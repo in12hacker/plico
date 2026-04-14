@@ -68,7 +68,9 @@ enum Mode {
 }
 
 fn run_local(args: &[String]) {
-    // Parse --root flag and filter it out so remaining args start with the command
+    // Parse --root flag and skip bare "--" separators so remaining args
+    // start with the command even when invoked as:
+    //   cargo run -- aicli --root /tmp -- put ...
     let mut filtered = Vec::with_capacity(args.len());
     let mut i = 0;
     let mut root = PathBuf::from("/tmp/plico");
@@ -78,6 +80,10 @@ fn run_local(args: &[String]) {
             "--root" if i + 1 < args.len() => {
                 root = PathBuf::from(&args[i + 1]);
                 i += 2;
+            }
+            // Skip bare "--" separators (e.g. "cargo run -- aicli ...")
+            "--" => {
+                i += 1;
             }
             other => {
                 filtered.push(other.to_string());
