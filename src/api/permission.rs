@@ -17,11 +17,12 @@
 //! # Usage
 //!
 //! ```
+//! use plico::{PermissionGuard, PermissionContext, PermissionAction, PermissionGrant};
 //! let mut guard = PermissionGuard::new();
-//! guard.grant("agent1", PermissionAction::Delete);
+//! guard.grant("agent1", PermissionGrant::new(PermissionAction::Delete));
 //! let ctx = PermissionContext::new("agent1".into());
-//! guard.check(&ctx, PermissionAction::Delete)?; // OK
-//! guard.check(&ctx, PermissionAction::Network)?; // Err: not granted
+//! guard.check(&ctx, PermissionAction::Delete).unwrap(); // OK
+//! guard.check(&ctx, PermissionAction::Network).unwrap_err(); // Err: permission denied
 //! ```
 
 use serde::{Deserialize, Serialize};
@@ -189,8 +190,10 @@ impl PermissionGuard {
     /// # Example
     ///
     /// ```
-    /// guard.grant("agent1", PermissionAction::Delete);
-    /// guard.grant("agent2", PermissionAction::Execute.with_scope("tool:web_search"));
+    /// use plico::{PermissionGuard, PermissionAction, PermissionGrant};
+    /// let mut guard = PermissionGuard::new();
+    /// guard.grant("agent1", PermissionGrant::new(PermissionAction::Delete));
+    /// guard.grant("agent2", PermissionGrant::new(PermissionAction::Execute).with_scope("tool:web_search"));
     /// ```
     pub fn grant(&mut self, agent_id: &str, grant: PermissionGrant) {
         self.grants

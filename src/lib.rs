@@ -21,7 +21,7 @@ pub mod kernel;
 pub mod api;
 
 // Permission re-exports for ergonomic access
-pub use api::permission::{PermissionGuard, PermissionContext, PermissionAction};
+pub use api::permission::{PermissionGuard, PermissionContext, PermissionAction, PermissionGrant};
 
 pub use cas::object::{AIObject, AIObjectMeta};
 pub use cas::storage::CASStorage;

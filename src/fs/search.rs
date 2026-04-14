@@ -4,7 +4,7 @@
 //!
 //! # Architecture
 //!
-//! ```
+//! ```text
 //! SemanticSearch (trait)
 //! ├── InMemoryBackend   — pure Rust, brute-force cosine similarity (MVP)
 //! └── LanceDBBackend   — persistent, HNSW index, production use

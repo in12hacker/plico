@@ -5,7 +5,7 @@
 //! # Layout Strategy
 //!
 //! Objects are sharded by CID prefix to avoid filesystem directory limits:
-//! ```
+//! ```text
 //! root/
 //! ├── 00/  01/  02/  ... ff/   (256 top-level shard directories)
 //! │   └── <remaining CID>.json  (object serialized as JSON)
@@ -51,10 +51,13 @@ impl CASStorage {
     /// # Example
     ///
     /// ```
-    /// let storage = CASStorage::new("/var/plico/objects".into()).unwrap();
+    /// use plico::{CASStorage, AIObject, AIObjectMeta};
+    /// let dir = std::env::temp_dir().join("plico_doctest");
+    /// let storage = CASStorage::new(dir.clone()).unwrap();
     /// let obj = AIObject::new(b"data".to_vec(), AIObjectMeta::text(["tag"]));
     /// let cid = storage.put(&obj).unwrap();
     /// let retrieved = storage.get(&cid).unwrap();
+    /// std::fs::remove_dir_all(dir).ok();
     /// ```
     pub fn new(root_path: PathBuf) -> io::Result<Self> {
         fs::create_dir_all(&root_path)?;

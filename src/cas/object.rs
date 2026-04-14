@@ -33,6 +33,7 @@ impl AIObject {
     /// # Example
     ///
     /// ```
+    /// use plico::{AIObject, AIObjectMeta};
     /// let obj = AIObject::new(
     ///     b"Meeting notes for Project X".to_vec(),
     ///     AIObjectMeta::text(["meeting", "project-x"]),

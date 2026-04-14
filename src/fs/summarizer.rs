@@ -4,7 +4,7 @@
 //!
 //! # Architecture
 //!
-//! ```
+//! ```text
 //! Summarizer (trait)
 //! ├── OllamaSummarizer  — calls local Ollama daemon (MVP)
 //! └── LocalONNXSummarizer — future: native ONNX inference

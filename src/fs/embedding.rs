@@ -4,7 +4,7 @@
 //!
 //! # Architecture
 //!
-//! ```
+//! ```text
 //! EmbeddingProvider (trait)
 //! ├── OllamaBackend      — calls local Ollama daemon via HTTP
 //! └── LocalONNXBackend   — pure Rust ONNX Runtime (future iteration)

@@ -17,7 +17,7 @@
 //! 2. **Count-based**: every `PERSIST_OP_COUNT` operations (default 50).
 //!
 //! Files layout:
-//! ```
+//! ```text
 //! root/
 //! ├── memory_index.json   (agent_id → Vec<PersistedTier>)
 //! └── cas/                (serialized memory entries, stored as CAS objects)
