@@ -76,6 +76,46 @@ pub struct AIObjectMeta {
 - **Update**: full operation log for rollback
 - **Delete**: logical delete (soft-delete / recycle bin), never immediate physical delete
 
+## Tools
+
+### Web Search (MCP)
+
+The MiniMax MCP server provides `web_search` and `understand_image` tools. Configure it via:
+
+```bash
+# Install uvx first (required by the MCP server)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Add MCP server (already configured in ~/.claude.json)
+claude mcp add -s user MiniMax \
+  --env MINIMAX_API_KEY=<key> \
+  --env MINIMAX_API_HOST=https://api.minimaxi.com \
+  -- uvx minimax-coding-plan-mcp -y
+```
+
+Tools are registered at user scope — available in all sessions. Use `claude mcp list` to verify.
+
+**Important**: The built-in `WebSearch` tool does NOT work with MiniMax API (MiniMax does not support it). Always use `web_search` from the MiniMax MCP server instead.
+
+## Build & Test Commands
+
+```bash
+# Build
+cargo build
+
+# Run tests (all 93 tests)
+cargo test
+
+# Build release
+cargo build --release
+
+# Run CLI
+cargo run --bin aicli -- --root /tmp/plico put --content "test" --tags "test"
+
+# Run daemon
+cargo run --bin plicod -- --port 7878 --root /tmp/plico
+```
+
 ## Related Prior Art
 
 - [AIOS (Rutgers)](https://github.com/agiresearch/AIOS) — full architecture reference
