@@ -9,6 +9,7 @@ use crate::cas::{AIObject, AIObjectMeta, CASStorage};
 use crate::fs::context_loader::ContextLoader;
 use crate::fs::embedding::{EmbeddingProvider, EmbedError};
 use crate::fs::search::{SemanticSearch, SearchFilter, SearchIndexMeta};
+use crate::fs::summarizer::Summarizer;
 
 /// Search query — can be tag-based, semantic, or mixed.
 #[derive(Debug, Clone)]
@@ -57,6 +58,8 @@ pub struct SemanticFS {
     embedding: Arc<dyn EmbeddingProvider>,
     /// Vector search index.
     search_index: Arc<dyn SemanticSearch>,
+    /// LLM summarizer for L0/L1 context generation.
+    summarizer: Option<Arc<dyn Summarizer>>,
 }
 
 #[derive(Debug, Clone)]
@@ -101,19 +104,22 @@ impl SemanticFS {
     ///
     /// `embedding` — provider for text → vector embeddings (e.g. OllamaBackend).
     /// `search_index` — backend for vector similarity search (e.g. InMemoryBackend).
+    /// `summarizer` — optional LLM summarizer for L0/L1 context (e.g. OllamaSummarizer).
     pub fn new(
         root_path: std::path::PathBuf,
         embedding: Arc<dyn EmbeddingProvider>,
         search_index: Arc<dyn SemanticSearch>,
+        summarizer: Option<Arc<dyn Summarizer>>,
     ) -> std::io::Result<Self> {
         Ok(Self {
             cas: CASStorage::new(root_path.join("objects"))?,
             tag_index: RwLock::new(HashMap::new()),
-            ctx_loader: Arc::new(ContextLoader::new(root_path.join("context"))?),
+            ctx_loader: Arc::new(ContextLoader::new(root_path.join("context"), summarizer.clone())?),
             recycle_bin: RwLock::new(HashMap::new()),
             audit_log: RwLock::new(Vec::new()),
             embedding,
             search_index,
+            summarizer,
         })
     }
 

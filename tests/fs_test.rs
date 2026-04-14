@@ -28,6 +28,7 @@ fn make_fs() -> (SemanticFS, tempfile::TempDir) {
         dir.path().to_path_buf(),
         std::sync::Arc::new(StubProvider),
         std::sync::Arc::new(InMemoryBackend::new()),
+        None, // no summarizer in tests
     ).unwrap();
     (fs, dir)
 }
@@ -213,9 +214,9 @@ fn test_deduplication_by_content() {
 #[test]
 fn test_context_loader_l0_cache() {
     let dir = tempdir().unwrap();
-    let loader = ContextLoader::new(dir.path().to_path_buf()).unwrap();
+    let loader = ContextLoader::new(dir.path().to_path_buf(), None).unwrap();
 
-    // Compute L0 summary
+    // Compute L0 summary (fallback heuristic since no summarizer)
     let summary = loader.compute_l0("This is a very long document with many words that should be summarized for the L0 layer.");
     assert!(!summary.is_empty());
     assert!(summary.len() < 200); // L0 should be short
@@ -224,7 +225,7 @@ fn test_context_loader_l0_cache() {
 #[test]
 fn test_context_loader_l0_round_trip() {
     let dir = tempdir().unwrap();
-    let loader = ContextLoader::new(dir.path().to_path_buf()).unwrap();
+    let loader = ContextLoader::new(dir.path().to_path_buf(), None).unwrap();
 
     // Create a test object (compute CID manually)
     let content = "Meeting notes: Project X kickoff discussion about Rust performance optimization.";
@@ -242,7 +243,7 @@ fn test_context_loader_l0_round_trip() {
 #[test]
 fn test_context_loader_l0_not_found_returns_error() {
     let dir = tempdir().unwrap();
-    let loader = ContextLoader::new(dir.path().to_path_buf()).unwrap();
+    let loader = ContextLoader::new(dir.path().to_path_buf(), None).unwrap();
 
     // Load nonexistent CID → should return an error (or placeholder)
     let result = loader.load("nonexistent00000000000000000000000000000000000000000000000000000000", ContextLayer::L0);
@@ -254,7 +255,7 @@ fn test_context_loader_l0_not_found_returns_error() {
 #[test]
 fn test_context_loader_l1_returns_placeholder() {
     let dir = tempdir().unwrap();
-    let loader = ContextLoader::new(dir.path().to_path_buf()).unwrap();
+    let loader = ContextLoader::new(dir.path().to_path_buf(), None).unwrap();
 
     let ctx = loader.load("somecid0000000000000000000000000000000000000000000000000000000000", ContextLayer::L1).unwrap();
     assert_eq!(ctx.layer, ContextLayer::L1);
@@ -264,7 +265,7 @@ fn test_context_loader_l1_returns_placeholder() {
 #[test]
 fn test_context_loader_l2_returns_full_content_marker() {
     let dir = tempdir().unwrap();
-    let loader = ContextLoader::new(dir.path().to_path_buf()).unwrap();
+    let loader = ContextLoader::new(dir.path().to_path_buf(), None).unwrap();
 
     let ctx = loader.load("somecid0000000000000000000000000000000000000000000000000000000000", ContextLayer::L2).unwrap();
     assert_eq!(ctx.layer, ContextLayer::L2);

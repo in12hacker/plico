@@ -15,7 +15,7 @@ use std::sync::Arc;
 use crate::cas::{CASStorage, AIObject, AIObjectMeta};
 use crate::memory::{LayeredMemory, MemoryEntry, CASPersister, MemoryPersister};
 use crate::scheduler::{AgentScheduler, Agent, Intent, IntentPriority, AgentHandle};
-use crate::fs::{SemanticFS, Query, OllamaBackend, InMemoryBackend, EmbeddingProvider, SemanticSearch};
+use crate::fs::{SemanticFS, Query, OllamaBackend, InMemoryBackend, EmbeddingProvider, SemanticSearch, OllamaSummarizer, Summarizer};
 use crate::api::permission::{PermissionGuard, PermissionContext, PermissionAction};
 
 /// The AI Kernel — all subsystems wired together.
@@ -29,6 +29,8 @@ pub struct AIKernel {
     pub memory_persister: Option<Arc<dyn MemoryPersister + Send + Sync>>,
     /// Embedding provider for semantic search.
     pub embedding: Arc<dyn EmbeddingProvider>,
+    /// Summarizer for L0/L1 context generation.
+    pub summarizer: Option<Arc<dyn Summarizer>>,
     /// Kernel data root (used to create persister on restart).
     root: PathBuf,
 }
@@ -61,13 +63,31 @@ impl AIKernel {
             }
         };
 
+        // Create summarizer — Ollama chat model for L0/L1 summaries.
+        // Falls back to heuristic if Ollama is unavailable.
+        let summarizer_model = std::env::var("OLLAMA_SUMMARIZER_MODEL")
+            .unwrap_or_else(|_| "llama3.2".to_string());
+        let summarizer: Option<Arc<dyn Summarizer>> = match OllamaSummarizer::new(&ollama_url, &summarizer_model) {
+            Ok(s) => {
+                tracing::info!("LLM summarizer enabled: {} via {}", summarizer_model, ollama_url);
+                Some(Arc::new(s))
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "Could not create summarizer: {e}. \
+                    ContextLoader will use heuristic summaries."
+                );
+                None
+            }
+        };
+
         // Create search index — pure Rust in-memory with cosine similarity
         let search_index: Arc<dyn SemanticSearch> = Arc::new(InMemoryBackend::new());
 
         let memory = Arc::new(LayeredMemory::new());
         let scheduler = Arc::new(AgentScheduler::new());
 
-        let fs = Arc::new(SemanticFS::new(root.clone(), embedding.clone(), search_index)?);
+        let fs = Arc::new(SemanticFS::new(root.clone(), embedding.clone(), search_index, summarizer.clone())?);
         let permissions = Arc::new(PermissionGuard::new());
 
         // Create memory persister and attach to memory
@@ -91,6 +111,7 @@ impl AIKernel {
             permissions,
             memory_persister: persister,
             embedding,
+            summarizer,
             root,
         };
 

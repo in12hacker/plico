@@ -14,7 +14,9 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
+
+use super::summarizer::{Summarizer, SummaryLayer};
 
 /// Context loading layer level.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -59,15 +61,22 @@ pub struct ContextLoader {
     root: PathBuf,
     /// In-memory cache for L0 summaries (small, frequently accessed).
     l0_cache: RwLock<HashMap<String, String>>,
+    /// Optional LLM summarizer — if None, falls back to heuristic.
+    summarizer: Option<Arc<dyn Summarizer>>,
 }
 
 impl ContextLoader {
-    pub fn new(root: PathBuf) -> std::io::Result<Self> {
+    /// Create a new context loader with an optional summarizer.
+    ///
+    /// If `summarizer` is `None`, `compute_l0` uses a simple heuristic
+    /// (first + last N words) instead of an LLM.
+    pub fn new(root: PathBuf, summarizer: Option<Arc<dyn Summarizer>>) -> std::io::Result<Self> {
         fs::create_dir_all(root.join("l0"))?;
         fs::create_dir_all(root.join("l1"))?;
         Ok(Self {
             root,
             l0_cache: RwLock::new(HashMap::new()),
+            summarizer,
         })
     }
 
@@ -96,9 +105,20 @@ impl ContextLoader {
         fs::write(path, summary)
     }
 
-    /// Compute a simple L0 summary (first N words + last N words).
-    /// In a full implementation, this would use an LLM to generate summaries.
+    /// Compute an L0 summary for the given content.
+    ///
+    /// Uses an LLM summarizer if one was provided at construction time;
+    /// otherwise falls back to a simple heuristic (first + last N words).
     pub fn compute_l0(&self, content: &str) -> String {
+        if let Some(ref summarizer) = self.summarizer {
+            match summarizer.summarize(content, SummaryLayer::L0) {
+                Ok(summary) => return summary,
+                Err(e) => {
+                    tracing::warn!("LLM summarization failed: {e}. Falling back to heuristic.");
+                }
+            }
+        }
+        // Fallback heuristic
         let words: Vec<&str> = content.split_whitespace().collect();
         if words.len() <= 20 {
             return content.to_string();
