@@ -166,7 +166,11 @@ impl AIKernel {
     pub fn get_object(&self, cid: &str, agent_id: &str) -> std::io::Result<AIObject> {
         let ctx = PermissionContext::new(agent_id.to_string());
         self.permissions.check(&ctx, PermissionAction::Read)?;
-        self.cas.get(cid).map_err(|e| std::io::Error::new(std::io::ErrorKind::NotFound, e.to_string()))
+        // Delegate to SemanticFS so reads go through the same CAS instance as writes
+        let results = self.fs.read(&crate::fs::Query::ByCid(cid.to_string()))?;
+        results.into_iter().next().ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::NotFound, format!("CID={}", cid))
+        })
     }
 
     // ─── Semantic FS Operations ────────────────────────────────────────

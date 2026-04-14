@@ -68,14 +68,26 @@ enum Mode {
 }
 
 fn run_local(args: &[String]) {
-    let root = args.iter().position(|a| a == "--root")
-        .and_then(|i| args.get(i + 1))
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/tmp/plico"));
+    // Parse --root flag and filter it out so remaining args start with the command
+    let mut filtered = Vec::with_capacity(args.len());
+    let mut i = 0;
+    let mut root = PathBuf::from("/tmp/plico");
+
+    while i < args.len() {
+        match args[i].as_str() {
+            "--root" if i + 1 < args.len() => {
+                root = PathBuf::from(&args[i + 1]);
+                i += 2;
+            }
+            other => {
+                filtered.push(other.to_string());
+                i += 1;
+            }
+        }
+    }
 
     let kernel = AIKernel::new(root).expect("Failed to initialize kernel");
-
-    let result = execute_local(&kernel, args);
+    let result = execute_local(&kernel, &filtered);
     print_result(&result);
 }
 
@@ -328,6 +340,9 @@ fn extract_tags_opt(args: &[String], flag: &str) -> Option<Vec<String>> {
 }
 
 fn print_result(response: &ApiResponse) {
+    if let Some(cid) = &response.cid {
+        println!("CID: {}", cid);
+    }
     if !response.ok {
         if let Some(e) = &response.error {
             eprintln!("Error: {}", e);
