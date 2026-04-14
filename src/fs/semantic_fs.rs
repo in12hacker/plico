@@ -7,6 +7,8 @@ use std::sync::{Arc, RwLock};
 
 use crate::cas::{AIObject, AIObjectMeta, CASStorage};
 use crate::fs::context_loader::ContextLoader;
+use crate::fs::embedding::{EmbeddingProvider, EmbedError};
+use crate::fs::search::{SemanticSearch, SearchFilter, SearchIndexMeta};
 
 /// Search query — can be tag-based, semantic, or mixed.
 #[derive(Debug, Clone)]
@@ -16,7 +18,11 @@ pub enum Query {
     /// Find by semantic tag(s).
     ByTags(Vec<String>),
     /// Find by natural language query (semantic search).
-    Semantic(String),
+    /// Uses vector embeddings for semantic similarity.
+    Semantic {
+        text: String,
+        filter: Option<SearchFilter>,
+    },
     /// Find by content type.
     ByType(String),
     /// Mixed: tags + semantic query.
@@ -47,6 +53,10 @@ pub struct SemanticFS {
     recycle_bin: RwLock<HashMap<String, RecycleEntry>>,
     /// Update audit log.
     audit_log: RwLock<Vec<AuditEntry>>,
+    /// Embedding provider (e.g. Ollama).
+    embedding: Arc<dyn EmbeddingProvider>,
+    /// Vector search index.
+    search_index: Arc<dyn SemanticSearch>,
 }
 
 #[derive(Debug, Clone)]
@@ -81,34 +91,39 @@ pub enum FSError {
 
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
+
+    #[error("Embedding error: {0}")]
+    Embedding(#[from] EmbedError),
 }
 
 impl SemanticFS {
-    /// Create a new semantic filesystem backed by CAS at `root_path`.
-    pub fn new(root_path: std::path::PathBuf) -> std::io::Result<Self> {
+    /// Create a new semantic filesystem.
+    ///
+    /// `embedding` — provider for text → vector embeddings (e.g. OllamaBackend).
+    /// `search_index` — backend for vector similarity search (e.g. InMemoryBackend).
+    pub fn new(
+        root_path: std::path::PathBuf,
+        embedding: Arc<dyn EmbeddingProvider>,
+        search_index: Arc<dyn SemanticSearch>,
+    ) -> std::io::Result<Self> {
         Ok(Self {
             cas: CASStorage::new(root_path.join("objects"))?,
             tag_index: RwLock::new(HashMap::new()),
             ctx_loader: Arc::new(ContextLoader::new(root_path.join("context"))?),
             recycle_bin: RwLock::new(HashMap::new()),
             audit_log: RwLock::new(Vec::new()),
+            embedding,
+            search_index,
         })
     }
 
     /// **Create**: Store content with semantic metadata. Returns CID.
     ///
-    /// AI perspective: "Store this. Here is what it means."
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// let cid = fs.create(
-    ///     b"Meeting notes: Project X kickoff...".to_vec(),
-    ///     ["meeting", "project-x", "2026-Q2"],
-    ///     "Agent_Scheduler_v1",
-    ///     Some("Quarterly kickoff meeting notes for project X"),
-    /// ).unwrap();
-    /// ```
+    /// Side effects:
+    /// 1. Content is stored in CAS
+    /// 2. Tags are indexed
+    /// 3. Text is embedded and upserted to the vector search index
+    /// 4. Audit log entry is created
     pub fn create(
         &self,
         content: Vec<u8>,
@@ -124,18 +139,16 @@ impl SemanticFS {
             intent,
         };
 
-        let obj = AIObject::new(content, meta);
+        let obj = AIObject::new(content.clone(), meta.clone());
         let cid = self.cas.put(&obj)?;
 
         // Update tag index
-        {
-            let mut index = self.tag_index.write().unwrap();
-            for tag in &tags {
-                index.entry(tag.clone()).or_default().push(cid.clone());
-            }
-        }
+        self.update_tag_index(&tags, &cid);
 
-        // Log creation
+        // Embed and index for semantic search
+        self.upsert_semantic_index(&cid, &content, &meta);
+
+        // Audit log
         self.audit_log
             .write()
             .unwrap()
@@ -166,11 +179,26 @@ impl SemanticFS {
                 }
                 Ok(objects)
             }
-            Query::Semantic(query_str) => {
-                // Placeholder: full semantic search with embeddings
-                // For now, tag-based fallback
-                let tags = query_str.split_whitespace().map(String::from).collect();
-                self.read(&Query::ByTags(tags))
+            Query::Semantic { text, filter } => {
+                // Vector semantic search
+                let filter = filter.clone().unwrap_or_default();
+                let query_emb = match self.embedding.embed(text) {
+                    Ok(emb) => emb,
+                    Err(e) => {
+                        tracing::warn!("Embedding failed for query '{text}': {e}. Falling back to tag search.");
+                        // Fallback: tag-based keyword matching
+                        let tags = text.split_whitespace().map(String::from).collect();
+                        return self.read(&Query::ByTags(tags));
+                    }
+                };
+                let hits = self.search_index.search(&query_emb, 10, &filter);
+                let mut objects = Vec::new();
+                for hit in hits {
+                    if let Ok(obj) = self.cas.get(&hit.cid) {
+                        objects.push(obj);
+                    }
+                }
+                Ok(objects)
             }
             _ => Ok(Vec::new()),
         }
@@ -188,16 +216,29 @@ impl SemanticFS {
         // Read old object
         let old_obj = self.cas.get(old_cid).map_err(|e| std::io::Error::new(std::io::ErrorKind::NotFound, e.to_string()))?;
 
+        // Decide on new tags: use new_tags if provided, otherwise keep old ones
+        let final_tags = new_tags.unwrap_or_else(|| old_obj.meta.tags.clone());
+
         let new_meta = AIObjectMeta {
             content_type: old_obj.meta.content_type,
-            tags: new_tags.unwrap_or(old_obj.meta.tags),
+            tags: final_tags.clone(),
             created_by: old_obj.meta.created_by.clone(),
             created_at: now_ms(),
             intent: old_obj.meta.intent.clone(),
         };
 
-        let new_obj = AIObject::new(new_content, new_meta);
+        let new_obj = AIObject::new(new_content.clone(), new_meta.clone());
         let new_cid = self.cas.put(&new_obj)?;
+
+        // Update tag index (remove old, add new)
+        if final_tags != old_obj.meta.tags {
+            self.remove_from_tag_index(&old_obj.meta.tags, old_cid);
+            self.update_tag_index(&final_tags, &new_cid);
+        }
+
+        // Update search index: remove old, add new
+        self.search_index.delete(old_cid);
+        self.upsert_semantic_index(&new_cid, &new_content, &new_meta);
 
         // Audit log
         self.audit_log
@@ -227,6 +268,9 @@ impl SemanticFS {
                     original_meta: obj.meta.clone(),
                 });
 
+            // Remove from search index
+            self.search_index.delete(cid);
+
             self.audit_log
                 .write()
                 .unwrap()
@@ -241,13 +285,35 @@ impl SemanticFS {
     }
 
     /// **Search**: Semantic search across all stored objects.
-    /// Placeholder for vector embedding integration.
+    /// Uses vector embeddings for semantic similarity.
     pub fn search(&self, query: &str, limit: usize) -> Vec<SearchResult> {
-        let mut results = Vec::new();
-        let query_lower = query.to_lowercase();
+        let query_emb = match self.embedding.embed(query) {
+            Ok(emb) => emb,
+            Err(e) => {
+                tracing::warn!("Embedding failed for query '{query}': {e}. Falling back to tag search.");
+                return self.search_by_tags(query);
+            }
+        };
 
-        // Simple keyword matching in tags
+        let hits = self.search_index.search(&query_emb, limit, &SearchFilter::default());
+        hits
+            .into_iter()
+            .filter_map(|hit| {
+                self.cas.get(&hit.cid).ok().map(|obj| SearchResult {
+                    cid: hit.cid,
+                    relevance: hit.score,
+                    meta: obj.meta,
+                })
+            })
+            .collect()
+    }
+
+    /// Tag-based keyword search (fallback when embeddings unavailable).
+    fn search_by_tags(&self, query: &str) -> Vec<SearchResult> {
+        let query_lower = query.to_lowercase();
         let index = self.tag_index.read().unwrap();
+        let mut results = Vec::new();
+
         for (tag, cids) in index.iter() {
             if tag.to_lowercase().contains(&query_lower) {
                 for cid in cids {
@@ -261,8 +327,6 @@ impl SemanticFS {
                 }
             }
         }
-
-        results.truncate(limit);
         results
     }
 
@@ -279,7 +343,55 @@ impl SemanticFS {
         self.audit_log.read().unwrap().clone()
     }
 
-    /// Resolve tags to CIDs (union of all matching tags).
+    // ─── Internal helpers ────────────────────────────────────────────────
+
+    fn upsert_semantic_index(&self, cid: &str, content: &[u8], meta: &AIObjectMeta) {
+        let text = String::from_utf8_lossy(content);
+
+        // Skip empty content
+        if text.trim().is_empty() {
+            return;
+        }
+
+        let embedding = match self.embedding.embed(&text) {
+            Ok(emb) => emb,
+            Err(e) => {
+                tracing::warn!("Failed to embed CID={}: {e}", cid);
+                return;
+            }
+        };
+
+        // Build snippet (first 200 chars)
+        let snippet = if text.len() > 200 {
+            format!("{}...", &text[..200])
+        } else {
+            text.to_string()
+        };
+
+        self.search_index.upsert(cid, &embedding, SearchIndexMeta {
+            cid: cid.to_string(),
+            tags: meta.tags.clone(),
+            snippet,
+            content_type: format!("{:?}", meta.content_type).to_lowercase(),
+        });
+    }
+
+    fn update_tag_index(&self, tags: &[String], cid: &str) {
+        let mut index = self.tag_index.write().unwrap();
+        for tag in tags {
+            index.entry(tag.clone()).or_default().push(cid.to_string());
+        }
+    }
+
+    fn remove_from_tag_index(&self, tags: &[String], cid: &str) {
+        let mut index = self.tag_index.write().unwrap();
+        for tag in tags {
+            if let Some(cids) = index.get_mut(tag) {
+                cids.retain(|c| c != cid);
+            }
+        }
+    }
+
     fn resolve_tags(&self, tags: &[String]) -> Vec<String> {
         let index = self.tag_index.read().unwrap();
         let mut cids: Vec<String> = Vec::new();

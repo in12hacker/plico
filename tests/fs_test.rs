@@ -3,12 +3,32 @@
 //! Tests cover: create, read, update, logical delete,
 //! tag index, search, and context loading.
 
-use plico::fs::{SemanticFS, Query, ContextLoader, ContextLayer, AuditAction};
+use plico::fs::{
+    SemanticFS, Query, ContextLoader, ContextLayer, AuditAction,
+    EmbeddingProvider, InMemoryBackend, EmbedError,
+};
 use tempfile::tempdir;
+
+/// A stub embedding provider that always fails — forces tag-based fallback in tests.
+struct StubProvider;
+impl EmbeddingProvider for StubProvider {
+    fn embed(&self, _: &str) -> Result<Vec<f32>, EmbedError> {
+        Err(EmbedError::ServerUnavailable("stub".to_string()))
+    }
+    fn embed_batch(&self, _: &[&str]) -> Result<Vec<Vec<f32>>, EmbedError> {
+        Err(EmbedError::ServerUnavailable("stub".to_string()))
+    }
+    fn dimension(&self) -> usize { 384 }
+    fn model_name(&self) -> &str { "stub" }
+}
 
 fn make_fs() -> (SemanticFS, tempfile::TempDir) {
     let dir = tempdir().unwrap();
-    let fs = SemanticFS::new(dir.path().to_path_buf()).unwrap();
+    let fs = SemanticFS::new(
+        dir.path().to_path_buf(),
+        std::sync::Arc::new(StubProvider),
+        std::sync::Arc::new(InMemoryBackend::new()),
+    ).unwrap();
     (fs, dir)
 }
 

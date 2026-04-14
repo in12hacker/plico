@@ -27,6 +27,10 @@
 
 pub mod semantic_fs;
 pub mod context_loader;
+pub mod embedding;
+pub mod search;
 
 pub use semantic_fs::{SemanticFS, FSError, Query, SearchResult, AuditEntry, AuditAction};
 pub use context_loader::{ContextLoader, ContextLayer};
+pub use embedding::{EmbeddingProvider, Embedding, EmbeddingMeta, EmbedError, OllamaBackend, LocalONNXBackend};
+pub use search::{SemanticSearch, SearchHit, SearchIndexMeta, SearchFilter, InMemoryBackend};

@@ -15,7 +15,7 @@ use std::sync::Arc;
 use crate::cas::{CASStorage, AIObject, AIObjectMeta};
 use crate::memory::{LayeredMemory, MemoryEntry, CASPersister, MemoryPersister};
 use crate::scheduler::{AgentScheduler, Agent, Intent, IntentPriority, AgentHandle};
-use crate::fs::{SemanticFS, Query};
+use crate::fs::{SemanticFS, Query, OllamaBackend, InMemoryBackend, EmbeddingProvider, SemanticSearch};
 use crate::api::permission::{PermissionGuard, PermissionContext, PermissionAction};
 
 /// The AI Kernel — all subsystems wired together.
@@ -27,17 +27,47 @@ pub struct AIKernel {
     pub permissions: Arc<PermissionGuard>,
     /// Memory persister for L1/L2/L3 durability.
     pub memory_persister: Option<Arc<dyn MemoryPersister + Send + Sync>>,
+    /// Embedding provider for semantic search.
+    pub embedding: Arc<dyn EmbeddingProvider>,
     /// Kernel data root (used to create persister on restart).
     root: PathBuf,
 }
 
 impl AIKernel {
     /// Initialize the AI Kernel with the given storage root.
+    ///
+    /// Uses Ollama at `OLLAMA_URL` env var (default `http://localhost:11434`)
+    /// with model `OLLAMA_EMBEDDING_MODEL` env var (default `all-minilm-l6-v2`).
     pub fn new(root: PathBuf) -> std::io::Result<Self> {
         let cas = Arc::new(CASStorage::new(root.join("cas"))?);
+
+        // Create embedding provider — Ollama daemon backend.
+        // If Ollama is unavailable, the kernel starts anyway; search falls back
+        // to tag-based matching when embedding fails at runtime.
+        let ollama_url = std::env::var("OLLAMA_URL").unwrap_or_else(|_| "http://localhost:11434".to_string());
+        let embedding_model = std::env::var("OLLAMA_EMBEDDING_MODEL")
+            .unwrap_or_else(|_| "all-minilm-l6-v2".to_string());
+        let embedding: Arc<dyn EmbeddingProvider> = match OllamaBackend::new(&ollama_url, &embedding_model) {
+            Ok(b) => Arc::new(b),
+            Err(e) => {
+                tracing::warn!(
+                    "Ollama not available at {}: {e}. \
+                    Semantic search will fall back to tag matching.",
+                    ollama_url
+                );
+                // Use a stub that returns an error on every embed call
+                // (triggers tag-based fallback in SemanticFS::search)
+                Arc::new(StubEmbeddingProvider::new()) as Arc<dyn EmbeddingProvider>
+            }
+        };
+
+        // Create search index — pure Rust in-memory with cosine similarity
+        let search_index: Arc<dyn SemanticSearch> = Arc::new(InMemoryBackend::new());
+
         let memory = Arc::new(LayeredMemory::new());
         let scheduler = Arc::new(AgentScheduler::new());
-        let fs = Arc::new(SemanticFS::new(root.clone())?);
+
+        let fs = Arc::new(SemanticFS::new(root.clone(), embedding.clone(), search_index)?);
         let permissions = Arc::new(PermissionGuard::new());
 
         // Create memory persister and attach to memory
@@ -60,6 +90,7 @@ impl AIKernel {
             fs,
             permissions,
             memory_persister: persister,
+            embedding,
             root,
         };
 
@@ -211,5 +242,39 @@ impl AIKernel {
     /// List all semantic tags in the filesystem.
     pub fn list_tags(&self) -> Vec<String> {
         self.fs.list_tags()
+    }
+}
+
+// ─── Stub Embedding Provider ─────────────────────────────────────────────────
+
+/// A stub embedding provider used when Ollama is not available.
+/// Always returns an error, triggering tag-based fallback in search.
+struct StubEmbeddingProvider;
+
+impl StubEmbeddingProvider {
+    fn new() -> Self {
+        Self
+    }
+}
+
+impl EmbeddingProvider for StubEmbeddingProvider {
+    fn embed(&self, _text: &str) -> Result<Vec<f32>, crate::fs::embedding::EmbedError> {
+        Err(crate::fs::embedding::EmbedError::ServerUnavailable(
+            "Ollama not configured".to_string(),
+        ))
+    }
+
+    fn embed_batch(&self, _texts: &[&str]) -> Result<Vec<Vec<f32>>, crate::fs::embedding::EmbedError> {
+        Err(crate::fs::embedding::EmbedError::ServerUnavailable(
+            "Ollama not configured".to_string(),
+        ))
+    }
+
+    fn dimension(&self) -> usize {
+        384 // Placeholder
+    }
+
+    fn model_name(&self) -> &str {
+        "stub"
     }
 }
