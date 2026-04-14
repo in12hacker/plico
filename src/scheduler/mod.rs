@@ -19,9 +19,11 @@
 
 pub mod agent;
 pub mod queue;
+pub mod dispatch;
 
 pub use agent::{Agent, AgentId, AgentState, Intent, IntentPriority, IntentId};
 pub use queue::{SchedulerQueue, SchedulerError};
+pub use dispatch::{DispatchHandle, AgentExecutor, LocalExecutor, TokioDispatchLoop, DispatchError, ExecutionResult};
 
 use serde::{Deserialize, Serialize};
 use std::sync::RwLock;

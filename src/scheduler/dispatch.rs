@@ -1,0 +1,356 @@
+//! Agent Execution Runtime — Intent → Running Agent
+//!
+//! Provides the dispatch loop that runs agents as async tasks.
+//!
+//! # Architecture
+//!
+//! ```text
+//! AgentExecutor (trait)
+//! └── TokioDispatchLoop  — tokio async loop over the scheduler queue
+//! ```
+//!
+//! # Dispatch Flow
+//!
+//! ```text
+//! Intent submitted
+//!   → SchedulerQueue (priority heap)
+//!   → TokioDispatchLoop polls queue every POLL_INTERVAL
+//!   → AgentExecutor::execute() runs the agent
+//!   → Agent state updated (Waiting → Running → Completed/Failed)
+//!   → Result returned to caller
+//! ```
+
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::sync::{broadcast, mpsc, RwLock};
+use tokio::time::{interval, Instant};
+
+use super::agent::{AgentId, AgentState, Intent, IntentId};
+use super::queue::SchedulerQueue;
+use super::AgentScheduler;
+
+/// Interval between queue polls (500ms).
+const POLL_INTERVAL: Duration = Duration::from_millis(500);
+
+/// Errors from agent execution.
+#[derive(Debug, thiserror::Error)]
+pub enum DispatchError {
+    #[error("Intent not found: {0}")]
+    IntentNotFound(IntentId),
+
+    #[error("Agent not found: {0}")]
+    AgentNotFound(AgentId),
+
+    #[error("Execution timeout after {0}ms")]
+    Timeout(u64),
+
+    #[error("Agent {0} is not in a runnable state: {1:?}")]
+    NotRunnable(AgentId, AgentState),
+
+    #[error("Tokio runtime error: {0}")]
+    Tokio(#[from] tokio::task::JoinError),
+
+    #[error("Channel closed: {0}")]
+    ChannelClosed(String),
+}
+
+/// Result of an agent execution attempt.
+#[derive(Debug, Clone)]
+pub struct ExecutionResult {
+    pub intent_id: IntentId,
+    pub agent_id: Option<AgentId>,
+    pub success: bool,
+    pub output: String,
+    pub elapsed_ms: u64,
+}
+
+impl ExecutionResult {
+    pub fn success(intent_id: IntentId, agent_id: Option<AgentId>, output: String, elapsed_ms: u64) -> Self {
+        Self { intent_id, agent_id, success: true, output, elapsed_ms }
+    }
+
+    pub fn failure(intent_id: IntentId, agent_id: Option<AgentId>, output: String, elapsed_ms: u64) -> Self {
+        Self { intent_id, agent_id, success: false, output, elapsed_ms }
+    }
+}
+
+/// Thread-safe handle for interacting with the dispatch loop.
+#[derive(Clone)]
+pub struct DispatchHandle {
+    /// Send a shutdown signal to the dispatch loop.
+    shutdown_tx: broadcast::Sender<()>,
+    /// Receive execution results.
+    result_rx: Arc<RwLock<mpsc::Receiver<ExecutionResult>>>,
+    /// Reference to the scheduler queue (shared with dispatch loop).
+    queue: Arc<RwLock<SchedulerQueue>>,
+}
+
+impl DispatchHandle {
+    /// Send a shutdown signal. Idempotent — safe to call multiple times.
+    pub fn shutdown(&self) {
+        let _ = self.shutdown_tx.send(());
+    }
+
+    /// Take all pending execution results.
+    pub async fn drain_results(&self) -> Vec<ExecutionResult> {
+        let mut rx = self.result_rx.write().await;
+        let mut results = Vec::new();
+        while let Ok(result) = rx.try_recv() {
+            results.push(result);
+        }
+        results
+    }
+
+    /// Number of intents currently queued.
+    pub async fn queue_len(&self) -> usize {
+        self.queue.read().await.len()
+    }
+}
+
+/// Trait for agent execution backends.
+///
+/// Implement this trait to provide different execution strategies:
+/// - Local tokio task execution (MVP)
+/// - Remote process execution (future)
+/// - Container/VM isolation (future)
+pub trait AgentExecutor: Send + Sync {
+    /// Execute an intent as the given agent.
+    ///
+    /// Returns `Ok(output)` on success, `Err(message)` on failure.
+    ///
+    /// `cpu_time_limit_ms` — hard limit on CPU time for this execution.
+    /// Implementations should enforce this limit.
+    fn execute(
+        &self,
+        intent: &Intent,
+        agent_id: Option<&AgentId>,
+        cpu_time_limit_ms: u64,
+    ) -> Result<String, String>;
+}
+
+/// Simple in-process executor — runs intent descriptions as async tasks.
+///
+/// For the MVP, execution is simulated: the intent description is logged
+/// and returned as the output. A future implementation would invoke actual
+/// model inference or tool calls.
+pub struct LocalExecutor;
+
+impl AgentExecutor for LocalExecutor {
+    fn execute(
+        &self,
+        intent: &Intent,
+        _agent_id: Option<&AgentId>,
+        _cpu_time_limit_ms: u64,
+    ) -> Result<String, String> {
+        // MVP: log the intent and return a simulated result.
+        // Real implementation would: load agent memory, call model, invoke tools.
+        tracing::info!(
+            "Executing intent {}: \"{}\" (priority={:?})",
+            intent.id,
+            intent.description,
+            intent.priority
+        );
+        Ok(format!(
+            "[Executed] Intent '{}' completed successfully.",
+            intent.description
+        ))
+    }
+}
+
+/// The dispatch loop — polls the scheduler queue and executes intents.
+///
+/// Runs as a background tokio task. Multiple dispatch loops can run
+/// concurrently for parallel execution.
+pub struct TokioDispatchLoop {
+    scheduler: Arc<AgentScheduler>,
+    executor: Arc<dyn AgentExecutor>,
+    cpu_time_limit_ms: u64,
+    poll_interval: Duration,
+}
+
+impl TokioDispatchLoop {
+    /// Create a new dispatch loop.
+    ///
+    /// `scheduler` — the agent scheduler (provides the queue and agent registry).
+    /// `executor` — the execution backend (e.g. `LocalExecutor`).
+    /// `cpu_time_limit_ms` — hard limit on CPU time per intent.
+    pub fn new(
+        scheduler: Arc<AgentScheduler>,
+        executor: Arc<dyn AgentExecutor>,
+        cpu_time_limit_ms: u64,
+    ) -> Self {
+        Self {
+            scheduler,
+            executor,
+            cpu_time_limit_ms,
+            poll_interval: POLL_INTERVAL,
+        }
+    }
+
+    /// Run the dispatch loop as a background tokio task.
+    /// Returns a `DispatchHandle` for controlling the loop.
+    pub fn spawn(self) -> (tokio::task::JoinHandle<()>, DispatchHandle) {
+        let (shutdown_tx, _) = broadcast::channel(1);
+        let (result_tx, result_rx) = mpsc::channel(100);
+        let queue = Arc::new(RwLock::new(SchedulerQueue::new()));
+        let queue_clone = Arc::clone(&queue);
+
+        // Mirror scheduler queue into our local queue
+        // (In a full implementation, this would use a shared channel)
+        let scheduler_clone = Arc::clone(&self.scheduler);
+        let executor_clone = Arc::clone(&self.executor);
+        let cpu_limit = self.cpu_time_limit_ms;
+        let poll_interval = self.poll_interval;
+        let shutdown_rx = shutdown_tx.subscribe();
+
+        let handle = tokio::spawn(async move {
+            dispatch_loop(
+                scheduler_clone,
+                executor_clone,
+                queue_clone,
+                result_tx,
+                shutdown_rx,
+                cpu_limit,
+                poll_interval,
+            )
+            .await;
+        });
+
+        (
+            handle,
+            DispatchHandle {
+                shutdown_tx,
+                result_rx: Arc::new(RwLock::new(result_rx)),
+                queue,
+            },
+        )
+    }
+}
+
+async fn dispatch_loop(
+    scheduler: Arc<AgentScheduler>,
+    executor: Arc<dyn AgentExecutor>,
+    queue: Arc<RwLock<SchedulerQueue>>,
+    result_tx: mpsc::Sender<ExecutionResult>,
+    mut shutdown_rx: broadcast::Receiver<()>,
+    cpu_time_limit_ms: u64,
+    poll_interval: Duration,
+) {
+    let mut poll_timer = interval(poll_interval);
+    poll_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+    loop {
+        tokio::select! {
+            // Shutdown signal received
+            _ = shutdown_rx.recv() => {
+                tracing::info!("Dispatch loop shutting down");
+                break;
+            }
+
+            // Poll timer tick
+            _ = poll_timer.tick() => {
+                // Drain pending intents from the scheduler into our queue
+                while let Some(intent) = scheduler.dequeue() {
+                    tracing::debug!("Draining intent {} from scheduler", intent.id);
+                    queue.write().await.push(intent);
+                }
+
+                // Execute next intent if any
+                let intent = {
+                    let mut q = queue.write().await;
+                    q.pop()
+                };
+
+                if let Some(intent) = intent {
+                    let start = Instant::now();
+                    let intent_id = intent.id.clone();
+                    let agent_id = intent.agent_id.clone();
+
+                    // Update agent state to Running
+                    if let Some(ref aid) = intent.agent_id {
+                        scheduler.update_state(aid, AgentState::Running);
+                    }
+
+                    let output = executor.execute(&intent, intent.agent_id.as_ref(), cpu_time_limit_ms);
+                    let elapsed_ms = start.elapsed().as_millis() as u64;
+
+                    let result = match output {
+                        Ok(out) => {
+                            ExecutionResult::success(intent_id.clone(), agent_id.clone(), out, elapsed_ms)
+                        }
+                        Err(msg) => {
+                            ExecutionResult::failure(intent_id.clone(), agent_id.clone(), msg, elapsed_ms)
+                        }
+                    };
+
+                    // Update agent state
+                    if let Some(ref aid) = agent_id {
+                        let next_state = if result.success {
+                            AgentState::Completed
+                        } else {
+                            AgentState::Failed
+                        };
+                        scheduler.update_state(aid, next_state);
+                    }
+
+                    if result_tx.send(result).await.is_err() {
+                        tracing::warn!("Dispatch loop: result receiver dropped");
+                        break;
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::scheduler::agent::IntentPriority;
+
+    #[test]
+    fn test_execution_result_success() {
+        let r = ExecutionResult::success(
+            IntentId::new(),
+            None,
+            "done".to_string(),
+            100,
+        );
+        assert!(r.success);
+        assert_eq!(r.elapsed_ms, 100);
+    }
+
+    #[test]
+    fn test_execution_result_failure() {
+        let r = ExecutionResult::failure(
+            IntentId::new(),
+            None,
+            "crashed".to_string(),
+            50,
+        );
+        assert!(!r.success);
+        assert!(r.output.contains("crashed"));
+    }
+
+    #[test]
+    fn test_local_executor_executes() {
+        let executor = LocalExecutor;
+        let intent = Intent::new(IntentPriority::High, "Analyze PR #42".into());
+        let result = executor.execute(&intent, None, 5000);
+        assert!(result.is_ok());
+        assert!(result.unwrap().contains("Analyze PR #42"));
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_handle_shutdown() {
+        let scheduler = Arc::new(AgentScheduler::new());
+        let executor = Arc::new(LocalExecutor);
+        let loop_ = TokioDispatchLoop::new(scheduler, executor, 5000);
+        let (_handle, dispatch) = loop_.spawn();
+
+        // Shutdown should not panic
+        dispatch.shutdown();
+        let len = dispatch.queue_len().await;
+        assert_eq!(len, 0);
+    }
+}

@@ -1,6 +1,7 @@
 //! plicod — Plico AI-Native OS Daemon
 //!
 //! Long-running TCP server exposing the semantic API for external AI programs.
+//! Also runs the agent execution dispatch loop in the background.
 //!
 //! Usage: cargo run --bin plicod [--port PORT] [--root PATH]
 //!
@@ -10,12 +11,15 @@
 
 use plico::kernel::AIKernel;
 use plico::api::semantic::{ApiRequest, ApiResponse, SearchResultDto, AgentDto};
-use std::net::{TcpListener, TcpStream};
-use std::io::{Read, Write};
+use plico::scheduler::{TokioDispatchLoop, LocalExecutor, DispatchHandle};
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream};
 
-fn main() {
+#[tokio::main]
+async fn main() {
     // Parse args
     let args: Vec<String> = std::env::args().collect();
     let port = args.iter().position(|a| a == "--port")
@@ -40,55 +44,75 @@ fn main() {
         }
     };
 
-    let listener = TcpListener::bind(format!("0.0.0.0:{}", port)).expect("Failed to bind port");
+    // Spawn the agent execution dispatch loop
+    let dispatch = {
+        use plico::scheduler::AgentExecutor;
+        let scheduler = Arc::clone(&kernel.scheduler);
+        let executor: Arc<dyn AgentExecutor> = Arc::new(LocalExecutor);
+        let loop_ = TokioDispatchLoop::new(scheduler, executor, 60_000);
+        let (_handle, dispatch_handle) = loop_.spawn();
+        dispatch_handle
+    };
+
+    println!("Agent dispatch loop started.");
+
+    let addr: SocketAddr = format!("0.0.0.0:{}", port).parse().unwrap();
+    let listener = TcpListener::bind(addr).await.expect("Failed to bind port");
     println!("Daemon ready. Awaiting AI connections...");
 
-    for stream in listener.incoming() {
-        match stream {
-            Ok(stream) => {
+    loop {
+        match listener.accept().await {
+            Ok((stream, peer)) => {
                 let kernel = Arc::clone(&kernel);
-                std::thread::spawn(|| handle_connection(stream, kernel));
+                let dispatch = dispatch.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = handle_connection(stream, &kernel, &dispatch).await {
+                        eprintln!("Connection error from {}: {}", peer, e);
+                    }
+                });
             }
             Err(e) => {
-                eprintln!("Connection error: {}", e);
+                eprintln!("Accept error: {}", e);
             }
         }
     }
 }
 
-fn handle_connection(mut stream: TcpStream, kernel: Arc<AIKernel>) {
-    let mut buf = [0u8; 65536];
+async fn handle_connection(
+    mut stream: TcpStream,
+    kernel: &Arc<AIKernel>,
+    _dispatch: &DispatchHandle,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let mut buf = vec![0u8; 65536];
     loop {
-        let n = match stream.read(&mut buf) {
-            Ok(0) => return, // Connection closed
-            Ok(n) => n,
-            Err(e) => {
-                eprintln!("Read error: {}", e);
-                return;
-            }
-        };
+        let n = stream.read(&mut buf).await?;
+        if n == 0 {
+            return Ok(()); // Connection closed
+        }
 
         let request: ApiRequest = match serde_json::from_slice(&buf[..n]) {
             Ok(r) => r,
             Err(e) => {
-                let _ = send_response(&mut stream, ApiResponse::error(format!("parse error: {}", e)));
-                return;
+                send_error(&mut stream, format!("parse error: {}", e)).await?;
+                return Ok(());
             }
         };
 
-        let response = handle_request(&kernel, request);
-        if let Err(e) = send_response(&mut stream, response) {
-            eprintln!("Write error: {}", e);
-            return;
-        }
+        let response = handle_request(kernel, request);
+        send_response(&mut stream, response).await?;
     }
 }
 
-fn send_response(stream: &mut TcpStream, response: ApiResponse) -> std::io::Result<()> {
+async fn send_response(stream: &mut TcpStream, response: ApiResponse) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let json = serde_json::to_vec(&response).unwrap();
-    stream.write_all(&json)?;
-    stream.write_all(b"\n")?;
-    stream.flush()
+    stream.write_all(&json).await?;
+    stream.write_all(b"\n").await?;
+    stream.flush().await?;
+    Ok(())
+}
+
+async fn send_error(stream: &mut TcpStream, msg: String) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    send_response(stream, ApiResponse::error(msg)).await
 }
 
 fn handle_request(kernel: &AIKernel, req: ApiRequest) -> ApiResponse {
