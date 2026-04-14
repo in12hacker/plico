@@ -15,8 +15,10 @@
 //! The memory manager handles tier promotion (L0→L1→L2) and retrieval.
 
 pub mod layered;
+pub mod persist;
 
-pub use layered::{LayeredMemory, MemoryTier, MemoryEntry, MemoryError, MemoryContent};
+pub use layered::{LayeredMemory, MemoryTier, MemoryEntry, MemoryContent, MemoryError};
+pub use persist::{MemoryPersister, CASPersister, MemoryLoader, PersistError, PersistenceIndex, PersistedTier};
 
 use serde::{Deserialize, Serialize};
 

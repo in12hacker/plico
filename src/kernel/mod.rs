@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::cas::{CASStorage, AIObject, AIObjectMeta};
-use crate::memory::{LayeredMemory, MemoryEntry};
+use crate::memory::{LayeredMemory, MemoryEntry, CASPersister, MemoryPersister};
 use crate::scheduler::{AgentScheduler, Agent, Intent, IntentPriority, AgentHandle};
 use crate::fs::{SemanticFS, Query};
 use crate::api::permission::{PermissionGuard, PermissionContext, PermissionAction};
@@ -25,6 +25,10 @@ pub struct AIKernel {
     pub scheduler: Arc<AgentScheduler>,
     pub fs: Arc<SemanticFS>,
     pub permissions: Arc<PermissionGuard>,
+    /// Memory persister for L1/L2/L3 durability.
+    pub memory_persister: Option<Arc<dyn MemoryPersister + Send + Sync>>,
+    /// Kernel data root (used to create persister on restart).
+    root: PathBuf,
 }
 
 impl AIKernel {
@@ -33,16 +37,62 @@ impl AIKernel {
         let cas = Arc::new(CASStorage::new(root.join("cas"))?);
         let memory = Arc::new(LayeredMemory::new());
         let scheduler = Arc::new(AgentScheduler::new());
-        let fs = Arc::new(SemanticFS::new(root)?);
+        let fs = Arc::new(SemanticFS::new(root.clone())?);
         let permissions = Arc::new(PermissionGuard::new());
 
-        Ok(Self {
+        // Create memory persister and attach to memory
+        let persister = match CASPersister::new(cas.clone(), root.clone()) {
+            Ok(p) => {
+                let arc_p: Arc<dyn MemoryPersister + Send + Sync> = Arc::new(p);
+                memory.set_persister(arc_p.clone());
+                Some(arc_p)
+            }
+            Err(e) => {
+                tracing::warn!("Failed to create memory persister: {e}. Memory will not persist across restarts.");
+                None
+            }
+        };
+
+        let kernel = Self {
             cas,
             memory,
             scheduler,
             fs,
             permissions,
-        })
+            memory_persister: persister,
+            root,
+        };
+
+        // Restore persisted memories for all previously known agents
+        kernel.restore_memories();
+
+        Ok(kernel)
+    }
+
+    /// Restore persisted memories from CAS for all known agents.
+    fn restore_memories(&self) {
+        if self.memory_persister.is_none() {
+            return;
+        }
+
+        // Get list of agents that had persisted memories
+        // We need to read the index file directly
+        if let Ok(json) = std::fs::read_to_string(self.root.join("memory_index.json")) {
+            if let Ok(index) = serde_json::from_str::<crate::memory::PersistenceIndex>(&json) {
+                for agent_id in index.agents.keys() {
+                    if let Err(e) = self.memory.restore_agent(agent_id) {
+                        tracing::warn!("Failed to restore memories for agent {}: {}", agent_id, e);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Persist all in-memory tiers to CAS now.
+    /// Called automatically by the memory tier on every N operations,
+    /// and can be triggered manually.
+    pub fn persist_memories(&self) -> usize {
+        self.memory.persist_all()
     }
 
     // ─── CAS Operations ────────────────────────────────────────────────

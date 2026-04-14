@@ -5,7 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
 /// Memory tier classification.
@@ -192,20 +192,9 @@ impl MemoryEntry {
 }
 
 /// Global memory manager — holds all agents' memory tiers.
-pub struct LayeredMemory {
-    /// Per-agent ephemeral memories (in-memory only).
-    ephemeral: RwLock<HashMap<String, Vec<MemoryEntry>>>,
-
-    /// Per-agent working memories (in-memory with persistence hint).
-    working: RwLock<HashMap<String, Vec<MemoryEntry>>>,
-
-    /// Long-term memories (persisted, vector-indexed).
-    long_term: RwLock<HashMap<String, Vec<MemoryEntry>>>,
-
-    /// Procedural memories (persistent, not evicted).
-    procedural: RwLock<HashMap<String, Vec<MemoryEntry>>>,
-}
-
+///
+/// Can optionally be paired with a [`MemoryPersister`] for L1/L2 persistence
+/// across restarts.
 #[derive(Debug, thiserror::Error)]
 pub enum MemoryError {
     #[error("Entry not found: id={0}")]
@@ -218,18 +207,155 @@ pub enum MemoryError {
     TierCapacityExceeded { tier: MemoryTier, agent: String },
 }
 
+pub struct LayeredMemory {
+    /// Per-agent ephemeral memories (in-memory only).
+    ephemeral: RwLock<HashMap<String, Vec<MemoryEntry>>>,
+
+    /// Per-agent working memories (in-memory with persistence hint).
+    working: RwLock<HashMap<String, Vec<MemoryEntry>>>,
+
+    /// Long-term memories (persisted, vector-indexed).
+    long_term: RwLock<HashMap<String, Vec<MemoryEntry>>>,
+
+    /// Procedural memories (persistent, not evicted).
+    procedural: RwLock<HashMap<String, Vec<MemoryEntry>>>,
+
+    /// Optional persister for L1/L2 durability.
+    persister: RwLock<Option<Arc<dyn crate::memory::persist::MemoryPersister + Send + Sync>>>,
+
+    /// Operation counter for auto-persist triggering.
+    op_count: RwLock<u64>,
+}
+
+/// Default number of operations between auto-persists.
+pub const DEFAULT_PERSIST_OP_COUNT: u64 = 50;
+
 impl LayeredMemory {
+    /// Create a new empty memory manager.
     pub fn new() -> Self {
         Self {
             ephemeral: RwLock::new(HashMap::new()),
             working: RwLock::new(HashMap::new()),
             long_term: RwLock::new(HashMap::new()),
             procedural: RwLock::new(HashMap::new()),
+            persister: RwLock::new(None),
+            op_count: RwLock::new(0),
+        }
+    }
+
+    /// Attach a persister for L1/L2 durability.
+    pub fn set_persister(&self, p: Arc<dyn crate::memory::persist::MemoryPersister + Send + Sync>) {
+        *self.persister.write().unwrap() = Some(p);
+    }
+
+    /// Persist all Working, LongTerm, and Procedural memories to CAS.
+    /// Returns the number of agents persisted.
+    pub fn persist_all(&self) -> usize {
+        let persister = {
+            let guard = self.persister.read().unwrap();
+            match guard.as_ref() {
+                Some(p) => Arc::clone(p),
+                None => return 0,
+            }
+        };
+
+        let agent_ids: Vec<String> = {
+            let w = self.working.read().unwrap();
+            let l = self.long_term.read().unwrap();
+            let pr = self.procedural.read().unwrap();
+            let mut ids: std::collections::HashSet<_> = w.keys().cloned().collect();
+            ids.extend(l.keys().cloned());
+            ids.extend(pr.keys().cloned());
+            ids.into_iter().collect()
+        };
+
+        let mut persisted = 0;
+        for agent_id in agent_ids {
+            for tier in [MemoryTier::Working, MemoryTier::LongTerm, MemoryTier::Procedural] {
+                let entries = self.get_tier(&agent_id, tier);
+                if !entries.is_empty() {
+                    if persister.persist(&agent_id, tier, &entries).is_ok() {
+                        persisted += 1;
+                    }
+                }
+            }
+        }
+        persisted
+    }
+
+    /// Restore memories for a specific agent from the persister.
+    /// Called on kernel startup.
+    pub fn restore_agent(&self, agent_id: &str) -> Result<(), crate::memory::persist::PersistError> {
+        let persister = {
+            let guard = self.persister.read().unwrap();
+            match guard.as_ref() {
+                Some(p) => Arc::clone(p),
+                None => return Ok(()),
+            }
+        };
+
+        let loader = crate::memory::MemoryLoader::new(persister);
+        let restored = loader.restore_agent(agent_id)?;
+
+        for (tier, entries) in restored {
+            let count = entries.len();
+            self.store_batch(entries);
+            tracing::debug!(
+                agent_id = %agent_id,
+                tier = %tier.name(),
+                count = count,
+                "Restored memory tier from CAS",
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Restore all persisted agents.
+    pub fn restore_all(&self) -> usize {
+        let persister = {
+            let guard = self.persister.read().unwrap();
+            match guard.as_ref() {
+                Some(p) => Arc::clone(p),
+                None => return 0,
+            }
+        };
+
+        let agent_ids = persister.list_all_agent_ids();
+        let mut restored = 0;
+        for agent_id in agent_ids {
+            if self.restore_agent(&agent_id).is_ok() {
+                restored += 1;
+            }
+        }
+        restored
+    }
+
+    /// Increment operation counter and trigger persist if threshold reached.
+    /// Returns true if a persist was triggered.
+    pub fn tick(&self) -> bool {
+        let threshold = {
+            let mut cnt = self.op_count.write().unwrap();
+            *cnt += 1;
+            *cnt >= DEFAULT_PERSIST_OP_COUNT
+        };
+
+        if threshold {
+            *self.op_count.write().unwrap() = 0;
+            self.persist_all();
+            true
+        } else {
+            false
         }
     }
 
     /// Store a memory entry in the appropriate tier.
     pub fn store(&self, entry: MemoryEntry) {
+        self.tick();
+        self.store_inner(entry);
+    }
+
+    fn store_inner(&self, entry: MemoryEntry) {
         match entry.tier {
             MemoryTier::Ephemeral => {
                 let mut map = self.ephemeral.write().unwrap();
@@ -255,6 +381,13 @@ impl LayeredMemory {
                     .or_default()
                     .push(entry);
             }
+        }
+    }
+
+    /// Store multiple entries at once (without triggering auto-persist).
+    fn store_batch(&self, entries: Vec<MemoryEntry>) {
+        for entry in entries {
+            self.store_inner(entry);
         }
     }
 
@@ -348,3 +481,4 @@ fn now_ms() -> u64 {
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
 }
+
