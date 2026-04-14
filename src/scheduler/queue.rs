@@ -3,7 +3,7 @@
 use std::collections::BinaryHeap;
 use std::cmp::Ordering;
 
-use super::agent::{Intent, IntentId, IntentPriority};
+use super::agent::{Intent, IntentId};
 
 #[derive(Debug, thiserror::Error)]
 pub enum SchedulerError {

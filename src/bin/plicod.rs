@@ -10,7 +10,6 @@
 
 use plico::kernel::AIKernel;
 use plico::api::semantic::{ApiRequest, ApiResponse, SearchResultDto, AgentDto};
-use plico::memory::MemoryContent;
 use std::net::{TcpListener, TcpStream};
 use std::io::{Read, Write};
 use std::path::PathBuf;

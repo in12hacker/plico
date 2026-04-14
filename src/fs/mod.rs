@@ -28,5 +28,5 @@
 pub mod semantic_fs;
 pub mod context_loader;
 
-pub use semantic_fs::{SemanticFS, FSError, Query, SearchResult};
+pub use semantic_fs::{SemanticFS, FSError, Query, SearchResult, AuditEntry, AuditAction};
 pub use context_loader::{ContextLoader, ContextLayer};

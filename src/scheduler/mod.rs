@@ -24,8 +24,7 @@ pub use agent::{Agent, AgentId, AgentState, Intent, IntentPriority, IntentId};
 pub use queue::{SchedulerQueue, SchedulerError};
 
 use serde::{Deserialize, Serialize};
-use std::sync::{Arc, RwLock};
-use uuid::Uuid;
+use std::sync::RwLock;
 
 /// The scheduler — global agent lifecycle manager.
 pub struct AgentScheduler {

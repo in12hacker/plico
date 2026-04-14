@@ -57,15 +57,15 @@ struct RecycleEntry {
 }
 
 #[derive(Debug, Clone)]
-struct AuditEntry {
-    timestamp: u64,
-    action: AuditAction,
-    cid: String,
-    agent_id: String,
+pub struct AuditEntry {
+    pub timestamp: u64,
+    pub action: AuditAction,
+    pub cid: String,
+    pub agent_id: String,
 }
 
-#[derive(Debug, Clone)]
-enum AuditAction {
+#[derive(Debug, Clone, PartialEq)]
+pub enum AuditAction {
     Create,
     Update { previous_cid: String },
     Delete,

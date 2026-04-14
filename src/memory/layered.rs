@@ -6,7 +6,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::RwLock;
-use thiserror::Error;
 use uuid::Uuid;
 
 /// Memory tier classification.
@@ -288,31 +287,39 @@ impl LayeredMemory {
     }
 
     /// Evict ephemeral memories for an agent (called on context window overflow).
+    ///
+    /// Entries with `importance >= 70` are promoted to Working Memory (L1).
+    /// Entries with lower importance are discarded and returned.
+    ///
+    /// Returns the list of **discarded** entries (importance < 70).
     pub fn evict_ephemeral(&self, agent_id: &str) -> Vec<MemoryEntry> {
-        let mut map = self.ephemeral.write().unwrap();
-        let entries = map.remove(agent_id).unwrap_or_default();
+        let entries = {
+            let mut map = self.ephemeral.write().unwrap();
+            map.remove(agent_id).unwrap_or_default()
+        };
 
-        // Promote important entries to working memory
-        let mut working = self.working.write().unwrap();
-        let to_promote: Vec<_> = entries
+        let (to_promote, discarded): (Vec<_>, Vec<_>) = entries
             .into_iter()
-            .filter(|e| e.importance >= 70)
-            .map(|mut e| {
-                e.tier = MemoryTier::Working;
-                e
-            })
-            .collect();
-        working
-            .entry(agent_id.to_string())
-            .or_default()
-            .extend(to_promote.clone());
-        working
-            .get(agent_id)
-            .map(|v| v.clone())
-            .unwrap_or_default();
+            .partition(|e| e.importance >= 70);
 
-        // Return non-promoted entries (discarded)
-        to_promote
+        // Promote important entries to Working Memory (L1)
+        if !to_promote.is_empty() {
+            let mut working = self.working.write().unwrap();
+            let promoted: Vec<_> = to_promote
+                .into_iter()
+                .map(|mut e| {
+                    e.tier = MemoryTier::Working;
+                    e
+                })
+                .collect();
+            working
+                .entry(agent_id.to_string())
+                .or_default()
+                .extend(promoted);
+        }
+
+        // Return discarded entries (not promoted)
+        discarded
     }
 
     /// Tag-based retrieval from a specific tier.

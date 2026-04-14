@@ -295,9 +295,17 @@ fn cmd_recall(kernel: &AIKernel, args: &[String]) -> ApiResponse {
     ApiResponse::ok()
 }
 
-fn cmd_tags(_kernel: &AIKernel, _args: &[String]) -> ApiResponse {
-    // TODO: expose via kernel
-    ApiResponse::error("not yet implemented")
+fn cmd_tags(kernel: &AIKernel, _args: &[String]) -> ApiResponse {
+    let tags = kernel.list_tags();
+    if tags.is_empty() {
+        println!("No tags in filesystem.");
+    } else {
+        println!("All tags ({} total):", tags.len());
+        for tag in &tags {
+            println!("  - {}", tag);
+        }
+    }
+    ApiResponse::ok()
 }
 
 // ─── Utilities ───────────────────────────────────────────────────────

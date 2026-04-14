@@ -88,8 +88,11 @@ impl ContextLoader {
             .unwrap()
             .insert(cid.to_string(), summary.clone());
 
-        // Persist to disk
+        // Persist to disk — create shard directory first
         let path = self.l0_path(cid);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
         fs::write(path, summary)
     }
 
@@ -117,9 +120,11 @@ impl ContextLoader {
             });
         }
 
-        // Load from disk
+        // Load from disk; if not found, return placeholder (L0 summary is optional)
         let path = self.l0_path(cid);
-        let content = fs::read_to_string(&path)?;
+        let content = fs::read_to_string(&path).unwrap_or_else(|_| {
+            format!("[L0 summary not pre-computed for CID={}]", cid)
+        });
         let tokens_estimate = content.split_whitespace().count() * 3 / 4;
 
         // Populate cache

@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::cas::{CASStorage, AIObject, AIObjectMeta};
-use crate::memory::{LayeredMemory, MemoryEntry, MemoryQuery, MemoryResult, MemoryTier};
+use crate::memory::{LayeredMemory, MemoryEntry};
 use crate::scheduler::{AgentScheduler, Agent, Intent, IntentPriority, AgentHandle};
 use crate::fs::{SemanticFS, Query};
 use crate::api::permission::{PermissionGuard, PermissionContext, PermissionAction};
@@ -156,5 +156,10 @@ impl AIKernel {
     /// Evict ephemeral memories for an agent.
     pub fn forget_ephemeral(&self, agent_id: &str) {
         self.memory.evict_ephemeral(agent_id);
+    }
+
+    /// List all semantic tags in the filesystem.
+    pub fn list_tags(&self) -> Vec<String> {
+        self.fs.list_tags()
     }
 }
