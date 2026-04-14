@@ -2,6 +2,10 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## AI Navigation
+
+When creating or updating `AGENTS.md`, `INDEX.md`, or any project navigation index, use the **ariadne-thread** skill. All module directories have `INDEX.md` (L1) with public API, dependencies, dependents, task routing, and modification risk. See `AGENTS.md` for full project structure.
+
 ## Project Overview
 
 **Plico** is an AI-native operating system designed from scratch exclusively for AI agents — no human CLI/GUI, no human filesystem paths. All data management (files, images, audio, video) is performed by AI through AI-friendly semantic APIs. The system is model-agnostic and does not depend on any specific AI or agent.
