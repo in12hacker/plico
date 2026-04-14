@@ -1,0 +1,36 @@
+[package]
+name = "plico"
+version = "0.1.0"
+edition = "2021"
+description = "AI-native operating system — designed entirely from AI perspective"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/in12hacker/plico"
+readme = "README.md"
+
+[dependencies]
+sha2 = "0.10"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "1.0"
+tokio = { version = "1.0", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1.0", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+
+[dev-dependencies]
+tempfile = "3.0"
+criterion = "0.5"
+
+[[bin]]
+name = "plicod"
+path = "src/bin/plicod.rs"
+
+[[bin]]
+name = "aicli"
+path = "src/bin/aicli.rs"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
