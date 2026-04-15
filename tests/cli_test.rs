@@ -17,6 +17,9 @@ fn aicli() -> String {
 fn run(root: &std::path::Path, args: &[&str]) -> Output {
     let mut cmd = Command::new(aicli());
     cmd.arg("--root").arg(root);
+    // Use stub embedding to avoid subprocess warm-up delay in tests.
+    // E2E embedding tests use EMBEDDING_BACKEND=local separately.
+    cmd.env("EMBEDDING_BACKEND", "stub");
     for arg in args {
         cmd.arg(arg);
     }

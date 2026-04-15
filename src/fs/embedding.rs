@@ -6,13 +6,15 @@
 //!
 //! ```text
 //! EmbeddingProvider (trait)
-//! ├── OllamaBackend      — calls local Ollama daemon via HTTP
-//! └── LocalONNXBackend   — pure Rust ONNX Runtime (future iteration)
+//! ├── OllamaBackend           — calls local Ollama daemon via HTTP
+//! ├── LocalEmbeddingBackend  — Python subprocess (ONNX Runtime), stdio JSON-RPC
+//! └── StubEmbeddingProvider   — error stub when no backend available
 //! ```
 //!
 //! All backends are thread-safe (`Send + Sync`).
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// A dense text embedding vector.
 pub type Embedding = Vec<f32>;
@@ -53,6 +55,12 @@ pub enum EmbedError {
 
     #[error("Runtime error: {0}")]
     Runtime(#[from] std::io::Error),
+
+    #[error("Python subprocess error: {0}")]
+    Subprocess(String),
+
+    #[error("Python subprocess not available. Install dependencies:\n  pip install transformers huggingface_hub onnxruntime")]
+    SubprocessUnavailable,
 }
 
 impl EmbedError {
@@ -97,7 +105,6 @@ impl OllamaBackend {
     /// `url` — Ollama server URL (e.g. `"http://localhost:11434"`).
     /// `model` — Model name (e.g. `"all-minilm-l6-v2"` or `"nomic-embed-text"`).
     pub fn new(url: &str, model: &str) -> Result<Self, EmbedError> {
-        // Build a single-threaded runtime for HTTP I/O
         let rt = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(1)
             .enable_all()
@@ -108,7 +115,6 @@ impl OllamaBackend {
             .build()
             .map_err(EmbedError::Http)?;
 
-        // Probe server to verify model availability and get dimension
         let dimension = rt.block_on(Self::probe(&client, url, model)).unwrap_or_else(|e| {
             tracing::warn!("Ollama probe failed: {e}. Using default dimension 384.");
             384
@@ -123,7 +129,6 @@ impl OllamaBackend {
         })
     }
 
-    /// Probe Ollama for model availability and embedding dimension.
     async fn probe(client: &reqwest::Client, url: &str, model: &str) -> Result<usize, EmbedError> {
         let tags_url = format!("{}/api/tags", url.trim_end_matches('/'));
         let resp: serde_json::Value = client
@@ -243,34 +248,247 @@ impl Clone for OllamaBackend {
     }
 }
 
-// ─── Local ONNX Stub ──────────────────────────────────────────────────────────
+// ─── Local Embedding Backend (Python subprocess) ───────────────────────────────
 
-/// Placeholder for local ONNX inference backend.
+/// Local embedding backend via Python subprocess.
 ///
-/// In a future iteration, this will use the `ort` crate to run
-/// all-MiniLM-L6-v2 directly without an external Ollama daemon.
-pub struct LocalONNXBackend {
-    dimension: usize,
+/// Uses a Python interpreter with ONNX Runtime + HuggingFace transformers
+/// to run an embedding model entirely locally — no Ollama required.
+///
+/// **Protocol**: JSON-RPC over stdio.
+/// Each request is a JSON line written to stdin; each response is a JSON line
+/// read from stdout. Fully decoupled: swap the Python script path or model
+/// by changing environment variables.
+///
+/// ## Model
+///
+/// Default: `bge-small-en-v1.5` (384d, ~24MB, MTEB 62.17)
+/// Fast (<100ms/sentence on 4-core CPU), high quality, Apache 2.0.
+///
+/// Alternative models can be configured via `EMBEDDING_MODEL_ID`:
+/// - `BAAI/bge-small-en-v1.5` (default, English, 24MB)
+/// - `TaylorAI/bge-small-gоторage-en-v1.5` (English, 24MB)
+/// - `intfloat/e5-small-v2` (multilingual, 22MB)
+///
+/// ## Setup
+///
+/// ```bash
+/// pip install transformers huggingface_hub onnxruntime
+/// # Model downloads automatically on first run (~24MB)
+/// ```
+pub struct LocalEmbeddingBackend {
+    child: std::sync::Mutex<ChildHandle>,
     model: String,
+    dimension: usize,
+    counter: AtomicUsize,
 }
 
-impl LocalONNXBackend {
-    pub fn new(model_path: &str) -> Result<Self, EmbedError> {
-        tracing::warn!("LocalONNXBackend is a stub — falling back to Ollama for embeddings");
-        Ok(Self {
-            dimension: 384,
-            model: model_path.to_string(),
-        })
+/// Wrapper that holds the Python subprocess handles.
+/// Communicates via channel: sender writes JSON lines to stdin,
+/// receiver reads JSON lines from stdout. A dedicated thread drains stdout.
+struct ChildHandle {
+    /// Process handle for wait().
+    process: std::process::Child,
+    /// Write JSON-RPC requests here.
+    to_stdin: std::sync::mpsc::Sender<String>,
+    /// Receive JSON-RPC responses here.
+    from_stdout: std::sync::mpsc::Receiver<Result<String, std::io::Error>>,
+}
+
+impl LocalEmbeddingBackend {
+    /// Create a new local embedding backend.
+    ///
+    /// `model_id` — HuggingFace model ID (default: `BAAI/bge-small-en-v1.5`).
+    /// `python_path` — Path to python interpreter.
+    ///
+    /// Script location: `CARGO_MANIFEST_DIR/tests/e2e/embed_server.py`.
+    /// This is an E2E test utility only. Production: use `EMBEDDING_BACKEND=ollama`.
+    ///
+    /// Returns an error if the Python script cannot be started.
+    pub fn new(model_id: &str, python_path: &str) -> Result<Self, EmbedError> {
+        let manifest_dir = std::env!("CARGO_MANIFEST_DIR");
+        let script_path = format!("{}/tests/e2e/embed_server.py", manifest_dir);
+        let script = std::fs::read_to_string(&script_path).map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                EmbedError::SubprocessUnavailable
+            } else {
+                EmbedError::Subprocess(format!(
+                    "e2e embed script not found at {}: {}. \
+                    This script is E2E-only. Set EMBEDDING_BACKEND=ollama for production.",
+                    script_path, e
+                ))
+            }
+        })?;
+
+        let mut child = std::process::Command::new(python_path)
+            .arg("-c")
+            .arg(script)
+            .env("EMBEDDING_MODEL_ID", model_id)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|e| {
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    EmbedError::SubprocessUnavailable
+                } else {
+                    EmbedError::Subprocess(format!("failed to spawn python: {e}"))
+                }
+            })?;
+
+        let stdin = child.stdin.take().unwrap();
+        let stdout = child.stdout.take().unwrap();
+
+        // Channel: main thread sends requests, stdout-reader thread receives responses
+        let (to_stdin, from_main) = std::sync::mpsc::channel::<String>();
+        let (to_main, from_stdout) = std::sync::mpsc::channel();
+
+        // Dedicated thread that reads stdout lines and forwards them to main thread
+        std::thread::spawn(move || {
+            let mut reader = std::io::BufReader::new(stdout);
+            let mut line = String::new();
+            loop {
+                line.clear();
+                match std::io::BufRead::read_line(&mut reader, &mut line) {
+                    Ok(0) => break, // EOF
+                    Ok(_) => {
+                        if to_main.send(Ok(line.clone())).is_err() {
+                            break; // receiver dropped
+                        }
+                    }
+                    Err(e) => {
+                        let _ = to_main.send(Err(e));
+                        break;
+                    }
+                }
+            }
+        });
+
+        // Spawn stdin writer thread that reads from main and writes to python
+        std::thread::spawn(move || {
+            let mut stdin = stdin;
+            for line in from_main.iter() {
+                use std::io::Write;
+                if stdin.write_all(line.as_bytes()).is_err() {
+                    break;
+                }
+                if stdin.flush().is_err() {
+                    break;
+                }
+            }
+        });
+
+        let handle = ChildHandle {
+            process: child,
+            to_stdin,
+            from_stdout,
+        };
+
+        let mut this = Self {
+            child: std::sync::Mutex::new(handle),
+            model: model_id.to_string(),
+            dimension: 0,
+            counter: AtomicUsize::new(0),
+        };
+
+        // Probe for dimension
+        this.dimension = this.probe()?;
+
+        tracing::info!(
+            "LocalEmbeddingBackend ready: model={} dim={}",
+            model_id,
+            this.dimension
+        );
+
+        Ok(this)
+    }
+
+    /// Probe the Python server for model info (dimension).
+    fn probe(&self) -> Result<usize, EmbedError> {
+        let req = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: 0,
+            method: "info".to_string(),
+            params: serde_json::Value::Null,
+        };
+        let resp = self.send_rpc(req)?;
+        resp.result
+            .and_then(|r| r.get("dimension").and_then(|d| d.as_u64()))
+            .map(|d| d as usize)
+            .ok_or_else(|| {
+                EmbedError::Subprocess(
+                    resp.error
+                        .map(|e| e.message)
+                        .unwrap_or_else(|| "info probe failed".into()),
+                )
+            })
+    }
+
+    fn send_rpc(&self, req: JsonRpcRequest) -> Result<JsonRpcResponse, EmbedError> {
+        // Serialize request
+        let line = serde_json::to_string(&req).map_err(|e| EmbedError::Subprocess(e.to_string()))?;
+        let line = format!("{}\n", line);
+
+        // Send to stdin writer thread
+        self.child
+            .lock()
+            .unwrap()
+            .to_stdin
+            .send(line)
+            .map_err(|e| EmbedError::Subprocess(format!("stdin send error: {e}")))?;
+
+        // Wait for response from stdout reader thread
+        let line = self
+            .child
+            .lock()
+            .unwrap()
+            .from_stdout
+            .recv()
+            .map_err(|e| EmbedError::Subprocess(format!("recv error: {e}")))?
+            .map_err(|e| EmbedError::Subprocess(format!("stdout read error: {e}")))?;
+
+        serde_json::from_str(&line)
+            .map_err(|e| EmbedError::Subprocess(format!("parse error: {e}: {line}")))
+    }
+
+    fn embed_single(&self, text: &str) -> Result<Embedding, EmbedError> {
+        let id = self.counter.fetch_add(1, Ordering::SeqCst) as i64;
+        let req = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id,
+            method: "embed".to_string(),
+            params: serde_json::json!({ "text": text }),
+        };
+
+        let resp = self.send_rpc(req)?;
+
+        resp.result
+            .and_then(|r| r.get("embedding").and_then(|e| {
+                e.as_array().map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_f64().map(|f| f as f32))
+                        .collect()
+                })
+            }))
+            .ok_or_else(|| {
+                EmbedError::Subprocess(
+                    resp.error.map(|e| e.message).unwrap_or_else(|| "embed failed".into()),
+                )
+            })
     }
 }
 
-impl EmbeddingProvider for LocalONNXBackend {
-    fn embed(&self, _text: &str) -> Result<Embedding, EmbedError> {
-        Err(EmbedError::Onnx("LocalONNXBackend not yet implemented".to_string()))
+impl EmbeddingProvider for LocalEmbeddingBackend {
+    fn embed(&self, text: &str) -> Result<Embedding, EmbedError> {
+        self.embed_single(text)
     }
 
-    fn embed_batch(&self, _texts: &[&str]) -> Result<Vec<Embedding>, EmbedError> {
-        Err(EmbedError::Onnx("LocalONNXBackend not yet implemented".to_string()))
+    fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Embedding>, EmbedError> {
+        let mut results = Vec::with_capacity(texts.len());
+        for text in texts {
+            results.push(self.embed_single(text)?);
+        }
+        Ok(results)
     }
 
     fn dimension(&self) -> usize {
@@ -282,20 +500,90 @@ impl EmbeddingProvider for LocalONNXBackend {
     }
 }
 
+impl Drop for LocalEmbeddingBackend {
+    fn drop(&mut self) {
+        // Dropping the channel sends will cause the stdin writer thread to exit.
+        // Then wait for the process to finish.
+        let _ = self.child.lock().unwrap().to_stdin.send(String::new()).ok();
+        let _ = self.child.lock().unwrap().process.wait();
+    }
+}
+
+// ─── JSON-RPC types ───────────────────────────────────────────────────────────
+
+#[derive(Debug, serde::Serialize)]
+struct JsonRpcRequest {
+    jsonrpc: String,
+    id: i64,
+    method: String,
+    params: serde_json::Value,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct JsonRpcResponse {
+    #[serde(default)]
+    jsonrpc: String,
+    #[serde(default)]
+    id: i64,
+    #[serde(default)]
+    result: Option<serde_json::Value>,
+    #[serde(default)]
+    error: Option<JsonRpcError>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct JsonRpcError {
+    code: i64,
+    message: String,
+}
+
+// ─── Stub Backend ─────────────────────────────────────────────────────────────
+
+/// A stub embedding provider used when no backend is available.
+/// Always returns an error, triggering tag-based fallback in search.
+pub struct StubEmbeddingProvider;
+
+impl StubEmbeddingProvider {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl EmbeddingProvider for StubEmbeddingProvider {
+    fn embed(&self, _text: &str) -> Result<Embedding, EmbedError> {
+        Err(EmbedError::ServerUnavailable(
+            "No embedding backend available".to_string(),
+        ))
+    }
+
+    fn embed_batch(&self, _texts: &[&str]) -> Result<Vec<Embedding>, EmbedError> {
+        Err(EmbedError::ServerUnavailable(
+            "No embedding backend available".to_string(),
+        ))
+    }
+
+    fn dimension(&self) -> usize {
+        384
+    }
+
+    fn model_name(&self) -> &str {
+        "stub"
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_ollama_backend_creation_without_server() {
-        // Without a running Ollama, the backend still creates (probe fails gracefully)
         let backend = OllamaBackend::new("http://localhost:9999", "all-minilm-l6-v2");
-        // Should succeed with default dimension (probe fails but is handled)
         match backend {
             Ok(b) => assert_eq!(b.dimension(), 384),
             Err(e) => {
-                // Connection refused is acceptable
-                assert!(format!("{e}").contains("connection") || format!("{e}").contains("9999") || format!("{e}").contains("probe"));
+                assert!(format!("{e}").contains("connection")
+                    || format!("{e}").contains("9999")
+                    || format!("{e}").contains("probe"));
             }
         }
     }

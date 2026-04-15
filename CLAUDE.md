@@ -97,13 +97,29 @@ Tools are registered at user scope — available in all sessions. Use `claude mc
 
 **Important**: The built-in `WebSearch` tool does NOT work with MiniMax API (MiniMax does not support it). Always use `web_search` from the MiniMax MCP server instead.
 
+## Embedding Backend
+
+Local embeddings are powered by `bge-small-en-v1.5` (384d, 24MB, MTEB 62.17) via Python subprocess with ONNX Runtime. Configure via environment:
+
+```bash
+export EMBEDDING_BACKEND=local          # "local" (default) | "ollama" | "stub"
+export EMBEDDING_MODEL_ID=BAAI/bge-small-en-v1.5   # HuggingFace model ID
+export EMBEDDING_PYTHON=python3       # python interpreter path
+
+# Setup (one-time):
+pip install transformers huggingface_hub onnxruntime
+# Model auto-downloads (~24MB for bge-small-en-v1.5)
+```
+
+The subprocess uses JSON-RPC over stdio — fully decoupled, no shared memory.
+
 ## Build & Test Commands
 
 ```bash
 # Build
 cargo build
 
-# Run tests (all 93 tests)
+# Run tests (all 38 tests)
 cargo test
 
 # Build release

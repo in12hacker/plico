@@ -7,6 +7,9 @@ use plico::kernel::AIKernel;
 use tempfile::tempdir;
 
 fn make_kernel() -> (AIKernel, tempfile::TempDir) {
+    // Use stub embedding to avoid subprocess spawn overhead in tests.
+    // Tests that verify embedding integration use EMBEDDING_BACKEND=local separately.
+    let _ = std::env::set_var("EMBEDDING_BACKEND", "stub");
     let dir = tempdir().unwrap();
     let kernel = AIKernel::new(dir.path().to_path_buf()).expect("kernel init");
     (kernel, dir)

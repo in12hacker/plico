@@ -5,7 +5,7 @@
 
 use plico::fs::{
     SemanticFS, Query, ContextLoader, ContextLayer, AuditAction,
-    EmbeddingProvider, InMemoryBackend, EmbedError,
+    EmbeddingProvider, InMemoryBackend, EmbedError, KnowledgeGraph,
 };
 use tempfile::tempdir;
 
@@ -28,7 +28,8 @@ fn make_fs() -> (SemanticFS, tempfile::TempDir) {
         dir.path().to_path_buf(),
         std::sync::Arc::new(StubProvider),
         std::sync::Arc::new(InMemoryBackend::new()),
-        None, // no summarizer in tests
+        None,                        // no summarizer in tests
+        None,                        // no knowledge graph in tests
     ).unwrap();
     (fs, dir)
 }

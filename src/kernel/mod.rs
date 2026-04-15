@@ -15,7 +15,7 @@ use std::sync::Arc;
 use crate::cas::{CASStorage, AIObject, AIObjectMeta};
 use crate::memory::{LayeredMemory, MemoryEntry, CASPersister, MemoryPersister};
 use crate::scheduler::{AgentScheduler, Agent, Intent, IntentPriority, AgentHandle};
-use crate::fs::{SemanticFS, Query, OllamaBackend, InMemoryBackend, EmbeddingProvider, SemanticSearch, OllamaSummarizer, Summarizer, KnowledgeGraph, PetgraphBackend};
+use crate::fs::{SemanticFS, Query, OllamaBackend, InMemoryBackend, EmbeddingProvider, SemanticSearch, OllamaSummarizer, Summarizer, KnowledgeGraph, PetgraphBackend, LocalEmbeddingBackend, StubEmbeddingProvider, EmbedError};
 use crate::api::permission::{PermissionGuard, PermissionContext, PermissionAction};
 
 /// The AI Kernel — all subsystems wired together.
@@ -40,33 +40,25 @@ pub struct AIKernel {
 impl AIKernel {
     /// Initialize the AI Kernel with the given storage root.
     ///
-    /// Uses Ollama at `OLLAMA_URL` env var (default `http://localhost:11434`)
-    /// with model `OLLAMA_EMBEDDING_MODEL` env var (default `all-minilm-l6-v2`).
+    /// Embedding backend priority (set via `EMBEDDING_BACKEND` env):
+    ///   "local" (default) — Python subprocess with bge-small-en-v1.5 ONNX model
+    ///   "ollama"          — Ollama daemon (OLLAMA_URL / OLLAMA_EMBEDDING_MODEL)
+    ///   "stub"            — always returns error (tag-only search)
+    ///
+    /// For local backend: `pip install transformers huggingface_hub onnxruntime`
+    /// Model auto-downloads (~24MB for bge-small-en-v1.5).
     pub fn new(root: PathBuf) -> std::io::Result<Self> {
         let cas = Arc::new(CASStorage::new(root.join("cas"))?);
 
-        // Create embedding provider — Ollama daemon backend.
-        // If Ollama is unavailable, the kernel starts anyway; search falls back
-        // to tag-based matching when embedding fails at runtime.
-        let ollama_url = std::env::var("OLLAMA_URL").unwrap_or_else(|_| "http://localhost:11434".to_string());
-        let embedding_model = std::env::var("OLLAMA_EMBEDDING_MODEL")
-            .unwrap_or_else(|_| "all-minilm-l6-v2".to_string());
-        let embedding: Arc<dyn EmbeddingProvider> = match OllamaBackend::new(&ollama_url, &embedding_model) {
-            Ok(b) => Arc::new(b),
-            Err(e) => {
-                tracing::warn!(
-                    "Ollama not available at {}: {e}. \
-                    Semantic search will fall back to tag matching.",
-                    ollama_url
-                );
-                // Use a stub that returns an error on every embed call
-                // (triggers tag-based fallback in SemanticFS::search)
+        let embedding: Arc<dyn EmbeddingProvider> =
+            create_embedding_provider().unwrap_or_else(|e| {
+                tracing::warn!("Embedding backend failed: {e}. Using stub (tag-only search).");
                 Arc::new(StubEmbeddingProvider::new()) as Arc<dyn EmbeddingProvider>
-            }
-        };
+            });
 
         // Create summarizer — Ollama chat model for L0/L1 summaries.
         // Falls back to heuristic if Ollama is unavailable.
+        let ollama_url = std::env::var("OLLAMA_URL").unwrap_or_else(|_| "http://localhost:11434".to_string());
         let summarizer_model = std::env::var("OLLAMA_SUMMARIZER_MODEL")
             .unwrap_or_else(|_| "llama3.2".to_string());
         let summarizer: Option<Arc<dyn Summarizer>> = match OllamaSummarizer::new(&ollama_url, &summarizer_model) {
@@ -311,34 +303,59 @@ impl AIKernel {
 
 // ─── Stub Embedding Provider ─────────────────────────────────────────────────
 
-/// A stub embedding provider used when Ollama is not available.
-/// Always returns an error, triggering tag-based fallback in search.
-struct StubEmbeddingProvider;
+/// Create the embedding provider based on EMBEDDING_BACKEND env var.
+///
+/// Priority: local → ollama → stub
+fn create_embedding_provider() -> Result<Arc<dyn EmbeddingProvider>, crate::fs::embedding::EmbedError> {
+    let backend = std::env::var("EMBEDDING_BACKEND")
+        .unwrap_or_else(|_| "local".to_string());
 
-impl StubEmbeddingProvider {
-    fn new() -> Self {
-        Self
+    match backend.as_str() {
+        "local" => {
+            let model_id = std::env::var("EMBEDDING_MODEL_ID")
+                .unwrap_or_else(|_| "BAAI/bge-small-en-v1.5".to_string());
+            let python = std::env::var("EMBEDDING_PYTHON")
+                .unwrap_or_else(|_| "python3".to_string());
+            match LocalEmbeddingBackend::new(&model_id, &python) {
+                Ok(b) => {
+                    tracing::info!("Embedding backend: local ({})", model_id);
+                    Ok(Arc::new(b) as Arc<dyn EmbeddingProvider>)
+                }
+                Err(EmbedError::SubprocessUnavailable) => {
+                    tracing::warn!(
+                        "LocalEmbeddingBackend unavailable (python3 not found or pip deps missing). \
+                        Install: pip install transformers huggingface_hub onnxruntime"
+                    );
+                    // Fall through to next backend
+                    try_ollama()
+                }
+                Err(e) => {
+                    tracing::warn!("LocalEmbeddingBackend error: {e}. Falling back.");
+                    try_ollama()
+                }
+            }
+        }
+        "ollama" => try_ollama(),
+        "stub" => {
+            tracing::info!("Embedding backend: stub (tag-only search)");
+            Ok(Arc::new(StubEmbeddingProvider::new()) as Arc<dyn EmbeddingProvider>)
+        }
+        _ => {
+            tracing::warn!("Unknown EMBEDDING_BACKEND={}, trying local", backend);
+            try_ollama()
+        }
     }
 }
 
-impl EmbeddingProvider for StubEmbeddingProvider {
-    fn embed(&self, _text: &str) -> Result<Vec<f32>, crate::fs::embedding::EmbedError> {
-        Err(crate::fs::embedding::EmbedError::ServerUnavailable(
-            "Ollama not configured".to_string(),
-        ))
-    }
-
-    fn embed_batch(&self, _texts: &[&str]) -> Result<Vec<Vec<f32>>, crate::fs::embedding::EmbedError> {
-        Err(crate::fs::embedding::EmbedError::ServerUnavailable(
-            "Ollama not configured".to_string(),
-        ))
-    }
-
-    fn dimension(&self) -> usize {
-        384 // Placeholder
-    }
-
-    fn model_name(&self) -> &str {
-        "stub"
+fn try_ollama() -> Result<Arc<dyn EmbeddingProvider>, EmbedError> {
+    let url = std::env::var("OLLAMA_URL").unwrap_or_else(|_| "http://localhost:11434".to_string());
+    let model = std::env::var("OLLAMA_EMBEDDING_MODEL")
+        .unwrap_or_else(|_| "all-minilm-l6-v2".to_string());
+    match OllamaBackend::new(&url, &model) {
+        Ok(b) => {
+            tracing::info!("Embedding backend: ollama ({})", model);
+            Ok(Arc::new(b) as Arc<dyn EmbeddingProvider>)
+        }
+        Err(e) => Err(e),
     }
 }
