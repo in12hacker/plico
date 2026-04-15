@@ -11,18 +11,26 @@ src/
 │   └── storage.rs    # CASStorage engine (sharded, atomic writes)
 ├── memory/           # Layered memory — Ephemeral / Working / LongTerm / Procedural
 │   ├── layered.rs    # LayeredMemory + MemoryTier + MemoryEntry + MemoryContent
+│   ├── persist.rs    # CASPersister, MemoryPersister trait, MemoryLoader, PersistenceIndex
 │   └── mod.rs        # MemoryQuery, MemoryResult (public types)
 ├── scheduler/        # Agent lifecycle — registration, priority queue, intent scheduling
 │   ├── agent.rs      # Agent, AgentId, AgentState, Intent, IntentPriority
 │   ├── queue.rs      # SchedulerQueue (binary heap, priority + timestamp ordering)
-│   └── mod.rs        # AgentScheduler, AgentHandle
+│   ├── dispatch.rs   # AgentExecutor trait, TokioDispatchLoop, DispatchHandle, LocalExecutor
+│   └── mod.rs        # AgentScheduler
 ├── fs/               # Semantic filesystem — tag-based CRUD, no paths
-│   ├── semantic_fs.rs # SemanticFS + Query + SearchResult + audit/recycle log
-│   └── context_loader.rs # L0/L1/L2 layered context loading
+│   ├── semantic_fs.rs  # SemanticFS + Query + SearchResult + audit/recycle log
+│   ├── context_loader.rs # L0/L1/L2 layered context loading (L2 reads real CAS content)
+│   ├── embedding.rs    # EmbeddingProvider trait, OllamaBackend, LocalEmbeddingBackend, StubEmbeddingProvider
+│   ├── search.rs       # SemanticSearch trait, InMemoryBackend, SearchFilter, SearchHit
+│   ├── graph.rs        # KnowledgeGraph trait, PetgraphBackend, KGNode, KGEdge, KGEdgeType
+│   └── summarizer.rs   # Summarizer trait, OllamaSummarizer, SummaryLayer
 ├── kernel/           # AI Kernel — orchestrates all subsystems
 │   └── mod.rs        # AIKernel: wires CAS, memory, scheduler, fs, permissions
+│                     #   start_dispatch_loop() → DispatchHandle
+│                     #   graph_explore_raw()  → Vec<(String,String,String,String,f32)>
 ├── api/              # API layer — permission guardrails + semantic JSON protocol
-│   ├── semantic.rs   # ApiRequest, ApiResponse (JSON over TCP)
+│   ├── semantic.rs   # ApiRequest, ApiResponse, ContentEncoding, decode_content (JSON over TCP)
 │   └── permission.rs # PermissionGuard, PermissionContext, PermissionAction
 └── bin/
     ├── plicod.rs     # TCP daemon (port 7878, JSON protocol)
@@ -38,12 +46,18 @@ CLAUDE.md             # Project-level guidance for Claude Code
 |------|-------------|---------|
 | CAS storage | `src/cas/mod.rs` | `AIObject`, `CASStorage`, `AIObjectMeta` |
 | Memory system | `src/memory/mod.rs` | `LayeredMemory`, `MemoryTier`, `MemoryEntry` |
+| Memory persistence | `src/memory/persist.rs` | `CASPersister`, `MemoryPersister`, `MemoryLoader` |
 | Agent scheduling | `src/scheduler/mod.rs` | `AgentScheduler`, `Intent`, `IntentPriority` |
+| Agent dispatch | `src/scheduler/dispatch.rs` | `AgentExecutor`, `TokioDispatchLoop`, `DispatchHandle` |
 | Semantic FS | `src/fs/mod.rs` | `SemanticFS`, `Query`, `SearchResult` |
+| Vector search | `src/fs/search.rs` | `SemanticSearch`, `InMemoryBackend`, `SearchFilter` |
+| Embedding backends | `src/fs/embedding.rs` | `OllamaBackend`, `LocalEmbeddingBackend`, `StubEmbeddingProvider` |
+| Knowledge graph | `src/fs/graph.rs` | `KnowledgeGraph`, `PetgraphBackend`, `KGNode`, `KGEdge` |
+| Summarizer | `src/fs/summarizer.rs` | `OllamaSummarizer`, `SummaryLayer` |
 | AI Kernel | `src/kernel/mod.rs` | `AIKernel` — the main orchestrator |
 | Permission guard | `src/api/permission.rs` | `PermissionGuard`, `PermissionAction` |
 | TCP daemon | `src/bin/plicod.rs` | JSON API server on port 7878 |
-| CLI tool | `src/bin/aicli.rs` | `put`, `get`, `search`, `update`, `delete`, `agent`, `remember`, `recall` |
+| CLI tool | `src/bin/aicli.rs` | `put`, `get`, `search`, `update`, `delete`, `tags`, `explore`, `agent`, `remember`, `recall` |
 
 ## Build & Test
 
@@ -85,8 +99,9 @@ CLAUDE.md             # Project-level guidance for Claude Code
 - Never panicking in library code except for critical invariants (`expect()` with message)
 
 ### Logging
-- No logging library in MVP; use `eprintln!` for daemon startup errors only
-- TODO: integrate `tracing` crate for structured logging (configured but not wired)
+- `tracing` crate is in Cargo.toml; `tracing::warn!` used in `SemanticFS` for embedding failures
+- `tracing_subscriber` available but not initialized in daemon/CLI — startup errors use `eprintln!`
+- TODO: call `tracing_subscriber::fmt::init()` in `plicod.rs` and `aicli.rs` main()
 
 ### Concurrency
 - `RwLock` for in-memory maps (ephemeral, working, long-term, procedural memories)

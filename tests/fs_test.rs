@@ -5,8 +5,10 @@
 
 use plico::fs::{
     SemanticFS, Query, ContextLoader, ContextLayer, AuditAction,
-    EmbeddingProvider, InMemoryBackend, EmbedError, KnowledgeGraph,
+    EmbeddingProvider, InMemoryBackend, EmbedError,
 };
+use plico::cas::CASStorage;
+use std::sync::Arc;
 use tempfile::tempdir;
 
 /// A stub embedding provider that always fails — forces tag-based fallback in tests.
@@ -215,7 +217,8 @@ fn test_deduplication_by_content() {
 #[test]
 fn test_context_loader_l0_cache() {
     let dir = tempdir().unwrap();
-    let loader = ContextLoader::new(dir.path().to_path_buf(), None).unwrap();
+    let cas = Arc::new(CASStorage::new(dir.path().join("cas_loader_test")).unwrap());
+    let loader = ContextLoader::new(dir.path().to_path_buf(), None, cas).unwrap();
 
     // Compute L0 summary (fallback heuristic since no summarizer)
     let summary = loader.compute_l0("This is a very long document with many words that should be summarized for the L0 layer.");
@@ -226,7 +229,8 @@ fn test_context_loader_l0_cache() {
 #[test]
 fn test_context_loader_l0_round_trip() {
     let dir = tempdir().unwrap();
-    let loader = ContextLoader::new(dir.path().to_path_buf(), None).unwrap();
+    let cas = Arc::new(CASStorage::new(dir.path().join("cas_loader_test")).unwrap());
+    let loader = ContextLoader::new(dir.path().to_path_buf(), None, cas).unwrap();
 
     // Create a test object (compute CID manually)
     let content = "Meeting notes: Project X kickoff discussion about Rust performance optimization.";
@@ -244,7 +248,8 @@ fn test_context_loader_l0_round_trip() {
 #[test]
 fn test_context_loader_l0_not_found_returns_error() {
     let dir = tempdir().unwrap();
-    let loader = ContextLoader::new(dir.path().to_path_buf(), None).unwrap();
+    let cas = Arc::new(CASStorage::new(dir.path().join("cas_loader_test")).unwrap());
+    let loader = ContextLoader::new(dir.path().to_path_buf(), None, cas).unwrap();
 
     // Load nonexistent CID → should return an error (or placeholder)
     let result = loader.load("nonexistent00000000000000000000000000000000000000000000000000000000", ContextLayer::L0);
@@ -256,7 +261,8 @@ fn test_context_loader_l0_not_found_returns_error() {
 #[test]
 fn test_context_loader_l1_returns_placeholder() {
     let dir = tempdir().unwrap();
-    let loader = ContextLoader::new(dir.path().to_path_buf(), None).unwrap();
+    let cas = Arc::new(CASStorage::new(dir.path().join("cas_loader_test")).unwrap());
+    let loader = ContextLoader::new(dir.path().to_path_buf(), None, cas).unwrap();
 
     let ctx = loader.load("somecid0000000000000000000000000000000000000000000000000000000000", ContextLayer::L1).unwrap();
     assert_eq!(ctx.layer, ContextLayer::L1);
@@ -264,12 +270,27 @@ fn test_context_loader_l1_returns_placeholder() {
 }
 
 #[test]
-fn test_context_loader_l2_returns_full_content_marker() {
-    let dir = tempdir().unwrap();
-    let loader = ContextLoader::new(dir.path().to_path_buf(), None).unwrap();
+fn test_context_loader_l2_real_content() {
+    use plico::cas::AIObject;
 
-    let ctx = loader.load("somecid0000000000000000000000000000000000000000000000000000000000", ContextLayer::L2).unwrap();
+    let dir = tempdir().unwrap();
+    let cas = Arc::new(CASStorage::new(dir.path().join("cas_loader_test")).unwrap());
+    let loader = ContextLoader::new(dir.path().to_path_buf(), None, Arc::clone(&cas)).unwrap();
+
+    // Store a real object in CAS
+    let content = b"Full document content for L2 loading.";
+    let meta = plico::cas::AIObjectMeta::text(["doc"]);
+    let obj = AIObject::new(content.to_vec(), meta);
+    let cid = cas.put(&obj).unwrap();
+
+    // L2 should return the actual content
+    let ctx = loader.load(&cid, ContextLayer::L2).unwrap();
     assert_eq!(ctx.layer, ContextLayer::L2);
+    assert_eq!(ctx.content.as_bytes(), content);
+
+    // L2 for nonexistent CID should return an error
+    let err = loader.load("0000000000000000000000000000000000000000000000000000000000000000", ContextLayer::L2);
+    assert!(err.is_err());
 }
 
 #[test]

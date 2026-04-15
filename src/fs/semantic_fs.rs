@@ -46,7 +46,7 @@ pub struct SearchResult {
 /// The semantic filesystem — a CAS-backed filesystem with AI-friendly operations.
 pub struct SemanticFS {
     /// CAS storage backend.
-    cas: CASStorage,
+    cas: Arc<CASStorage>,
     /// Tag index: tag → CIDs.
     tag_index: RwLock<HashMap<String, Vec<String>>>,
     /// Path to persist the tag index.
@@ -118,7 +118,7 @@ impl SemanticFS {
         knowledge_graph: Option<Arc<dyn KnowledgeGraph>>,
     ) -> std::io::Result<Self> {
         let tag_index_path = root_path.join("tag_index.json");
-        let cas = CASStorage::new(root_path.join("objects"))?;
+        let cas = Arc::new(CASStorage::new(root_path.join("objects"))?);
 
         // Rebuild in-memory tag index from existing CAS objects on startup
         let tag_index = if tag_index_path.exists() {
@@ -130,18 +130,95 @@ impl SemanticFS {
             Self::rebuild_tag_index(&cas)
         };
 
-        Ok(Self {
-            cas,
+        let fs = Self {
+            cas: Arc::clone(&cas),
             tag_index: RwLock::new(tag_index),
             tag_index_path,
-            ctx_loader: Arc::new(ContextLoader::new(root_path.join("context"), summarizer.clone())?),
+            ctx_loader: Arc::new(ContextLoader::new(root_path.join("context"), summarizer.clone(), cas)?),
             recycle_bin: RwLock::new(HashMap::new()),
             audit_log: RwLock::new(Vec::new()),
             embedding,
             search_index,
             summarizer,
             knowledge_graph,
-        })
+        };
+
+        // Rebuild vector index from persisted CAS objects.
+        // The in-memory SemanticSearch index is lost on every restart; re-embed
+        // all stored text objects so semantic search works after a cold start.
+        fs.rebuild_vector_index();
+
+        Ok(fs)
+    }
+
+    /// Rebuild the in-memory vector search index from all CAS objects.
+    ///
+    /// Called once at startup. Skipped (with a warning) if the embedding
+    /// provider is unavailable — the tag-based fallback remains functional.
+    fn rebuild_vector_index(&self) {
+        let cids = match self.cas.list_cids() {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!("rebuild_vector_index: failed to list CIDs: {e}");
+                return;
+            }
+        };
+
+        if cids.is_empty() {
+            return;
+        }
+
+        tracing::debug!("rebuild_vector_index: found {} CIDs", cids.len());
+
+        tracing::info!("Rebuilding vector index for {} objects…", cids.len());
+        let mut indexed = 0usize;
+
+        for cid in &cids {
+            let obj = match self.cas.get(cid) {
+                Ok(o) => o,
+                Err(_) => continue,
+            };
+
+            // Skip known binary blobs (images, audio, video).
+            // Include Unknown — legacy objects stored without type detection.
+            if obj.meta.content_type.is_multimedia() {
+                continue;
+            }
+
+            let text = match std::str::from_utf8(&obj.data) {
+                Ok(s) => s.trim().to_string(),
+                Err(_) => continue,
+            };
+
+            if text.is_empty() {
+                continue;
+            }
+
+            match self.embedding.embed(&text) {
+                Ok(emb) => {
+                    self.search_index.upsert(
+                        cid,
+                        &emb,
+                        SearchIndexMeta {
+                            cid: cid.clone(),
+                            tags: obj.meta.tags.clone(),
+                            content_type: obj.meta.content_type.to_string(),
+                            snippet: text.chars().take(256).collect(),
+                        },
+                    );
+                    indexed += 1;
+                }
+                Err(e) => {
+                    tracing::warn!("rebuild_vector_index: embed failed for {}: {e}", &cid[..8]);
+                    // Stop trying — embedding provider unavailable; tag-based fallback remains.
+                    break;
+                }
+            }
+        }
+
+        if indexed > 0 {
+            tracing::info!("Vector index rebuilt: {}/{} objects indexed", indexed, cids.len());
+        }
     }
 
     /// **Create**: Store content with semantic metadata. Returns CID.
@@ -158,8 +235,15 @@ impl SemanticFS {
         created_by: String,
         intent: Option<String>,
     ) -> std::io::Result<String> {
+        // Auto-detect content type: if the bytes are valid UTF-8, treat as text.
+        let content_type = if std::str::from_utf8(&content).is_ok() {
+            crate::cas::ContentType::Text
+        } else {
+            crate::cas::ContentType::Unknown
+        };
+
         let meta = AIObjectMeta {
-            content_type: crate::cas::ContentType::Unknown,
+            content_type,
             tags: tags.clone(),
             created_by,
             created_at: now_ms(),
@@ -234,7 +318,65 @@ impl SemanticFS {
                 }
                 Ok(objects)
             }
-            _ => Ok(Vec::new()),
+            Query::ByType(content_type) => {
+                // Scan the search index for all entries with the matching content_type.
+                let filter = crate::fs::search::SearchFilter {
+                    content_type: Some(content_type.clone()),
+                    ..Default::default()
+                };
+                let cids = self.search_index.list_by_filter(&filter);
+                let mut objects = Vec::new();
+                for cid in cids {
+                    if let Ok(obj) = self.cas.get(&cid) {
+                        objects.push(obj);
+                    }
+                }
+                Ok(objects)
+            }
+            Query::Hybrid { tags, semantic, content_type } => {
+                // Build a filter from tags + content_type.
+                let filter = crate::fs::search::SearchFilter {
+                    require_tags: tags.clone(),
+                    content_type: content_type.clone(),
+                    ..Default::default()
+                };
+
+                if let Some(text) = semantic {
+                    // Semantic vector search with tag + type filter applied.
+                    let query_emb = match self.embedding.embed(text) {
+                        Ok(emb) => emb,
+                        Err(e) => {
+                            tracing::warn!("Embedding failed in Hybrid query: {e}. Falling back to filter scan.");
+                            let cids = self.search_index.list_by_filter(&filter);
+                            let mut objects = Vec::new();
+                            for cid in cids {
+                                if let Ok(obj) = self.cas.get(&cid) {
+                                    objects.push(obj);
+                                }
+                            }
+                            return Ok(objects);
+                        }
+                    };
+                    let hits = self.search_index.search(&query_emb, 10, &filter);
+                    let mut objects = Vec::new();
+                    for hit in hits {
+                        if let Ok(obj) = self.cas.get(&hit.cid) {
+                            objects.push(obj);
+                        }
+                    }
+                    Ok(objects)
+                } else {
+                    // No semantic text — pure tag+type filter scan.
+                    let cids = self.search_index.list_by_filter(&filter);
+                    let mut objects = Vec::new();
+                    for cid in cids {
+                        if let Ok(obj) = self.cas.get(&cid) {
+                            objects.push(obj);
+                        }
+                    }
+                    Ok(objects)
+                }
+            }
         }
     }
 
@@ -264,11 +406,10 @@ impl SemanticFS {
         let new_obj = AIObject::new(new_content.clone(), new_meta.clone());
         let new_cid = self.cas.put(&new_obj)?;
 
-        // Update tag index (remove old, add new)
-        if final_tags != old_obj.meta.tags {
-            self.remove_from_tag_index(&old_obj.meta.tags, old_cid);
-            self.update_tag_index(&final_tags, &new_cid);
-        }
+        // Update tag index: old CID is gone regardless of whether tags changed,
+        // because the content hash changed and index keys on (tag, cid) pairs.
+        self.remove_from_tag_index(&old_obj.meta.tags, old_cid);
+        self.update_tag_index(&final_tags, &new_cid);
 
         // Update search index: remove old, add new
         self.search_index.delete(old_cid);
@@ -390,24 +531,28 @@ impl SemanticFS {
     fn upsert_semantic_index(&self, cid: &str, content: &[u8], meta: &AIObjectMeta) {
         let text = String::from_utf8_lossy(content);
 
-        // Skip empty content
-        if text.trim().is_empty() {
-            return;
-        }
-
-        let embedding = match self.embedding.embed(&text) {
-            Ok(emb) => emb,
-            Err(e) => {
-                tracing::warn!("Failed to embed CID={}: {e}", cid);
-                return;
-            }
-        };
-
-        // Build snippet (first 200 chars)
-        let snippet = if text.len() > 200 {
+        // Build snippet (first 200 chars of UTF-8 text; empty for binary).
+        let snippet = if text.trim().is_empty() {
+            String::new()
+        } else if text.len() > 200 {
             format!("{}...", &text[..200])
         } else {
             text.to_string()
+        };
+
+        // Attempt to embed for semantic search. On failure, use a zero vector so
+        // that filter-based queries (ByType, Hybrid tags) still work — only
+        // cosine similarity ranking is disabled.
+        let embedding = if text.trim().is_empty() {
+            vec![0.0f32; self.embedding.dimension()]
+        } else {
+            match self.embedding.embed(&text) {
+                Ok(emb) => emb,
+                Err(e) => {
+                    tracing::warn!("Failed to embed CID={}: {e}. Indexing with zero vector.", cid);
+                    vec![0.0f32; self.embedding.dimension()]
+                }
+            }
         };
 
         self.search_index.upsert(cid, &embedding, SearchIndexMeta {
@@ -493,4 +638,128 @@ fn now_ms() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::fs::embedding::StubEmbeddingProvider;
+    use crate::fs::search::InMemoryBackend;
+    use std::sync::Arc;
+    use tempfile::TempDir;
+
+    fn make_fs(dir: &TempDir) -> SemanticFS {
+        SemanticFS::new(
+            dir.path().to_path_buf(),
+            Arc::new(StubEmbeddingProvider::new()),
+            Arc::new(InMemoryBackend::new()),
+            None,
+            None,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn context_loader_l2_returns_actual_content() {
+        let dir = TempDir::new().unwrap();
+        let fs = make_fs(&dir);
+
+        let expected = b"The quick brown fox";
+        let cid = fs
+            .create(expected.to_vec(), vec!["test".to_string()], "agent".to_string(), None)
+            .unwrap();
+
+        // Load via context loader
+        let ctx = fs.ctx_loader.load(&cid, crate::fs::context_loader::ContextLayer::L2).unwrap();
+        assert_eq!(ctx.layer, crate::fs::context_loader::ContextLayer::L2);
+        assert_eq!(ctx.content.as_bytes(), expected);
+        assert!(ctx.tokens_estimate > 0);
+    }
+
+    #[test]
+    fn by_type_returns_matching_objects() {
+        let dir = TempDir::new().unwrap();
+        let fs = make_fs(&dir);
+
+        // Create a text object and a binary object
+        let cid_text = fs
+            .create(b"hello text".to_vec(), vec!["doc".to_string()], "a".to_string(), None)
+            .unwrap();
+        let cid_bin = fs
+            .create(vec![0x89, 0x50, 0x4E, 0x47], vec!["img".to_string()], "a".to_string(), None)
+            .unwrap();
+
+        // Query by type "text"
+        let results = fs.read(&Query::ByType("text".to_string())).unwrap();
+        let cids: Vec<_> = results.iter().map(|o| o.cid.as_str()).collect();
+        assert!(cids.contains(&cid_text.as_str()), "text object must appear in ByType(text)");
+        // Binary (PNG magic bytes) should not appear as text
+        assert!(!cids.contains(&cid_bin.as_str()), "binary object must not appear in ByType(text)");
+    }
+
+    #[test]
+    fn hybrid_query_with_tags_filters_correctly() {
+        let dir = TempDir::new().unwrap();
+        let fs = make_fs(&dir);
+
+        let cid_a = fs
+            .create(b"Rust programming notes".to_vec(), vec!["rust".to_string(), "notes".to_string()], "a".to_string(), None)
+            .unwrap();
+        let _cid_b = fs
+            .create(b"Python tutorial".to_vec(), vec!["python".to_string(), "notes".to_string()], "a".to_string(), None)
+            .unwrap();
+
+        // Hybrid with only tags — should return only rust-tagged object
+        let results = fs
+            .read(&Query::Hybrid {
+                tags: vec!["rust".to_string()],
+                semantic: None,
+                content_type: None,
+            })
+            .unwrap();
+
+        let cids: Vec<_> = results.iter().map(|o| o.cid.as_str()).collect();
+        assert!(cids.contains(&cid_a.as_str()), "rust-tagged object must appear");
+        assert_eq!(cids.len(), 1, "only rust-tagged object expected");
+    }
+
+    /// Regression test: after update() with unchanged tags, the NEW cid must be
+    /// reachable via ByTags and the OLD cid must not appear.
+    #[test]
+    fn update_tag_index_reflects_new_cid() {
+        let dir = TempDir::new().unwrap();
+        let fs = make_fs(&dir);
+
+        let cid1 = fs
+            .create(
+                b"version one".to_vec(),
+                vec!["rust".to_string(), "plico".to_string()],
+                "agent-test".to_string(),
+                None,
+            )
+            .unwrap();
+
+        // Update content only (tags unchanged — this was the bug trigger)
+        let cid2 = fs
+            .update(&cid1, b"version two".to_vec(), None, "agent-test".to_string())
+            .unwrap();
+
+        // The two versions must have different CIDs (different content).
+        assert_ne!(cid1, cid2, "updated content must produce a new CID");
+
+        // ByTags must return the NEW cid, not the old one.
+        let results = fs.read(&Query::ByTags(vec!["rust".to_string()])).unwrap();
+        let cids: Vec<_> = results.iter().map(|r| r.cid.as_str()).collect();
+
+        assert!(
+            cids.contains(&cid2.as_str()),
+            "new CID must be in tag index after update; got {:?}",
+            cids
+        );
+        assert!(
+            !cids.contains(&cid1.as_str()),
+            "old CID must be removed from tag index after update; got {:?}",
+            cids
+        );
+    }
 }

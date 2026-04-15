@@ -111,6 +111,12 @@ pub trait SemanticSearch: Send + Sync {
     fn is_empty(&self) -> bool {
         self.len() == 0
     }
+
+    /// Return all CIDs whose metadata matches the filter (no vector ranking).
+    ///
+    /// Used for `Query::ByType` and `Query::Hybrid` where we need full scans
+    /// without a semantic query vector.
+    fn list_by_filter(&self, filter: &SearchFilter) -> Vec<String>;
 }
 
 // ─── Pure-Rust In-Memory Backend ─────────────────────────────────────────────
@@ -215,6 +221,16 @@ impl SemanticSearch for InMemoryBackend {
 
     fn len(&self) -> usize {
         self.entries.read().unwrap().len()
+    }
+
+    fn list_by_filter(&self, filter: &SearchFilter) -> Vec<String> {
+        self.entries
+            .read()
+            .unwrap()
+            .iter()
+            .filter(|e| filter.matches(&e.meta))
+            .map(|e| e.cid.clone())
+            .collect()
     }
 }
 

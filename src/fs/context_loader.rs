@@ -16,6 +16,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
+use crate::cas::CASStorage;
 use super::summarizer::{Summarizer, SummaryLayer};
 
 /// Context loading layer level.
@@ -63,20 +64,28 @@ pub struct ContextLoader {
     l0_cache: RwLock<HashMap<String, String>>,
     /// Optional LLM summarizer — if None, falls back to heuristic.
     summarizer: Option<Arc<dyn Summarizer>>,
+    /// CAS storage for L2 (full content) loading.
+    cas: Arc<CASStorage>,
 }
 
 impl ContextLoader {
     /// Create a new context loader with an optional summarizer.
     ///
+    /// `cas` — shared CAS storage for L2 full-content loading.
     /// If `summarizer` is `None`, `compute_l0` uses a simple heuristic
     /// (first + last N words) instead of an LLM.
-    pub fn new(root: PathBuf, summarizer: Option<Arc<dyn Summarizer>>) -> std::io::Result<Self> {
+    pub fn new(
+        root: PathBuf,
+        summarizer: Option<Arc<dyn Summarizer>>,
+        cas: Arc<CASStorage>,
+    ) -> std::io::Result<Self> {
         fs::create_dir_all(root.join("l0"))?;
         fs::create_dir_all(root.join("l1"))?;
         Ok(Self {
             root,
             l0_cache: RwLock::new(HashMap::new()),
             summarizer,
+            cas,
         })
     }
 
@@ -175,14 +184,18 @@ impl ContextLoader {
         })
     }
 
-    fn load_l2(&self, _cid: &str) -> std::io::Result<LoadedContext> {
-        // L2 = full content, loaded directly from CAS
-        // This is handled by the SemanticFS layer calling CASStorage
+    fn load_l2(&self, cid: &str) -> std::io::Result<LoadedContext> {
+        // L2 = full content, loaded directly from CAS.
+        let obj = self.cas.get(cid).map_err(|e| {
+            std::io::Error::new(std::io::ErrorKind::NotFound, e.to_string())
+        })?;
+        let content = String::from_utf8_lossy(&obj.data).into_owned();
+        let tokens_estimate = content.split_whitespace().count() * 3 / 4;
         Ok(LoadedContext {
-            cid: _cid.to_string(),
+            cid: cid.to_string(),
             layer: ContextLayer::L2,
-            content: "[Full content — load from CASStorage]".to_string(),
-            tokens_estimate: 0,
+            content,
+            tokens_estimate,
         })
     }
 

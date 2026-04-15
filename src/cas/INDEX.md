@@ -2,7 +2,7 @@
 
 The foundation of Plico's AI-native filesystem. Provides immutable, content-addressed object storage.
 
-Status: stable | Fan-in: 3 (kernel, fs, scheduler) | Fan-out: 0
+Status: stable | Fan-in: 3 (kernel, fs, memory/persist) | Fan-out: 0
 
 ## Public API
 
@@ -21,8 +21,8 @@ None — this is a leaf module.
 ## Dependents (Fan-in: 3)
 
 - `src/kernel/mod.rs` → `CASStorage::put`, `CASStorage::get`
-- `src/fs/semantic_fs.rs` → `CASStorage`
-- `src/bin/aicli.rs` → via kernel
+- `src/fs/semantic_fs.rs` → `CASStorage` (stored as `Arc<CASStorage>`)
+- `src/memory/persist.rs` → `CASStorage` for memory persistence (via `Arc` from kernel)
 
 ## Interface Contract
 

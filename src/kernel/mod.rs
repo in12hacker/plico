@@ -15,6 +15,7 @@ use std::sync::Arc;
 use crate::cas::{CASStorage, AIObject, AIObjectMeta};
 use crate::memory::{LayeredMemory, MemoryEntry, CASPersister, MemoryPersister};
 use crate::scheduler::{AgentScheduler, Agent, Intent, IntentPriority, AgentHandle};
+use crate::scheduler::dispatch::{TokioDispatchLoop, LocalExecutor, AgentExecutor, DispatchHandle};
 use crate::fs::{SemanticFS, Query, OllamaBackend, InMemoryBackend, EmbeddingProvider, SemanticSearch, OllamaSummarizer, Summarizer, KnowledgeGraph, PetgraphBackend, LocalEmbeddingBackend, StubEmbeddingProvider, EmbedError};
 use crate::api::permission::{PermissionGuard, PermissionContext, PermissionAction};
 
@@ -274,6 +275,49 @@ impl AIKernel {
     /// List all semantic tags in the filesystem.
     pub fn list_tags(&self) -> Vec<String> {
         self.fs.list_tags()
+    }
+
+    /// Start the agent dispatch loop as a background tokio task.
+    ///
+    /// Returns a `DispatchHandle` that can be used to shut down the loop.
+    /// This must be called from within a tokio runtime context.
+    ///
+    /// Binaries should call this instead of importing scheduler types directly.
+    pub fn start_dispatch_loop(&self) -> DispatchHandle {
+        let executor: Arc<dyn AgentExecutor> = Arc::new(LocalExecutor);
+        let loop_ = TokioDispatchLoop::new(Arc::clone(&self.scheduler), executor, 60_000);
+        let (_join, handle) = loop_.spawn();
+        handle
+    }
+
+    /// Explore graph neighbors of a CID, returning plain data (no fs types).
+    ///
+    /// Returns `Vec<(node_id, label, node_type, edge_type, authority_score)>`.
+    /// Designed for use by the API layer without importing fs subsystem types.
+    pub fn graph_explore_raw(
+        &self,
+        cid: &str,
+        edge_type_str: Option<&str>,
+        depth: u8,
+    ) -> Vec<(String, String, String, String, f32)> {
+        let edge_filter = edge_type_str.and_then(|s| match s {
+            "associates_with" => Some(crate::fs::KGEdgeType::AssociatesWith),
+            "mentions"        => Some(crate::fs::KGEdgeType::Mentions),
+            "follows"         => Some(crate::fs::KGEdgeType::Follows),
+            "part_of"         => Some(crate::fs::KGEdgeType::PartOf),
+            "related_to"      => Some(crate::fs::KGEdgeType::RelatedTo),
+            _ => None,
+        });
+        self.graph_explore(cid, edge_filter, depth)
+            .into_iter()
+            .map(|hit| {
+                let node_type = format!("{:?}", hit.node.node_type).to_lowercase();
+                let edge_type = hit.edge_type
+                    .map(|et| format!("{:?}", et).to_lowercase())
+                    .unwrap_or_default();
+                (hit.node.id, hit.node.label, node_type, edge_type, hit.authority_score)
+            })
+            .collect()
     }
 
     /// Explore graph neighbors of a CID at a given depth.

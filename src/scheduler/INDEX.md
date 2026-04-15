@@ -2,7 +2,7 @@
 
 Manages AI agent registration and intent scheduling via priority queue.
 
-Status: stable | Fan-in: 2 (kernel, api) | Fan-out: 0
+Status: stable | Fan-in: 1 (kernel) | Fan-out: 0
 
 ## Public API
 
@@ -17,15 +17,19 @@ Status: stable | Fan-in: 2 (kernel, api) | Fan-out: 0
 | `IntentId` | `agent.rs` | UUID-based intent identifier |
 | `SchedulerQueue` | `queue.rs` | Binary heap queue: push/pop/peek/len |
 | `SchedulerError` | `queue.rs` | Error: Empty, IntentNotFound |
+| `AgentExecutor` | `dispatch.rs` | Trait: execute(intent, agent_id, cpu_limit_ms) |
+| `TokioDispatchLoop` | `dispatch.rs` | Background tokio task: polls queue and runs executor |
+| `DispatchHandle` | `dispatch.rs` | Handle for shutdown + result streaming |
+| `LocalExecutor` | `dispatch.rs` | MVP: simulates execution by logging intent |
+| `DispatchError` | `dispatch.rs` | Error: IntentNotFound, Timeout, NotRunnable |
 
 ## Dependencies (Fan-out: 0)
 
 Leaf module.
 
-## Dependents (Fan-in: 2)
+## Dependents (Fan-in: 1)
 
-- `src/kernel/mod.rs` → `AgentScheduler::register`, `submit`, `list_agents`
-- `src/bin/plicod.rs` → `AgentScheduler` via kernel
+- `src/kernel/mod.rs` → `AgentScheduler`, `TokioDispatchLoop`, `LocalExecutor` (via `start_dispatch_loop()`)
 
 ## Interface Contract
 
@@ -51,3 +55,4 @@ Leaf module.
 
 - `cargo test --lib -- scheduler::tests::test_priority_ordering` — queue ordering
 - `cargo test --lib -- scheduler::tests::test_register_and_list` — agent registration
+- `cargo test --lib -- scheduler::dispatch::tests` — LocalExecutor, DispatchHandle, result streaming

@@ -2,7 +2,7 @@
 
 Four-tier memory system with optional CAS persistence.
 
-Status: stable | Fan-in: 2 (kernel, scheduler) | Fan-out: 0
+Status: stable | Fan-in: 1 (kernel) | Fan-out: 1 (cas via persist.rs)
 
 ## Public API
 
@@ -56,6 +56,6 @@ None — leaf module. `persist.rs` depends on `cas` (imported via `crate::cas`).
 
 ## Tests
 
-- Unit tests in `layered.rs` — tier behavior, eviction, promotion
-- Unit tests in `persist.rs` — round-trip, index persistence, multi-tier isolation
-- Integration tests: `tests/memory_persist_test.rs` — full persist → restart → restore cycle
+- Unit tests in `persist.rs` — round-trip, index persistence, multi-tier isolation (co-located)
+- Integration tests: `tests/memory_test.rs` — tier behavior, eviction, promotion (12 tests)
+- Integration tests: `tests/memory_persist_test.rs` — full persist → restart → restore cycle (5 tests)

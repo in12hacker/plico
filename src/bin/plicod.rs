@@ -10,8 +10,7 @@
 //! JSON messages over TCP. Connect, send ApiRequest as JSON, receive ApiResponse.
 
 use plico::kernel::AIKernel;
-use plico::api::semantic::{ApiRequest, ApiResponse, SearchResultDto, AgentDto};
-use plico::scheduler::{TokioDispatchLoop, LocalExecutor, DispatchHandle};
+use plico::api::semantic::{ApiRequest, ApiResponse, SearchResultDto, AgentDto, NeighborDto, decode_content};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -44,15 +43,8 @@ async fn main() {
         }
     };
 
-    // Spawn the agent execution dispatch loop
-    let dispatch = {
-        use plico::scheduler::AgentExecutor;
-        let scheduler = Arc::clone(&kernel.scheduler);
-        let executor: Arc<dyn AgentExecutor> = Arc::new(LocalExecutor);
-        let loop_ = TokioDispatchLoop::new(scheduler, executor, 60_000);
-        let (_handle, dispatch_handle) = loop_.spawn();
-        dispatch_handle
-    };
+    // Spawn the agent execution dispatch loop via kernel (no direct subsystem imports).
+    let _dispatch = kernel.start_dispatch_loop();
 
     println!("Agent dispatch loop started.");
 
@@ -64,9 +56,8 @@ async fn main() {
         match listener.accept().await {
             Ok((stream, peer)) => {
                 let kernel = Arc::clone(&kernel);
-                let dispatch = dispatch.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = handle_connection(stream, &kernel, &dispatch).await {
+                    if let Err(e) = handle_connection(stream, &kernel).await {
                         eprintln!("Connection error from {}: {}", peer, e);
                     }
                 });
@@ -81,7 +72,6 @@ async fn main() {
 async fn handle_connection(
     mut stream: TcpStream,
     kernel: &Arc<AIKernel>,
-    _dispatch: &DispatchHandle,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut buf = vec![0u8; 65536];
     loop {
@@ -117,13 +107,12 @@ async fn send_error(stream: &mut TcpStream, msg: String) -> Result<(), Box<dyn s
 
 fn handle_request(kernel: &AIKernel, req: ApiRequest) -> ApiResponse {
     match req {
-        ApiRequest::Create { content, tags, agent_id, intent } => {
-            match kernel.semantic_create(
-                content.into_bytes(),
-                tags,
-                &agent_id,
-                intent,
-            ) {
+        ApiRequest::Create { content, content_encoding, tags, agent_id, intent } => {
+            let bytes = match decode_content(&content, &content_encoding) {
+                Ok(b) => b,
+                Err(e) => return ApiResponse::error(e),
+            };
+            match kernel.semantic_create(bytes, tags, &agent_id, intent) {
                 Ok(cid) => ApiResponse::with_cid(cid),
                 Err(e) => ApiResponse::error(e.to_string()),
             }
@@ -146,8 +135,12 @@ fn handle_request(kernel: &AIKernel, req: ApiRequest) -> ApiResponse {
             ApiResponse { ok: true, cid: None, data: None, results: Some(dto), agent_id: None, agents: None, memory: None, tags: None, neighbors: None, error: None }
         }
 
-        ApiRequest::Update { cid, content, new_tags, agent_id } => {
-            match kernel.semantic_update(&cid, content.into_bytes(), new_tags, &agent_id) {
+        ApiRequest::Update { cid, content, content_encoding, new_tags, agent_id } => {
+            let bytes = match decode_content(&content, &content_encoding) {
+                Ok(b) => b,
+                Err(e) => return ApiResponse::error(e),
+            };
+            match kernel.semantic_update(&cid, bytes, new_tags, &agent_id) {
                 Ok(new_cid) => ApiResponse::with_cid(new_cid),
                 Err(e) => ApiResponse::error(e.to_string()),
             }
@@ -191,24 +184,10 @@ fn handle_request(kernel: &AIKernel, req: ApiRequest) -> ApiResponse {
         }
 
         ApiRequest::Explore { cid, edge_type, depth, agent_id: _ } => {
-            use plico::fs::{KGEdgeType, KGSearchHit};
-            use plico::api::semantic::NeighborDto;
-            let edge_type_filter = edge_type.and_then(|s| match s.as_str() {
-                "associates_with" => Some(KGEdgeType::AssociatesWith),
-                "mentions" => Some(KGEdgeType::Mentions),
-                "follows" => Some(KGEdgeType::Follows),
-                "part_of" => Some(KGEdgeType::PartOf),
-                "related_to" => Some(KGEdgeType::RelatedTo),
-                _ => None,
-            });
             let depth = depth.unwrap_or(1).min(3);
-            let neighbors = kernel.graph_explore(&cid, edge_type_filter, depth);
-            let dto: Vec<NeighborDto> = neighbors.into_iter().map(|hit: KGSearchHit| NeighborDto {
-                node_id: hit.node.id,
-                label: hit.node.label,
-                node_type: format!("{:?}", hit.node.node_type).to_lowercase(),
-                edge_type: hit.edge_type.map(|et| format!("{:?}", et).to_lowercase()).unwrap_or_default(),
-                authority_score: hit.authority_score,
+            let raw = kernel.graph_explore_raw(&cid, edge_type.as_deref(), depth);
+            let dto: Vec<NeighborDto> = raw.into_iter().map(|(node_id, label, node_type, edge_type, authority_score)| {
+                NeighborDto { node_id, label, node_type, edge_type, authority_score }
             }).collect();
             ApiResponse { ok: true, cid: None, data: None, results: None, agent_id: None, agents: None, memory: None, tags: None, neighbors: Some(dto), error: None }
         }

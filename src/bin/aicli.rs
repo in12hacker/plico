@@ -140,7 +140,7 @@ fn build_request(args: &[String]) -> Option<ApiRequest> {
             let content = extract_arg(args, "--content").unwrap_or_default();
             let tags = extract_tags(args, "--tags");
             let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
-            Some(ApiRequest::Create { content, tags, agent_id, intent: extract_arg(args, "--intent") })
+            Some(ApiRequest::Create { content, content_encoding: Default::default(), tags, agent_id, intent: extract_arg(args, "--intent") })
         }
         Some("get") | Some("read") => {
             let cid = args.get(1).cloned().unwrap_or_default();
@@ -158,7 +158,7 @@ fn build_request(args: &[String]) -> Option<ApiRequest> {
             let content = extract_arg(args, "--content").unwrap_or_default();
             let new_tags = extract_tags_opt(args, "--tags");
             let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
-            Some(ApiRequest::Update { cid, content, new_tags, agent_id })
+            Some(ApiRequest::Update { cid, content, content_encoding: Default::default(), new_tags, agent_id })
         }
         Some("delete") => {
             let cid = extract_arg(args, "--cid").unwrap_or_default();

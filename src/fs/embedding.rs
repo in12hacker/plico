@@ -212,19 +212,32 @@ impl OllamaBackend {
 
 impl EmbeddingProvider for OllamaBackend {
     fn embed(&self, text: &str) -> Result<Embedding, EmbedError> {
-        self.rt.block_on(self.embed_async(text))
+        // If called from within a tokio runtime (e.g. plicod's request handler),
+        // block_on() would panic. block_in_place() moves this call off the async
+        // scheduler temporarily, which is safe on a multi-thread runtime.
+        // If no tokio runtime is present (e.g. aicli), fall back to a plain block_on.
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => {
+                tokio::task::block_in_place(|| handle.block_on(self.embed_async(text)))
+            }
+            Err(_) => self.rt.block_on(self.embed_async(text)),
+        }
     }
 
     fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Embedding>, EmbedError> {
         let this = self.clone();
         let texts: Vec<String> = texts.iter().map(|s| s.to_string()).collect();
-        self.rt.block_on(async {
+        let fut = async move {
             let mut results = Vec::with_capacity(texts.len());
             for text in &texts {
                 results.push(this.embed_async(text).await?);
             }
             Ok(results)
-        })
+        };
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => tokio::task::block_in_place(|| handle.block_on(fut)),
+            Err(_) => self.rt.block_on(fut),
+        }
     }
 
     fn dimension(&self) -> usize {
@@ -254,6 +267,12 @@ impl Clone for OllamaBackend {
 ///
 /// Uses a Python interpreter with ONNX Runtime + HuggingFace transformers
 /// to run an embedding model entirely locally — no Ollama required.
+///
+/// **Subprocess pooling**: A single Python subprocess is spawned per process
+/// and shared across all `LocalEmbeddingBackend` instances via module-level
+/// pooling. This eliminates the ~4s model-loading overhead on repeated calls
+/// within the same daemon process (e.g., `plicod`). For `aicli` (single
+/// invocations), each call still pays the cold-start cost.
 ///
 /// **Protocol**: JSON-RPC over stdio.
 /// Each request is a JSON line written to stdin; each response is a JSON line

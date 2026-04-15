@@ -17,9 +17,7 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1.0", features = ["v4", "serde"] }
-chrono = { version = "0.4", features = ["serde"] }
-petgraph = "0.6"
-rusqlite = { version = "0.31", features = ["bundled"] }
+base64 = "0.22"
 
 [dev-dependencies]
 tempfile = "3.0"
