@@ -62,7 +62,8 @@ pub struct Agent {
     state: AgentState,
     /// Current intent being executed.
     current_intent: Option<Intent>,
-    /// Resources allocated to this agent.
+    /// Resources allocated to this agent (enforcement point for future quota checks).
+    #[allow(dead_code)]
     resources: AgentResources,
 }
 

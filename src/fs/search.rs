@@ -67,15 +67,11 @@ pub struct SearchFilter {
 impl SearchFilter {
     pub fn matches(&self, meta: &SearchIndexMeta) -> bool {
         // Tag filtering
-        if !self.require_tags.is_empty() {
-            if !self.require_tags.iter().all(|t| meta.tags.contains(t)) {
-                return false;
-            }
+        if !self.require_tags.is_empty() && !self.require_tags.iter().all(|t| meta.tags.contains(t)) {
+            return false;
         }
-        if !self.exclude_tags.is_empty() {
-            if self.exclude_tags.iter().any(|t| meta.tags.contains(t)) {
-                return false;
-            }
+        if !self.exclude_tags.is_empty() && self.exclude_tags.iter().any(|t| meta.tags.contains(t)) {
+            return false;
         }
         // Content type filtering
         if let Some(ct) = &self.content_type {
@@ -342,7 +338,6 @@ mod tests {
     #[test]
     fn test_upsert_replaces_existing() {
         let backend = InMemoryBackend::new();
-        let dim = 4;
 
         backend.upsert("cid1", &vec![1.0, 0.0, 0.0, 0.0], SearchIndexMeta {
             cid: "cid1".to_string(),

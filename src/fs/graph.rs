@@ -24,6 +24,13 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::RwLock;
 
+/// Type alias for the triple returned by `load_from_disk`.
+type DiskGraph = (
+    HashMap<String, KGNode>,
+    HashMap<String, Vec<(String, KGEdge)>>,
+    HashMap<String, Vec<(String, KGEdge)>>,
+);
+
 use serde::{Deserialize, Serialize};
 
 /// Node type discriminator.
@@ -213,11 +220,11 @@ impl PetgraphBackend {
     fn load_from_disk(
         nodes_path: &std::path::Path,
         edges_path: &std::path::Path,
-    ) -> Result<(HashMap<String, KGNode>, HashMap<String, Vec<(String, KGEdge)>>, HashMap<String, Vec<(String, KGEdge)>>), KGError> {
+    ) -> Result<DiskGraph, KGError> {
         let nodes: HashMap<String, KGNode> = serde_json::from_str(&std::fs::read_to_string(nodes_path)?)
-            .map_err(|e| KGError::Json(e))?;
+            .map_err(KGError::Json)?;
         let edges: Vec<EdgeRecord> = serde_json::from_str(&std::fs::read_to_string(edges_path)?)
-            .map_err(|e| KGError::Json(e))?;
+            .map_err(KGError::Json)?;
 
         let mut out_edges: HashMap<String, Vec<(String, KGEdge)>> = HashMap::new();
         let mut in_edges: HashMap<String, Vec<(String, KGEdge)>> = HashMap::new();
@@ -362,7 +369,7 @@ impl PetgraphBackend {
                 .max()
                 .unwrap_or(1)
         };
-        ((degree as f32).ln() / ((max_degree.max(1)) as f32).ln()).max(0.0).min(1.0)
+        ((degree as f32).ln() / ((max_degree.max(1)) as f32).ln()).clamp(0.0, 1.0)
     }
 }
 
@@ -402,7 +409,7 @@ impl KnowledgeGraph for PetgraphBackend {
             let out = self.out_edges.read().unwrap();
             if out
                 .get(&edge.src)
-                .map_or(false, |v| v.iter().any(|(dst, _)| dst == &edge.dst))
+                .is_some_and(|v| v.iter().any(|(dst, _)| dst == &edge.dst))
             {
                 return Err(KGError::EdgeExists(edge.src.clone(), edge.dst.clone(), edge.edge_type));
             }
@@ -454,7 +461,7 @@ impl KnowledgeGraph for PetgraphBackend {
                         if visited.contains(neighbor) {
                             continue;
                         }
-                        if edge_type.map_or(true, |et| edge.edge_type == et) {
+                        if edge_type.is_none_or(|et| edge.edge_type == et) {
                             if let Some(node) = nodes.get(neighbor) {
                                 results.push((node.clone(), edge.clone()));
                                 visited.insert(neighbor.clone());
@@ -469,7 +476,7 @@ impl KnowledgeGraph for PetgraphBackend {
                         if visited.contains(neighbor) {
                             continue;
                         }
-                        if edge_type.map_or(true, |et| edge.edge_type == et) {
+                        if edge_type.is_none_or(|et| edge.edge_type == et) {
                             if let Some(node) = nodes.get(neighbor) {
                                 results.push((node.clone(), edge.clone()));
                                 visited.insert(neighbor.clone());
@@ -527,7 +534,7 @@ impl KnowledgeGraph for PetgraphBackend {
         let nodes = self.nodes.read().unwrap();
         Ok(nodes
             .values()
-            .filter(|n| n.agent_id == agent_id && node_type.map_or(true, |t| n.node_type == t))
+            .filter(|n| n.agent_id == agent_id && node_type.is_none_or(|t| n.node_type == t))
             .cloned()
             .collect())
     }
@@ -538,7 +545,7 @@ impl KnowledgeGraph for PetgraphBackend {
         let mut edges = Vec::new();
 
         for (src, out_list) in out.iter() {
-            if nodes.get(src).map(|n| &n.agent_id == agent_id).unwrap_or(false) {
+            if nodes.get(src).map(|n| n.agent_id == agent_id).unwrap_or(false) {
                 for (_, edge) in out_list {
                     edges.push(edge.clone());
                 }

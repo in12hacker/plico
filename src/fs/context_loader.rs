@@ -149,11 +149,18 @@ impl ContextLoader {
             });
         }
 
-        // Load from disk; if not found, return placeholder (L0 summary is optional)
+        // Load from disk; if not found, compute on demand from CAS content.
         let path = self.l0_path(cid);
-        let content = fs::read_to_string(&path).unwrap_or_else(|_| {
-            format!("[L0 summary not pre-computed for CID={}]", cid)
-        });
+        let content = match fs::read_to_string(&path) {
+            Ok(s) => s,
+            Err(_) => {
+                // Compute L0 from CAS full content (handles LLM + heuristic fallback).
+                let raw = self.cas.get(cid)
+                    .map(|obj| String::from_utf8_lossy(&obj.data).into_owned())
+                    .unwrap_or_default();
+                self.compute_l0(&raw)
+            }
+        };
         let tokens_estimate = content.split_whitespace().count() * 3 / 4;
 
         // Populate cache
@@ -172,9 +179,22 @@ impl ContextLoader {
 
     fn load_l1(&self, cid: &str) -> std::io::Result<LoadedContext> {
         let path = self.l1_path(cid);
-        let content = fs::read_to_string(&path).unwrap_or_else(|_| {
-            format!("[L1 content not pre-computed for CID={}]", cid)
-        });
+        let content = match fs::read_to_string(&path) {
+            Ok(s) => s,
+            Err(_) => {
+                // No pre-computed L1 — fall back to leading content from CAS
+                // (approximately 2000 tokens ≈ 8000 characters).
+                const L1_CHAR_LIMIT: usize = 8_000;
+                let raw = self.cas.get(cid)
+                    .map(|obj| String::from_utf8_lossy(&obj.data).into_owned())
+                    .unwrap_or_default();
+                if raw.len() <= L1_CHAR_LIMIT {
+                    raw
+                } else {
+                    raw[..L1_CHAR_LIMIT].to_string()
+                }
+            }
+        };
         let tokens_estimate = content.split_whitespace().count() * 3 / 4;
         Ok(LoadedContext {
             cid: cid.to_string(),

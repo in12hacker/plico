@@ -133,6 +133,8 @@ fn execute_local(kernel: &AIKernel, args: &[String]) -> ApiResponse {
         Some("recall") => cmd_recall(kernel, args),
         Some("tags") => cmd_tags(kernel, args),
         Some("explore") => cmd_explore(kernel, args),
+        Some("deleted") => cmd_deleted(kernel, args),
+        Some("restore") => cmd_restore(kernel, args),
         _ => ApiResponse::error("Unknown command. Run: aicli --help"),
     }
 }
@@ -172,13 +174,7 @@ fn build_request(args: &[String]) -> Option<ApiRequest> {
             let name = extract_arg(args, "--register").unwrap_or_else(|| "unnamed".to_string());
             Some(ApiRequest::RegisterAgent { name })
         }
-        Some("agents") => {
-            if args.contains(&"--list".to_string()) {
-                Some(ApiRequest::ListAgents)
-            } else {
-                Some(ApiRequest::ListAgents)
-            }
-        }
+        Some("agents") => Some(ApiRequest::ListAgents),
         Some("remember") => {
             let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
             let content = extract_arg(args, "--content").unwrap_or_default();
@@ -194,6 +190,15 @@ fn build_request(args: &[String]) -> Option<ApiRequest> {
             let edge_type = extract_arg(args, "--edge-type");
             let depth = extract_arg(args, "--depth").and_then(|s| s.parse().ok());
             Some(ApiRequest::Explore { cid, edge_type, depth, agent_id })
+        }
+        Some("deleted") => {
+            let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
+            Some(ApiRequest::ListDeleted { agent_id })
+        }
+        Some("restore") => {
+            let cid = extract_arg(args, "--cid").unwrap_or_default();
+            let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
+            Some(ApiRequest::Restore { cid, agent_id })
         }
         _ => None,
     }
@@ -339,24 +344,52 @@ fn cmd_tags(kernel: &AIKernel, _args: &[String]) -> ApiResponse {
 
 fn cmd_explore(kernel: &AIKernel, args: &[String]) -> ApiResponse {
     let cid = extract_arg(args, "--cid").unwrap_or_default();
-    let _agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
-    let depth = extract_arg(args, "--depth")
+    let edge_type = extract_arg(args, "--edge-type");
+    let depth: u8 = extract_arg(args, "--depth")
         .and_then(|s| s.parse().ok())
-        .unwrap_or(1);
+        .unwrap_or(1_u8)
+        .min(3);
 
-    let neighbors = kernel.graph_explore(&cid, None, depth);
+    let neighbors = kernel.graph_explore_raw(&cid, edge_type.as_deref(), depth);
 
     if neighbors.is_empty() {
         println!("No graph neighbors for: {}", cid);
     } else {
         println!("Graph neighbors of {} (depth {}):", cid, depth);
-        for (i, n) in neighbors.iter().enumerate() {
-            let edge_str = n.edge_type.as_ref().map(|et| format!("{:?}", et)).unwrap_or_default();
-            println!("{}. [auth={:.3}] {} ({}) {}", i + 1, n.authority_score, n.node.id, format!("{:?}", n.node.node_type).to_lowercase(), edge_str);
+        for (i, (node_id, label, node_type, edge_str, auth)) in neighbors.iter().enumerate() {
+            println!("{}. [auth={:.3}] {} ({}) {} \"{}\"", i + 1, auth, node_id, node_type, edge_str, label);
         }
     }
 
     ApiResponse::ok()
+}
+
+fn cmd_deleted(kernel: &AIKernel, _args: &[String]) -> ApiResponse {
+    let entries = kernel.list_deleted();
+    if entries.is_empty() {
+        println!("Recycle bin is empty.");
+    } else {
+        println!("Recycle bin ({} items):", entries.len());
+        for entry in &entries {
+            println!("  CID: {}", entry.cid);
+            println!("    Tags: {:?}", entry.original_meta.tags);
+            println!("    Deleted at: {}", entry.deleted_at);
+        }
+    }
+    ApiResponse::ok()
+}
+
+fn cmd_restore(kernel: &AIKernel, args: &[String]) -> ApiResponse {
+    let cid = extract_arg(args, "--cid").unwrap_or_default();
+    let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
+
+    match kernel.restore_deleted(&cid, &agent_id) {
+        Ok(()) => {
+            println!("Restored: {}", cid);
+            ApiResponse::ok()
+        }
+        Err(e) => ApiResponse::error(e.to_string()),
+    }
 }
 
 // ─── Utilities ───────────────────────────────────────────────────────
@@ -434,6 +467,12 @@ COMMANDS:
   explore       Graph neighbors of a CID
     --cid CID        Starting node CID
     --depth N        Traversal depth (default: 1, max: 3)
+    --agent ID       Agent ID
+
+  deleted       List logically deleted objects (recycle bin)
+
+  restore       Restore a deleted object
+    --cid CID        Object CID to restore
     --agent ID       Agent ID
 
 EXAMPLES:

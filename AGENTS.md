@@ -24,11 +24,13 @@ src/
 │   ├── embedding.rs    # EmbeddingProvider trait, OllamaBackend, LocalEmbeddingBackend, StubEmbeddingProvider
 │   ├── search.rs       # SemanticSearch trait, InMemoryBackend, SearchFilter, SearchHit
 │   ├── graph.rs        # KnowledgeGraph trait, PetgraphBackend, KGNode, KGEdge, KGEdgeType
-│   └── summarizer.rs   # Summarizer trait, OllamaSummarizer, SummaryLayer
+│   └── summarizer.rs   # Summarizer trait, OllamaSummarizer, SummaryLayer (LocalONNXSummarizer removed — was never implemented)
 ├── kernel/           # AI Kernel — orchestrates all subsystems
 │   └── mod.rs        # AIKernel: wires CAS, memory, scheduler, fs, permissions
+│                     #   Fields: pub(crate) — accessible in tests/, not external crates
 │                     #   start_dispatch_loop() → DispatchHandle
 │                     #   graph_explore_raw()  → Vec<(String,String,String,String,f32)>
+│                     #   list_deleted() / restore_deleted() — recycle bin API
 ├── api/              # API layer — permission guardrails + semantic JSON protocol
 │   ├── semantic.rs   # ApiRequest, ApiResponse, ContentEncoding, decode_content (JSON over TCP)
 │   └── permission.rs # PermissionGuard, PermissionContext, PermissionAction
@@ -57,7 +59,7 @@ CLAUDE.md             # Project-level guidance for Claude Code
 | AI Kernel | `src/kernel/mod.rs` | `AIKernel` — the main orchestrator |
 | Permission guard | `src/api/permission.rs` | `PermissionGuard`, `PermissionAction` |
 | TCP daemon | `src/bin/plicod.rs` | JSON API server on port 7878 |
-| CLI tool | `src/bin/aicli.rs` | `put`, `get`, `search`, `update`, `delete`, `tags`, `explore`, `agent`, `remember`, `recall` |
+| CLI tool | `src/bin/aicli.rs` | `put`, `get`, `search`, `update`, `delete`, `tags`, `explore` (uses `graph_explore_raw`, respects `--edge-type`, clamps depth≤3), `agent`, `remember`, `recall`, `deleted`, `restore` |
 
 ## Build & Test
 
@@ -86,6 +88,7 @@ CLAUDE.md             # Project-level guidance for Claude Code
 
 - Dependency direction: **api/permission → kernel → fs → cas/memory/scheduler** (never reverse)
 - `kernel/` is the only module that imports all other modules — all subsystem calls go through `AIKernel`
+- `AIKernel` fields are `pub(crate)` — integration tests in `tests/` can access them, external crates cannot
 - Binaries (`bin/`) import only `kernel/` and `api/`, never subsystem modules directly
 - CAS is the only module that touches the filesystem directly
 - No `unsafe` blocks in library code without a `# Safety` doc comment
@@ -99,14 +102,18 @@ CLAUDE.md             # Project-level guidance for Claude Code
 - Never panicking in library code except for critical invariants (`expect()` with message)
 
 ### Logging
-- `tracing` crate is in Cargo.toml; `tracing::warn!` used in `SemanticFS` for embedding failures
-- `tracing_subscriber` available but not initialized in daemon/CLI — startup errors use `eprintln!`
-- TODO: call `tracing_subscriber::fmt::init()` in `plicod.rs` and `aicli.rs` main()
+- `tracing` crate in Cargo.toml; structured logging with `tracing::info!/warn!/debug!`
+- `tracing_subscriber::fmt::init()` called in both `plicod.rs` and `aicli.rs` main() — reads `RUST_LOG` env var
+- Library code uses `tracing` only; subscriber setup is binary responsibility
 
 ### Concurrency
 - `RwLock` for in-memory maps (ephemeral, working, long-term, procedural memories)
 - `tokio` available for async TCP server; currently using blocking `std::net` for simplicity
 - All `Arc<...>` wrapping shared kernel state in daemon
+- `OllamaBackend` and `OllamaSummarizer`: safe to call from within `tokio::spawn` (use `block_in_place`)
+
+### Clippy Policy
+- `cargo clippy` runs clean (zero warnings) — all lint violations are either fixed or suppressed with `#[allow(...)]` comments explaining why
 
 ### Serialization
 - JSON for: CAS object persistence, TCP protocol, `serde` on all public types

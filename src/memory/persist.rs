@@ -196,7 +196,7 @@ impl MemoryPersister for CASPersister {
             .map_err(|e| PersistError::cas(e.to_string()))?;
 
         let entries: Vec<MemoryEntry> = serde_json::from_slice(&obj.data)
-            .map_err(|e| PersistError::Serialization(e))?;
+            .map_err(PersistError::Serialization)?;
 
         Ok(entries)
     }

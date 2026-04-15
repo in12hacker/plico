@@ -167,3 +167,68 @@ fn test_kernel_list_tags() {
     assert!(tags.contains(&"b".to_string()));
     assert!(tags.contains(&"c".to_string()));
 }
+
+#[test]
+fn test_kernel_list_deleted_after_delete() {
+    let (kernel, _dir) = make_kernel();
+
+    // No deleted objects initially
+    assert!(kernel.list_deleted().is_empty());
+
+    let cid = kernel
+        .semantic_create(b"to be deleted".to_vec(), vec!["temp".to_string()], "kernel", None)
+        .expect("create failed");
+
+    // "kernel" has all permissions granted by default
+    kernel.semantic_delete(&cid, "kernel").expect("delete failed");
+
+    let deleted = kernel.list_deleted();
+    assert_eq!(deleted.len(), 1);
+    assert_eq!(deleted[0].cid, cid);
+    assert_eq!(deleted[0].original_meta.tags, vec!["temp"]);
+}
+
+#[test]
+fn test_kernel_restore_deleted() {
+    let (kernel, _dir) = make_kernel();
+
+    let cid = kernel
+        .semantic_create(b"restore me".to_vec(), vec!["restore-test".to_string()], "kernel", None)
+        .expect("create failed");
+
+    kernel.semantic_delete(&cid, "kernel").expect("delete failed");
+    assert_eq!(kernel.list_deleted().len(), 1);
+
+    kernel.restore_deleted(&cid, "kernel").expect("restore failed");
+
+    // Should no longer appear in recycle bin
+    assert!(kernel.list_deleted().is_empty());
+
+    // Object should be searchable by tag again
+    let results = kernel
+        .semantic_read(&plico::fs::Query::ByTags(vec!["restore-test".to_string()]), "kernel")
+        .expect("read after restore failed");
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].data, b"restore me");
+}
+
+#[test]
+fn test_kernel_graph_explore_raw_empty() {
+    let (kernel, _dir) = make_kernel();
+    // A CID with no graph edges returns an empty slice
+    let hits = kernel.graph_explore_raw("nonexistent-cid", None, 1);
+    assert!(hits.is_empty());
+}
+
+#[test]
+fn test_kernel_graph_explore_raw_returns_tuples() {
+    let (kernel, _dir) = make_kernel();
+    let cid = kernel
+        .semantic_create(b"graph node A".to_vec(), vec!["graph".to_string()], "x", None)
+        .expect("create failed");
+
+    // No edges added — just confirm the call succeeds and returns the expected tuple shape
+    let hits = kernel.graph_explore_raw(&cid, None, 1);
+    // With no edges, result should be empty
+    assert!(hits.is_empty());
+}

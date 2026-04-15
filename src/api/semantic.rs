@@ -48,17 +48,12 @@ use serde::{Deserialize, Serialize};
 /// ```json
 /// {"method": "create", "content": "iVBORw0KGgo...", "content_encoding": "base64", "tags": ["image"], "agent_id": "a1"}
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum ContentEncoding {
+    #[default]
     Utf8,
     Base64,
-}
-
-impl Default for ContentEncoding {
-    fn default() -> Self {
-        ContentEncoding::Utf8
-    }
 }
 
 /// Decode a content string according to its encoding.

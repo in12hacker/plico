@@ -76,15 +76,7 @@ impl PermissionGrant {
                 return false; // Grant expired
             }
         }
-        match (&self.action, &action) {
-            (PermissionAction::All, _) => true,
-            (PermissionAction::Write, PermissionAction::Write) => true,
-            (PermissionAction::Read, PermissionAction::Read) => true,
-            (PermissionAction::Delete, PermissionAction::Delete) => true,
-            (PermissionAction::Network, PermissionAction::Network) => true,
-            (PermissionAction::Execute, PermissionAction::Execute) => true,
-            _ => false,
-        }
+        matches!(self.action, PermissionAction::All) || self.action == action
     }
 
     /// Create a new grant for an action with no expiry.

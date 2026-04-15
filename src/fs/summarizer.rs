@@ -6,8 +6,7 @@
 //!
 //! ```text
 //! Summarizer (trait)
-//! ├── OllamaSummarizer  — calls local Ollama daemon (MVP)
-//! └── LocalONNXSummarizer — future: native ONNX inference
+//! └── OllamaSummarizer  — calls local Ollama daemon (MVP)
 //! ```
 //!
 //! # Integration
@@ -235,35 +234,6 @@ impl Clone for OllamaSummarizer {
     }
 }
 
-// ─── Local ONNX Stub ──────────────────────────────────────────────────────────
-
-/// Placeholder for local ONNX summarization.
-///
-/// In a future iteration, this will use the `ort` crate with a summarization model.
-pub struct LocalONNXSummarizer {
-    model: String,
-}
-
-impl LocalONNXSummarizer {
-    pub fn new(model_path: &str) -> Result<Self, SummarError> {
-        tracing::warn!("LocalONNXSummarizer is a stub — falling back to Ollama");
-        Ok(Self {
-            model: model_path.to_string(),
-        })
-    }
-}
-
-impl Summarizer for LocalONNXSummarizer {
-    fn summarize(&self, _content: &str, _layer: SummaryLayer) -> Result<String, SummarError> {
-        Err(SummarError::Ollama(
-            "LocalONNXSummarizer not yet implemented".to_string(),
-        ))
-    }
-
-    fn model_name(&self) -> &str {
-        &self.model
-    }
-}
 
 #[cfg(test)]
 mod tests {

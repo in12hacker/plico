@@ -273,10 +273,8 @@ impl LayeredMemory {
         for agent_id in agent_ids {
             for tier in [MemoryTier::Working, MemoryTier::LongTerm, MemoryTier::Procedural] {
                 let entries = self.get_tier(&agent_id, tier);
-                if !entries.is_empty() {
-                    if persister.persist(&agent_id, tier, &entries).is_ok() {
-                        persisted += 1;
-                    }
+                if !entries.is_empty() && persister.persist(&agent_id, tier, &entries).is_ok() {
+                    persisted += 1;
                 }
             }
         }

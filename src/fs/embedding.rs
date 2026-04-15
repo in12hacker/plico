@@ -538,6 +538,9 @@ struct JsonRpcRequest {
     params: serde_json::Value,
 }
 
+/// JSON-RPC response envelope. `jsonrpc` and `id` are required by the spec but
+/// only `result` and `error.message` are consumed by this implementation.
+#[allow(dead_code)]
 #[derive(Debug, serde::Deserialize)]
 struct JsonRpcResponse {
     #[serde(default)]
@@ -550,6 +553,7 @@ struct JsonRpcResponse {
     error: Option<JsonRpcError>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, serde::Deserialize)]
 struct JsonRpcError {
     code: i64,
@@ -560,6 +564,7 @@ struct JsonRpcError {
 
 /// A stub embedding provider used when no backend is available.
 /// Always returns an error, triggering tag-based fallback in search.
+#[derive(Default)]
 pub struct StubEmbeddingProvider;
 
 impl StubEmbeddingProvider {

@@ -20,20 +20,28 @@ use crate::fs::{SemanticFS, Query, OllamaBackend, InMemoryBackend, EmbeddingProv
 use crate::api::permission::{PermissionGuard, PermissionContext, PermissionAction};
 
 /// The AI Kernel — all subsystems wired together.
+///
+/// All fields are `pub(crate)` — accessible within the `plico` crate (e.g. for
+/// integration tests in `tests/`) but not exposed to external crates. External
+/// callers must go through the kernel's public methods.
 pub struct AIKernel {
-    pub cas: Arc<CASStorage>,
-    pub memory: Arc<LayeredMemory>,
-    pub scheduler: Arc<AgentScheduler>,
-    pub fs: Arc<SemanticFS>,
-    pub permissions: Arc<PermissionGuard>,
+    pub(crate) cas: Arc<CASStorage>,
+    pub(crate) memory: Arc<LayeredMemory>,
+    pub(crate) scheduler: Arc<AgentScheduler>,
+    pub(crate) fs: Arc<SemanticFS>,
+    pub(crate) permissions: Arc<PermissionGuard>,
     /// Memory persister for L1/L2/L3 durability.
-    pub memory_persister: Option<Arc<dyn MemoryPersister + Send + Sync>>,
+    pub(crate) memory_persister: Option<Arc<dyn MemoryPersister + Send + Sync>>,
     /// Embedding provider for semantic search.
-    pub embedding: Arc<dyn EmbeddingProvider>,
+    /// Kept alive here so the Arc doesn't drop while `fs` holds a weak reference.
+    #[allow(dead_code)]
+    pub(crate) embedding: Arc<dyn EmbeddingProvider>,
     /// Summarizer for L0/L1 context generation.
-    pub summarizer: Option<Arc<dyn Summarizer>>,
+    /// Kept alive here so the Arc doesn't drop while `fs` holds a weak reference.
+    #[allow(dead_code)]
+    pub(crate) summarizer: Option<Arc<dyn Summarizer>>,
     /// Knowledge graph for entity/relationship tracking.
-    pub knowledge_graph: Option<Arc<dyn KnowledgeGraph>>,
+    pub(crate) knowledge_graph: Option<Arc<dyn KnowledgeGraph>>,
 }
 
 impl AIKernel {

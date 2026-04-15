@@ -264,14 +264,39 @@ fn test_context_loader_l0_not_found_returns_error() {
 }
 
 #[test]
-fn test_context_loader_l1_returns_placeholder() {
+fn test_context_loader_l1_fallback_for_unknown_cid() {
+    // When no L1 file is pre-computed and the CID is not in CAS,
+    // load() should return empty content (not a leak the impl detail as a placeholder string).
     let dir = tempdir().unwrap();
     let cas = Arc::new(CASStorage::new(dir.path().join("cas_loader_test")).unwrap());
     let loader = ContextLoader::new(dir.path().to_path_buf(), None, cas).unwrap();
 
     let ctx = loader.load("somecid0000000000000000000000000000000000000000000000000000000000", ContextLayer::L1).unwrap();
     assert_eq!(ctx.layer, ContextLayer::L1);
-    assert!(ctx.content.contains("not pre-computed") || !ctx.content.is_empty());
+    // CID not in CAS → empty content, no error
+    assert!(ctx.content.is_empty());
+    assert_eq!(ctx.tokens_estimate, 0);
+}
+
+#[test]
+fn test_context_loader_l1_on_demand_from_cas() {
+    use plico::cas::AIObject;
+
+    let dir = tempdir().unwrap();
+    let cas = Arc::new(CASStorage::new(dir.path().join("cas_loader_test2")).unwrap());
+    let loader = ContextLoader::new(dir.path().to_path_buf(), None, Arc::clone(&cas)).unwrap();
+
+    // Store a real object in CAS
+    let content = "This is the actual document content that L1 should return.";
+    let meta = plico::cas::AIObjectMeta::text(["doc"]);
+    let obj = AIObject::new(content.as_bytes().to_vec(), meta);
+    let cid = cas.put(&obj).unwrap();
+
+    // L1 should return real content from CAS (no placeholder)
+    let ctx = loader.load(&cid, ContextLayer::L1).unwrap();
+    assert_eq!(ctx.layer, ContextLayer::L1);
+    assert_eq!(ctx.content, content);
+    assert!(!ctx.content.contains("not pre-computed"));
 }
 
 #[test]
