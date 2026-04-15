@@ -34,8 +34,6 @@ pub struct AIKernel {
     pub summarizer: Option<Arc<dyn Summarizer>>,
     /// Knowledge graph for entity/relationship tracking.
     pub knowledge_graph: Option<Arc<dyn KnowledgeGraph>>,
-    /// Kernel data root (used to create persister on restart).
-    root: PathBuf,
 }
 
 impl AIKernel {
@@ -120,7 +118,6 @@ impl AIKernel {
             embedding,
             summarizer,
             knowledge_graph,
-            root,
         };
 
         // Restore persisted memories for all previously known agents
@@ -130,20 +127,19 @@ impl AIKernel {
     }
 
     /// Restore persisted memories from CAS for all known agents.
+    ///
+    /// Uses `MemoryPersister::list_all_agent_ids()` so no direct filesystem access
+    /// is needed — satisfies the arch constraint that CAS is the only module touching
+    /// the filesystem.
     fn restore_memories(&self) {
-        if self.memory_persister.is_none() {
+        let Some(ref persister) = self.memory_persister else {
             return;
-        }
+        };
 
-        // Get list of agents that had persisted memories
-        // We need to read the index file directly
-        if let Ok(json) = std::fs::read_to_string(self.root.join("memory_index.json")) {
-            if let Ok(index) = serde_json::from_str::<crate::memory::PersistenceIndex>(&json) {
-                for agent_id in index.agents.keys() {
-                    if let Err(e) = self.memory.restore_agent(agent_id) {
-                        tracing::warn!("Failed to restore memories for agent {}: {}", agent_id, e);
-                    }
-                }
+        let agent_ids = persister.list_all_agent_ids();
+        for agent_id in &agent_ids {
+            if let Err(e) = self.memory.restore_agent(agent_id) {
+                tracing::warn!("Failed to restore memories for agent {}: {}", agent_id, e);
             }
         }
     }
@@ -275,6 +271,18 @@ impl AIKernel {
     /// List all semantic tags in the filesystem.
     pub fn list_tags(&self) -> Vec<String> {
         self.fs.list_tags()
+    }
+
+    /// List all logically deleted objects (recycle bin contents).
+    pub fn list_deleted(&self) -> Vec<crate::fs::RecycleEntry> {
+        self.fs.list_deleted()
+    }
+
+    /// Restore a deleted object from the recycle bin.
+    pub fn restore_deleted(&self, cid: &str, agent_id: &str) -> std::io::Result<()> {
+        let ctx = PermissionContext::new(agent_id.to_string());
+        self.permissions.check(&ctx, PermissionAction::Write)?;
+        self.fs.restore(cid, agent_id.to_string())
     }
 
     /// Start the agent dispatch loop as a background tokio task.

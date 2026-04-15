@@ -213,7 +213,10 @@ impl Summarizer for OllamaSummarizer {
         let system = layer.system_prompt();
         let user = layer.user_prompt(truncated);
 
-        self.rt.block_on(self.chat_async(system, &user))
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => tokio::task::block_in_place(|| handle.block_on(self.chat_async(system, &user))),
+            Err(_) => self.rt.block_on(self.chat_async(system, &user)),
+        }
     }
 
     fn model_name(&self) -> &str {
@@ -291,5 +294,20 @@ mod tests {
 
         let l1_sys = SummaryLayer::L1.system_prompt();
         assert!(l1_sys.contains("1-2 paragraphs"));
+    }
+
+    /// Calling summarize() from inside a tokio::spawn must not panic.
+    /// The connection will fail (no server at 9999) but must not panic with
+    /// "Cannot start a runtime from within a runtime".
+    #[tokio::test]
+    async fn test_summarize_safe_inside_tokio_spawn() {
+        let s = OllamaSummarizer::new("http://localhost:9999", "test-model").unwrap();
+        let result = tokio::task::spawn_blocking(move || {
+            s.summarize("hello world", SummaryLayer::L0)
+        }).await.unwrap();
+        // Connection refused is expected — what must NOT happen is a panic
+        assert!(result.is_err());
+        let msg = format!("{}", result.unwrap_err());
+        assert!(!msg.contains("Cannot start a runtime from within a runtime"));
     }
 }

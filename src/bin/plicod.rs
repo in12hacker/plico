@@ -34,6 +34,9 @@ async fn main() {
     println!("Storage root: {:?}", root);
     println!("Listening on: 0.0.0.0:{}", port);
 
+    // Initialize structured logging (reads RUST_LOG env var; defaults to INFO)
+    tracing_subscriber::fmt::init();
+
     // Initialize kernel
     let kernel = match AIKernel::new(root) {
         Ok(k) => Arc::new(k),
@@ -132,7 +135,7 @@ fn handle_request(kernel: &AIKernel, req: ApiRequest) -> ApiResponse {
                 relevance: r.relevance,
                 tags: r.meta.tags,
             }).collect();
-            ApiResponse { ok: true, cid: None, data: None, results: Some(dto), agent_id: None, agents: None, memory: None, tags: None, neighbors: None, error: None }
+            ApiResponse { ok: true, cid: None, data: None, results: Some(dto), agent_id: None, agents: None, memory: None, tags: None, neighbors: None, deleted: None, error: None }
         }
 
         ApiRequest::Update { cid, content, content_encoding, new_tags, agent_id } => {
@@ -155,7 +158,7 @@ fn handle_request(kernel: &AIKernel, req: ApiRequest) -> ApiResponse {
 
         ApiRequest::RegisterAgent { name } => {
             let id = kernel.register_agent(name);
-            ApiResponse { ok: true, cid: None, data: None, results: None, agent_id: Some(id), agents: None, memory: None, tags: None, neighbors: None, error: None }
+            ApiResponse { ok: true, cid: None, data: None, results: None, agent_id: Some(id), agents: None, memory: None, tags: None, neighbors: None, deleted: None, error: None }
         }
 
         ApiRequest::ListAgents => {
@@ -164,7 +167,7 @@ fn handle_request(kernel: &AIKernel, req: ApiRequest) -> ApiResponse {
                 name: a.name,
                 state: format!("{:?}", a.state),
             }).collect();
-            ApiResponse { ok: true, cid: None, data: None, results: None, agent_id: None, agents: Some(agents), memory: None, tags: None, neighbors: None, error: None }
+            ApiResponse { ok: true, cid: None, data: None, results: None, agent_id: None, agents: Some(agents), memory: None, tags: None, neighbors: None, deleted: None, error: None }
         }
 
         ApiRequest::Remember { agent_id, content } => {
@@ -180,7 +183,7 @@ fn handle_request(kernel: &AIKernel, req: ApiRequest) -> ApiResponse {
                     _ => None,
                 })
                 .collect();
-            ApiResponse { ok: true, cid: None, data: None, results: None, agent_id: None, agents: None, memory: Some(memories), tags: None, neighbors: None, error: None }
+            ApiResponse { ok: true, cid: None, data: None, results: None, agent_id: None, agents: None, memory: Some(memories), tags: None, neighbors: None, deleted: None, error: None }
         }
 
         ApiRequest::Explore { cid, edge_type, depth, agent_id: _ } => {
@@ -189,7 +192,26 @@ fn handle_request(kernel: &AIKernel, req: ApiRequest) -> ApiResponse {
             let dto: Vec<NeighborDto> = raw.into_iter().map(|(node_id, label, node_type, edge_type, authority_score)| {
                 NeighborDto { node_id, label, node_type, edge_type, authority_score }
             }).collect();
-            ApiResponse { ok: true, cid: None, data: None, results: None, agent_id: None, agents: None, memory: None, tags: None, neighbors: Some(dto), error: None }
+            ApiResponse { ok: true, cid: None, data: None, results: None, agent_id: None, agents: None, memory: None, tags: None, neighbors: Some(dto), deleted: None, error: None }
+        }
+
+        ApiRequest::ListDeleted { agent_id: _ } => {
+            let entries = kernel.list_deleted();
+            let dto: Vec<plico::api::semantic::DeletedDto> = entries.into_iter().map(|e| {
+                plico::api::semantic::DeletedDto {
+                    cid: e.cid,
+                    deleted_at: e.deleted_at,
+                    tags: e.original_meta.tags,
+                }
+            }).collect();
+            ApiResponse { ok: true, cid: None, data: None, results: None, agent_id: None, agents: None, memory: None, tags: None, neighbors: None, deleted: Some(dto), error: None }
+        }
+
+        ApiRequest::Restore { cid, agent_id } => {
+            match kernel.restore_deleted(&cid, &agent_id) {
+                Ok(()) => ApiResponse::ok(),
+                Err(e) => ApiResponse::error(e.to_string()),
+            }
         }
     }
 }

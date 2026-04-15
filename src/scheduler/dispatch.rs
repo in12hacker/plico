@@ -271,7 +271,33 @@ async fn dispatch_loop(
                         scheduler.update_state(aid, AgentState::Running);
                     }
 
-                    let output = executor.execute(&intent, intent.agent_id.as_ref(), cpu_time_limit_ms);
+                    // Run executor in a blocking thread so it doesn't block the tokio runtime.
+                    // Wrap with timeout so a slow/hung intent can't hold the dispatch loop
+                    // indefinitely. cpu_time_limit_ms=0 means no limit.
+                    let agent_id_exec = intent.agent_id.clone();
+                    let executor_ref = Arc::clone(&executor);
+                    let intent_ref = intent.clone();
+                    let limit_ms = cpu_time_limit_ms;
+
+                    let output = async {
+                        tokio::task::spawn_blocking(move || {
+                            executor_ref.execute(&intent_ref, agent_id_exec.as_ref(), limit_ms)
+                        }).await
+                    };
+
+                    let output = if limit_ms > 0 {
+                        match tokio::time::timeout(Duration::from_millis(limit_ms), output).await {
+                            Ok(Ok(result)) => result,
+                            Ok(Err(e)) => Err(format!("Task panicked: {e}")),
+                            Err(_) => Err(format!("Timeout after {limit_ms}ms")),
+                        }
+                    } else {
+                        match output.await {
+                            Ok(result) => result,
+                            Err(e) => Err(format!("Task panicked: {e}")),
+                        }
+                    };
+
                     let elapsed_ms = start.elapsed().as_millis() as u64;
 
                     let result = match output {
@@ -339,6 +365,36 @@ mod tests {
         let result = executor.execute(&intent, None, 5000);
         assert!(result.is_ok());
         assert!(result.unwrap().contains("Analyze PR #42"));
+    }
+
+    /// Executor that sleeps longer than the timeout.
+    struct SlowExecutor(u64);
+    impl AgentExecutor for SlowExecutor {
+        fn execute(&self, _intent: &Intent, _agent_id: Option<&AgentId>, _cpu_time_limit_ms: u64) -> Result<String, String> {
+            std::thread::sleep(std::time::Duration::from_millis(self.0));
+            Ok("done".into())
+        }
+    }
+
+    #[tokio::test]
+    async fn test_executor_timeout_enforced() {
+        use tokio::time::Duration;
+        // Executor sleeps 500ms, but limit is 50ms — should timeout
+        let executor: Arc<dyn AgentExecutor> = Arc::new(SlowExecutor(500));
+        let intent = Intent::new(crate::scheduler::agent::IntentPriority::High, "slow task".into());
+        let agent_id_exec = intent.agent_id.clone();
+        let intent_ref = intent.clone();
+        let executor_ref = Arc::clone(&executor);
+        let limit_ms = 50u64;
+
+        let output = async {
+            tokio::task::spawn_blocking(move || {
+                executor_ref.execute(&intent_ref, agent_id_exec.as_ref(), limit_ms)
+            }).await
+        };
+
+        let result = tokio::time::timeout(Duration::from_millis(limit_ms), output).await;
+        assert!(result.is_err(), "should have timed out but got: {:?}", result);
     }
 
     #[tokio::test]

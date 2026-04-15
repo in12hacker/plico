@@ -124,6 +124,12 @@ pub enum ApiRequest {
 
     #[serde(rename = "explore")]
     Explore { cid: String, edge_type: Option<String>, depth: Option<u8>, agent_id: String },
+
+    #[serde(rename = "list_deleted")]
+    ListDeleted { agent_id: String },
+
+    #[serde(rename = "restore")]
+    Restore { cid: String, agent_id: String },
 }
 
 /// A JSON API response.
@@ -146,6 +152,8 @@ pub struct ApiResponse {
     pub tags: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub neighbors: Option<Vec<NeighborDto>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deleted: Option<Vec<DeletedDto>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
@@ -173,21 +181,28 @@ pub struct NeighborDto {
     pub authority_score: f32,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeletedDto {
+    pub cid: String,
+    pub deleted_at: u64,
+    pub tags: Vec<String>,
+}
+
 impl ApiResponse {
     pub fn ok() -> Self {
-        Self { ok: true, cid: None, data: None, results: None, agent_id: None, agents: None, memory: None, tags: None, neighbors: None, error: None }
+        Self { ok: true, cid: None, data: None, results: None, agent_id: None, agents: None, memory: None, tags: None, neighbors: None, deleted: None, error: None }
     }
 
     pub fn with_cid(cid: String) -> Self {
-        Self { ok: true, cid: Some(cid), data: None, results: None, agent_id: None, agents: None, memory: None, tags: None, neighbors: None, error: None }
+        Self { ok: true, cid: Some(cid), data: None, results: None, agent_id: None, agents: None, memory: None, tags: None, neighbors: None, deleted: None, error: None }
     }
 
     pub fn with_data(data: String) -> Self {
-        Self { ok: true, cid: None, data: Some(data), results: None, agent_id: None, agents: None, memory: None, tags: None, neighbors: None, error: None }
+        Self { ok: true, cid: None, data: Some(data), results: None, agent_id: None, agents: None, memory: None, tags: None, neighbors: None, deleted: None, error: None }
     }
 
     pub fn error(msg: impl Into<String>) -> Self {
-        Self { ok: false, cid: None, data: None, results: None, agent_id: None, agents: None, memory: None, tags: None, neighbors: None, error: Some(msg.into()) }
+        Self { ok: false, cid: None, data: None, results: None, agent_id: None, agents: None, memory: None, tags: None, neighbors: None, deleted: None, error: Some(msg.into()) }
     }
 }
 

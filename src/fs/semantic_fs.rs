@@ -51,6 +51,8 @@ pub struct SemanticFS {
     tag_index: RwLock<HashMap<String, Vec<String>>>,
     /// Path to persist the tag index.
     tag_index_path: std::path::PathBuf,
+    /// Path to persist the recycle bin index.
+    recycle_bin_path: std::path::PathBuf,
     /// Context loader for L0/L1/L2 layers.
     ctx_loader: Arc<ContextLoader>,
     /// Recycle bin (logical deletes).
@@ -67,11 +69,11 @@ pub struct SemanticFS {
     knowledge_graph: Option<Arc<dyn KnowledgeGraph>>,
 }
 
-#[derive(Debug, Clone)]
-struct RecycleEntry {
-    cid: String,
-    deleted_at: u64,
-    original_meta: AIObjectMeta,
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct RecycleEntry {
+    pub cid: String,
+    pub deleted_at: u64,
+    pub original_meta: AIObjectMeta,
 }
 
 #[derive(Debug, Clone)]
@@ -118,6 +120,7 @@ impl SemanticFS {
         knowledge_graph: Option<Arc<dyn KnowledgeGraph>>,
     ) -> std::io::Result<Self> {
         let tag_index_path = root_path.join("tag_index.json");
+        let recycle_bin_path = root_path.join("recycle_bin.json");
         let cas = Arc::new(CASStorage::new(root_path.join("objects"))?);
 
         // Rebuild in-memory tag index from existing CAS objects on startup
@@ -130,12 +133,23 @@ impl SemanticFS {
             Self::rebuild_tag_index(&cas)
         };
 
+        // Load recycle bin from disk (if it exists)
+        let recycle_bin = if recycle_bin_path.exists() {
+            Self::load_recycle_bin(&recycle_bin_path).unwrap_or_else(|e| {
+                tracing::warn!("Failed to load recycle bin: {}", e);
+                HashMap::new()
+            })
+        } else {
+            HashMap::new()
+        };
+
         let fs = Self {
             cas: Arc::clone(&cas),
             tag_index: RwLock::new(tag_index),
             tag_index_path,
+            recycle_bin_path,
             ctx_loader: Arc::new(ContextLoader::new(root_path.join("context"), summarizer.clone(), cas)?),
-            recycle_bin: RwLock::new(HashMap::new()),
+            recycle_bin: RwLock::new(recycle_bin),
             audit_log: RwLock::new(Vec::new()),
             embedding,
             search_index,
@@ -263,6 +277,27 @@ impl SemanticFS {
         if let Some(ref kg) = self.knowledge_graph {
             if let Err(e) = kg.upsert_document(&cid, &tags, &meta.created_by) {
                 tracing::warn!("Failed to upsert document to knowledge graph: {}", e);
+            }
+        }
+
+        // Auto-generate L0 summary if a summarizer is configured.
+        // Failure is non-fatal — L2 content is always available as fallback.
+        if let Some(ref summarizer) = self.summarizer {
+            let text = match std::str::from_utf8(&content) {
+                Ok(s) if !s.trim().is_empty() => s.to_string(),
+                _ => String::new(),
+            };
+            if !text.is_empty() {
+                match summarizer.summarize(&text, crate::fs::summarizer::SummaryLayer::L0) {
+                    Ok(summary) => {
+                        if let Err(e) = self.ctx_loader.store_l0(&cid, summary) {
+                            tracing::warn!("Failed to store L0 summary for {}: {}", &cid[..8], e);
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!("L0 summarization failed for {}: {}", &cid[..8], e);
+                    }
+                }
             }
         }
 
@@ -463,7 +498,56 @@ impl SemanticFS {
                     cid: cid.to_string(),
                     agent_id,
                 });
+
+            // Persist recycle bin to disk so deleted entries survive restart
+            let _ = self.persist_recycle_bin();
         }
+        Ok(())
+    }
+
+    /// **List deleted**: Returns all entries in the recycle bin.
+    pub fn list_deleted(&self) -> Vec<RecycleEntry> {
+        let bin = self.recycle_bin.read().unwrap();
+        let mut entries: Vec<_> = bin.values().cloned().collect();
+        // Stable ordering: most recently deleted first
+        entries.sort_by(|a, b| b.deleted_at.cmp(&a.deleted_at));
+        entries
+    }
+
+    /// **Restore**: Move an entry from recycle bin back to the active tag index
+    /// and search index. The object data is still in CAS — only the index entries
+    /// are restored. Returns FSError::NotFound if the CID is not in the recycle bin.
+    pub fn restore(&self, cid: &str, agent_id: String) -> std::io::Result<()> {
+        let entry = {
+            let mut bin = self.recycle_bin.write().unwrap();
+            bin.remove(cid).ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::NotFound, format!("CID not in recycle bin: {cid}"))
+            })?
+        };
+
+        // Re-add to tag index
+        self.update_tag_index(&entry.original_meta.tags, cid);
+
+        // Re-add to search index (re-embed content from CAS)
+        if let Ok(obj) = self.cas.get(cid) {
+            self.upsert_semantic_index(cid, &obj.data, &obj.meta);
+        }
+
+        // Re-add to knowledge graph
+        if let Some(ref kg) = self.knowledge_graph {
+            let _ = kg.upsert_document(cid, &entry.original_meta.tags, &entry.original_meta.created_by);
+        }
+
+        // Persist updated (smaller) recycle bin
+        let _ = self.persist_recycle_bin();
+
+        self.audit_log.write().unwrap().push(AuditEntry {
+            timestamp: now_ms(),
+            action: AuditAction::Create, // restore is semantically a re-create
+            cid: cid.to_string(),
+            agent_id,
+        });
+
         Ok(())
     }
 
@@ -570,6 +654,21 @@ impl SemanticFS {
         }
         drop(index);
         let _ = self.persist_tag_index();
+    }
+
+    /// Persist recycle bin to disk.
+    fn persist_recycle_bin(&self) -> std::io::Result<()> {
+        let bin = self.recycle_bin.read().unwrap();
+        let json = serde_json::to_vec(&*bin)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        std::fs::write(&self.recycle_bin_path, json)
+    }
+
+    /// Load recycle bin from disk.
+    fn load_recycle_bin(path: &std::path::Path) -> std::io::Result<HashMap<String, RecycleEntry>> {
+        let json = std::fs::read(path)?;
+        serde_json::from_slice::<HashMap<String, RecycleEntry>>(&json)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
     }
 
     /// Persist tag index to disk.

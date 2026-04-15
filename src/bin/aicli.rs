@@ -38,6 +38,9 @@ use std::net::TcpStream;
 use std::time::Duration;
 
 fn main() {
+    // Initialize structured logging (reads RUST_LOG env var; defaults to INFO)
+    tracing_subscriber::fmt::init();
+
     let args: Vec<String> = std::env::args().skip(1).collect();
 
     if args.is_empty() || args[0] == "--help" || args[0] == "-h" {
@@ -285,7 +288,7 @@ fn cmd_agent(kernel: &AIKernel, args: &[String]) -> ApiResponse {
     let name = extract_arg(args, "--register").unwrap_or_else(|| "unnamed".to_string());
     let id = kernel.register_agent(name.clone());
     println!("Agent registered: {} (ID: {})", name, id);
-    ApiResponse { ok: true, cid: None, data: None, results: None, agent_id: Some(id), agents: None, memory: None, tags: None, neighbors: None, error: None }
+    ApiResponse { ok: true, cid: None, data: None, results: None, agent_id: Some(id), agents: None, memory: None, tags: None, neighbors: None, deleted: None, error: None }
 }
 
 fn cmd_agents(kernel: &AIKernel, _args: &[String]) -> ApiResponse {

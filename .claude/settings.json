@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "defaultMode": "acceptEdits",
+    "allow": [
+      "Bash(cargo *)",
+      "Bash(rustc --version)",
+      "Bash(git *)",
+      "Bash(uvx *)",
+      "Bash(tar *)",
+      "Bash(curl *)",
+      "Bash(ls *)",
+      "Bash(mkdir *)",
+      "Bash(rm -rf target *)",
+      "Bash(ln -sf *)"
+    ],
+    "additionalDirectories": [
+      "/home/leo/.cargo/bin",
+      "/home/leo/.local/bin"
+    ]
+  },
+  "mcpServers": {}
+}

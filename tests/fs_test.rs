@@ -24,15 +24,20 @@ impl EmbeddingProvider for StubProvider {
     fn model_name(&self) -> &str { "stub" }
 }
 
-fn make_fs() -> (SemanticFS, tempfile::TempDir) {
-    let dir = tempdir().unwrap();
+fn make_fs_at(path: &std::path::Path) -> (SemanticFS, ()) {
     let fs = SemanticFS::new(
-        dir.path().to_path_buf(),
+        path.to_path_buf(),
         std::sync::Arc::new(StubProvider),
         std::sync::Arc::new(InMemoryBackend::new()),
-        None,                        // no summarizer in tests
-        None,                        // no knowledge graph in tests
+        None,
+        None,
     ).unwrap();
+    (fs, ())
+}
+
+fn make_fs() -> (SemanticFS, tempfile::TempDir) {
+    let dir = tempdir().unwrap();
+    let (fs, _) = make_fs_at(dir.path());
     (fs, dir)
 }
 
@@ -326,4 +331,68 @@ fn test_content_type_predicates() {
     assert!(ContentType::Audio.is_multimedia());
     assert!(ContentType::Video.is_multimedia());
     assert!(!ContentType::Text.is_multimedia());
+}
+
+// ─── Recycle Bin Tests ────────────────────────────────────────────────────────
+
+#[test]
+fn test_list_deleted_after_delete() {
+    let (fs, _dir) = make_fs();
+
+    let cid = fs.create(b"will be deleted".to_vec(), vec!["trash".to_string()], "a".to_string(), None).unwrap();
+    assert!(fs.list_deleted().is_empty());
+
+    fs.delete(&cid, "a".to_string()).unwrap();
+
+    let deleted = fs.list_deleted();
+    assert_eq!(deleted.len(), 1);
+    assert_eq!(deleted[0].cid, cid);
+    assert!(deleted[0].original_meta.tags.contains(&"trash".to_string()));
+}
+
+#[test]
+fn test_restore_puts_back_in_tag_index() {
+    let (fs, _dir) = make_fs();
+
+    let cid = fs.create(b"restorable content".to_vec(), vec!["restore-me".to_string()], "a".to_string(), None).unwrap();
+    fs.delete(&cid, "a".to_string()).unwrap();
+
+    // After delete: not in tag index
+    let before = fs.read(&Query::ByTags(vec!["restore-me".to_string()])).unwrap();
+    assert!(before.is_empty(), "deleted object must not appear in tag search");
+
+    // Restore
+    fs.restore(&cid, "a".to_string()).unwrap();
+
+    // After restore: back in tag index
+    let after = fs.read(&Query::ByTags(vec!["restore-me".to_string()])).unwrap();
+    assert_eq!(after.len(), 1);
+    assert_eq!(after[0].cid, cid);
+
+    // Recycle bin is now empty
+    assert!(fs.list_deleted().is_empty());
+}
+
+#[test]
+fn test_recycle_bin_persists_across_restart() {
+    let dir = tempdir().unwrap();
+    let cid = {
+        let (fs, _) = make_fs_at(dir.path());
+        let cid = fs.create(b"survive restart".to_vec(), vec!["persist-test".to_string()], "a".to_string(), None).unwrap();
+        fs.delete(&cid, "a".to_string()).unwrap();
+        cid
+    }; // fs dropped here — simulates process restart
+
+    // Re-open the same root
+    let (fs2, _) = make_fs_at(dir.path());
+    let deleted = fs2.list_deleted();
+    assert_eq!(deleted.len(), 1, "recycle bin must survive process restart");
+    assert_eq!(deleted[0].cid, cid);
+}
+
+#[test]
+fn test_restore_nonexistent_cid_returns_error() {
+    let (fs, _dir) = make_fs();
+    let result = fs.restore("nonexistentcid000000000000000000000000000000000000000000000000000", "a".to_string());
+    assert!(result.is_err());
 }
