@@ -10,6 +10,7 @@ use crate::fs::context_loader::ContextLoader;
 use crate::fs::embedding::{EmbeddingProvider, EmbedError};
 use crate::fs::search::{SemanticSearch, SearchFilter, SearchIndexMeta};
 use crate::fs::summarizer::Summarizer;
+use crate::fs::graph::KnowledgeGraph;
 
 /// Search query — can be tag-based, semantic, or mixed.
 #[derive(Debug, Clone)]
@@ -48,6 +49,8 @@ pub struct SemanticFS {
     cas: CASStorage,
     /// Tag index: tag → CIDs.
     tag_index: RwLock<HashMap<String, Vec<String>>>,
+    /// Path to persist the tag index.
+    tag_index_path: std::path::PathBuf,
     /// Context loader for L0/L1/L2 layers.
     ctx_loader: Arc<ContextLoader>,
     /// Recycle bin (logical deletes).
@@ -60,6 +63,8 @@ pub struct SemanticFS {
     search_index: Arc<dyn SemanticSearch>,
     /// LLM summarizer for L0/L1 context generation.
     summarizer: Option<Arc<dyn Summarizer>>,
+    /// Knowledge graph for entity/relationship tracking.
+    knowledge_graph: Option<Arc<dyn KnowledgeGraph>>,
 }
 
 #[derive(Debug, Clone)]
@@ -110,16 +115,32 @@ impl SemanticFS {
         embedding: Arc<dyn EmbeddingProvider>,
         search_index: Arc<dyn SemanticSearch>,
         summarizer: Option<Arc<dyn Summarizer>>,
+        knowledge_graph: Option<Arc<dyn KnowledgeGraph>>,
     ) -> std::io::Result<Self> {
+        let tag_index_path = root_path.join("tag_index.json");
+        let cas = CASStorage::new(root_path.join("objects"))?;
+
+        // Rebuild in-memory tag index from existing CAS objects on startup
+        let tag_index = if tag_index_path.exists() {
+            Self::load_tag_index(&tag_index_path).unwrap_or_else(|e| {
+                tracing::warn!("Failed to load tag index, rebuilding from CAS: {}", e);
+                Self::rebuild_tag_index(&cas)
+            })
+        } else {
+            Self::rebuild_tag_index(&cas)
+        };
+
         Ok(Self {
-            cas: CASStorage::new(root_path.join("objects"))?,
-            tag_index: RwLock::new(HashMap::new()),
+            cas,
+            tag_index: RwLock::new(tag_index),
+            tag_index_path,
             ctx_loader: Arc::new(ContextLoader::new(root_path.join("context"), summarizer.clone())?),
             recycle_bin: RwLock::new(HashMap::new()),
             audit_log: RwLock::new(Vec::new()),
             embedding,
             search_index,
             summarizer,
+            knowledge_graph,
         })
     }
 
@@ -153,6 +174,13 @@ impl SemanticFS {
 
         // Embed and index for semantic search
         self.upsert_semantic_index(&cid, &content, &meta);
+
+        // Upsert to knowledge graph: creates Document node + AssociatesWith edges
+        if let Some(ref kg) = self.knowledge_graph {
+            if let Err(e) = kg.upsert_document(&cid, &tags, &meta.created_by) {
+                tracing::warn!("Failed to upsert document to knowledge graph: {}", e);
+            }
+        }
 
         // Audit log
         self.audit_log
@@ -277,6 +305,14 @@ impl SemanticFS {
             // Remove from search index
             self.search_index.delete(cid);
 
+            // Remove from knowledge graph
+            if let Some(ref kg) = self.knowledge_graph {
+                let _ = kg.remove_node(cid);
+            }
+
+            // Remove from tag index
+            self.remove_from_tag_index(&obj.meta.tags, cid);
+
             self.audit_log
                 .write()
                 .unwrap()
@@ -387,7 +423,40 @@ impl SemanticFS {
         for tag in tags {
             index.entry(tag.clone()).or_default().push(cid.to_string());
         }
+        drop(index);
+        let _ = self.persist_tag_index();
     }
+
+    /// Persist tag index to disk.
+    fn persist_tag_index(&self) -> std::io::Result<()> {
+        let index = self.tag_index.read().unwrap();
+        let json = serde_json::to_vec(&*index)?;
+        std::fs::write(&self.tag_index_path, json)
+    }
+
+    /// Load tag index from disk.
+    fn load_tag_index(path: &std::path::Path) -> std::io::Result<HashMap<String, Vec<String>>> {
+        let json = std::fs::read(path)?;
+        let index = serde_json::from_slice::<HashMap<String, Vec<String>>>(&json)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        Ok(index)
+    }
+
+    /// Rebuild tag index by scanning all CAS objects.
+    fn rebuild_tag_index(cas: &CASStorage) -> HashMap<String, Vec<String>> {
+        let mut index: HashMap<String, Vec<String>> = HashMap::new();
+        if let Ok(cids) = cas.list_cids() {
+            for cid in cids {
+                if let Ok(obj) = cas.get(&cid) {
+                    for tag in &obj.meta.tags {
+                        index.entry(tag.clone()).or_default().push(cid.clone());
+                    }
+                }
+            }
+        }
+        index
+    }
+
 
     fn remove_from_tag_index(&self, tags: &[String], cid: &str) {
         let mut index = self.tag_index.write().unwrap();
@@ -396,6 +465,8 @@ impl SemanticFS {
                 cids.retain(|c| c != cid);
             }
         }
+        drop(index);
+        let _ = self.persist_tag_index();
     }
 
     fn resolve_tags(&self, tags: &[String]) -> Vec<String> {

@@ -23,6 +23,8 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use crate::cas::object::AIObject;
+
+#[cfg(test)]
 use crate::cas::AIObjectMeta;
 
 #[derive(Debug)]

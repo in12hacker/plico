@@ -143,7 +143,7 @@ fn handle_request(kernel: &AIKernel, req: ApiRequest) -> ApiResponse {
                 relevance: r.relevance,
                 tags: r.meta.tags,
             }).collect();
-            ApiResponse { ok: true, cid: None, data: None, results: Some(dto), agent_id: None, agents: None, memory: None, tags: None, error: None }
+            ApiResponse { ok: true, cid: None, data: None, results: Some(dto), agent_id: None, agents: None, memory: None, tags: None, neighbors: None, error: None }
         }
 
         ApiRequest::Update { cid, content, new_tags, agent_id } => {
@@ -162,7 +162,7 @@ fn handle_request(kernel: &AIKernel, req: ApiRequest) -> ApiResponse {
 
         ApiRequest::RegisterAgent { name } => {
             let id = kernel.register_agent(name);
-            ApiResponse { ok: true, cid: None, data: None, results: None, agent_id: Some(id), agents: None, memory: None, tags: None, error: None }
+            ApiResponse { ok: true, cid: None, data: None, results: None, agent_id: Some(id), agents: None, memory: None, tags: None, neighbors: None, error: None }
         }
 
         ApiRequest::ListAgents => {
@@ -171,7 +171,7 @@ fn handle_request(kernel: &AIKernel, req: ApiRequest) -> ApiResponse {
                 name: a.name,
                 state: format!("{:?}", a.state),
             }).collect();
-            ApiResponse { ok: true, cid: None, data: None, results: None, agent_id: None, agents: Some(agents), memory: None, tags: None, error: None }
+            ApiResponse { ok: true, cid: None, data: None, results: None, agent_id: None, agents: Some(agents), memory: None, tags: None, neighbors: None, error: None }
         }
 
         ApiRequest::Remember { agent_id, content } => {
@@ -187,7 +187,30 @@ fn handle_request(kernel: &AIKernel, req: ApiRequest) -> ApiResponse {
                     _ => None,
                 })
                 .collect();
-            ApiResponse { ok: true, cid: None, data: None, results: None, agent_id: None, agents: None, memory: Some(memories), tags: None, error: None }
+            ApiResponse { ok: true, cid: None, data: None, results: None, agent_id: None, agents: None, memory: Some(memories), tags: None, neighbors: None, error: None }
+        }
+
+        ApiRequest::Explore { cid, edge_type, depth, agent_id: _ } => {
+            use plico::fs::{KGEdgeType, KGSearchHit};
+            use plico::api::semantic::NeighborDto;
+            let edge_type_filter = edge_type.and_then(|s| match s.as_str() {
+                "associates_with" => Some(KGEdgeType::AssociatesWith),
+                "mentions" => Some(KGEdgeType::Mentions),
+                "follows" => Some(KGEdgeType::Follows),
+                "part_of" => Some(KGEdgeType::PartOf),
+                "related_to" => Some(KGEdgeType::RelatedTo),
+                _ => None,
+            });
+            let depth = depth.unwrap_or(1).min(3);
+            let neighbors = kernel.graph_explore(&cid, edge_type_filter, depth);
+            let dto: Vec<NeighborDto> = neighbors.into_iter().map(|hit: KGSearchHit| NeighborDto {
+                node_id: hit.node.id,
+                label: hit.node.label,
+                node_type: format!("{:?}", hit.node.node_type).to_lowercase(),
+                edge_type: hit.edge_type.map(|et| format!("{:?}", et).to_lowercase()).unwrap_or_default(),
+                authority_score: hit.authority_score,
+            }).collect();
+            ApiResponse { ok: true, cid: None, data: None, results: None, agent_id: None, agents: None, memory: None, tags: None, neighbors: Some(dto), error: None }
         }
     }
 }

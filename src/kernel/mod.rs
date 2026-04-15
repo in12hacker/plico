@@ -15,7 +15,7 @@ use std::sync::Arc;
 use crate::cas::{CASStorage, AIObject, AIObjectMeta};
 use crate::memory::{LayeredMemory, MemoryEntry, CASPersister, MemoryPersister};
 use crate::scheduler::{AgentScheduler, Agent, Intent, IntentPriority, AgentHandle};
-use crate::fs::{SemanticFS, Query, OllamaBackend, InMemoryBackend, EmbeddingProvider, SemanticSearch, OllamaSummarizer, Summarizer};
+use crate::fs::{SemanticFS, Query, OllamaBackend, InMemoryBackend, EmbeddingProvider, SemanticSearch, OllamaSummarizer, Summarizer, KnowledgeGraph, PetgraphBackend};
 use crate::api::permission::{PermissionGuard, PermissionContext, PermissionAction};
 
 /// The AI Kernel — all subsystems wired together.
@@ -31,6 +31,8 @@ pub struct AIKernel {
     pub embedding: Arc<dyn EmbeddingProvider>,
     /// Summarizer for L0/L1 context generation.
     pub summarizer: Option<Arc<dyn Summarizer>>,
+    /// Knowledge graph for entity/relationship tracking.
+    pub knowledge_graph: Option<Arc<dyn KnowledgeGraph>>,
     /// Kernel data root (used to create persister on restart).
     root: PathBuf,
 }
@@ -84,10 +86,22 @@ impl AIKernel {
         // Create search index — pure Rust in-memory with cosine similarity
         let search_index: Arc<dyn SemanticSearch> = Arc::new(InMemoryBackend::new());
 
+        // Create knowledge graph — persisted HashMap directed graph
+        let knowledge_graph: Option<Arc<dyn KnowledgeGraph>> = {
+            let kg: Arc<dyn KnowledgeGraph> = Arc::new(PetgraphBackend::open(root.clone()));
+            Some(kg)
+        };
+
         let memory = Arc::new(LayeredMemory::new());
         let scheduler = Arc::new(AgentScheduler::new());
 
-        let fs = Arc::new(SemanticFS::new(root.clone(), embedding.clone(), search_index, summarizer.clone())?);
+        let fs = Arc::new(SemanticFS::new(
+            root.clone(),
+            embedding.clone(),
+            search_index,
+            summarizer.clone(),
+            knowledge_graph.clone(),
+        )?);
         let permissions = Arc::new(PermissionGuard::new());
 
         // Create memory persister and attach to memory
@@ -112,6 +126,7 @@ impl AIKernel {
             memory_persister: persister,
             embedding,
             summarizer,
+            knowledge_graph,
             root,
         };
 
@@ -267,6 +282,30 @@ impl AIKernel {
     /// List all semantic tags in the filesystem.
     pub fn list_tags(&self) -> Vec<String> {
         self.fs.list_tags()
+    }
+
+    /// Explore graph neighbors of a CID at a given depth.
+    pub fn graph_explore(&self, cid: &str, edge_type: Option<crate::fs::KGEdgeType>, depth: u8) -> Vec<crate::fs::KGSearchHit> {
+        let Some(ref kg) = self.knowledge_graph else {
+            return Vec::new();
+        };
+        let neighbors = match kg.get_neighbors(cid, edge_type, depth) {
+            Ok(n) => n,
+            Err(e) => {
+                tracing::warn!("graph_explore failed for {}: {}", cid, e);
+                return Vec::new();
+            }
+        };
+        neighbors
+            .into_iter()
+            .map(|(node, edge)| crate::fs::KGSearchHit {
+                node,
+                edge_type: Some(edge.edge_type),
+                vector_score: 0.0,
+                authority_score: kg.authority_score(cid).unwrap_or(0.0),
+                combined_score: 0.0,
+            })
+            .collect()
     }
 }
 

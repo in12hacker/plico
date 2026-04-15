@@ -129,6 +129,7 @@ fn execute_local(kernel: &AIKernel, args: &[String]) -> ApiResponse {
         Some("remember") => cmd_remember(kernel, args),
         Some("recall") => cmd_recall(kernel, args),
         Some("tags") => cmd_tags(kernel, args),
+        Some("explore") => cmd_explore(kernel, args),
         _ => ApiResponse::error("Unknown command. Run: aicli --help"),
     }
 }
@@ -183,6 +184,13 @@ fn build_request(args: &[String]) -> Option<ApiRequest> {
         Some("recall") => {
             let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
             Some(ApiRequest::Recall { agent_id })
+        }
+        Some("explore") => {
+            let cid = extract_arg(args, "--cid").unwrap_or_default();
+            let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
+            let edge_type = extract_arg(args, "--edge-type");
+            let depth = extract_arg(args, "--depth").and_then(|s| s.parse().ok());
+            Some(ApiRequest::Explore { cid, edge_type, depth, agent_id })
         }
         _ => None,
     }
@@ -277,7 +285,7 @@ fn cmd_agent(kernel: &AIKernel, args: &[String]) -> ApiResponse {
     let name = extract_arg(args, "--register").unwrap_or_else(|| "unnamed".to_string());
     let id = kernel.register_agent(name.clone());
     println!("Agent registered: {} (ID: {})", name, id);
-    ApiResponse { ok: true, cid: None, data: None, results: None, agent_id: Some(id), agents: None, memory: None, tags: None, error: None }
+    ApiResponse { ok: true, cid: None, data: None, results: None, agent_id: Some(id), agents: None, memory: None, tags: None, neighbors: None, error: None }
 }
 
 fn cmd_agents(kernel: &AIKernel, _args: &[String]) -> ApiResponse {
@@ -323,6 +331,28 @@ fn cmd_tags(kernel: &AIKernel, _args: &[String]) -> ApiResponse {
             println!("  - {}", tag);
         }
     }
+    ApiResponse::ok()
+}
+
+fn cmd_explore(kernel: &AIKernel, args: &[String]) -> ApiResponse {
+    let cid = extract_arg(args, "--cid").unwrap_or_default();
+    let _agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
+    let depth = extract_arg(args, "--depth")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1);
+
+    let neighbors = kernel.graph_explore(&cid, None, depth);
+
+    if neighbors.is_empty() {
+        println!("No graph neighbors for: {}", cid);
+    } else {
+        println!("Graph neighbors of {} (depth {}):", cid, depth);
+        for (i, n) in neighbors.iter().enumerate() {
+            let edge_str = n.edge_type.as_ref().map(|et| format!("{:?}", et)).unwrap_or_default();
+            println!("{}. [auth={:.3}] {} ({}) {}", i + 1, n.authority_score, n.node.id, format!("{:?}", n.node.node_type).to_lowercase(), edge_str);
+        }
+    }
+
     ApiResponse::ok()
 }
 
@@ -396,6 +426,11 @@ COMMANDS:
     --content TEXT   Memory content
 
   recall        Retrieve agent memories
+    --agent ID       Agent ID
+
+  explore       Graph neighbors of a CID
+    --cid CID        Starting node CID
+    --depth N        Traversal depth (default: 1, max: 3)
     --agent ID       Agent ID
 
 EXAMPLES:

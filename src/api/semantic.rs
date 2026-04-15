@@ -77,6 +77,9 @@ pub enum ApiRequest {
 
     #[serde(rename = "recall")]
     Recall { agent_id: String },
+
+    #[serde(rename = "explore")]
+    Explore { cid: String, edge_type: Option<String>, depth: Option<u8>, agent_id: String },
 }
 
 /// A JSON API response.
@@ -98,6 +101,8 @@ pub struct ApiResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tags: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub neighbors: Option<Vec<NeighborDto>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
 
@@ -115,20 +120,29 @@ pub struct AgentDto {
     pub state: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NeighborDto {
+    pub node_id: String,
+    pub label: String,
+    pub node_type: String,
+    pub edge_type: String,
+    pub authority_score: f32,
+}
+
 impl ApiResponse {
     pub fn ok() -> Self {
-        Self { ok: true, cid: None, data: None, results: None, agent_id: None, agents: None, memory: None, tags: None, error: None }
+        Self { ok: true, cid: None, data: None, results: None, agent_id: None, agents: None, memory: None, tags: None, neighbors: None, error: None }
     }
 
     pub fn with_cid(cid: String) -> Self {
-        Self { ok: true, cid: Some(cid), data: None, results: None, agent_id: None, agents: None, memory: None, tags: None, error: None }
+        Self { ok: true, cid: Some(cid), data: None, results: None, agent_id: None, agents: None, memory: None, tags: None, neighbors: None, error: None }
     }
 
     pub fn with_data(data: String) -> Self {
-        Self { ok: true, cid: None, data: Some(data), results: None, agent_id: None, agents: None, memory: None, tags: None, error: None }
+        Self { ok: true, cid: None, data: Some(data), results: None, agent_id: None, agents: None, memory: None, tags: None, neighbors: None, error: None }
     }
 
     pub fn error(msg: impl Into<String>) -> Self {
-        Self { ok: false, cid: None, data: None, results: None, agent_id: None, agents: None, memory: None, tags: None, error: Some(msg.into()) }
+        Self { ok: false, cid: None, data: None, results: None, agent_id: None, agents: None, memory: None, tags: None, neighbors: None, error: Some(msg.into()) }
     }
 }

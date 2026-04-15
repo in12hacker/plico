@@ -105,6 +105,7 @@ pub struct KGEdge {
 #[derive(Debug, Clone)]
 pub struct KGSearchHit {
     pub node: KGNode,
+    pub edge_type: Option<KGEdgeType>,
     pub vector_score: f32,
     pub authority_score: f32,
     pub combined_score: f32,
@@ -129,7 +130,7 @@ pub enum KGError {
 /// The KnowledgeGraph trait — pluggable graph backends.
 ///
 /// Implement this trait to provide different storage strategies:
-/// - `PetgraphBackend`: in-memory (MVP, fast)
+/// - `PetgraphBackend`: in-memory + JSON persistence (MVP, fast)
 /// - `SqliteGraphBackend`: persisted adjacency list (future)
 pub trait KnowledgeGraph: Send + Sync {
     fn add_node(&self, node: KGNode) -> Result<(), KGError>;
@@ -145,26 +146,112 @@ pub trait KnowledgeGraph: Send + Sync {
     fn list_nodes(&self, agent_id: &str, node_type: Option<KGNodeType>) -> Result<Vec<KGNode>, KGError>;
     fn list_edges(&self, agent_id: &str) -> Result<Vec<KGEdge>, KGError>;
     fn remove_node(&self, id: &str) -> Result<(), KGError>;
+    /// Upsert a Document node and auto-create AssociatesWith edges for shared ≥2 tags.
+    fn upsert_document(&self, cid: &str, tags: &[String], agent_id: &str) -> Result<(), KGError>;
+    /// Compute authority score (log-scaled degree, normalized 0–1).
+    fn authority_score(&self, node_id: &str) -> Result<f32, KGError>;
+}
+
+/// Flattened edge record for JSON serialization (restores bidirectional edges on load).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct EdgeRecord {
+    src: String,
+    dst: String,
+    edge: KGEdge,
 }
 
 // ─── In-memory implementation ───────────────────────────────────────────────────────
 
 /// In-memory knowledge graph backed by HashMap.
-/// Thread-safe via RwLock.
+/// Thread-safe via RwLock. Persisted to disk as JSON.
 pub struct PetgraphBackend {
     nodes: RwLock<HashMap<String, KGNode>>,
     /// Outbound edges: src → [(dst, edge_data)]
     out_edges: RwLock<HashMap<String, Vec<(String, KGEdge)>>>,
     /// Inbound edges: dst → [(src, edge_data)]
     in_edges: RwLock<HashMap<String, Vec<(String, KGEdge)>>>,
+    /// Path prefix for persistence (e.g. root/kg_nodes.json, root/kg_edges.json).
+    path: Option<std::path::PathBuf>,
 }
 
 impl PetgraphBackend {
+    /// Create a new in-memory graph with no persistence path.
     pub fn new() -> Self {
         Self {
             nodes: RwLock::new(HashMap::new()),
             out_edges: RwLock::new(HashMap::new()),
             in_edges: RwLock::new(HashMap::new()),
+            path: None,
+        }
+    }
+
+    /// Create or open a persisted graph at the given root path.
+    pub fn open(root: std::path::PathBuf) -> Self {
+        let nodes_path = root.join("kg_nodes.json");
+        let edges_path = root.join("kg_edges.json");
+
+        let (nodes, out_e, in_e) = if nodes_path.exists() {
+            match Self::load_from_disk(&nodes_path, &edges_path) {
+                Ok(triple) => triple,
+                Err(e) => {
+                    tracing::warn!("Failed to load knowledge graph, starting fresh: {}", e);
+                    (HashMap::new(), HashMap::new(), HashMap::new())
+                }
+            }
+        } else {
+            (HashMap::new(), HashMap::new(), HashMap::new())
+        };
+
+        Self {
+            nodes: RwLock::new(nodes),
+            out_edges: RwLock::new(out_e),
+            in_edges: RwLock::new(in_e),
+            path: Some(root),
+        }
+    }
+
+    fn load_from_disk(
+        nodes_path: &std::path::Path,
+        edges_path: &std::path::Path,
+    ) -> Result<(HashMap<String, KGNode>, HashMap<String, Vec<(String, KGEdge)>>, HashMap<String, Vec<(String, KGEdge)>>), KGError> {
+        let nodes: HashMap<String, KGNode> = serde_json::from_str(&std::fs::read_to_string(nodes_path)?)
+            .map_err(|e| KGError::Json(e))?;
+        let edges: Vec<EdgeRecord> = serde_json::from_str(&std::fs::read_to_string(edges_path)?)
+            .map_err(|e| KGError::Json(e))?;
+
+        let mut out_edges: HashMap<String, Vec<(String, KGEdge)>> = HashMap::new();
+        let mut in_edges: HashMap<String, Vec<(String, KGEdge)>> = HashMap::new();
+        for rec in edges {
+            out_edges.entry(rec.src.clone()).or_default().push((rec.dst.clone(), rec.edge.clone()));
+            in_edges.entry(rec.dst.clone()).or_default().push((rec.src.clone(), rec.edge));
+        }
+        Ok((nodes, out_edges, in_edges))
+    }
+
+    fn persist(&self) {
+        let Some(ref path) = self.path else { return };
+        let nodes_path = path.join("kg_nodes.json");
+        let edges_path = path.join("kg_edges.json");
+
+        let nodes = self.nodes.read().unwrap();
+        if let Ok(json) = serde_json::to_string(&*nodes) {
+            let _ = std::fs::write(&nodes_path, json);
+        }
+        drop(nodes);
+
+        let out = self.out_edges.read().unwrap();
+        let records: Vec<EdgeRecord> = out
+            .iter()
+            .flat_map(|(src, list)| {
+                list.iter().map(move |(dst, edge)| EdgeRecord {
+                    src: src.clone(),
+                    dst: dst.clone(),
+                    edge: edge.clone(),
+                })
+            })
+            .collect();
+        if let Ok(json) = serde_json::to_string(&records) {
+            let _ = std::fs::write(&edges_path, json);
         }
     }
 
@@ -305,6 +392,8 @@ impl KnowledgeGraph for PetgraphBackend {
     fn add_node(&self, node: KGNode) -> Result<(), KGError> {
         let mut nodes = self.nodes.write().unwrap();
         nodes.insert(node.id.clone(), node);
+        drop(nodes);
+        self.persist();
         Ok(())
     }
 
@@ -330,6 +419,7 @@ impl KnowledgeGraph for PetgraphBackend {
             .entry(edge.dst.clone())
             .or_default()
             .push((edge.src.clone(), edge));
+        self.persist();
         Ok(())
     }
 
@@ -357,9 +447,9 @@ impl KnowledgeGraph for PetgraphBackend {
 
         for _d in 0..depth {
             let mut next = HashSet::new();
-            for current in frontier {
+            for current in frontier.iter() {
                 // outbound neighbors
-                if let Some(out_list) = out.get(&current) {
+                if let Some(out_list) = out.get(current) {
                     for (neighbor, edge) in out_list {
                         if visited.contains(neighbor) {
                             continue;
@@ -374,7 +464,7 @@ impl KnowledgeGraph for PetgraphBackend {
                     }
                 }
                 // inbound neighbors
-                if let Some(inc_list) = inc.get(&current) {
+                if let Some(inc_list) = inc.get(current) {
                     for (neighbor, edge) in inc_list {
                         if visited.contains(neighbor) {
                             continue;
@@ -483,7 +573,16 @@ impl KnowledgeGraph for PetgraphBackend {
                 }
             }
         }
+        self.persist();
         Ok(())
+    }
+
+    fn upsert_document(&self, cid: &str, tags: &[String], agent_id: &str) -> Result<(), KGError> {
+        PetgraphBackend::upsert_document(self, cid, tags, agent_id)
+    }
+
+    fn authority_score(&self, node_id: &str) -> Result<f32, KGError> {
+        Ok(PetgraphBackend::authority_score(self, node_id))
     }
 }
 
