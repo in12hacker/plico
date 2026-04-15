@@ -16,7 +16,8 @@ use crate::cas::{CASStorage, AIObject, AIObjectMeta};
 use crate::memory::{LayeredMemory, MemoryEntry, CASPersister, MemoryPersister};
 use crate::scheduler::{AgentScheduler, Agent, Intent, IntentPriority, AgentHandle};
 use crate::scheduler::dispatch::{TokioDispatchLoop, LocalExecutor, AgentExecutor, DispatchHandle};
-use crate::fs::{SemanticFS, Query, OllamaBackend, InMemoryBackend, EmbeddingProvider, SemanticSearch, OllamaSummarizer, Summarizer, KnowledgeGraph, PetgraphBackend, LocalEmbeddingBackend, StubEmbeddingProvider, EmbedError};
+use crate::fs::{SemanticFS, Query, OllamaBackend, InMemoryBackend, EmbeddingProvider, SemanticSearch, OllamaSummarizer, Summarizer, KnowledgeGraph, PetgraphBackend, LocalEmbeddingBackend, StubEmbeddingProvider, EmbedError, EventType, EventRelation, EventSummary};
+use crate::temporal::{TemporalResolver, RULE_BASED_RESOLVER};
 use crate::api::permission::{PermissionGuard, PermissionContext, PermissionAction};
 
 /// The AI Kernel — all subsystems wired together.
@@ -209,12 +210,31 @@ impl AIKernel {
         require_tags: Vec<String>,
         exclude_tags: Vec<String>,
     ) -> Vec<crate::fs::SearchResult> {
+        self.semantic_search_with_time(query, agent_id, limit, require_tags, exclude_tags, None, None)
+    }
+
+    /// Semantic search with time-range bounds.
+    ///
+    /// `since` / `until` — Unix milliseconds. Both optional; None means unbounded.
+    /// When only one is provided, the other is left open.
+    pub fn semantic_search_with_time(
+        &self,
+        query: &str,
+        agent_id: &str,
+        limit: usize,
+        require_tags: Vec<String>,
+        exclude_tags: Vec<String>,
+        since: Option<i64>,
+        until: Option<i64>,
+    ) -> Vec<crate::fs::SearchResult> {
         let ctx = PermissionContext::new(agent_id.to_string());
         let _ = self.permissions.check(&ctx, PermissionAction::Read);
         let filter = crate::fs::SearchFilter {
             require_tags,
             exclude_tags,
             content_type: None,
+            since,
+            until,
         };
         self.fs.search_with_filter(query, limit, filter)
     }
@@ -348,6 +368,64 @@ impl AIKernel {
                 (hit.node.id, hit.node.label, node_type, edge_type, hit.authority_score)
             })
             .collect()
+    }
+
+    // ─── Event Operations ───────────────────────────────────────────────
+
+    /// Create an event and register it in the knowledge graph.
+    pub fn create_event(
+        &self,
+        label: &str,
+        event_type: EventType,
+        start_time: Option<u64>,
+        end_time: Option<u64>,
+        location: Option<&str>,
+        tags: Vec<String>,
+        agent_id: &str,
+    ) -> std::io::Result<String> {
+        let ctx = PermissionContext::new(agent_id.to_string());
+        self.permissions.check(&ctx, PermissionAction::Write)?;
+        self.fs.create_event(label, event_type, start_time, end_time, location, tags, agent_id)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
+    }
+
+    /// List events matching time range, tags, and optional event type.
+    pub fn list_events(
+        &self,
+        since: Option<u64>,
+        until: Option<u64>,
+        tags: &[String],
+        event_type: Option<EventType>,
+    ) -> Vec<EventSummary> {
+        self.fs.list_events(since, until, tags, event_type).unwrap_or_default()
+    }
+
+    /// List events by natural-language time expression (e.g. "几天前", "上周").
+    ///
+    /// Uses the built-in rule-based resolver server-side.
+    pub fn list_events_text(
+        &self,
+        time_expression: &str,
+        tags: &[String],
+        event_type: Option<EventType>,
+    ) -> std::io::Result<Vec<EventSummary>> {
+        let resolver: &dyn TemporalResolver = &RULE_BASED_RESOLVER;
+        self.fs.list_events_by_time(time_expression, tags, event_type, resolver)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
+    }
+
+    /// Attach a target (person, document, media, decision) to an event.
+    pub fn event_attach(
+        &self,
+        event_id: &str,
+        target_id: &str,
+        relation: EventRelation,
+        agent_id: &str,
+    ) -> std::io::Result<()> {
+        let ctx = PermissionContext::new(agent_id.to_string());
+        self.permissions.check(&ctx, PermissionAction::Write)?;
+        self.fs.event_attach(event_id, target_id, relation, agent_id)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
     }
 
     /// Explore graph neighbors of a CID at a given depth.

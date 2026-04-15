@@ -37,6 +37,7 @@
 
 use base64::Engine;
 use serde::{Deserialize, Serialize};
+use crate::fs::{EventType, EventRelation, EventSummary};
 
 /// Content encoding field for binary-safe API payloads.
 ///
@@ -99,6 +100,12 @@ pub enum ApiRequest {
         /// Exclude entries that have any of these tags.
         #[serde(default)]
         exclude_tags: Vec<String>,
+        /// Inclusive lower bound on creation time (Unix ms).
+        #[serde(default)]
+        since: Option<i64>,
+        /// Inclusive upper bound on creation time (Unix ms).
+        #[serde(default)]
+        until: Option<i64>,
     },
 
     #[serde(rename = "update")]
@@ -135,6 +142,42 @@ pub enum ApiRequest {
 
     #[serde(rename = "restore")]
     Restore { cid: String, agent_id: String },
+
+    #[serde(rename = "create_event")]
+    CreateEvent {
+        label: String,
+        event_type: EventType,
+        start_time: Option<u64>,
+        end_time: Option<u64>,
+        location: Option<String>,
+        tags: Vec<String>,
+        agent_id: String,
+    },
+
+    #[serde(rename = "list_events")]
+    ListEvents {
+        since: Option<u64>,
+        until: Option<u64>,
+        tags: Vec<String>,
+        event_type: Option<EventType>,
+        agent_id: String,
+    },
+
+    #[serde(rename = "list_events_text")]
+    ListEventsText {
+        time_expression: String,
+        tags: Vec<String>,
+        event_type: Option<EventType>,
+        agent_id: String,
+    },
+
+    #[serde(rename = "event_attach")]
+    EventAttach {
+        event_id: String,
+        target_id: String,
+        relation: EventRelation,
+        agent_id: String,
+    },
 }
 
 /// A JSON API response.
@@ -159,6 +202,8 @@ pub struct ApiResponse {
     pub neighbors: Option<Vec<NeighborDto>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub deleted: Option<Vec<DeletedDto>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub events: Option<Vec<EventSummary>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
@@ -195,19 +240,23 @@ pub struct DeletedDto {
 
 impl ApiResponse {
     pub fn ok() -> Self {
-        Self { ok: true, cid: None, data: None, results: None, agent_id: None, agents: None, memory: None, tags: None, neighbors: None, deleted: None, error: None }
+        Self { ok: true, cid: None, data: None, results: None, agent_id: None, agents: None, memory: None, tags: None, neighbors: None, deleted: None, events: None, error: None }
     }
 
     pub fn with_cid(cid: String) -> Self {
-        Self { ok: true, cid: Some(cid), data: None, results: None, agent_id: None, agents: None, memory: None, tags: None, neighbors: None, deleted: None, error: None }
+        Self { ok: true, cid: Some(cid), data: None, results: None, agent_id: None, agents: None, memory: None, tags: None, neighbors: None, deleted: None, events: None, error: None }
     }
 
     pub fn with_data(data: String) -> Self {
-        Self { ok: true, cid: None, data: Some(data), results: None, agent_id: None, agents: None, memory: None, tags: None, neighbors: None, deleted: None, error: None }
+        Self { ok: true, cid: None, data: Some(data), results: None, agent_id: None, agents: None, memory: None, tags: None, neighbors: None, deleted: None, events: None, error: None }
+    }
+
+    pub fn with_events(events: Vec<EventSummary>) -> Self {
+        Self { ok: true, cid: None, data: None, results: None, agent_id: None, agents: None, memory: None, tags: None, neighbors: None, deleted: None, events: Some(events), error: None }
     }
 
     pub fn error(msg: impl Into<String>) -> Self {
-        Self { ok: false, cid: None, data: None, results: None, agent_id: None, agents: None, memory: None, tags: None, neighbors: None, deleted: None, error: Some(msg.into()) }
+        Self { ok: false, cid: None, data: None, results: None, agent_id: None, agents: None, memory: None, tags: None, neighbors: None, deleted: None, events: None, error: Some(msg.into()) }
     }
 }
 

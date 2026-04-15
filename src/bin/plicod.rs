@@ -136,20 +136,22 @@ fn handle_request(kernel: &AIKernel, req: ApiRequest) -> ApiResponse {
             }
         }
 
-        ApiRequest::Search { query, agent_id, limit, require_tags, exclude_tags } => {
-            let results = kernel.semantic_search(
+        ApiRequest::Search { query, agent_id, limit, require_tags, exclude_tags, since, until } => {
+            let results = kernel.semantic_search_with_time(
                 &query,
                 &agent_id,
                 limit.unwrap_or(10),
                 require_tags,
                 exclude_tags,
+                since,
+                until,
             );
             let dto: Vec<SearchResultDto> = results.into_iter().map(|r| SearchResultDto {
                 cid: r.cid,
                 relevance: r.relevance,
                 tags: r.meta.tags,
             }).collect();
-            ApiResponse { ok: true, cid: None, data: None, results: Some(dto), agent_id: None, agents: None, memory: None, tags: None, neighbors: None, deleted: None, error: None }
+            ApiResponse { ok: true, cid: None, data: None, results: Some(dto), agent_id: None, agents: None, memory: None, tags: None, neighbors: None, deleted: None, events: None, error: None }
         }
 
         ApiRequest::Update { cid, content, content_encoding, new_tags, agent_id } => {
@@ -172,7 +174,7 @@ fn handle_request(kernel: &AIKernel, req: ApiRequest) -> ApiResponse {
 
         ApiRequest::RegisterAgent { name } => {
             let id = kernel.register_agent(name);
-            ApiResponse { ok: true, cid: None, data: None, results: None, agent_id: Some(id), agents: None, memory: None, tags: None, neighbors: None, deleted: None, error: None }
+            ApiResponse { ok: true, cid: None, data: None, results: None, agent_id: Some(id), agents: None, memory: None, tags: None, neighbors: None, deleted: None, events: None, error: None }
         }
 
         ApiRequest::ListAgents => {
@@ -181,7 +183,7 @@ fn handle_request(kernel: &AIKernel, req: ApiRequest) -> ApiResponse {
                 name: a.name,
                 state: format!("{:?}", a.state),
             }).collect();
-            ApiResponse { ok: true, cid: None, data: None, results: None, agent_id: None, agents: Some(agents), memory: None, tags: None, neighbors: None, deleted: None, error: None }
+            ApiResponse { ok: true, cid: None, data: None, results: None, agent_id: None, agents: Some(agents), memory: None, tags: None, neighbors: None, deleted: None, events: None, error: None }
         }
 
         ApiRequest::Remember { agent_id, content } => {
@@ -197,7 +199,7 @@ fn handle_request(kernel: &AIKernel, req: ApiRequest) -> ApiResponse {
                     _ => None,
                 })
                 .collect();
-            ApiResponse { ok: true, cid: None, data: None, results: None, agent_id: None, agents: None, memory: Some(memories), tags: None, neighbors: None, deleted: None, error: None }
+            ApiResponse { ok: true, cid: None, data: None, results: None, agent_id: None, agents: None, memory: Some(memories), tags: None, neighbors: None, deleted: None, events: None, error: None }
         }
 
         ApiRequest::Explore { cid, edge_type, depth, agent_id: _ } => {
@@ -206,7 +208,7 @@ fn handle_request(kernel: &AIKernel, req: ApiRequest) -> ApiResponse {
             let dto: Vec<NeighborDto> = raw.into_iter().map(|(node_id, label, node_type, edge_type, authority_score)| {
                 NeighborDto { node_id, label, node_type, edge_type, authority_score }
             }).collect();
-            ApiResponse { ok: true, cid: None, data: None, results: None, agent_id: None, agents: None, memory: None, tags: None, neighbors: Some(dto), deleted: None, error: None }
+            ApiResponse { ok: true, cid: None, data: None, results: None, agent_id: None, agents: None, memory: None, tags: None, neighbors: Some(dto), deleted: None, events: None, error: None }
         }
 
         ApiRequest::ListDeleted { agent_id } => {
@@ -218,11 +220,37 @@ fn handle_request(kernel: &AIKernel, req: ApiRequest) -> ApiResponse {
                     tags: e.original_meta.tags,
                 }
             }).collect();
-            ApiResponse { ok: true, cid: None, data: None, results: None, agent_id: None, agents: None, memory: None, tags: None, neighbors: None, deleted: Some(dto), error: None }
+            ApiResponse { ok: true, cid: None, data: None, results: None, agent_id: None, agents: None, memory: None, tags: None, neighbors: None, deleted: Some(dto), events: None, error: None }
         }
 
         ApiRequest::Restore { cid, agent_id } => {
             match kernel.restore_deleted(&cid, &agent_id) {
+                Ok(()) => ApiResponse::ok(),
+                Err(e) => ApiResponse::error(e.to_string()),
+            }
+        }
+
+        ApiRequest::CreateEvent { label, event_type, start_time, end_time, location, tags, agent_id } => {
+            match kernel.create_event(&label, event_type, start_time, end_time, location.as_deref(), tags, &agent_id) {
+                Ok(id) => ApiResponse::with_cid(id),
+                Err(e) => ApiResponse::error(e.to_string()),
+            }
+        }
+
+        ApiRequest::ListEvents { since, until, tags, event_type, agent_id: _ } => {
+            let events = kernel.list_events(since, until, &tags, event_type);
+            ApiResponse::with_events(events)
+        }
+
+        ApiRequest::ListEventsText { time_expression, tags, event_type, agent_id: _ } => {
+            match kernel.list_events_text(&time_expression, &tags, event_type) {
+                Ok(events) => ApiResponse::with_events(events),
+                Err(e) => ApiResponse::error(e.to_string()),
+            }
+        }
+
+        ApiRequest::EventAttach { event_id, target_id, relation, agent_id } => {
+            match kernel.event_attach(&event_id, &target_id, relation, &agent_id) {
                 Ok(()) => ApiResponse::ok(),
                 Err(e) => ApiResponse::error(e.to_string()),
             }

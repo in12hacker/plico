@@ -56,8 +56,16 @@ impl std::fmt::Display for KGNodeType {
 }
 
 /// Edge type discriminator.
+///
+/// # Serialization
+/// All variants serialize to their snake_case string name via serde's default
+/// derive. When loading persisted KG files, unknown variants cause a deserialize
+/// error — acceptable during the prototype phase (no compatibility requirement).
+/// Adding a new variant here requires updating this enum, the Display impl, and
+/// any `match` arms that cover all variants.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum KGEdgeType {
+    // ── General / existing ────────────────────────────────────────────────
     AssociatesWith,
     Follows,
     Mentions,
@@ -66,6 +74,20 @@ pub enum KGEdgeType {
     PartOf,
     SimilarTo,
     RelatedTo,
+    // ── Event-specific relations ──────────────────────────────────────────
+    /// Event → Person (attendee of the event).
+    HasAttendee,
+    /// Event → Document (content associated with the event).
+    HasDocument,
+    /// Event → Media (photo, recording, etc. from the event).
+    HasMedia,
+    /// Event → ActionItem (decision, task, or resolution from the event).
+    HasDecision,
+    // ── Reasoning / Action Suggestion edges ───────────────────────────────
+    /// Preference node → suggested action (cross-event inference).
+    SuggestsAction,
+    /// Action suggestion → event that triggered it.
+    MotivatedBy,
 }
 
 impl std::fmt::Display for KGEdgeType {
@@ -79,6 +101,12 @@ impl std::fmt::Display for KGEdgeType {
             KGEdgeType::PartOf => write!(f, "part_of"),
             KGEdgeType::SimilarTo => write!(f, "similar_to"),
             KGEdgeType::RelatedTo => write!(f, "related_to"),
+            KGEdgeType::HasAttendee => write!(f, "has_attendee"),
+            KGEdgeType::HasDocument => write!(f, "has_document"),
+            KGEdgeType::HasMedia => write!(f, "has_media"),
+            KGEdgeType::HasDecision => write!(f, "has_decision"),
+            KGEdgeType::SuggestsAction => write!(f, "suggests_action"),
+            KGEdgeType::MotivatedBy => write!(f, "motivated_by"),
         }
     }
 }
@@ -153,6 +181,8 @@ pub trait KnowledgeGraph: Send + Sync {
     fn list_nodes(&self, agent_id: &str, node_type: Option<KGNodeType>) -> Result<Vec<KGNode>, KGError>;
     fn list_edges(&self, agent_id: &str) -> Result<Vec<KGEdge>, KGError>;
     fn remove_node(&self, id: &str) -> Result<(), KGError>;
+    /// Return IDs of all nodes in the graph. Used for full-scan queries (e.g. event listing).
+    fn all_node_ids(&self) -> Vec<String>;
     /// Upsert a Document node and auto-create AssociatesWith edges for shared ≥2 tags.
     fn upsert_document(&self, cid: &str, tags: &[String], agent_id: &str) -> Result<(), KGError>;
     /// Compute authority score (log-scaled degree, normalized 0–1).
@@ -555,6 +585,11 @@ impl KnowledgeGraph for PetgraphBackend {
         Ok(edges)
     }
 
+    fn all_node_ids(&self) -> Vec<String> {
+        let nodes = self.nodes.read().unwrap();
+        nodes.keys().cloned().collect()
+    }
+
     fn remove_node(&self, id: &str) -> Result<(), KGError> {
         {
             let mut nodes = self.nodes.write().unwrap();
@@ -786,5 +821,74 @@ mod tests {
         assert_eq!(kg.degree("center"), 2);
         // leaf1 has 1 neighbor: {center} (outbound to center)
         assert_eq!(kg.degree("leaf1"), 1);
+    }
+
+    // ── Event edge types ──────────────────────────────────────────────────────
+
+    #[test]
+    fn test_event_edge_types_serialize_roundtrip() {
+        use serde_json;
+
+        let variants = [
+            KGEdgeType::HasAttendee,
+            KGEdgeType::HasDocument,
+            KGEdgeType::HasMedia,
+            KGEdgeType::HasDecision,
+        ];
+
+        for edge_type in variants {
+            let json = serde_json::to_string(&edge_type).unwrap();
+            let roundtrip: KGEdgeType = serde_json::from_str(&json).unwrap();
+            assert_eq!(edge_type, roundtrip, "serde roundtrip must preserve {:?}", edge_type);
+        }
+    }
+
+    #[test]
+    fn test_event_edge_types_display() {
+        assert_eq!(KGEdgeType::HasAttendee.to_string(), "has_attendee");
+        assert_eq!(KGEdgeType::HasDocument.to_string(), "has_document");
+        assert_eq!(KGEdgeType::HasMedia.to_string(), "has_media");
+        assert_eq!(KGEdgeType::HasDecision.to_string(), "has_decision");
+        assert_eq!(KGEdgeType::SuggestsAction.to_string(), "suggests_action");
+        assert_eq!(KGEdgeType::MotivatedBy.to_string(), "motivated_by");
+    }
+
+    #[test]
+    fn test_event_edge_add_and_query() {
+        let kg = PetgraphBackend::new();
+        // Simulate: Event("Q2规划会议") → Person("王总") via HasAttendee
+        kg.add_node(make_node("evt1", KGNodeType::Entity, vec![], "agent1")).unwrap();
+        kg.add_node(make_node("person1", KGNodeType::Entity, vec![], "agent1")).unwrap();
+        kg.add_edge(KGEdge {
+            src: "evt1".into(),
+            dst: "person1".into(),
+            edge_type: KGEdgeType::HasAttendee,
+            weight: 1.0,
+            evidence_cid: None,
+            created_at: 0,
+        }).unwrap();
+
+        let attendees = kg.get_neighbors("evt1", Some(KGEdgeType::HasAttendee), 1).unwrap();
+        assert_eq!(attendees.len(), 1, "event should have 1 attendee");
+        assert_eq!(attendees[0].0.label, "person1");
+
+        // Event → Document via HasDocument
+        kg.add_node(make_node("doc1", KGNodeType::Document, vec![], "agent1")).unwrap();
+        kg.add_edge(KGEdge {
+            src: "evt1".into(),
+            dst: "doc1".into(),
+            edge_type: KGEdgeType::HasDocument,
+            weight: 1.0,
+            evidence_cid: None,
+            created_at: 0,
+        }).unwrap();
+
+        let docs = kg.get_neighbors("evt1", Some(KGEdgeType::HasDocument), 1).unwrap();
+        assert_eq!(docs.len(), 1, "event should have 1 document");
+        assert_eq!(docs[0].0.label, "doc1");
+
+        // HasAttendee neighbors should not include doc1
+        let attendees_only = kg.get_neighbors("evt1", Some(KGEdgeType::HasAttendee), 1).unwrap();
+        assert!(attendees_only.iter().all(|(n, _)| n.id != "doc1"), "HasAttendee filter must exclude documents");
     }
 }

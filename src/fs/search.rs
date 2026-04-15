@@ -40,6 +40,8 @@ pub struct SearchIndexMeta {
     pub snippet: String,
     /// Content type string.
     pub content_type: String,
+    /// Creation timestamp (Unix ms), used for time-range filtering.
+    pub created_at: u64,
 }
 
 /// A search hit — a matching entry with relevance score.
@@ -62,9 +64,14 @@ pub struct SearchFilter {
     pub exclude_tags: Vec<String>,
     /// Content type filter.
     pub content_type: Option<String>,
+    /// Inclusive lower bound on creation time (Unix ms). None = no lower bound.
+    pub since: Option<i64>,
+    /// Inclusive upper bound on creation time (Unix ms). None = no upper bound.
+    pub until: Option<i64>,
 }
 
 impl SearchFilter {
+    /// Returns true if the entry passes all filter criteria.
     pub fn matches(&self, meta: &SearchIndexMeta) -> bool {
         // Tag filtering
         if !self.require_tags.is_empty() && !self.require_tags.iter().all(|t| meta.tags.contains(t)) {
@@ -79,7 +86,27 @@ impl SearchFilter {
                 return false;
             }
         }
+        // Time-range filtering
+        if let Some(since) = self.since {
+            if (meta.created_at as i64) < since {
+                return false;
+            }
+        }
+        if let Some(until) = self.until {
+            if (meta.created_at as i64) > until {
+                return false;
+            }
+        }
         true
+    }
+
+    /// Build a new filter with time bounds applied.
+    /// Convenience method — allows chaining in confidence-driven search.
+    #[allow(dead_code)]
+    pub fn with_time(mut self, since: i64, until: i64) -> Self {
+        self.since = Some(since);
+        self.until = Some(until);
+        self
     }
 }
 
@@ -268,6 +295,7 @@ mod tests {
                 tags: vec!["rust".to_string(), "ai".to_string()],
                 snippet: "Rust AI systems".to_string(),
                 content_type: "text".to_string(),
+                created_at: 0,
             },
         );
         backend.upsert(
@@ -278,6 +306,7 @@ mod tests {
                 tags: vec!["python".to_string()],
                 snippet: "Python web app".to_string(),
                 content_type: "text".to_string(),
+                created_at: 0,
             },
         );
 
@@ -301,12 +330,14 @@ mod tests {
             tags: vec!["rust".to_string()],
             snippet: "".to_string(),
             content_type: "text".to_string(),
+            created_at: 0,
         });
         backend.upsert("cid2", &sample_embedding(dim, 2.0), SearchIndexMeta {
             cid: "cid2".to_string(),
             tags: vec!["python".to_string()],
             snippet: "".to_string(),
             content_type: "text".to_string(),
+            created_at: 0,
         });
 
         let filter = SearchFilter {
@@ -328,6 +359,7 @@ mod tests {
             tags: vec![],
             snippet: "".to_string(),
             content_type: "text".to_string(),
+            created_at: 0,
         });
 
         assert_eq!(backend.len(), 1);
@@ -344,12 +376,14 @@ mod tests {
             tags: vec!["old".to_string()],
             snippet: "old".to_string(),
             content_type: "text".to_string(),
+            created_at: 0,
         });
         backend.upsert("cid1", &vec![0.0, 1.0, 0.0, 0.0], SearchIndexMeta {
             cid: "cid1".to_string(),
             tags: vec!["new".to_string()],
             snippet: "new".to_string(),
             content_type: "text".to_string(),
+            created_at: 0,
         });
 
         assert_eq!(backend.len(), 1);

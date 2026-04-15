@@ -195,7 +195,9 @@ fn build_request(args: &[String]) -> Option<ApiRequest> {
             let require_tags = extract_tags_opt(args, "--require-tags")
                 .unwrap_or_else(|| extract_tags_opt(args, "-t").unwrap_or_default());
             let exclude_tags = extract_tags_opt(args, "--exclude-tags").unwrap_or_default();
-            Some(ApiRequest::Search { query, agent_id, limit, require_tags, exclude_tags })
+            let since = extract_arg(args, "--since").and_then(|s| s.parse::<i64>().ok());
+            let until = extract_arg(args, "--until").and_then(|s| s.parse::<i64>().ok());
+            Some(ApiRequest::Search { query, agent_id, limit, require_tags, exclude_tags, since, until })
         }
         Some("update") => {
             let cid = extract_arg(args, "--cid").unwrap_or_default();
@@ -288,13 +290,17 @@ fn cmd_search(kernel: &AIKernel, args: &[String]) -> ApiResponse {
         .or_else(|| extract_tags_opt(args, "-t"))
         .unwrap_or_default();
     let exclude_tags = extract_tags_opt(args, "--exclude-tags").unwrap_or_default();
+    let since = extract_arg(args, "--since").and_then(|s| s.parse::<i64>().ok());
+    let until = extract_arg(args, "--until").and_then(|s| s.parse::<i64>().ok());
 
     if query.is_empty() {
         eprintln!("Error: search requires a query. Use: search --query <text> or: search <text>");
         return ApiResponse::error("empty query");
     }
 
-    let results = kernel.semantic_search(&query, &agent_id, limit, require_tags, exclude_tags);
+    let results = kernel.semantic_search_with_time(
+        &query, &agent_id, limit, require_tags, exclude_tags, since, until,
+    );
 
     if results.is_empty() {
         println!("No results for: {}", query);
@@ -344,7 +350,7 @@ fn cmd_agent(kernel: &AIKernel, args: &[String]) -> ApiResponse {
     let name = extract_arg(args, "--register").unwrap_or_else(|| "unnamed".to_string());
     let id = kernel.register_agent(name.clone());
     println!("Agent registered: {} (ID: {})", name, id);
-    ApiResponse { ok: true, cid: None, data: None, results: None, agent_id: Some(id), agents: None, memory: None, tags: None, neighbors: None, deleted: None, error: None }
+    ApiResponse { ok: true, cid: None, data: None, results: None, agent_id: Some(id), agents: None, memory: None, tags: None, neighbors: None, deleted: None, events: None, error: None }
 }
 
 fn cmd_agents(kernel: &AIKernel, _args: &[String]) -> ApiResponse {
@@ -530,13 +536,15 @@ COMMANDS:
   get/read     Retrieve object by CID
     <CID>             Object CID to retrieve
 
-  search       Semantic search with optional tag filtering
+  search       Semantic search with optional tag/time filtering
     --query TEXT      Natural language query
     <text>            Positional query (alternative to --query)
     --require-tags T  Only return files with ALL these tags (comma-sep)
     --exclude-tags T  Exclude files with any of these tags (comma-sep)
     -t               Short for --require-tags
-    --agent ID       Agent ID
+    --since MS        Inclusive lower bound (Unix ms) — e.g. "几天前" resolved
+    --until MS        Inclusive upper bound (Unix ms)
+    --agent ID        Agent ID
 
   update       Update object content
     --cid CID        Object CID to update

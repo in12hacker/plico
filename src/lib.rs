@@ -19,6 +19,7 @@ pub mod scheduler;
 pub mod fs;
 pub mod kernel;
 pub mod api;
+pub mod temporal;
 
 // Permission re-exports for ergonomic access
 pub use api::permission::{PermissionGuard, PermissionContext, PermissionAction, PermissionGrant};

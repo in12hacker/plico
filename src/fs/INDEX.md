@@ -8,7 +8,15 @@ Status: active | Fan-in: 1 (kernel) | Fan-out: 1 (cas)
 
 | Export | File | Description |
 |--------|------|-------------|
-| `SemanticFS` | `semantic_fs.rs` | Filesystem: create/read/update/delete/search/list_tags/audit_log/list_deleted/restore |
+| `SemanticFS` | `semantic_fs.rs` | Filesystem: create/read/update/delete/search/list_tags/audit_log/list_deleted/restore/create_event/list_events/event_attach |
+| `EventType` | `semantic_fs.rs` | Enum: Meeting/Presentation/Review/Interview/Travel/Entertainment/Social/Work/Personal/Other |
+| `EventMeta` | `semantic_fs.rs` | Event metadata (stored in KGNode.properties): label/event_type/start_time/attendee_ids/related_cids |
+| `EventRelation` | `semantic_fs.rs` | Enum: Attendee/Document/Media/Decision — relation type when attaching to event |
+| `EventSummary` | `semantic_fs.rs` | Lightweight event listing: id/label/event_type/start_time/attendee_count/related_count |
+| `ActionSuggestion` | `semantic_fs.rs` | AI action suggestion with inline preference + reasoning_chain + confidence + status |
+| `SuggestionStatus` | `semantic_fs.rs` | Enum: Pending/Confirmed/Dismissed |
+| `PREFERENCE_MIN_CONFIDENCE` | `semantic_fs.rs` | Minimum confidence threshold (0.4) for surfacing suggestions |
+| `PREFERENCE_HIGH_CONFIDENCE` | `semantic_fs.rs` | Auto-fire threshold (0.8); no user confirmation needed |
 | `RecycleEntry` | `semantic_fs.rs` | Soft-deleted object entry: cid/deleted_at/original_meta (persisted to recycle_bin.json) |
 | `Query` | `semantic_fs.rs` | Enum: ByCid/ByTags/Semantic/ByType/Hybrid |
 | `SearchResult` | `semantic_fs.rs` | Result: cid + relevance score + AIObjectMeta |
@@ -28,12 +36,12 @@ Status: active | Fan-in: 1 (kernel) | Fan-out: 1 (cas)
 | `SearchFilter` | `search.rs` | Filter: require_tags/exclude_tags/content_type |
 | `SearchHit` | `search.rs` | A search match: cid + score + meta |
 | `SearchIndexMeta` | `search.rs` | Metadata stored in vector index per entry |
-| `KnowledgeGraph` | `graph.rs` | Trait: add_node/add_edge/get_neighbors/remove_node/authority_score |
+| `KnowledgeGraph` | `graph.rs` | Trait: add_node/add_edge/get_neighbors/remove_node/authority_score/all_node_ids |
 | `PetgraphBackend` | `graph.rs` | HashMap-based directed graph (prod-ready) |
 | `KGNode` | `graph.rs` | Graph node: id/label/node_type/agent_id/metadata |
 | `KGNodeType` | `graph.rs` | Enum: Document/Entity/Concept/Fact/Agent |
 | `KGEdge` | `graph.rs` | Graph edge: source/target/edge_type/weight/created_at |
-| `KGEdgeType` | `graph.rs` | Enum: AssociatesWith/Mentions/Follows/PartOf/RelatedTo/Causes/Reminds/SimilarTo |
+| `KGEdgeType` | `graph.rs` | Enum: AssociatesWith/Follows/Mentions/PartOf/RelatedTo/SimilarTo + HasAttendee/HasDocument/HasMedia/HasDecision (event) + SuggestsAction/MotivatedBy (reasoning) |
 | `KGSearchHit` | `graph.rs` | A graph search hit: node + edge_type + scores |
 | `KGError` | `graph.rs` | Error: NodeNotFound, EdgeAlreadyExists, GraphError |
 | `Summarizer` | `summarizer.rs` | Trait: summarize(content, layer) → String |
@@ -59,6 +67,12 @@ Status: active | Fan-in: 1 (kernel) | Fan-out: 1 (cas)
 - `SemanticFS::create(...)`: Auto-generates L0 summary via `Summarizer` after store (if summarizer available; failure only warns).
 - `SemanticFS::read(Query::ByType(t))`: Scans search index by `content_type` field; works even without embeddings.
 - `SemanticFS::read(Query::Hybrid{tags, semantic, content_type})`: Combines vector search + tag + type filter.
+- `SemanticFS::create_event(...)`: Creates event as KG node (Entity type + EventMeta in properties). Works even if KG is absent (returns ID, no-op for KG). Indexes by tags for `list_events` queries.
+- `SemanticFS::list_events(since, until, tags, event_type)`: Full-scan over KG Entity nodes filtered by time range + tag intersection + EventType. Returns empty vec if KG is not initialized.
+- `SemanticFS::list_events_by_time(time_expr, tags, event_type, resolver)`: Resolves natural-language time expression via `TemporalResolver` → delegates to `list_events`. Returns `Err` if resolver cannot parse expression.
+- `SemanticFS::event_attach(event_id, target_id, relation, agent_id)`: Adds typed KG edge + updates EventMeta attendee_ids/related_cids. Returns `Err` if KG is absent or event not found.
+- `KnowledgeGraph::all_node_ids()`: Returns IDs of all nodes in the graph. Used for full-scan queries without tag filtering.
+- `HeuristicTemporalResolver` (in `src/temporal/`): Implements `TemporalResolver`; resolves "几天前"/"上周"/"上个月"/etc. to Unix-ms ranges via rule-based heuristics. Safe to call from `tokio::spawn`.
 - `ContextLoader::load(cid, L0)`: Returns pre-cached summary if available; otherwise computes on-demand via `compute_l0()` (LLM summarizer if present, heuristic fallback). Never returns a placeholder string.
 - `ContextLoader::load(cid, L1)`: Returns pre-computed L1 file if available; otherwise falls back to leading 8000 chars of CAS content (~2000 tokens). Never returns a placeholder string.
 - `ContextLoader::load(cid, L2)`: Reads actual full content from `Arc<CASStorage>`. Returns `Err` if CID not found.
@@ -80,6 +94,10 @@ Embedding backend (set via `EMBEDDING_BACKEND` env):
 - Add new `Query` variant → add match arm in `SemanticFS::read()`
 - Change `ContentType` display format → affects search index `content_type` field string matching
 - Change `RecycleEntry` struct fields → affects `recycle_bin.json` deserialization (migration needed)
+- Add `KGEdgeType` variant → update Display impl + exhaustive `match` arms; serialization format changes
+- Add `KnowledgeGraph::all_node_ids` → implement in all KG backends
+- Add `SuggestionStatus` variant → update ActionSuggestion serde + any match arms
+- `SemanticFS::create_event` stores in KG: if KG is absent, silently no-ops (returns ID anyway) — callers must handle this if KG is required
 
 ## Task Routing
 
@@ -89,7 +107,7 @@ Embedding backend (set via `EMBEDDING_BACKEND` env):
 
 ## Tests
 
-- `src/fs/semantic_fs.rs` — 3 unit tests: tag-index bug, ByType, Hybrid, L2 real content
+- `src/fs/semantic_fs.rs` — 20 unit tests: CRUD, tag-index bug, ByType, Hybrid, L2 real content, event CRUD, list_events_by_time, ActionSuggestion (is_actionable/needs_confirmation/is_too_uncertain), serde roundtrips
 - `src/fs/search.rs` — 5 tests: cosine similarity, upsert, tag filter, delete, replace
 - `src/fs/graph.rs` — 8 tests: CRUD, edges, neighbors, cascade, centrality
 - `src/fs/summarizer.rs` — 2 tests: layer prompts, max_chars
