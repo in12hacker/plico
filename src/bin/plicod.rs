@@ -136,8 +136,14 @@ fn handle_request(kernel: &AIKernel, req: ApiRequest) -> ApiResponse {
             }
         }
 
-        ApiRequest::Search { query, agent_id, limit } => {
-            let results = kernel.semantic_search(&query, &agent_id, limit.unwrap_or(10));
+        ApiRequest::Search { query, agent_id, limit, require_tags, exclude_tags } => {
+            let results = kernel.semantic_search(
+                &query,
+                &agent_id,
+                limit.unwrap_or(10),
+                require_tags,
+                exclude_tags,
+            );
             let dto: Vec<SearchResultDto> = results.into_iter().map(|r| SearchResultDto {
                 cid: r.cid,
                 relevance: r.relevance,

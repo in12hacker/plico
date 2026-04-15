@@ -89,7 +89,17 @@ pub enum ApiRequest {
     Read { cid: String, agent_id: String },
 
     #[serde(rename = "search")]
-    Search { query: String, agent_id: String, limit: Option<usize> },
+    Search {
+        query: String,
+        agent_id: String,
+        limit: Option<usize>,
+        /// Require entries to have all of these tags (AND).
+        #[serde(default)]
+        require_tags: Vec<String>,
+        /// Exclude entries that have any of these tags.
+        #[serde(default)]
+        exclude_tags: Vec<String>,
+    },
 
     #[serde(rename = "update")]
     Update {

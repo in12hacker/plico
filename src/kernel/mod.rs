@@ -200,11 +200,23 @@ impl AIKernel {
         self.fs.create(content, tags, agent_id.to_string(), intent)
     }
 
-    /// Semantic search.
-    pub fn semantic_search(&self, query: &str, agent_id: &str, limit: usize) -> Vec<crate::fs::SearchResult> {
+    /// Semantic search with optional tag filtering.
+    pub fn semantic_search(
+        &self,
+        query: &str,
+        agent_id: &str,
+        limit: usize,
+        require_tags: Vec<String>,
+        exclude_tags: Vec<String>,
+    ) -> Vec<crate::fs::SearchResult> {
         let ctx = PermissionContext::new(agent_id.to_string());
         let _ = self.permissions.check(&ctx, PermissionAction::Read);
-        self.fs.search(query, limit)
+        let filter = crate::fs::SearchFilter {
+            require_tags,
+            exclude_tags,
+            content_type: None,
+        };
+        self.fs.search_with_filter(query, limit, filter)
     }
 
     /// Semantic read.

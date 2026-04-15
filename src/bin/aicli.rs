@@ -192,7 +192,10 @@ fn build_request(args: &[String]) -> Option<ApiRequest> {
                 .unwrap_or_default();
             let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
             let limit = extract_arg(args, "--limit").and_then(|s| s.parse().ok());
-            Some(ApiRequest::Search { query, agent_id, limit })
+            let require_tags = extract_tags_opt(args, "--require-tags")
+                .unwrap_or_else(|| extract_tags_opt(args, "-t").unwrap_or_default());
+            let exclude_tags = extract_tags_opt(args, "--exclude-tags").unwrap_or_default();
+            Some(ApiRequest::Search { query, agent_id, limit, require_tags, exclude_tags })
         }
         Some("update") => {
             let cid = extract_arg(args, "--cid").unwrap_or_default();
@@ -281,13 +284,17 @@ fn cmd_search(kernel: &AIKernel, args: &[String]) -> ApiResponse {
     let limit = extract_arg(args, "--limit")
         .and_then(|s| s.parse().ok())
         .unwrap_or(10);
+    let require_tags = extract_tags_opt(args, "--require-tags")
+        .or_else(|| extract_tags_opt(args, "-t"))
+        .unwrap_or_default();
+    let exclude_tags = extract_tags_opt(args, "--exclude-tags").unwrap_or_default();
 
     if query.is_empty() {
         eprintln!("Error: search requires a query. Use: search --query <text> or: search <text>");
         return ApiResponse::error("empty query");
     }
 
-    let results = kernel.semantic_search(&query, &agent_id, limit);
+    let results = kernel.semantic_search(&query, &agent_id, limit, require_tags, exclude_tags);
 
     if results.is_empty() {
         println!("No results for: {}", query);
@@ -523,9 +530,12 @@ COMMANDS:
   get/read     Retrieve object by CID
     <CID>             Object CID to retrieve
 
-  search       Semantic search
+  search       Semantic search with optional tag filtering
     --query TEXT      Natural language query
     <text>            Positional query (alternative to --query)
+    --require-tags T  Only return files with ALL these tags (comma-sep)
+    --exclude-tags T  Exclude files with any of these tags (comma-sep)
+    -t               Short for --require-tags
     --agent ID       Agent ID
 
   update       Update object content

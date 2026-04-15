@@ -554,15 +554,20 @@ impl SemanticFS {
     /// **Search**: Semantic search across all stored objects.
     /// Uses vector embeddings for semantic similarity.
     pub fn search(&self, query: &str, limit: usize) -> Vec<SearchResult> {
+        self.search_with_filter(query, limit, SearchFilter::default())
+    }
+
+    /// Semantic search with optional tag/content-type filtering.
+    pub fn search_with_filter(&self, query: &str, limit: usize, filter: SearchFilter) -> Vec<SearchResult> {
         let query_emb = match self.embedding.embed(query) {
             Ok(emb) => emb,
             Err(e) => {
                 tracing::warn!("Embedding failed for query '{query}': {e}. Falling back to tag search.");
-                return self.search_by_tags(query);
+                return self.search_by_tags_with_filter(query, &filter);
             }
         };
 
-        let hits = self.search_index.search(&query_emb, limit, &SearchFilter::default());
+        let hits = self.search_index.search(&query_emb, limit, &filter);
         hits
             .into_iter()
             .filter_map(|hit| {
@@ -575,8 +580,8 @@ impl SemanticFS {
             .collect()
     }
 
-    /// Tag-based keyword search (fallback when embeddings unavailable).
-    fn search_by_tags(&self, query: &str) -> Vec<SearchResult> {
+    /// Tag-based keyword search with filter applied (fallback when embeddings unavailable).
+    fn search_by_tags_with_filter(&self, query: &str, filter: &SearchFilter) -> Vec<SearchResult> {
         let query_lower = query.to_lowercase();
         let index = self.tag_index.read().unwrap();
         let mut results = Vec::new();
@@ -585,11 +590,18 @@ impl SemanticFS {
             if tag.to_lowercase().contains(&query_lower) {
                 for cid in cids {
                     if let Ok(obj) = self.cas.get(cid) {
-                        results.push(SearchResult {
+                        if filter.matches(&SearchIndexMeta {
                             cid: cid.clone(),
-                            relevance: 0.8,
-                            meta: obj.meta,
-                        });
+                            tags: obj.meta.tags.clone(),
+                            snippet: String::new(),
+                            content_type: format!("{}", obj.meta.content_type),
+                        }) {
+                            results.push(SearchResult {
+                                cid: cid.clone(),
+                                relevance: 0.8,
+                                meta: obj.meta,
+                            });
+                        }
                     }
                 }
             }
