@@ -59,7 +59,7 @@ CLAUDE.md             # Project-level guidance for Claude Code
 | AI Kernel | `src/kernel/mod.rs` | `AIKernel` — the main orchestrator |
 | Permission guard | `src/api/permission.rs` | `PermissionGuard`, `PermissionAction` |
 | TCP daemon | `src/bin/plicod.rs` | JSON API server on port 7878 |
-| CLI tool | `src/bin/aicli.rs` | `put`, `get`, `search`, `update`, `delete`, `tags`, `explore` (uses `graph_explore_raw`, respects `--edge-type`, clamps depth≤3), `agent`, `remember`, `recall`, `deleted`, `restore` |
+| CLI tool | `src/bin/aicli.rs` | `put`, `get`, `search` (accepts `--query` flag or positional arg), `update`, `delete`, `tags`, `explore` (uses `graph_explore_raw`, respects `--edge-type`, clamps depth≤3), `agent`, `remember`, `recall`, `deleted`, `restore` |
 
 ## Build & Test
 

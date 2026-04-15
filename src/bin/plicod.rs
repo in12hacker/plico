@@ -16,6 +16,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
+use tracing_subscriber::util::SubscriberInitExt;
 
 #[tokio::main]
 async fn main() {
@@ -35,7 +36,14 @@ async fn main() {
     println!("Listening on: 0.0.0.0:{}", port);
 
     // Initialize structured logging (reads RUST_LOG env var; defaults to INFO)
-    tracing_subscriber::fmt::init();
+    // Use fmt().finish().try_init() instead of fmt::init() to avoid background
+    // worker threads that prevent the process from exiting cleanly.
+    let env = std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string());
+    tracing_subscriber::fmt()
+        .with_env_filter(&env)
+        .finish()
+        .try_init()
+        .ok();
 
     // Initialize kernel
     let kernel = match AIKernel::new(root) {

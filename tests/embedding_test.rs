@@ -26,8 +26,11 @@ struct JsonRpcRequest {
 
 #[derive(Debug, serde::Deserialize)]
 struct JsonRpcResponse {
+    // jsonrpc and id are required by JSON-RPC spec but not consumed in tests
+    #[allow(dead_code)]
     #[serde(default)]
     jsonrpc: String,
+    #[allow(dead_code)]
     #[serde(default)]
     id: i64,
     #[serde(default)]

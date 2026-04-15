@@ -33,13 +33,20 @@
 use plico::kernel::AIKernel;
 use plico::api::semantic::{ApiRequest, ApiResponse};
 use std::path::PathBuf;
-use std::io::{Read, Write};
+use std::io::Write;
 use std::net::TcpStream;
+use tracing_subscriber::util::SubscriberInitExt;
 use std::time::Duration;
 
 fn main() {
     // Initialize structured logging (reads RUST_LOG env var; defaults to INFO)
-    tracing_subscriber::fmt::init();
+    // Use fmt().finish() instead of fmt::init() to avoid background worker
+    // threads that prevent the process from exiting cleanly.
+    let env = std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string());
+    tracing_subscriber::fmt()
+        .with_env_filter(&env)
+        .finish()
+        .init();
 
     let args: Vec<String> = std::env::args().skip(1).collect();
 
@@ -49,12 +56,16 @@ fn main() {
     }
 
     // Determine mode: local (direct kernel) or tcp (remote daemon)
+    // --tcp may be followed by an optional address: --tcp [addr]
+    // --addr addr is also accepted as an explicit alternative
     let mode = args.iter().position(|a| a == "--tcp")
-        .map(|_| {
+        .map(|tcp_idx| {
+            // Prefer --addr if present, otherwise use the arg immediately after --tcp
             let addr = args.iter().position(|a| a == "--addr")
                 .and_then(|i| args.get(i + 1))
-                .unwrap_or(&"127.0.0.1:7878".to_string())
-                .clone();
+                .cloned()
+                .or_else(|| args.get(tcp_idx + 1).filter(|s| !s.starts_with("--")).cloned())
+                .unwrap_or_else(|| "127.0.0.1:7878".to_string());
             Mode::Tcp(addr)
         })
         .unwrap_or(Mode::Local);
@@ -63,6 +74,9 @@ fn main() {
         Mode::Local => run_local(&args),
         Mode::Tcp(addr) => run_tcp(&args, &addr),
     }
+    // Explicit exit to bypass any tokio runtime or tracing worker threads that
+    // may not shut down cleanly on process exit.
+    std::process::exit(0);
 }
 
 enum Mode {
@@ -101,22 +115,42 @@ fn run_local(args: &[String]) {
 }
 
 fn run_tcp(args: &[String], addr: &str) {
+    // Filter out --tcp and --addr (and their values) before building request
+    let mut i = 0;
+    let mut filtered = Vec::with_capacity(args.len());
+    while i < args.len() {
+        match args[i].as_str() {
+            "--tcp" | "--addr" => {
+                i += 2; // skip flag and its value
+            }
+            a => {
+                filtered.push(a.to_string());
+                i += 1;
+            }
+        }
+    }
+
     let mut stream = TcpStream::connect_timeout(
         &addr.parse().unwrap_or_else(|_| "127.0.0.1:7878".parse().unwrap()),
         Duration::from_secs(5),
     ).expect("Failed to connect to daemon");
     stream.set_read_timeout(Some(Duration::from_secs(30))).ok();
 
-    let req = build_request(args).expect("Failed to build request");
+    let req = build_request(&filtered).expect("Failed to build request");
     let json = serde_json::to_vec(&req).expect("Failed to serialize request");
 
     stream.write_all(&json).expect("Failed to send request");
     stream.write_all(b"\n").expect("Failed to send newline");
+    stream.flush().expect("Failed to flush");
 
-    let mut buf = Vec::new();
-    stream.read_to_end(&mut buf).expect("Failed to read response");
+    // Read one line of response (daemon sends JSON + "\n", then keeps connection open)
+    use std::io::BufRead;
+    let mut reader = std::io::BufReader::new(&stream);
+    let mut line = String::new();
+    reader.read_line(&mut line).expect("Failed to read response");
+    let line = line.trim();
 
-    let response: ApiResponse = serde_json::from_slice(&buf).expect("Failed to parse response");
+    let response: ApiResponse = serde_json::from_str(line).expect("Failed to parse response");
     print_result(&response);
 }
 
@@ -153,7 +187,9 @@ fn build_request(args: &[String]) -> Option<ApiRequest> {
             Some(ApiRequest::Read { cid, agent_id })
         }
         Some("search") => {
-            let query = extract_arg(args, "--query").unwrap_or_default();
+            let query = extract_arg(args, "--query")
+                .or_else(|| args.get(1).cloned())
+                .unwrap_or_default();
             let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
             let limit = extract_arg(args, "--limit").and_then(|s| s.parse().ok());
             Some(ApiRequest::Search { query, agent_id, limit })
@@ -237,11 +273,19 @@ fn cmd_read(kernel: &AIKernel, args: &[String]) -> ApiResponse {
 }
 
 fn cmd_search(kernel: &AIKernel, args: &[String]) -> ApiResponse {
-    let query = extract_arg(args, "--query").unwrap_or_default();
+    // Accept either --query <text> or a positional argument
+    let query = extract_arg(args, "--query")
+        .or_else(|| args.get(1).cloned())
+        .unwrap_or_default();
     let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
     let limit = extract_arg(args, "--limit")
         .and_then(|s| s.parse().ok())
         .unwrap_or(10);
+
+    if query.is_empty() {
+        eprintln!("Error: search requires a query. Use: search --query <text> or: search <text>");
+        return ApiResponse::error("empty query");
+    }
 
     let results = kernel.semantic_search(&query, &agent_id, limit);
 
@@ -415,6 +459,40 @@ fn print_result(response: &ApiResponse) {
     if let Some(cid) = &response.cid {
         println!("CID: {}", cid);
     }
+    if let Some(results) = &response.results {
+        for (i, r) in results.iter().enumerate() {
+            println!("{}. [relevance={:.2}] {}", i + 1, r.relevance, r.cid);
+            println!("   Tags: {:?}", r.tags);
+        }
+    }
+    if let Some(tags) = &response.tags {
+        println!("All tags ({} total):", tags.len());
+        for t in tags {
+            println!("  - {}", t);
+        }
+    }
+    if let Some(agents) = &response.agents {
+        for a in agents {
+            println!("Agent: {} ({}) - {}", a.name, a.id, a.state);
+        }
+    }
+    if let Some(memories) = &response.memory {
+        for m in memories {
+            println!("{}", m);
+        }
+    }
+    if let Some(neighbors) = &response.neighbors {
+        for (i, n) in neighbors.iter().enumerate() {
+            println!("{}. [auth={:.3}] {} ({}) {} \"{}\"",
+                i + 1, n.authority_score, n.node_id, n.node_type, n.edge_type, n.label);
+        }
+    }
+    if let Some(deleted) = &response.deleted {
+        for d in deleted {
+            println!("CID: {} (deleted)", d.cid);
+            println!("   Tags: {:?}", d.tags);
+        }
+    }
     if !response.ok {
         if let Some(e) = &response.error {
             eprintln!("Error: {}", e);
@@ -427,7 +505,12 @@ fn print_help() {
 Plico AI-Native OS — AI-Friendly CLI
 
 USAGE:
-  aicli <command> [flags]
+  aicli [MODE] <command> [flags]
+
+MODE:
+  --tcp [addr]       Connect to plicod daemon (default: 127.0.0.1:7878)
+  --root PATH        Storage root directory (default: /tmp/plico)
+  (default: direct kernel access, no daemon)
 
 COMMANDS:
   put/create   Store content with semantic tags
@@ -441,6 +524,7 @@ COMMANDS:
 
   search       Semantic search
     --query TEXT      Natural language query
+    <text>            Positional query (alternative to --query)
     --agent ID       Agent ID
 
   update       Update object content
@@ -448,7 +532,7 @@ COMMANDS:
     --content TEXT   New content
     --tags TEXT      Optional new tags
 
-  delete       Logical delete (soft)
+  delete       Logical delete (soft, requires Delete permission)
     --cid CID        Object CID to delete
 
   agent        Register a new agent
@@ -473,12 +557,16 @@ COMMANDS:
 
   restore       Restore a deleted object
     --cid CID        Object CID to restore
-    --agent ID       Agent ID
+
+NOTES:
+  • delete/restore require Delete permission (use --agent kernel, or grant first)
+  • tags command is local-only (not available via TCP)
+  • TCP mode connects to plicod at --tcp [addr] for persistent storage
 
 EXAMPLES:
-  aicli put --content "Project X kickoff" --tags "meeting,project-x"
-  aicli get 3a4b5c...
-  aicli search --query "meeting notes about project x"
-  aicli agent --register Summarizer
+  aicli --root /tmp/plico put --content "Meeting notes" --tags "meeting,project-x"
+  aicli --tcp 127.0.0.1:7879 put --content "..." --tags "..."
+  aicli search "meeting notes about project x"
+  aicli --tcp 127.0.0.1:7879 agent --register MyAgent
 "#);
 }

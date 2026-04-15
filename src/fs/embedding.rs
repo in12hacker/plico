@@ -308,8 +308,8 @@ pub struct LocalEmbeddingBackend {
 struct ChildHandle {
     /// Process handle for wait().
     process: std::process::Child,
-    /// Write JSON-RPC requests here.
-    to_stdin: std::sync::mpsc::Sender<String>,
+    /// Write JSON-RPC requests here. `Option` so we can take it in Drop.
+    to_stdin: Option<std::sync::mpsc::Sender<String>>,
     /// Receive JSON-RPC responses here.
     from_stdout: std::sync::mpsc::Receiver<Result<String, std::io::Error>>,
 }
@@ -399,7 +399,7 @@ impl LocalEmbeddingBackend {
 
         let handle = ChildHandle {
             process: child,
-            to_stdin,
+            to_stdin: Some(to_stdin),
             from_stdout,
         };
 
@@ -453,6 +453,8 @@ impl LocalEmbeddingBackend {
             .lock()
             .unwrap()
             .to_stdin
+            .as_ref()
+            .expect("backend not dropped")
             .send(line)
             .map_err(|e| EmbedError::Subprocess(format!("stdin send error: {e}")))?;
 
@@ -521,10 +523,16 @@ impl EmbeddingProvider for LocalEmbeddingBackend {
 
 impl Drop for LocalEmbeddingBackend {
     fn drop(&mut self) {
-        // Dropping the channel sends will cause the stdin writer thread to exit.
-        // Then wait for the process to finish.
-        let _ = self.child.lock().unwrap().to_stdin.send(String::new()).ok();
-        let _ = self.child.lock().unwrap().process.wait();
+        // Force-terminate the Python subprocess rather than waiting for the stdin
+        // writer thread to gracefully drain and exit. Taking `to_stdin` out of
+        // the ChildHandle drops it, closing the channel and signaling the
+        // stdin-writer thread to exit. We then kill and wait for the process.
+        let mut handle = self.child.lock().unwrap();
+        // Take the sender out of Option — this drops it and closes the channel.
+        let _ = handle.to_stdin.take();
+        // Kill and reap the subprocess.
+        let _ = handle.process.kill();
+        let _ = handle.process.wait();
     }
 }
 
