@@ -16,3 +16,4 @@ Cargo.lock
 # OS
 .DS_Store
 Thumbs.db
+.claude/\ntests/e2e/__pycache__/
