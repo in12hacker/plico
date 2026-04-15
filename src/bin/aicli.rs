@@ -408,8 +408,9 @@ fn cmd_explore(kernel: &AIKernel, args: &[String]) -> ApiResponse {
     ApiResponse::ok()
 }
 
-fn cmd_deleted(kernel: &AIKernel, _args: &[String]) -> ApiResponse {
-    let entries = kernel.list_deleted();
+fn cmd_deleted(kernel: &AIKernel, args: &[String]) -> ApiResponse {
+    let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
+    let entries = kernel.list_deleted(&agent_id);
     if entries.is_empty() {
         println!("Recycle bin is empty.");
     } else {

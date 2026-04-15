@@ -173,7 +173,7 @@ fn test_kernel_list_deleted_after_delete() {
     let (kernel, _dir) = make_kernel();
 
     // No deleted objects initially
-    assert!(kernel.list_deleted().is_empty());
+    assert!(kernel.list_deleted("kernel").is_empty());
 
     let cid = kernel
         .semantic_create(b"to be deleted".to_vec(), vec!["temp".to_string()], "kernel", None)
@@ -182,7 +182,7 @@ fn test_kernel_list_deleted_after_delete() {
     // "kernel" has all permissions granted by default
     kernel.semantic_delete(&cid, "kernel").expect("delete failed");
 
-    let deleted = kernel.list_deleted();
+    let deleted = kernel.list_deleted("kernel");
     assert_eq!(deleted.len(), 1);
     assert_eq!(deleted[0].cid, cid);
     assert_eq!(deleted[0].original_meta.tags, vec!["temp"]);
@@ -197,12 +197,12 @@ fn test_kernel_restore_deleted() {
         .expect("create failed");
 
     kernel.semantic_delete(&cid, "kernel").expect("delete failed");
-    assert_eq!(kernel.list_deleted().len(), 1);
+    assert_eq!(kernel.list_deleted("kernel").len(), 1);
 
     kernel.restore_deleted(&cid, "kernel").expect("restore failed");
 
     // Should no longer appear in recycle bin
-    assert!(kernel.list_deleted().is_empty());
+    assert!(kernel.list_deleted("kernel").is_empty());
 
     // Object should be searchable by tag again
     let results = kernel

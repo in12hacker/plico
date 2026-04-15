@@ -282,7 +282,9 @@ impl AIKernel {
     }
 
     /// List all logically deleted objects (recycle bin contents).
-    pub fn list_deleted(&self) -> Vec<crate::fs::RecycleEntry> {
+    pub fn list_deleted(&self, agent_id: &str) -> Vec<crate::fs::RecycleEntry> {
+        let ctx = PermissionContext::new(agent_id.to_string());
+        let _ = self.permissions.check(&ctx, PermissionAction::Read);
         self.fs.list_deleted()
     }
 

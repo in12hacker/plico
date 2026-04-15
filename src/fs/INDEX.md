@@ -29,7 +29,7 @@ Status: active | Fan-in: 1 (kernel) | Fan-out: 1 (cas)
 | `SearchHit` | `search.rs` | A search match: cid + score + meta |
 | `SearchIndexMeta` | `search.rs` | Metadata stored in vector index per entry |
 | `KnowledgeGraph` | `graph.rs` | Trait: add_node/add_edge/get_neighbors/remove_node/authority_score |
-| `PetgraphBackend` | `graph.rs` | HashMap-based directed graph (prod-ready, petgraph unused) |
+| `PetgraphBackend` | `graph.rs` | HashMap-based directed graph (prod-ready) |
 | `KGNode` | `graph.rs` | Graph node: id/label/node_type/agent_id/metadata |
 | `KGNodeType` | `graph.rs` | Enum: Document/Entity/Concept/Fact/Agent |
 | `KGEdge` | `graph.rs` | Graph edge: source/target/edge_type/weight/created_at |

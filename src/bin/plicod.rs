@@ -203,8 +203,8 @@ fn handle_request(kernel: &AIKernel, req: ApiRequest) -> ApiResponse {
             ApiResponse { ok: true, cid: None, data: None, results: None, agent_id: None, agents: None, memory: None, tags: None, neighbors: Some(dto), deleted: None, error: None }
         }
 
-        ApiRequest::ListDeleted { agent_id: _ } => {
-            let entries = kernel.list_deleted();
+        ApiRequest::ListDeleted { agent_id } => {
+            let entries = kernel.list_deleted(&agent_id);
             let dto: Vec<plico::api::semantic::DeletedDto> = entries.into_iter().map(|e| {
                 plico::api::semantic::DeletedDto {
                     cid: e.cid,
