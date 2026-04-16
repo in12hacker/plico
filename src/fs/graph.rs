@@ -1,8 +1,22 @@
-//! Knowledge Graph Module
+//! Knowledge Graph — typed node/edge graph for entity and relationship tracking.
 //!
-//! Provides a typed knowledge graph for AI agents. Nodes represent entities,
-//! facts, and memory blocks extracted from CAS objects. Edges represent
-//! typed relationships (RelatedTo, Follows, Mentions, etc.).
+//! Nodes represent entities, facts, and memory blocks from CAS objects.
+//! Edges represent typed relationships (RelatedTo, Follows, Mentions, etc.).
+//!
+//! # Errors
+//! Returns `String` errors (prototype — should migrate to typed KGError).
+//!
+//! # Public API
+//! - [`KnowledgeGraph`]: trait for graph operations (add/get/remove nodes/edges, neighbors)
+//! - [`PetgraphBackend`]: HashMap-based directed graph with JSON disk persistence
+//! - [`KGNode`], [`KGEdge`], [`KGNodeType`], [`KGEdgeType`]: graph element types
+//!
+//! # Key Ranges (1475 lines — needs split)
+//! - Lines 1–135: type enums (KGNodeType, KGEdgeType, Display impls)
+//! - Lines 136–350: KGNode, KGEdge structs
+//! - Lines 350–550: KnowledgeGraph trait definition
+//! - Lines 550–1100: PetgraphBackend implementation
+//! - Lines 1100–1475: tests
 //!
 //! # Node Types
 //!
@@ -41,13 +55,6 @@ pub enum KGNodeType {
     Document,
     Agent,
     Memory,
-    // ── Project Self-Management (Dogfooding Plico) ────────────────────────
-/// An iteration/phase in the project lifecycle.
-    Iteration,
-    /// A plan item or milestone.
-    Plan,
-    /// A design document or specification.
-    DesignDoc,
 }
 
 impl std::fmt::Display for KGNodeType {
@@ -58,9 +65,6 @@ impl std::fmt::Display for KGNodeType {
             KGNodeType::Document => write!(f, "document"),
             KGNodeType::Agent => write!(f, "agent"),
             KGNodeType::Memory => write!(f, "memory"),
-            KGNodeType::Iteration => write!(f, "iteration"),
-            KGNodeType::Plan => write!(f, "plan"),
-            KGNodeType::DesignDoc => write!(f, "design_doc"),
         }
     }
 }
@@ -94,19 +98,12 @@ pub enum KGEdgeType {
     /// Event → ActionItem (decision, task, or resolution from the event).
     HasDecision,
     // ── Reasoning / Action Suggestion edges ───────────────────────────────
-    /// Person → UserFact (inferred preference from behavioral patterns).
+    /// Person → Fact (generic knowledge graph fact).
     HasPreference,
     /// Preference node → suggested action (cross-event inference).
     SuggestsAction,
     /// Action suggestion → event that triggered it.
     MotivatedBy,
-    // ── Project Self-Management edges ─────────────────────────────────
-    /// Project → Iteration (this iteration is part of the project).
-    HasIteration,
-    /// Iteration → Plan (plan item belongs to this iteration).
-    HasPlan,
-    /// Plan → DesignDoc (plan references this document).
-    References,
 }
 
 impl std::fmt::Display for KGEdgeType {
@@ -127,9 +124,6 @@ impl std::fmt::Display for KGEdgeType {
             KGEdgeType::SuggestsAction => write!(f, "suggests_action"),
             KGEdgeType::MotivatedBy => write!(f, "motivated_by"),
             KGEdgeType::HasPreference => write!(f, "has_preference"),
-            KGEdgeType::HasIteration => write!(f, "has_iteration"),
-            KGEdgeType::HasPlan => write!(f, "has_plan"),
-            KGEdgeType::References => write!(f, "references"),
         }
     }
 }

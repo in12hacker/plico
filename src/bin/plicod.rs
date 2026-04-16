@@ -57,11 +57,6 @@ async fn main() {
     // Spawn the agent execution dispatch loop via kernel (no direct subsystem imports).
     let _dispatch = kernel.start_dispatch_loop();
 
-    // Spawn the suggestion notification poller (M15: alarm → notification pipeline).
-    // Polls every 60 seconds for pending suggestions and submits notification intents.
-    let poller_kernel = Arc::clone(&kernel);
-    let _poller = poller_kernel.start_suggestion_poller(std::time::Duration::from_secs(60));
-
     println!("Agent dispatch loop started.");
 
     let addr: SocketAddr = format!("0.0.0.0:{}", port).parse().unwrap();
@@ -165,7 +160,7 @@ fn handle_request(kernel: &AIKernel, req: ApiRequest) -> ApiResponse {
                 relevance: r.relevance,
                 tags: r.meta.tags,
             }).collect();
-            ApiResponse { ok: true, cid: None, data: None, results: Some(dto), agent_id: None, agents: None, memory: None, tags: None, neighbors: None, deleted: None, events: None, observations: None, behavioral_observations: None, user_facts: None, suggestions: None, project_status: None, error: None }
+            ApiResponse { ok: true, cid: None, data: None, results: Some(dto), agent_id: None, agents: None, memory: None, tags: None, neighbors: None, deleted: None, events: None, error: None }
         }
 
         ApiRequest::Update { cid, content, content_encoding, new_tags, agent_id } => {
@@ -188,7 +183,7 @@ fn handle_request(kernel: &AIKernel, req: ApiRequest) -> ApiResponse {
 
         ApiRequest::RegisterAgent { name } => {
             let id = kernel.register_agent(name);
-            ApiResponse { ok: true, cid: None, data: None, results: None, agent_id: Some(id), agents: None, memory: None, tags: None, neighbors: None, deleted: None, events: None, observations: None, behavioral_observations: None, user_facts: None, suggestions: None, project_status: None, error: None }
+            ApiResponse { ok: true, cid: None, data: None, results: None, agent_id: Some(id), agents: None, memory: None, tags: None, neighbors: None, deleted: None, events: None, error: None }
         }
 
         ApiRequest::ListAgents => {
@@ -197,7 +192,7 @@ fn handle_request(kernel: &AIKernel, req: ApiRequest) -> ApiResponse {
                 name: a.name,
                 state: format!("{:?}", a.state),
             }).collect();
-            ApiResponse { ok: true, cid: None, data: None, results: None, agent_id: None, agents: Some(agents), memory: None, tags: None, neighbors: None, deleted: None, events: None, observations: None, behavioral_observations: None, user_facts: None, suggestions: None, project_status: None, error: None }
+            ApiResponse { ok: true, cid: None, data: None, results: None, agent_id: None, agents: Some(agents), memory: None, tags: None, neighbors: None, deleted: None, events: None, error: None }
         }
 
         ApiRequest::Remember { agent_id, content } => {
@@ -213,7 +208,7 @@ fn handle_request(kernel: &AIKernel, req: ApiRequest) -> ApiResponse {
                     _ => None,
                 })
                 .collect();
-            ApiResponse { ok: true, cid: None, data: None, results: None, agent_id: None, agents: None, memory: Some(memories), tags: None, neighbors: None, deleted: None, events: None, observations: None, behavioral_observations: None, user_facts: None, suggestions: None, project_status: None, error: None }
+            ApiResponse { ok: true, cid: None, data: None, results: None, agent_id: None, agents: None, memory: Some(memories), tags: None, neighbors: None, deleted: None, events: None, error: None }
         }
 
         ApiRequest::Explore { cid, edge_type, depth, agent_id: _ } => {
@@ -222,7 +217,7 @@ fn handle_request(kernel: &AIKernel, req: ApiRequest) -> ApiResponse {
             let dto: Vec<NeighborDto> = raw.into_iter().map(|(node_id, label, node_type, edge_type, authority_score)| {
                 NeighborDto { node_id, label, node_type, edge_type, authority_score }
             }).collect();
-            ApiResponse { ok: true, cid: None, data: None, results: None, agent_id: None, agents: None, memory: None, tags: None, neighbors: Some(dto), deleted: None, events: None, observations: None, behavioral_observations: None, user_facts: None, suggestions: None, project_status: None, error: None }
+            ApiResponse { ok: true, cid: None, data: None, results: None, agent_id: None, agents: None, memory: None, tags: None, neighbors: Some(dto), deleted: None, events: None, error: None }
         }
 
         ApiRequest::ListDeleted { agent_id } => {
@@ -234,7 +229,7 @@ fn handle_request(kernel: &AIKernel, req: ApiRequest) -> ApiResponse {
                     tags: e.original_meta.tags,
                 }
             }).collect();
-            ApiResponse { ok: true, cid: None, data: None, results: None, agent_id: None, agents: None, memory: None, tags: None, neighbors: None, deleted: Some(dto), events: None, observations: None, behavioral_observations: None, user_facts: None, suggestions: None, project_status: None, error: None }
+            ApiResponse { ok: true, cid: None, data: None, results: None, agent_id: None, agents: None, memory: None, tags: None, neighbors: None, deleted: Some(dto), events: None, error: None }
         }
 
         ApiRequest::Restore { cid, agent_id } => {
@@ -270,77 +265,6 @@ fn handle_request(kernel: &AIKernel, req: ApiRequest) -> ApiResponse {
             }
         }
 
-        ApiRequest::AddEventObservation { event_id, observation_id, agent_id } => {
-            match kernel.event_add_observation(&event_id, &observation_id, &agent_id) {
-                Ok(()) => ApiResponse::ok(),
-                Err(e) => ApiResponse::error(e.to_string()),
-            }
-        }
-
-        ApiRequest::GetEventObservations { event_id } => {
-            match kernel.event_get_observations(&event_id) {
-                Ok(observations) => ApiResponse::with_observations(observations),
-                Err(e) => ApiResponse::error(e.to_string()),
-            }
-        }
-
-        ApiRequest::AddBehavioralObservation { observation, event_id, agent_id: _ } => {
-            match kernel.add_behavioral_observation(observation, event_id.as_deref()) {
-                Ok(()) => ApiResponse::ok(),
-                Err(e) => ApiResponse::error(e.to_string()),
-            }
-        }
-
-        ApiRequest::GetBehavioralObservations { subject_id } => {
-            let observations = kernel.get_behavioral_observations_for_subject(&subject_id);
-            ApiResponse::with_behavioral_observations(observations)
-        }
-
-        ApiRequest::AddUserFact { fact } => {
-            kernel.add_user_fact(fact);
-            ApiResponse::ok()
-        }
-
-        ApiRequest::GetUserFacts { subject_id } => {
-            let facts = kernel.get_user_facts_for_subject(&subject_id);
-            ApiResponse::with_user_facts(facts)
-        }
-
-        ApiRequest::InferSuggestions { event_id } => {
-            match kernel.infer_suggestions_for_event(&event_id) {
-                Ok(suggestions) => ApiResponse::with_suggestions(suggestions),
-                Err(e) => ApiResponse::error(e.to_string()),
-            }
-        }
-
-
-        ApiRequest::GetPendingSuggestions => {
-            let suggestions = kernel.get_pending_suggestions();
-            ApiResponse::with_suggestions(suggestions)
-        }
-
-        ApiRequest::ConfirmSuggestion { suggestion_id } => {
-            match kernel.confirm_suggestion(&suggestion_id) {
-                Ok(()) => ApiResponse::ok(),
-                Err(e) => ApiResponse::error(e.to_string()),
-            }
-        }
-
-        ApiRequest::DismissSuggestion { suggestion_id } => {
-            match kernel.dismiss_suggestion(&suggestion_id) {
-                Ok(()) => ApiResponse::ok(),
-                Err(e) => ApiResponse::error(e.to_string()),
-            }
-        }
-
-        ApiRequest::ProjectStatus { agent_id: _ } => {
-            ApiResponse { ok: true, cid: None, data: None, results: None, agent_id: None, agents: None, memory: None, tags: None, neighbors: None, deleted: None, events: None, observations: None, behavioral_observations: None, user_facts: None, suggestions: None, project_status: Some(kernel.project_status()), error: None }
-        }
-
-        ApiRequest::SyncProjectState => {
-            kernel.sync_project_state();
-            ApiResponse::ok()
-        }
     }
 }
 
@@ -377,21 +301,17 @@ async fn handle_dashboard_http(
     // Simple HTTP routing — parse method + path from the request line
     let first_line = request.lines().next().unwrap_or("");
     let parts: Vec<&str> = first_line.split_whitespace().collect();
-    let method = parts.get(0).unwrap_or(&"");
+    let method = parts.first().unwrap_or(&"");
     let path = parts.get(1).unwrap_or(&"/");
 
     let (status, body) = match (*method, *path) {
-        ("GET", "/api/project/status") | ("GET", "/api/status") | ("GET", "/") => {
-            let status = kernel.project_status();
-            let json = serde_json::to_string(&status).unwrap_or_else(|_| r#"{"error":"serialization failed"}"#.to_string());
+        ("GET", "/api/status") | ("GET", "/") => {
+            let metrics = kernel.dashboard_status();
+            let json = serde_json::to_string(&metrics).unwrap_or_else(|_| r#"{"error":"serialization failed"}"#.to_string());
             (200, json)
         }
         ("GET", "/health") => {
             (200, r#"{"ok":true}"#.to_string())
-        }
-        ("POST", "/api/sync_project_state") => {
-            kernel.sync_project_state();
-            (200, r#"{"ok":true,"synced":true}"#.to_string())
         }
         _ => {
             (404, r#"{"error":"not found"}"#.to_string())

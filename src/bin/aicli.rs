@@ -350,7 +350,7 @@ fn cmd_agent(kernel: &AIKernel, args: &[String]) -> ApiResponse {
     let name = extract_arg(args, "--register").unwrap_or_else(|| "unnamed".to_string());
     let id = kernel.register_agent(name.clone());
     println!("Agent registered: {} (ID: {})", name, id);
-ApiResponse { ok: true, cid: None, data: None, results: None, agent_id: Some(id), agents: None, memory: None, tags: None, neighbors: None, deleted: None, events: None, observations: None, behavioral_observations: None, user_facts: None, suggestions: None, project_status: None, error: None }
+ApiResponse { ok: true, cid: None, data: None, results: None, agent_id: Some(id), agents: None, memory: None, tags: None, neighbors: None, deleted: None, events: None, error: None }
 }
 
 fn cmd_agents(kernel: &AIKernel, _args: &[String]) -> ApiResponse {
@@ -583,7 +583,7 @@ NOTES:
   • TCP mode connects to plicod at --tcp [addr] for persistent storage
 
 EXAMPLES:
-  aicli --root /tmp/plico put --content "Meeting notes" --tags "meeting,project-x"
+  aicli --root /tmp/plico put --content "agent output data" --tags "embedding,batch-result"
   aicli --tcp 127.0.0.1:7879 put --content "..." --tags "..."
   aicli search "meeting notes about project x"
   aicli --tcp 127.0.0.1:7879 agent --register MyAgent

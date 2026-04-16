@@ -35,7 +35,7 @@ impl AIObject {
     /// ```
     /// use plico::{AIObject, AIObjectMeta};
     /// let obj = AIObject::new(
-    ///     b"Meeting notes for Project X".to_vec(),
+    ///     b"Agent task output: embedding batch result".to_vec(),
     ///     AIObjectMeta::text(["meeting", "project-x"]),
     /// );
     /// println!("CID: {}", obj.cid);

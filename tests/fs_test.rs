@@ -47,34 +47,34 @@ fn test_create_and_get() {
 
     let cid = fs
         .create(
-            b"Meeting notes for Project X".to_vec(),
-            vec!["meeting".to_string(), "project-x".to_string()],
+            b"Agent task output: embedding batch result".to_vec(),
+            vec!["embedding".to_string(), "batch-result".to_string()],
             "TestAgent".to_string(),
-            Some("Quarterly kickoff notes".to_string()),
+            Some("Embedding computation output".to_string()),
         )
         .unwrap();
 
     let results = fs.read(&Query::ByCid(cid.clone())).unwrap();
     assert_eq!(results.len(), 1);
-    assert_eq!(results[0].data, b"Meeting notes for Project X");
-    assert_eq!(results[0].meta.tags, vec!["meeting", "project-x"]);
+    assert_eq!(results[0].data, b"Agent task output: embedding batch result");
+    assert_eq!(results[0].meta.tags, vec!["embedding", "batch-result"]);
 }
 
 #[test]
 fn test_search_by_tags() {
     let (fs, _dir) = make_fs();
 
-    fs.create(b"doc1".to_vec(), vec!["meeting".to_string()], "a".to_string(), None)
+    fs.create(b"doc1".to_vec(), vec!["embedding".to_string()], "a".to_string(), None)
         .unwrap();
-    fs.create(b"doc2".to_vec(), vec!["meeting".to_string(), "project-x".to_string()], "a".to_string(), None)
+    fs.create(b"doc2".to_vec(), vec!["embedding".to_string(), "batch-result".to_string()], "a".to_string(), None)
         .unwrap();
-    fs.create(b"doc3".to_vec(), vec!["project-x".to_string()], "a".to_string(), None)
+    fs.create(b"doc3".to_vec(), vec!["batch-result".to_string()], "a".to_string(), None)
         .unwrap();
 
-    let results = fs.read(&Query::ByTags(vec!["meeting".to_string()])).unwrap();
+    let results = fs.read(&Query::ByTags(vec!["embedding".to_string()])).unwrap();
     assert_eq!(results.len(), 2);
 
-    let results = fs.read(&Query::ByTags(vec!["project-x".to_string()])).unwrap();
+    let results = fs.read(&Query::ByTags(vec!["batch-result".to_string()])).unwrap();
     assert_eq!(results.len(), 2);
 }
 
@@ -82,11 +82,10 @@ fn test_search_by_tags() {
 fn test_search_query() {
     let (fs, _dir) = make_fs();
 
-    fs.create(b"doc about rust".to_vec(), vec!["meeting".to_string()], "a".to_string(), None)
+    fs.create(b"doc about rust".to_vec(), vec!["embedding".to_string()], "a".to_string(), None)
         .unwrap();
 
-    // search() uses tag-based keyword matching
-    let results = fs.search("meeting", 10);
+    let results = fs.search("embedding", 10);
     assert!(!results.is_empty());
 }
 
@@ -238,16 +237,14 @@ fn test_context_loader_l0_round_trip() {
     let loader = ContextLoader::new(dir.path().to_path_buf(), None, cas).unwrap();
 
     // Create a test object (compute CID manually)
-    let content = "Meeting notes: Project X kickoff discussion about Rust performance optimization.";
+    let content = "Vector embedding batch result: 384-dim output for 50 documents using bge-small-en-v1.5.";
     let cid = plico::cas::object::AIObject::compute_cid(content.as_bytes());
 
-    // Store L0 summary
-    loader.store_l0(&cid, "Meeting notes for Project X kickoff.".to_string()).unwrap();
+    loader.store_l0(&cid, "Embedding batch: 50 docs, bge-small-en-v1.5.".to_string()).unwrap();
 
-    // Load L0 summary
     let ctx = loader.load(&cid, ContextLayer::L0).unwrap();
     assert_eq!(ctx.layer, ContextLayer::L0);
-    assert!(ctx.content.contains("Project X"));
+    assert!(ctx.content.contains("bge-small"));
 }
 
 #[test]

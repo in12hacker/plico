@@ -1,61 +1,65 @@
-# Module: memory — Layered Memory Management
+# Module: memory
 
-Four-tier memory system with optional CAS persistence.
+Layered memory management — 4-tier cognitive hierarchy (Ephemeral/Working/LongTerm/Procedural) for AI agents.
 
-Status: stable | Fan-in: 1 (kernel) | Fan-out: 1 (cas via persist.rs)
+Status: stable | Fan-in: 2 | Fan-out: 1
+
+## Dependents (Fan-in: 2)
+
+- `src/kernel/mod.rs` → LayeredMemory, MemoryEntry, CASPersister, MemoryPersister (kernel wiring + remember/recall)
+- `src/bin/plicod.rs` [indirect via kernel] → memory operations through API
+
+## Modification Risk
+
+- Add field to `MemoryEntry` → compatible if `#[serde(default)]`, update constructors
+- Change `MemoryTier` variants → BREAKING, update all match arms in kernel/API/tests
+- Change persistence index format → BREAKING, invalidates persisted memory data
+- Change eviction policy → compatible, behavioral change only
+
+## Task Routing
+
+- Add memory tier → modify `src/memory/layered.rs` MemoryTier enum + priority/name
+- Change eviction logic → modify `src/memory/layered.rs` LayeredMemory::evict
+- Fix persistence → modify `src/memory/persist.rs` CASPersister
+- Add memory content type → modify `src/memory/layered.rs` MemoryContent enum
 
 ## Public API
 
 | Export | File | Description |
 |--------|------|-------------|
-| `LayeredMemory` | `layered.rs` | 4-tier memory store: store/get_tier/get_all/evict_ephemeral |
-| `MemoryTier` | `layered.rs` | Enum: Ephemeral/Working/LongTerm/Procedural |
-| `MemoryEntry` | `layered.rs` | Entry: id/agent_id/tier/content/importance/access_count |
-| `MemoryContent` | `layered.rs` | Enum: Text/ObjectRef/Structured/Procedure/Knowledge |
-| `MemoryError` | `layered.rs` | Error: NotFound, Serialization, TierCapacityExceeded |
-| `MemoryQuery` | `mod.rs` | Query: query text + tier filter + limit + agent_id |
-| `MemoryResult` | `mod.rs` | Result: entries + tier + total count |
-| `MemoryPersister` | `persist.rs` | Trait: persist/load/list_persisted/has_persisted |
-| `CASPersister` | `persist.rs` | CAS-backed persister implementation |
-| `MemoryLoader` | `persist.rs` | Loads persisted memories from CAS |
-| `PersistError` | `persist.rs` | Error: Io, Serialization, CAS, AgentNotFound |
-| `PersistenceIndex` | `persist.rs` | Index: maps agent_id → Vec\<PersistedTier\> |
+| `LayeredMemory` | `layered.rs` | 4-tier in-memory store with eviction |
+| `MemoryTier` | `layered.rs` | Tier enum: Ephemeral, Working, LongTerm, Procedural |
+| `MemoryEntry` | `layered.rs` | Single memory entry with importance/access tracking |
+| `MemoryContent` | `layered.rs` | Content enum: Text, ObjectRef, Structured, Procedure, Knowledge |
+| `MemoryError` | `layered.rs` | Typed memory errors |
+| `CASPersister` | `persist.rs` | Persists memory entries to CAS |
+| `MemoryPersister` | `persist.rs` | Trait for pluggable persistence backends |
+| `MemoryLoader` | `persist.rs` | Restores memory entries from CAS on startup |
+| `MemoryQuery` | `mod.rs` | Query struct for memory retrieval |
+| `MemoryResult` | `mod.rs` | Result struct for memory queries |
 
-## Dependencies (Fan-out: 0)
+## Files
 
-None — leaf module. `persist.rs` depends on `cas` (imported via `crate::cas`).
+| File | Lines | Purpose |
+|------|-------|---------|
+| `layered.rs` | ⚠ ~482 | LayeredMemory, MemoryTier, MemoryEntry — needs split |
+| `persist.rs` | ~384 | CASPersister, MemoryLoader, PersistenceIndex |
+| `mod.rs` | ~44 | MemoryQuery, MemoryResult, re-exports |
 
-## Dependents (Fan-in: 2)
+## Dependencies (Fan-out: 1)
 
-- `src/kernel/mod.rs` → `LayeredMemory::store`, `get_all`, `evict_ephemeral`, `persist_all`, `restore_agent`
-- `src/bin/plicod.rs` → `MemoryContent` (recall handler)
+- `src/cas/` — CASPersister stores serialized memory entries as CAS objects
 
 ## Interface Contract
 
-- `LayeredMemory::store(entry)`: Inserts into tier based on `entry.tier`. **Side effect**: increments op counter; auto-persists after 50 ops (Working/LongTerm/Procedural tiers only).
-- `LayeredMemory::evict_ephemeral(agent_id)`: Removes ephemeral entries. Entries with `importance >= 70` promoted to Working tier.
-- `LayeredMemory::set_persister(p)`: Attaches a persister for L1/L2 durability.
-- `LayeredMemory::persist_all()`: Persists all Working/LongTerm/Procedural entries to CAS.
-- `LayeredMemory::restore_agent(agent_id)`: Restores persisted entries from CAS for one agent.
-- `CASPersister::persist(agent, tier, entries)`: Serializes entries → JSON → CAS. Updates `memory_index.json`.
-- Ephemeral tier entries are **never persisted** (in-memory only).
-
-## Modification Risk
-
-- Add new `MemoryTier` variant → **BREAKING** for tier ordering, matching logic
-- Change eviction threshold (70) → affects memory pressure behavior
-- Change `MemoryContent` enum variants → **BREAKING** for all pattern matches
-- Change `DEFAULT_PERSIST_OP_COUNT` (50) → affects auto-persist frequency
-
-## Task Routing
-
-- Add new memory tier → modify `MemoryTier` + `LayeredMemory::store()` + eviction logic
-- Change eviction policy → modify `LayeredMemory::evict_ephemeral()`
-- Change persistence trigger → modify `LayeredMemory::tick()` / `DEFAULT_PERSIST_OP_COUNT`
-- Add semantic search to memory → new method in `LayeredMemory`, update kernel
+- `LayeredMemory::store()`: adds entry to specified tier; auto-evicts if tier capacity exceeded
+- `LayeredMemory::recall()`: returns entries by agent_id + tier, sorted by last_accessed
+- `CASPersister::persist()`: serializes all entries for an agent to CAS; returns persisted CIDs
+- `MemoryLoader::load()`: restores entries from CAS using persistence index
+- Thread safety: all public methods use `RwLock` — safe for concurrent access
 
 ## Tests
 
-- Unit tests in `persist.rs` — round-trip, index persistence, multi-tier isolation (co-located)
-- Integration tests: `tests/memory_test.rs` — tier behavior, eviction, promotion (12 tests)
-- Integration tests: `tests/memory_persist_test.rs` — full persist → restart → restore cycle (5 tests)
+- Unit: `src/memory/layered.rs` mod tests
+- Integration: `tests/memory_test.rs`, `tests/memory_persist_test.rs`
+- Critical: `test_store_and_recall`, `test_eviction_by_importance`

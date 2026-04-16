@@ -21,10 +21,10 @@ fn test_kernel_create_and_get() {
 
     let cid = kernel
         .semantic_create(
-            b"Meeting notes for Project X".to_vec(),
-            vec!["meeting".to_string(), "project-x".to_string()],
+            b"Agent task output: embedding batch result".to_vec(),
+            vec!["embedding".to_string(), "batch-result".to_string()],
             "TestAgent",
-            Some("Quarterly kickoff notes".to_string()),
+            Some("Embedding computation output".to_string()),
         )
         .expect("create failed");
 
@@ -32,8 +32,8 @@ fn test_kernel_create_and_get() {
         .get_object(&cid, "TestAgent")
         .expect("get failed");
 
-    assert_eq!(obj.data, b"Meeting notes for Project X");
-    assert_eq!(obj.meta.tags, vec!["meeting", "project-x"]);
+    assert_eq!(obj.data, b"Agent task output: embedding batch result");
+    assert_eq!(obj.meta.tags, vec!["embedding", "batch-result"]);
     assert_eq!(obj.meta.created_by, "TestAgent");
 }
 

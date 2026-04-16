@@ -1,55 +1,73 @@
-# Module: api — Permission Guardrails & Semantic Protocol
+# Module: api
 
-Enforces access control and provides JSON serialization for IPC.
+AI-friendly semantic API — permission guardrails + JSON protocol types for TCP daemon and CLI.
 
-Status: stable | Fan-in: 3 (kernel, plicod, aicli) | Fan-out: 0
-
-## Public API
-
-| Export | File | Description |
-|--------|------|-------------|
-| `PermissionGuard` | `permission.rs` | Access control: check/grant/revoke_all |
-| `PermissionContext` | `permission.rs` | Agent identity + granted permissions |
-| `PermissionAction` | `permission.rs` | Enum: Read/Write/Delete/Network/Execute/All |
-| `PermissionGrant` | `permission.rs` | Grant with scope + expiration |
-| `ApiRequest` | `semantic.rs` | JSON request enum (serde tag) |
-| `ApiResponse` | `semantic.rs` | JSON response: ok/cid/data/results/error |
-| `SearchResultDto` | `semantic.rs` | DTO: cid + relevance + tags |
-| `AgentDto` | `semantic.rs` | DTO: id + name + state |
-
-## Dependencies (Fan-out: 0)
-
-Leaf module.
+Status: stable | Fan-in: 3 | Fan-out: 1
 
 ## Dependents (Fan-in: 3)
 
-- `src/kernel/mod.rs` → `PermissionGuard::check()`
-- `src/bin/plicod.rs` → `ApiRequest`/`ApiResponse` for JSON protocol
-- `src/bin/aicli.rs` → `ApiRequest`/`ApiResponse` for TCP mode
-
-## Interface Contract
-
-- `PermissionGuard::check(ctx, action)`: Returns `Ok(())` if allowed. Trusted agents (`kernel`, `system`) bypass all checks.
-- Default policy: `Read`/`Write` allowed by default; `Delete`/`Network`/`Execute` require explicit grant.
-- `ApiRequest` is a serde-tagged enum: `{"method": "create", "params": {...}}`
-- `ApiResponse` fields skipped if `None` (serde `skip_serializing_if`)
+- `src/kernel/mod.rs` → PermissionGuard, PermissionContext, PermissionAction; DashboardStatus and related types
+- `src/bin/plicod.rs` → ApiRequest, ApiResponse, SearchResultDto, AgentDto, NeighborDto, decode_content
+- `src/bin/aicli.rs` → ApiRequest, ApiResponse, SearchResultDto (TCP mode)
 
 ## Modification Risk
 
-- Add new `PermissionAction` → update `PermissionGuard::check()` matching, all `covers()` implementations
-- Change default policy (allow → deny) → **BREAKING** for all agents
-- Add new `ApiRequest` variant → update both `plicod.rs` and `aicli.rs` handlers
-- Add authentication (token-based) → extend `PermissionContext` with token field
+- Add `ApiRequest` variant → compatible, add dispatch in plicod.rs
+- Change `ApiResponse` fields → BREAKING, update all response construction sites
+- Change `PermissionAction` variants → BREAKING, update all check() calls
+- Change `PermissionGuard` policy → behavioral change, affects all agent access
 
 ## Task Routing
 
-- Add OAuth/API key auth → extend `PermissionContext`, add auth middleware in plicod
-- Add rate limiting → new module `api/ratelimit.rs`, wire into `plicod::handle_connection`
-- Add WebSocket support → new module `api/websocket.rs`, upgrade from TCP to async
-- Add request batching → extend `ApiRequest` with `Batch { requests: Vec<ApiRequest> }` variant
+- Add new API method → modify `src/api/semantic.rs` ApiRequest + ApiResponse, then `src/bin/plicod.rs` dispatch
+- Change permission model → modify `src/api/permission.rs`
+- Add API response field → modify `src/api/semantic.rs` ApiResponse
+- Fix content encoding → modify `src/api/semantic.rs` decode_content
+
+## Public API
+
+### Permission
+
+| Export | File | Description |
+|--------|------|-------------|
+| `PermissionGuard` | `permission.rs` | Global access control registry |
+| `PermissionContext` | `permission.rs` | Per-request agent identity + embedded grants |
+| `PermissionAction` | `permission.rs` | Action enum (Read/Write/Delete/Network/Execute/All) |
+| `PermissionGrant` | `permission.rs` | Grant with optional scope + expiry |
+
+### Protocol
+
+| Export | File | Description |
+|--------|------|-------------|
+| `ApiRequest` | `semantic.rs` | Tagged enum of all API operations (create/read/search/etc.) |
+| `ApiResponse` | `semantic.rs` | Unified response with optional fields |
+| `ContentEncoding` | `semantic.rs` | UTF-8 or Base64 encoding for binary payloads |
+| `decode_content` | `semantic.rs` | Decode content string by encoding type |
+| `SearchResultDto` | `semantic.rs` | Search result DTO for API responses |
+| `DashboardStatus` | `semantic.rs` | ⚠ Development dashboard types (soul violation) |
+
+## Files
+
+| File | Lines | Purpose |
+|------|-------|---------|
+| `permission.rs` | ~229 | PermissionGuard, fine-grained access control |
+| `semantic.rs` | ~654 | ApiRequest/ApiResponse, protocol types, dashboard types |
+| `mod.rs` | ~7 | Re-exports |
+
+## Dependencies (Fan-out: 1)
+
+- `src/fs/` — imports EventType, EventRelation, EventSummary, UserFact, ActionSuggestion for API type definitions
+
+## Interface Contract
+
+- `PermissionGuard::check()`: returns `Ok(())` if allowed, `Err(PermissionDenied)` if denied
+- Default policy: Read + Write allowed by default; Delete/Network/Execute require explicit grant
+- Trusted agents ("kernel", "system") bypass all checks
+- `PermissionGrant` supports optional scope restriction and expiry timestamp
+- Thread safety: `PermissionGuard` is NOT internally synchronized — caller must manage mutability
 
 ## Tests
 
-- Permission tests: unit tests for trust bypass, action coverage
-- Protocol tests: serialize/deserialize round-trip for all `ApiRequest`/`ApiResponse` variants
-- Integration: `plicod` TCP echo test (send request, validate response JSON)
+- Unit: `src/api/semantic.rs` mod tests (encoding roundtrips), `src/api/permission.rs` (implicit via integration)
+- Integration: `tests/permission_test.rs`
+- Critical: `test_default_policy`, `test_grant_and_check`, `test_trusted_agent_bypass`

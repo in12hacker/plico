@@ -1,58 +1,67 @@
-# Module: scheduler — Agent Lifecycle & Intent Scheduling
+# Module: scheduler
 
-Manages AI agent registration and intent scheduling via priority queue.
+Agent lifecycle management — creation, scheduling, priority-based dispatch, suspension, and destruction.
 
-Status: stable | Fan-in: 1 (kernel) | Fan-out: 0
+Status: stable | Fan-in: 2 | Fan-out: 0
+
+## Dependents (Fan-in: 2)
+
+- `src/kernel/mod.rs` → AgentScheduler, Agent, Intent, IntentPriority, AgentHandle, AgentId, DispatchHandle, TokioDispatchLoop, LocalExecutor, AgentExecutor
+- `src/bin/plicod.rs` [indirect via kernel] → agent operations through API
+
+## Modification Risk
+
+- Add `AgentState` variant → BREAKING, update all match arms
+- Change `IntentPriority` ordering → behavioral change, affects scheduling order
+- Change `AgentExecutor` trait → BREAKING, update all implementations
+- Add field to `Agent` → compatible, update constructors
+
+## Task Routing
+
+- Add agent state → modify `src/scheduler/agent.rs` AgentState enum
+- Change priority ordering → modify `src/scheduler/queue.rs` Ord implementation
+- Add dispatch strategy → modify `src/scheduler/dispatch.rs`
+- Change agent lifecycle → modify `src/scheduler/agent.rs` Agent + AgentState
 
 ## Public API
 
 | Export | File | Description |
 |--------|------|-------------|
-| `AgentScheduler` | `mod.rs` | Global scheduler: register/submit/dequeue/update_state/list_agents |
-| `Agent` | `agent.rs` | Agent entity: id/name/state/current_intent/resources |
+| `Agent` | `agent.rs` | AI agent with ID, name, state, capabilities |
 | `AgentId` | `agent.rs` | UUID-based agent identifier |
-| `AgentState` | `agent.rs` | Enum: Created/Waiting/Running/Suspended/Completed/Failed/Terminated |
-| `Intent` | `agent.rs` | Task: id/priority/description/agent_id/submitted_at |
-| `IntentPriority` | `agent.rs` | Enum: Critical(4)/High(3)/Medium(2)/Low(1) |
-| `IntentId` | `agent.rs` | UUID-based intent identifier |
-| `SchedulerQueue` | `queue.rs` | Binary heap queue: push/pop/peek/len |
-| `SchedulerError` | `queue.rs` | Error: Empty, IntentNotFound |
-| `AgentExecutor` | `dispatch.rs` | Trait: execute(intent, agent_id, cpu_limit_ms) |
-| `TokioDispatchLoop` | `dispatch.rs` | Background tokio task: polls queue and runs executor |
-| `DispatchHandle` | `dispatch.rs` | Handle for shutdown + result streaming |
-| `LocalExecutor` | `dispatch.rs` | MVP: simulates execution by logging intent |
-| `DispatchError` | `dispatch.rs` | Error: IntentNotFound, Timeout, NotRunnable |
+| `AgentState` | `agent.rs` | Lifecycle state (Created/Waiting/Running/etc.) |
+| `Intent` | `agent.rs` | Task/goal with priority and description |
+| `IntentPriority` | `agent.rs` | Priority levels (Critical/High/Medium/Low) |
+| `AgentScheduler` | `mod.rs` | Global agent registry + intent queue |
+| `SchedulerQueue` | `queue.rs` | Binary heap priority queue |
+| `AgentExecutor` | `dispatch.rs` | Trait for intent execution backends |
+| `TokioDispatchLoop` | `dispatch.rs` | Async dispatch loop for tokio runtime |
+| `DispatchHandle` | `dispatch.rs` | Handle to running dispatch loop |
+| `LocalExecutor` | `dispatch.rs` | Simple synchronous executor |
+
+## Files
+
+| File | Lines | Purpose |
+|------|-------|---------|
+| `agent.rs` | ~196 | Agent, AgentId, AgentState, Intent, IntentPriority |
+| `queue.rs` | ~90 | SchedulerQueue (BinaryHeap-based) |
+| `dispatch.rs` | ~412 | AgentExecutor trait, TokioDispatchLoop, DispatchHandle |
+| `mod.rs` | ~154 | AgentScheduler (registry + queue), AgentHandle |
 
 ## Dependencies (Fan-out: 0)
 
-Leaf module.
-
-## Dependents (Fan-in: 1)
-
-- `src/kernel/mod.rs` → `AgentScheduler`, `TokioDispatchLoop`, `LocalExecutor` (via `start_dispatch_loop()`)
+None — scheduler is a standalone module, depends only on std + external crates (uuid, serde, tokio).
 
 ## Interface Contract
 
-- `AgentScheduler::register(agent)`: Returns `AgentId`. **Side effect**: inserts into agents map.
-- `AgentScheduler::submit(intent)`: Enqueues intent. **Side effect**: acquires write lock.
-- `SchedulerQueue::pop()`: Returns highest-priority (Critical > High > Medium > Low), oldest (lowest timestamp) intent.
-- `IntentPriority::cmp()`: Ord by discriminant value (higher = more urgent).
-
-## Modification Risk
-
-- Change `IntentPriority` ordering → affects scheduling fairness; test `test_priority_ordering`
-- Add new `AgentState` → update all pattern matches; **BREAKING** if terminal states change
-- Change queue from BinaryHeap to another structure → affects scheduling behavior
-
-## Task Routing
-
-- Add agent priority/weighting → modify `Agent` + scheduling logic
-- Change scheduling algorithm → modify `SchedulerQueue` or add new scheduler type
-- Add agent resource limits → modify `AgentResources`, enforce in `AIKernel`
-- Add agent communication (IPC) → new module `scheduler/ipc.rs`, update `AgentScheduler`
+- `AgentScheduler::register()`: stores agent, returns AgentId
+- `AgentScheduler::submit()`: adds intent to priority queue
+- `AgentScheduler::dequeue()`: returns highest-priority intent (Critical > High > Medium > Low; FIFO within same priority)
+- `TokioDispatchLoop::start()`: spawns background task, returns DispatchHandle
+- Thread safety: all methods use `RwLock` — safe for concurrent access
 
 ## Tests
 
-- `cargo test --lib -- scheduler::tests::test_priority_ordering` — queue ordering
-- `cargo test --lib -- scheduler::tests::test_register_and_list` — agent registration
-- `cargo test --lib -- scheduler::dispatch::tests` — LocalExecutor, DispatchHandle, result streaming
+- Unit: `src/scheduler/mod.rs` mod tests, `src/scheduler/dispatch.rs` mod tests
+- Integration: `tests/kernel_test.rs` (agent register/submit through kernel)
+- Critical: `test_priority_ordering`, `test_register_and_list`

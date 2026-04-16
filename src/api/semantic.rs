@@ -37,7 +37,7 @@
 
 use base64::Engine;
 use serde::{Deserialize, Serialize};
-use crate::fs::{EventType, EventRelation, EventSummary, UserFact, ActionSuggestion, BehavioralObservation};
+use crate::fs::{EventType, EventRelation, EventSummary};
 
 /// Content encoding field for binary-safe API payloads.
 ///
@@ -179,67 +179,7 @@ pub enum ApiRequest {
         agent_id: String,
     },
 
-    // ── Phase C: Behavioral Pipeline ─────────────────────────────────────────
-    #[serde(rename = "add_event_observation")]
-    AddEventObservation {
-        event_id: String,
-        observation_id: String,
-        agent_id: String,
-    },
 
-    #[serde(rename = "get_event_observations")]
-    GetEventObservations {
-        event_id: String,
-    },
-
-    #[serde(rename = "add_behavioral_observation")]
-    AddBehavioralObservation {
-        observation: BehavioralObservation,
-        event_id: Option<String>,
-        agent_id: String,
-    },
-
-    #[serde(rename = "get_behavioral_observations")]
-    GetBehavioralObservations {
-        subject_id: String,
-    },
-
-    #[serde(rename = "add_user_fact")]
-    AddUserFact {
-        fact: UserFact,
-    },
-
-    #[serde(rename = "get_user_facts")]
-    GetUserFacts {
-        subject_id: String,
-    },
-
-    #[serde(rename = "infer_suggestions")]
-    InferSuggestions {
-        event_id: String,
-    },
-
-    #[serde(rename = "get_pending_suggestions")]
-    GetPendingSuggestions,
-
-    #[serde(rename = "confirm_suggestion")]
-    ConfirmSuggestion {
-        suggestion_id: String,
-    },
-
-    #[serde(rename = "dismiss_suggestion")]
-    DismissSuggestion {
-        suggestion_id: String,
-    },
-
-    // ── Project Self-Management ──────────────────────────────────────────────
-    #[serde(rename = "project_status")]
-    ProjectStatus { agent_id: String },
-
-    /// Sync KG project nodes from current git state.
-    /// Updates iter12 commit_hash, completed_phases, and DesignDoc nodes.
-    #[serde(rename = "sync_project_state")]
-    SyncProjectState,
 }
 
 /// A JSON API response.
@@ -266,18 +206,6 @@ pub struct ApiResponse {
     pub deleted: Option<Vec<DeletedDto>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub events: Option<Vec<EventSummary>>,
-    // ── Phase C: Behavioral Pipeline ─────────────────────────────────────────
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub observations: Option<Vec<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub behavioral_observations: Option<Vec<BehavioralObservation>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub user_facts: Option<Vec<UserFact>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub suggestions: Option<Vec<ActionSuggestion>>,
-    // ── Project Self-Management ──────────────────────────────────────────────
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub project_status: Option<ProjectStatus>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
@@ -314,137 +242,22 @@ pub struct DeletedDto {
 
 // ── Project Self-Management (Dogfooding Plico) ─────────────────────────────────
 
-/// Project status — describes Plico's own development state.
-/// Stored as KG nodes so it lives alongside all other AI memory.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProjectStatus {
-    /// Current iteration number (e.g. 12).
-    pub iteration: u32,
-    /// Git branch name.
-    pub git_branch: String,
-    /// Git commit short hash.
-    pub git_commit: String,
-    /// All iterations in this project.
-    pub iterations: Vec<IterationDto>,
-    /// All active plans.
-    pub plans: Vec<PlanDto>,
-    /// All design documents.
-    pub design_docs: Vec<DesignDocDto>,
-    /// Soul alignment score (0–100).
-    pub soul_alignment_percent: u8,
-    /// Key gaps blocking 100% alignment.
-    pub key_gaps: Vec<GapDto>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct IterationDto {
-    pub id: String,
-    pub name: String,
-    pub completed_phases: Vec<String>,
-    pub active_phase: Option<String>,
-    pub commit_hash: String,
-    pub date: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PlanDto {
-    pub id: String,
-    pub title: String,
-    pub phase: String,
-    pub status: String, // "pending" | "in_progress" | "done"
-    pub priority: String,
-    pub description: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DesignDocDto {
-    pub id: String,
-    pub name: String,
-    pub path: String,
-    pub version: Option<String>,
-    pub description: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GapDto {
-    pub title: String,
-    pub priority: String, // "P0" | "P1" | "P2"
-    pub blocks: Vec<String>, // what this gap blocks
-    pub description: String,
-}
 
 // ── Dashboard / Project Status Types ───────────────────────────────────────────
 
 /// Full dashboard status — served over HTTP on a separate port.
+/// Runtime kernel metrics — reports live system state, not development plans.
+///
+/// Follows the health-check + metrics separation pattern:
+/// all fields are computed from actual kernel state at query time.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DashboardStatus {
-    pub iteration: u32,
-    pub started_at: u64,
-    pub now: i64,
-    pub git_branch: String,
-    pub git_commit: String,
-    pub tests_passed: Option<bool>,
+    pub timestamp_ms: i64,
     pub cas_object_count: usize,
     pub agent_count: usize,
     pub tag_count: usize,
     pub kg_node_count: usize,
     pub kg_edge_count: usize,
-    pub event_count: usize,
-    pub pending_suggestions: usize,
-    pub phases: Vec<PhaseStatus>,
-    pub modules: Vec<ModuleStatus>,
-    pub soul_alignment: SoulAlignment,
-    pub examples: Vec<ExampleCoverage>,
-    pub next_steps: Vec<NextStep>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PhaseStatus {
-    pub name: String,
-    pub percent: u8,
-    pub status: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ModuleStatus {
-    pub name: String,
-    pub path: String,
-    pub status: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SoulAlignment {
-    pub principles: Vec<PrincipleStatus>,
-    pub overall_percent: u8,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PrincipleStatus {
-    pub number: u8,
-    pub title: String,
-    pub description: String,
-    pub aligned: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ExampleCoverage {
-    pub name: String,
-    pub reasoning_chain: Vec<ChainStep>,
-    pub execution_chain: Vec<ChainStep>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ChainStep {
-    pub name: String,
-    pub done: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct NextStep {
-    pub order: u8,
-    pub title: String,
-    pub description: String,
-    pub priority: String,
 }
 
 impl ApiResponse {
@@ -461,11 +274,6 @@ impl ApiResponse {
             neighbors: None,
             deleted: None,
             events: None,
-            observations: None,
-            behavioral_observations: None,
-            user_facts: None,
-            suggestions: None,
-            project_status: None,
             error: None,
         }
     }
@@ -483,11 +291,6 @@ impl ApiResponse {
             neighbors: None,
             deleted: None,
             events: None,
-            observations: None,
-            behavioral_observations: None,
-            user_facts: None,
-            suggestions: None,
-            project_status: None,
             error: None,
         }
     }
@@ -505,11 +308,6 @@ impl ApiResponse {
             neighbors: None,
             deleted: None,
             events: None,
-            observations: None,
-            behavioral_observations: None,
-            user_facts: None,
-            suggestions: None,
-            project_status: None,
             error: None,
         }
     }
@@ -527,102 +325,11 @@ impl ApiResponse {
             neighbors: None,
             deleted: None,
             events: Some(events),
-            observations: None,
-            behavioral_observations: None,
-            user_facts: None,
-            suggestions: None,
-            project_status: None,
             error: None,
         }
     }
 
-    pub fn with_observations(observations: Vec<String>) -> Self {
-        Self {
-            ok: true,
-            cid: None,
-            data: None,
-            results: None,
-            agent_id: None,
-            agents: None,
-            memory: None,
-            tags: None,
-            neighbors: None,
-            deleted: None,
-            events: None,
-            observations: Some(observations),
-            behavioral_observations: None,
-            user_facts: None,
-            suggestions: None,
-            project_status: None,
-            error: None,
-        }
-    }
 
-    pub fn with_user_facts(facts: Vec<UserFact>) -> Self {
-        Self {
-            ok: true,
-            cid: None,
-            data: None,
-            results: None,
-            agent_id: None,
-            agents: None,
-            memory: None,
-            tags: None,
-            neighbors: None,
-            deleted: None,
-            events: None,
-            observations: None,
-            behavioral_observations: None,
-            user_facts: Some(facts),
-            suggestions: None,
-            project_status: None,
-            error: None,
-        }
-    }
-
-    pub fn with_suggestions(suggestions: Vec<ActionSuggestion>) -> Self {
-        Self {
-            ok: true,
-            cid: None,
-            data: None,
-            results: None,
-            agent_id: None,
-            agents: None,
-            memory: None,
-            tags: None,
-            neighbors: None,
-            deleted: None,
-            events: None,
-            observations: None,
-            behavioral_observations: None,
-            user_facts: None,
-            suggestions: Some(suggestions),
-            project_status: None,
-            error: None,
-        }
-    }
-
-    pub fn with_behavioral_observations(observations: Vec<BehavioralObservation>) -> Self {
-        Self {
-            ok: true,
-            cid: None,
-            data: None,
-            results: None,
-            agent_id: None,
-            agents: None,
-            memory: None,
-            tags: None,
-            neighbors: None,
-            deleted: None,
-            events: None,
-            observations: None,
-            behavioral_observations: Some(observations),
-            user_facts: None,
-            suggestions: None,
-            project_status: None,
-            error: None,
-        }
-    }
 
     pub fn error(msg: impl Into<String>) -> Self {
         Self {
@@ -637,11 +344,6 @@ impl ApiResponse {
             neighbors: None,
             deleted: None,
             events: None,
-            observations: None,
-            behavioral_observations: None,
-            user_facts: None,
-            suggestions: None,
-            project_status: None,
             error: Some(msg.into()),
         }
     }

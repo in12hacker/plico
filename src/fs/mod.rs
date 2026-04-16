@@ -32,7 +32,7 @@ pub mod search;
 pub mod summarizer;
 pub mod graph;
 
-pub use semantic_fs::{SemanticFS, FSError, Query, SearchResult, AuditEntry, AuditAction, RecycleEntry, EventType, EventRelation, EventSummary, ActionSuggestion, SuggestionStatus, PREFERENCE_MIN_CONFIDENCE, PREFERENCE_HIGH_CONFIDENCE, BehavioralObservation, UserFact, PatternExtractor};
+pub use semantic_fs::{SemanticFS, FSError, Query, SearchResult, AuditEntry, AuditAction, RecycleEntry, EventType, EventRelation, EventSummary};
 pub use context_loader::{ContextLoader, ContextLayer};
 pub use embedding::{EmbeddingProvider, Embedding, EmbeddingMeta, EmbedError, OllamaBackend, LocalEmbeddingBackend, StubEmbeddingProvider};
 pub use search::{SemanticSearch, SearchHit, SearchIndexMeta, SearchFilter, InMemoryBackend, Bm25Index};

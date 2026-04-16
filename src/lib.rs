@@ -6,12 +6,12 @@
 //! # Architecture
 //!
 //! - [`cas`] — Content-Addressed Storage (SHA-256 object store)
-//! - [`memory`] — Layered memory management
-//! - [`scheduler`] — Agent lifecycle scheduler
+//! - [`memory`] — Layered memory management (4-tier cognitive hierarchy)
+//! - [`scheduler`] — Agent lifecycle scheduler (priority-based dispatch)
 //! - [`fs`] — Semantic filesystem (CRUD, vector index, knowledge graph)
 //! - [`kernel`] — AI Kernel (orchestrates all subsystems)
-//! - [`api`] — AI-friendly semantic API
 //! - [`api`] — AI-friendly semantic API (permission + semantic protocol)
+//! - [`temporal`] — Temporal reasoning (natural language time → time ranges)
 
 pub mod cas;
 pub mod memory;
