@@ -37,7 +37,7 @@
 
 use base64::Engine;
 use serde::{Deserialize, Serialize};
-use crate::fs::{EventType, EventRelation, EventSummary};
+use crate::fs::{EventType, EventRelation, EventSummary, UserFact, ActionSuggestion};
 
 /// Content encoding field for binary-safe API payloads.
 ///
@@ -178,6 +178,105 @@ pub enum ApiRequest {
         relation: EventRelation,
         agent_id: String,
     },
+
+    #[serde(rename = "add_event_observation")]
+    AddEventObservation {
+        event_id: String,
+        observation_id: String,
+        agent_id: String,
+    },
+
+    #[serde(rename = "get_event_observations")]
+    GetEventObservations {
+        event_id: String,
+    },
+
+    #[serde(rename = "add_user_fact")]
+    AddUserFact {
+        fact: UserFact,
+    },
+
+    #[serde(rename = "get_user_facts")]
+    GetUserFacts {
+        subject_id: String,
+    },
+
+    #[serde(rename = "infer_suggestions")]
+    InferSuggestions {
+        event_id: String,
+    },
+}
+
+/// Dashboard API response — served over HTTP on a separate port.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DashboardStatus {
+    pub iteration: u32,
+    pub started_at: u64,
+    pub now: i64,
+    pub git_branch: String,
+    pub git_commit: String,
+    pub tests_passed: Option<bool>,
+    pub cas_object_count: usize,
+    pub agent_count: usize,
+    pub tag_count: usize,
+    pub kg_node_count: usize,
+    pub kg_edge_count: usize,
+    pub event_count: usize,
+    pub pending_suggestions: usize,
+    pub phases: Vec<PhaseStatus>,
+    pub modules: Vec<ModuleStatus>,
+    pub soul_alignment: SoulAlignment,
+    pub examples: Vec<ExampleCoverage>,
+    pub next_steps: Vec<NextStep>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PhaseStatus {
+    pub name: String,
+    pub percent: u8,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModuleStatus {
+    pub name: String,
+    pub path: String,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SoulAlignment {
+    pub principles: Vec<PrincipleStatus>,
+    pub overall_percent: u8,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PrincipleStatus {
+    pub number: u8,
+    pub title: String,
+    pub description: String,
+    pub aligned: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExampleCoverage {
+    pub name: String,
+    pub reasoning_chain: Vec<ChainStep>,
+    pub execution_chain: Vec<ChainStep>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChainStep {
+    pub name: String,
+    pub done: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NextStep {
+    pub order: u8,
+    pub title: String,
+    pub description: String,
+    pub priority: String,
 }
 
 /// A JSON API response.
@@ -204,6 +303,12 @@ pub struct ApiResponse {
     pub deleted: Option<Vec<DeletedDto>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub events: Option<Vec<EventSummary>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub observations: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user_facts: Option<Vec<UserFact>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub suggestions: Option<Vec<ActionSuggestion>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
@@ -240,23 +345,35 @@ pub struct DeletedDto {
 
 impl ApiResponse {
     pub fn ok() -> Self {
-        Self { ok: true, cid: None, data: None, results: None, agent_id: None, agents: None, memory: None, tags: None, neighbors: None, deleted: None, events: None, error: None }
+        Self { ok: true, cid: None, data: None, results: None, agent_id: None, agents: None, memory: None, tags: None, neighbors: None, deleted: None, events: None, observations: None, user_facts: None, suggestions: None, error: None }
     }
 
     pub fn with_cid(cid: String) -> Self {
-        Self { ok: true, cid: Some(cid), data: None, results: None, agent_id: None, agents: None, memory: None, tags: None, neighbors: None, deleted: None, events: None, error: None }
+        Self { ok: true, cid: Some(cid), data: None, results: None, agent_id: None, agents: None, memory: None, tags: None, neighbors: None, deleted: None, events: None, observations: None, user_facts: None, suggestions: None, error: None }
     }
 
     pub fn with_data(data: String) -> Self {
-        Self { ok: true, cid: None, data: Some(data), results: None, agent_id: None, agents: None, memory: None, tags: None, neighbors: None, deleted: None, events: None, error: None }
+        Self { ok: true, cid: None, data: Some(data), results: None, agent_id: None, agents: None, memory: None, tags: None, neighbors: None, deleted: None, events: None, observations: None, user_facts: None, suggestions: None, error: None }
     }
 
     pub fn with_events(events: Vec<EventSummary>) -> Self {
-        Self { ok: true, cid: None, data: None, results: None, agent_id: None, agents: None, memory: None, tags: None, neighbors: None, deleted: None, events: Some(events), error: None }
+        Self { ok: true, cid: None, data: None, results: None, agent_id: None, agents: None, memory: None, tags: None, neighbors: None, deleted: None, events: Some(events), observations: None, user_facts: None, suggestions: None, error: None }
+    }
+
+    pub fn with_observations(observations: Vec<String>) -> Self {
+        Self { ok: true, cid: None, data: None, results: None, agent_id: None, agents: None, memory: None, tags: None, neighbors: None, deleted: None, events: None, observations: Some(observations), user_facts: None, suggestions: None, error: None }
+    }
+
+    pub fn with_user_facts(facts: Vec<UserFact>) -> Self {
+        Self { ok: true, cid: None, data: None, results: None, agent_id: None, agents: None, memory: None, tags: None, neighbors: None, deleted: None, events: None, observations: None, user_facts: Some(facts), suggestions: None, error: None }
+    }
+
+    pub fn with_suggestions(suggestions: Vec<ActionSuggestion>) -> Self {
+        Self { ok: true, cid: None, data: None, results: None, agent_id: None, agents: None, memory: None, tags: None, neighbors: None, deleted: None, events: None, observations: None, user_facts: None, suggestions: Some(suggestions), error: None }
     }
 
     pub fn error(msg: impl Into<String>) -> Self {
-        Self { ok: false, cid: None, data: None, results: None, agent_id: None, agents: None, memory: None, tags: None, neighbors: None, deleted: None, events: None, error: Some(msg.into()) }
+        Self { ok: false, cid: None, data: None, results: None, agent_id: None, agents: None, memory: None, tags: None, neighbors: None, deleted: None, events: None, observations: None, user_facts: None, suggestions: None, error: Some(msg.into()) }
     }
 }
 

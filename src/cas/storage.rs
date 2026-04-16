@@ -177,6 +177,19 @@ impl CASStorage {
         &self.root
     }
 
+    /// Number of objects stored.
+    /// Counts top-level shard directories as a quick estimate; accurate if no partial shards.
+    pub fn len(&self) -> usize {
+        fs::read_dir(&self.root)
+            .map(|entries| {
+                entries
+                    .filter_map(|e| e.ok())
+                    .filter(|e| e.file_type().map_or(false, |ft| ft.is_dir()))
+                    .count()
+            })
+            .unwrap_or(0)
+    }
+
     /// Compute shard directory for a CID.
     fn shard_dir(&self, cid: &str) -> PathBuf {
         let (prefix, _) = cid.split_at(2);

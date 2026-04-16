@@ -63,6 +63,15 @@ async fn main() {
     let listener = TcpListener::bind(addr).await.expect("Failed to bind port");
     println!("Daemon ready. Awaiting AI connections...");
 
+    // Start HTTP dashboard server on port 7879
+    let dashboard_kernel = Arc::clone(&kernel);
+    tokio::spawn(async move {
+        if let Err(e) = run_dashboard_server(dashboard_kernel).await {
+            eprintln!("Dashboard HTTP server error: {}", e);
+        }
+    });
+    println!("Dashboard HTTP server: http://127.0.0.1:7879/api/status");
+
     loop {
         match listener.accept().await {
             Ok((stream, peer)) => {
@@ -151,7 +160,7 @@ fn handle_request(kernel: &AIKernel, req: ApiRequest) -> ApiResponse {
                 relevance: r.relevance,
                 tags: r.meta.tags,
             }).collect();
-            ApiResponse { ok: true, cid: None, data: None, results: Some(dto), agent_id: None, agents: None, memory: None, tags: None, neighbors: None, deleted: None, events: None, error: None }
+            ApiResponse { ok: true, cid: None, data: None, results: Some(dto), agent_id: None, agents: None, memory: None, tags: None, neighbors: None, deleted: None, events: None, observations: None, user_facts: None, suggestions: None, error: None }
         }
 
         ApiRequest::Update { cid, content, content_encoding, new_tags, agent_id } => {
@@ -174,7 +183,7 @@ fn handle_request(kernel: &AIKernel, req: ApiRequest) -> ApiResponse {
 
         ApiRequest::RegisterAgent { name } => {
             let id = kernel.register_agent(name);
-            ApiResponse { ok: true, cid: None, data: None, results: None, agent_id: Some(id), agents: None, memory: None, tags: None, neighbors: None, deleted: None, events: None, error: None }
+            ApiResponse { ok: true, cid: None, data: None, results: None, agent_id: Some(id), agents: None, memory: None, tags: None, neighbors: None, deleted: None, events: None, observations: None, user_facts: None, suggestions: None, error: None }
         }
 
         ApiRequest::ListAgents => {
@@ -183,7 +192,7 @@ fn handle_request(kernel: &AIKernel, req: ApiRequest) -> ApiResponse {
                 name: a.name,
                 state: format!("{:?}", a.state),
             }).collect();
-            ApiResponse { ok: true, cid: None, data: None, results: None, agent_id: None, agents: Some(agents), memory: None, tags: None, neighbors: None, deleted: None, events: None, error: None }
+            ApiResponse { ok: true, cid: None, data: None, results: None, agent_id: None, agents: Some(agents), memory: None, tags: None, neighbors: None, deleted: None, events: None, observations: None, user_facts: None, suggestions: None, error: None }
         }
 
         ApiRequest::Remember { agent_id, content } => {
@@ -199,7 +208,7 @@ fn handle_request(kernel: &AIKernel, req: ApiRequest) -> ApiResponse {
                     _ => None,
                 })
                 .collect();
-            ApiResponse { ok: true, cid: None, data: None, results: None, agent_id: None, agents: None, memory: Some(memories), tags: None, neighbors: None, deleted: None, events: None, error: None }
+            ApiResponse { ok: true, cid: None, data: None, results: None, agent_id: None, agents: None, memory: Some(memories), tags: None, neighbors: None, deleted: None, events: None, observations: None, user_facts: None, suggestions: None, error: None }
         }
 
         ApiRequest::Explore { cid, edge_type, depth, agent_id: _ } => {
@@ -208,7 +217,7 @@ fn handle_request(kernel: &AIKernel, req: ApiRequest) -> ApiResponse {
             let dto: Vec<NeighborDto> = raw.into_iter().map(|(node_id, label, node_type, edge_type, authority_score)| {
                 NeighborDto { node_id, label, node_type, edge_type, authority_score }
             }).collect();
-            ApiResponse { ok: true, cid: None, data: None, results: None, agent_id: None, agents: None, memory: None, tags: None, neighbors: Some(dto), deleted: None, events: None, error: None }
+            ApiResponse { ok: true, cid: None, data: None, results: None, agent_id: None, agents: None, memory: None, tags: None, neighbors: Some(dto), deleted: None, events: None, observations: None, user_facts: None, suggestions: None, error: None }
         }
 
         ApiRequest::ListDeleted { agent_id } => {
@@ -220,7 +229,7 @@ fn handle_request(kernel: &AIKernel, req: ApiRequest) -> ApiResponse {
                     tags: e.original_meta.tags,
                 }
             }).collect();
-            ApiResponse { ok: true, cid: None, data: None, results: None, agent_id: None, agents: None, memory: None, tags: None, neighbors: None, deleted: Some(dto), events: None, error: None }
+            ApiResponse { ok: true, cid: None, data: None, results: None, agent_id: None, agents: None, memory: None, tags: None, neighbors: None, deleted: Some(dto), events: None, observations: None, user_facts: None, suggestions: None, error: None }
         }
 
         ApiRequest::Restore { cid, agent_id } => {
@@ -255,5 +264,104 @@ fn handle_request(kernel: &AIKernel, req: ApiRequest) -> ApiResponse {
                 Err(e) => ApiResponse::error(e.to_string()),
             }
         }
+
+        ApiRequest::AddEventObservation { event_id, observation_id, agent_id } => {
+            match kernel.event_add_observation(&event_id, &observation_id, &agent_id) {
+                Ok(()) => ApiResponse::ok(),
+                Err(e) => ApiResponse::error(e.to_string()),
+            }
+        }
+
+        ApiRequest::GetEventObservations { event_id } => {
+            match kernel.event_get_observations(&event_id) {
+                Ok(observations) => ApiResponse::with_observations(observations),
+                Err(e) => ApiResponse::error(e.to_string()),
+            }
+        }
+
+        ApiRequest::AddUserFact { fact } => {
+            kernel.add_user_fact(fact);
+            ApiResponse::ok()
+        }
+
+        ApiRequest::GetUserFacts { subject_id } => {
+            let facts = kernel.get_user_facts_for_subject(&subject_id);
+            ApiResponse::with_user_facts(facts)
+        }
+
+        ApiRequest::InferSuggestions { event_id } => {
+            match kernel.infer_suggestions_for_event(&event_id) {
+                Ok(suggestions) => ApiResponse::with_suggestions(suggestions),
+                Err(e) => ApiResponse::error(e.to_string()),
+            }
+        }
     }
+}
+
+// ─── HTTP Dashboard Server ────────────────────────────────────────────────────────
+
+
+async fn run_dashboard_server(kernel: Arc<AIKernel>) -> std::io::Result<()> {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:7879").await?;
+    println!("Dashboard HTTP server listening on http://127.0.0.1:7879");
+
+    loop {
+        let (stream, peer) = listener.accept().await?;
+        let kernel = Arc::clone(&kernel);
+        tokio::spawn(async move {
+            if let Err(e) = handle_dashboard_http(stream, &kernel).await {
+                eprintln!("Dashboard HTTP error from {}: {}", peer, e);
+            }
+        });
+    }
+}
+
+async fn handle_dashboard_http(
+    mut stream: tokio::net::TcpStream,
+    kernel: &Arc<AIKernel>,
+) -> std::io::Result<()> {
+    let mut buf = vec![0u8; 8192];
+    let n = stream.read(&mut buf).await?;
+    if n == 0 {
+        return Ok(());
+    }
+
+    let request = String::from_utf8_lossy(&buf[..n]);
+
+    // Simple HTTP routing — parse method + path from the request line
+    let first_line = request.lines().next().unwrap_or("");
+    let parts: Vec<&str> = first_line.split_whitespace().collect();
+    let method = parts.get(0).unwrap_or(&"");
+    let path = parts.get(1).unwrap_or(&"/");
+
+    let (status, body) = match (*method, *path) {
+        ("GET", "/api/status") | ("GET", "/") => {
+            let status = kernel.dashboard_status();
+            let json = serde_json::to_string(&status).unwrap_or_else(|_| r#"{"error":"serialization failed"}"#.to_string());
+            (200, json)
+        }
+        ("GET", "/health") => {
+            (200, r#"{"ok":true}"#.to_string())
+        }
+        _ => {
+            (404, r#"{"error":"not found"}"#.to_string())
+        }
+    };
+
+    let response = format!(
+        "HTTP/1.1 {} OK\r\n\
+         Content-Type: application/json\r\n\
+         Content-Length: {}\r\n\
+         Connection: close\r\n\
+         Access-Control-Allow-Origin: *\r\n\
+         \r\n\
+         {}",
+        status,
+        body.len(),
+        body
+    );
+
+    stream.write_all(response.as_bytes()).await?;
+    stream.flush().await?;
+    Ok(())
 }

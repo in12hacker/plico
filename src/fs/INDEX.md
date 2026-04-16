@@ -8,15 +8,16 @@ Status: active | Fan-in: 1 (kernel) | Fan-out: 1 (cas)
 
 | Export | File | Description |
 |--------|------|-------------|
-| `SemanticFS` | `semantic_fs.rs` | Filesystem: create/read/update/delete/search/list_tags/audit_log/list_deleted/restore/create_event/list_events/event_attach |
+| `SemanticFS` | `semantic_fs.rs` | Filesystem: create/read/update/delete/search/list_tags/audit_log/list_deleted/restore/create_event/list_events/event_attach/event_add_observation/event_get_observations/add_user_fact/get_user_facts_for_subject/infer_suggestions_for_event |
 | `EventType` | `semantic_fs.rs` | Enum: Meeting/Presentation/Review/Interview/Travel/Entertainment/Social/Work/Personal/Other |
-| `EventMeta` | `semantic_fs.rs` | Event metadata (stored in KGNode.properties): label/event_type/start_time/attendee_ids/related_cids |
+| `EventMeta` | `semantic_fs.rs` | Event metadata (stored in KGNode.properties): label/event_type/start_time/attendee_ids/related_cids/observation_ids |
 | `EventRelation` | `semantic_fs.rs` | Enum: Attendee/Document/Media/Decision — relation type when attaching to event |
 | `EventSummary` | `semantic_fs.rs` | Lightweight event listing: id/label/event_type/start_time/attendee_count/related_count |
 | `ActionSuggestion` | `semantic_fs.rs` | AI action suggestion with inline preference + reasoning_chain + confidence + status |
 | `SuggestionStatus` | `semantic_fs.rs` | Enum: Pending/Confirmed/Dismissed |
 | `PREFERENCE_MIN_CONFIDENCE` | `semantic_fs.rs` | Minimum confidence threshold (0.4) for surfacing suggestions |
 | `PREFERENCE_HIGH_CONFIDENCE` | `semantic_fs.rs` | Auto-fire threshold (0.8); no user confirmation needed |
+| `PatternExtractor` | `semantic_fs.rs` | Groups observations → UserFacts → ActionSuggestions pipeline: extract() + extract_and_suggest() |
 | `RecycleEntry` | `semantic_fs.rs` | Soft-deleted object entry: cid/deleted_at/original_meta (persisted to recycle_bin.json) |
 | `Query` | `semantic_fs.rs` | Enum: ByCid/ByTags/Semantic/ByType/Hybrid |
 | `SearchResult` | `semantic_fs.rs` | Result: cid + relevance score + AIObjectMeta |
@@ -41,7 +42,7 @@ Status: active | Fan-in: 1 (kernel) | Fan-out: 1 (cas)
 | `KGNode` | `graph.rs` | Graph node: id/label/node_type/agent_id/metadata |
 | `KGNodeType` | `graph.rs` | Enum: Document/Entity/Concept/Fact/Agent |
 | `KGEdge` | `graph.rs` | Graph edge: source/target/edge_type/weight/created_at |
-| `KGEdgeType` | `graph.rs` | Enum: AssociatesWith/Follows/Mentions/PartOf/RelatedTo/SimilarTo + HasAttendee/HasDocument/HasMedia/HasDecision (event) + SuggestsAction/MotivatedBy (reasoning) |
+| `KGEdgeType` | `graph.rs` | Enum: AssociatesWith/Follows/Mentions/PartOf/RelatedTo/SimilarTo + HasAttendee/HasDocument/HasMedia/HasDecision (event) + HasPreference/SuggestsAction/MotivatedBy (reasoning) |
 | `KGSearchHit` | `graph.rs` | A graph search hit: node + edge_type + scores |
 | `KGError` | `graph.rs` | Error: NodeNotFound, EdgeAlreadyExists, GraphError |
 | `Summarizer` | `summarizer.rs` | Trait: summarize(content, layer) → String |
@@ -71,6 +72,11 @@ Status: active | Fan-in: 1 (kernel) | Fan-out: 1 (cas)
 - `SemanticFS::list_events(since, until, tags, event_type)`: Full-scan over KG Entity nodes filtered by time range + tag intersection + EventType. Returns empty vec if KG is not initialized.
 - `SemanticFS::list_events_by_time(time_expr, tags, event_type, resolver)`: Resolves natural-language time expression via `TemporalResolver` → delegates to `list_events`. Returns `Err` if resolver cannot parse expression.
 - `SemanticFS::event_attach(event_id, target_id, relation, agent_id)`: Adds typed KG edge + updates EventMeta attendee_ids/related_cids. Returns `Err` if KG is absent or event not found.
+- `SemanticFS::event_add_observation(event_id, observation_id)`: Associates a behavioral observation ID with an event (updates EventMeta.observation_ids, no KG edge). Returns `Err` if KG is absent or event not found.
+- `SemanticFS::event_get_observations(event_id)`: Returns all observation IDs associated with an event. Returns `Err` if KG is absent or event not found.
+- `SemanticFS::add_user_fact(fact)`: Store a UserFact (promoted from behavioral observations) in the preference store, keyed by subject_id.
+- `SemanticFS::get_user_facts_for_subject(subject_id)`: Retrieve all UserFacts for a given person ID.
+- `SemanticFS::infer_suggestions_for_event(event_id)`: Multi-hop query: Event → attendees → UserFacts → ActionSuggestions. Returns action suggestions for all attendees with known preferences.
 - `KnowledgeGraph::all_node_ids()`: Returns IDs of all nodes in the graph. Used for full-scan queries without tag filtering.
 - `HeuristicTemporalResolver` (in `src/temporal/`): Implements `TemporalResolver`; resolves "几天前"/"上周"/"上个月"/etc. to Unix-ms ranges via rule-based heuristics. Safe to call from `tokio::spawn`.
 - `ContextLoader::load(cid, L0)`: Returns pre-cached summary if available; otherwise computes on-demand via `compute_l0()` (LLM summarizer if present, heuristic fallback). Never returns a placeholder string.
