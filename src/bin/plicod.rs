@@ -57,6 +57,11 @@ async fn main() {
     // Spawn the agent execution dispatch loop via kernel (no direct subsystem imports).
     let _dispatch = kernel.start_dispatch_loop();
 
+    // Spawn the suggestion notification poller (M15: alarm → notification pipeline).
+    // Polls every 60 seconds for pending suggestions and submits notification intents.
+    let poller_kernel = Arc::clone(&kernel);
+    let _poller = poller_kernel.start_suggestion_poller(std::time::Duration::from_secs(60));
+
     println!("Agent dispatch loop started.");
 
     let addr: SocketAddr = format!("0.0.0.0:{}", port).parse().unwrap();
