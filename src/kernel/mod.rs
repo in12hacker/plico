@@ -132,6 +132,9 @@ impl AIKernel {
         // Restore persisted memories for all previously known agents
         kernel.restore_memories();
 
+        // Initialize project KG nodes for dogfooding
+        kernel.init_project_nodes();
+
         Ok(kernel)
     }
 
@@ -491,7 +494,282 @@ impl AIKernel {
                 authority_score: kg.authority_score(cid).unwrap_or(0.0),
                 combined_score: 0.0,
             })
-            .collect()
+                        .collect()
+    }
+    // ─── Project Self-Management (Dogfooding Plico) ─────────────────────────
+
+    /// Returns the current project status by querying KG nodes.
+    ///
+    /// Collects all Iteration, Plan, and DesignDoc KG nodes and assembles
+    /// them into a `ProjectStatus` struct. Git branch/commit are read from
+    /// the environment or derived from git commands.
+    pub fn project_status(&self) -> crate::api::semantic::ProjectStatus {
+        use crate::api::semantic::*;
+        use crate::fs::KGNodeType;
+
+        let Some(ref kg) = self.knowledge_graph else {
+            return ProjectStatus {
+                iteration: 0,
+                git_branch: String::new(),
+                git_commit: String::new(),
+                iterations: Vec::new(),
+                plans: Vec::new(),
+                design_docs: Vec::new(),
+                soul_alignment_percent: 0,
+                key_gaps: Vec::new(),
+            };
+        };
+
+        // Collect all nodes
+        let all_nodes: Vec<_> = kg.all_node_ids()
+            .into_iter()
+            .filter_map(|id| kg.get_node(&id).ok().flatten())
+            .collect();
+
+        let iterations: Vec<_> = all_nodes.iter()
+            .filter(|n| n.node_type == KGNodeType::Iteration)
+            .map(|n| IterationDto {
+                id: n.id.clone(),
+                name: n.properties.get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(&n.label)
+                    .to_string(),
+                completed_phases: n.properties.get("completed_phases")
+                    .and_then(|v| serde_json::from_value(v.clone()).ok())
+                    .unwrap_or_default(),
+                active_phase: n.properties.get("active_phase")
+                    .and_then(|v| v.as_str())
+                    .map(String::from),
+                commit_hash: n.properties.get("commit_hash")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                date: n.properties.get("date")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+            })
+            .collect();
+
+        let plans: Vec<_> = all_nodes.iter()
+            .filter(|n| n.node_type == KGNodeType::Plan)
+            .map(|n| PlanDto {
+                id: n.id.clone(),
+                title: n.label.clone(),
+                phase: n.properties.get("phase")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                status: n.properties.get("status")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("pending")
+                    .to_string(),
+                priority: n.properties.get("priority")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("P1")
+                    .to_string(),
+                description: n.properties.get("description")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+            })
+            .collect();
+
+        let design_docs: Vec<_> = all_nodes.iter()
+            .filter(|n| n.node_type == KGNodeType::DesignDoc)
+            .map(|n| DesignDocDto {
+                id: n.id.clone(),
+                name: n.label.clone(),
+                path: n.properties.get("path")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                version: n.properties.get("version")
+                    .and_then(|v| v.as_str())
+                    .map(String::from),
+                description: n.properties.get("description")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+            })
+            .collect();
+
+        // Git info from environment or git commands
+        let git_branch = std::env::var("GIT_BRANCH")
+            .unwrap_or_else(|_| {
+                std::process::Command::new("git")
+                    .args(["rev-parse", "--abbrev-ref", "HEAD"])
+                    .output()
+                    .ok()
+                    .and_then(|o| String::from_utf8(o.stdout).ok())
+                    .map(|s| s.trim().to_string())
+                    .unwrap_or_else(|| "feat/plico-self-management".to_string())
+            });
+
+        let git_commit = std::env::var("GIT_COMMIT")
+            .unwrap_or_else(|_| {
+                std::process::Command::new("git")
+                    .args(["rev-parse", "--short", "HEAD"])
+                    .output()
+                    .ok()
+                    .and_then(|o| String::from_utf8(o.stdout).ok())
+                    .map(|s| s.trim().to_string())
+                    .unwrap_or_default()
+            });
+
+        // Current iteration number — highest numeric iter in KG
+        let iteration = iterations.iter()
+            .filter_map(|i| i.name.strip_prefix("iter").and_then(|s| s.parse::<u32>().ok()))
+            .max()
+            .unwrap_or(0);
+
+        // Soul alignment: bootstrapped heuristic — real computation comes later
+        let soul_alignment_percent = if !iterations.is_empty() || !plans.is_empty() || !design_docs.is_empty() {
+            60
+        } else {
+            0
+        };
+
+        // Key gaps — Plan nodes with "gap" in title or description
+        let key_gaps: Vec<_> = plans.iter()
+            .filter(|p| {
+                p.title.to_lowercase().contains("gap") ||
+                p.description.to_lowercase().contains("gap")
+            })
+            .map(|p| GapDto {
+                title: p.title.clone(),
+                priority: p.priority.clone(),
+                blocks: Vec::new(),
+                description: p.description.clone(),
+            })
+            .collect();
+
+        ProjectStatus {
+            iteration,
+            git_branch,
+            git_commit,
+            iterations,
+            plans,
+            design_docs,
+            soul_alignment_percent,
+            key_gaps,
+        }
+    }
+
+    /// Initialize project KG nodes on first startup.
+    ///
+    /// Creates Iteration, Plan, and DesignDoc nodes if they don't exist yet.
+    /// Safe to call multiple times — idempotent based on node IDs.
+    pub fn init_project_nodes(&self) {
+        use crate::fs::{KGNodeType, KGEdgeType};
+
+        let Some(ref kg) = self.knowledge_graph else { return; };
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+
+        // Check if already initialized
+        let existing = kg.all_node_ids();
+        if existing.iter().any(|id| id == "iter12") {
+            return; // already initialized
+        }
+
+        // Create iter12 node
+        let iter12_props = serde_json::json!({
+            "name": "iter12",
+            "completed_phases": ["Phase A"],
+            "active_phase": "Phase C",
+            "commit_hash": "2cb4958",
+            "date": "2026-04-16",
+        });
+        let _ = kg.add_node(crate::fs::KGNode {
+            id: "iter12".into(),
+            label: "iter12".into(),
+            node_type: KGNodeType::Iteration,
+            content_cid: None,
+            properties: iter12_props,
+            agent_id: "system".into(),
+            created_at: now,
+            valid_at: None,
+            invalid_at: None,
+            expired_at: None,
+        });
+
+        // Create plan: complete project self-management
+        let plan_props = serde_json::json!({
+            "phase": "iter12",
+            "status": "in_progress",
+            "priority": "P0",
+            "description": "Implement Plico self-management: KG nodes for project state, HTTP API for dashboard",
+        });
+        let _ = kg.add_node(crate::fs::KGNode {
+            id: "plan-plico-self-mgmt".into(),
+            label: "complete project self-management".into(),
+            node_type: KGNodeType::Plan,
+            content_cid: None,
+            properties: plan_props,
+            agent_id: "system".into(),
+            created_at: now,
+            valid_at: None,
+            invalid_at: None,
+            expired_at: None,
+        });
+
+        // Create edge: iter12 HasPlan plan-plico-self-mgmt
+        let _ = kg.add_edge(crate::fs::KGEdge {
+            src: "iter12".into(),
+            dst: "plan-plico-self-mgmt".into(),
+            edge_type: KGEdgeType::HasPlan,
+            weight: 1.0,
+            evidence_cid: None,
+            created_at: now,
+            valid_at: None,
+            invalid_at: None,
+            expired_at: None,
+            episodes: vec![],
+        });
+
+        // Create DesignDoc nodes for existing design docs
+        for (id, name, path, desc) in [
+            ("ddoc-plico-iter", "plico-iter-analysis", "docs/design/plico-iter-analysis.md", "Analysis of iteration patterns for Plico development"),
+            ("ddoc-temporal-kg", "plico-temporal-kg", "docs/design/plico-temporal-kg.md", "Temporal knowledge graph design for event reasoning"),
+        ] {
+            let props = serde_json::json!({
+                "path": path,
+                "version": None::<String>,
+                "description": desc,
+            });
+            let _ = kg.add_node(crate::fs::KGNode {
+                id: id.into(),
+                label: name.into(),
+                node_type: KGNodeType::DesignDoc,
+                content_cid: None,
+                properties: props,
+                agent_id: "system".into(),
+                created_at: now,
+                valid_at: None,
+                invalid_at: None,
+                expired_at: None,
+            });
+
+            // iter12 References this design doc
+            let _ = kg.add_edge(crate::fs::KGEdge {
+                src: "iter12".into(),
+                dst: id.into(),
+                edge_type: KGEdgeType::References,
+                weight: 0.5,
+                evidence_cid: None,
+                created_at: now,
+                valid_at: None,
+                invalid_at: None,
+                expired_at: None,
+                episodes: vec![],
+            });
+        }
+
+        tracing::info!("Initialized project KG nodes for Plico self-management");
     }
 
     /// Build the dashboard status response from live kernel state.
@@ -630,8 +908,6 @@ impl AIKernel {
         }
     }
 }
-
-// ─── Stub Embedding Provider ─────────────────────────────────────────────────
 
 /// Create the embedding provider based on EMBEDDING_BACKEND env var.
 ///
