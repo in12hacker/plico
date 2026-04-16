@@ -556,6 +556,11 @@ pub struct SemanticFS {
     ///
     /// Key: event_id that triggered the suggestion. Value: list of suggestions.
     suggestion_store: RwLock<HashMap<String, Vec<ActionSuggestion>>>,
+    /// In-memory store of BehavioralObservations.
+    ///
+    /// Keyed by observation ID. Observations are linked to events via
+    /// `observation_ids` in EventMeta. Used by PatternExtractor for inference.
+    observation_store: RwLock<HashMap<String, BehavioralObservation>>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -653,6 +658,7 @@ impl SemanticFS {
             user_facts: RwLock::new(HashMap::new()),
             bm25_index: Arc::new(Bm25Index::new()),
             suggestion_store: RwLock::new(HashMap::new()),
+            observation_store: RwLock::new(HashMap::new()),
         };
 
         // Rebuild vector index from persisted CAS objects.
@@ -1600,6 +1606,60 @@ impl SemanticFS {
         Ok(meta.observation_ids)
     }
 
+    /// Add a behavioral observation to the observation store and optionally link it to an event.
+    ///
+    /// The observation is stored by ID, keyed by observation.id.
+    /// If `event_id` is provided, also links the observation ID to that event's EventMeta.
+    ///
+    /// Per plico-multi-hop-reasoning.md §4.2: observations drive pattern extraction.
+    pub fn add_behavioral_observation(
+        &self,
+        observation: BehavioralObservation,
+        event_id: Option<&str>,
+    ) -> Result<(), FSError> {
+        // Store the observation
+        {
+            let mut store = self.observation_store.write().unwrap();
+            store.insert(observation.id.clone(), observation.clone());
+        }
+
+        // Optionally link to an event
+        if let Some(eid) = event_id {
+            if let Some(ref kg) = self.knowledge_graph {
+                // Add observation ID to EventMeta
+                let mut node = kg.get_node(eid)
+                    .map_err(|e| FSError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?
+                    .ok_or_else(|| FSError::Io(std::io::Error::new(std::io::ErrorKind::NotFound, "event not found")))?;
+                let mut meta: EventMeta = serde_json::from_value(node.properties.clone())
+                    .map_err(|e| FSError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())))?;
+                if !meta.observation_ids.contains(&observation.id) {
+                    meta.observation_ids.push(observation.id.clone());
+                }
+                node.properties = serde_json::to_value(&meta)
+                    .map_err(|e| FSError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())))?;
+                kg.add_node(node)
+                    .map_err(|e| FSError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Get a behavioral observation by ID.
+    pub fn get_behavioral_observation(&self, id: &str) -> Option<BehavioralObservation> {
+        let store = self.observation_store.read().unwrap();
+        store.get(id).cloned()
+    }
+
+    /// Get all behavioral observations for a given subject (person).
+    pub fn get_behavioral_observations_for_subject(&self, subject_id: &str) -> Vec<BehavioralObservation> {
+        let store = self.observation_store.read().unwrap();
+        store.values()
+            .filter(|obs| obs.subject_id == subject_id)
+            .cloned()
+            .collect()
+    }
+
     /// Add a UserFact (promoted from behavioral observations) to the preference store.
     ///
     /// Per plico-multi-hop-reasoning.md §6.1: UserFacts are promoted when patterns
@@ -2196,6 +2256,56 @@ mod tests {
 
         let obs_ids = fs.event_get_observations(&event_id).unwrap();
         assert_eq!(obs_ids.len(), 3);
+    }
+
+    #[test]
+    fn behavioral_observation_store_add_and_get() {
+        // M19: BehavioralObservation objects are stored in the observation_store
+        let dir = TempDir::new().unwrap();
+        let fs = make_fs_with_kg(&dir);
+
+        let obs = BehavioralObservation::new(
+            "person:wang".to_string(),
+            "at_dinner".to_string(),
+            "order_food".to_string(),
+            "红酒".to_string(),
+            None,
+        );
+        let obs_id = obs.id.clone();
+
+        // Add observation without event link
+        fs.add_behavioral_observation(obs, None).unwrap();
+
+        // Retrieve by ID
+        let retrieved = fs.get_behavioral_observation(&obs_id);
+        assert!(retrieved.is_some());
+        assert_eq!(retrieved.unwrap().subject_id, "person:wang");
+
+        // Retrieve by subject
+        let all_for_wang = fs.get_behavioral_observations_for_subject("person:wang");
+        assert_eq!(all_for_wang.len(), 1);
+    }
+
+    #[test]
+    fn behavioral_observation_store_links_to_event() {
+        // M19: add_behavioral_observation with event_id links observation to event
+        let dir = TempDir::new().unwrap();
+        let fs = make_fs_with_kg(&dir);
+
+        let event_id = fs.create_event("商务晚餐", EventType::Meeting, None, None, None, vec![], "a").unwrap();
+        let obs = BehavioralObservation::new(
+            "person:wang".to_string(),
+            "at_dinner".to_string(),
+            "order_food".to_string(),
+            "红酒".to_string(),
+            None,
+        );
+
+        fs.add_behavioral_observation(obs, Some(&event_id)).unwrap();
+
+        // Observation should be linked to event
+        let obs_ids = fs.event_get_observations(&event_id).unwrap();
+        assert_eq!(obs_ids.len(), 1);
     }
 
     #[test]

@@ -496,6 +496,21 @@ impl AIKernel {
         self.fs.get_user_facts_for_subject(subject_id)
     }
 
+    /// Add a behavioral observation and optionally link it to an event.
+    pub fn add_behavioral_observation(
+        &self,
+        observation: crate::fs::BehavioralObservation,
+        event_id: Option<&str>,
+    ) -> std::io::Result<()> {
+        self.fs.add_behavioral_observation(observation, event_id)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
+    }
+
+    /// Get all behavioral observations for a given subject (person).
+    pub fn get_behavioral_observations_for_subject(&self, subject_id: &str) -> Vec<crate::fs::BehavioralObservation> {
+        self.fs.get_behavioral_observations_for_subject(subject_id)
+    }
+
     /// Infer action suggestions for an event by traversing:
     /// Event → HasAttendee → Person → UserFact → ActionSuggestion
     pub fn infer_suggestions_for_event(

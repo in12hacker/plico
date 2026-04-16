@@ -37,7 +37,7 @@
 
 use base64::Engine;
 use serde::{Deserialize, Serialize};
-use crate::fs::{EventType, EventRelation, EventSummary, UserFact, ActionSuggestion};
+use crate::fs::{EventType, EventRelation, EventSummary, UserFact, ActionSuggestion, BehavioralObservation};
 
 /// Content encoding field for binary-safe API payloads.
 ///
@@ -192,6 +192,18 @@ pub enum ApiRequest {
         event_id: String,
     },
 
+    #[serde(rename = "add_behavioral_observation")]
+    AddBehavioralObservation {
+        observation: BehavioralObservation,
+        event_id: Option<String>,
+        agent_id: String,
+    },
+
+    #[serde(rename = "get_behavioral_observations")]
+    GetBehavioralObservations {
+        subject_id: String,
+    },
+
     #[serde(rename = "add_user_fact")]
     AddUserFact {
         fact: UserFact,
@@ -257,6 +269,8 @@ pub struct ApiResponse {
     // ── Phase C: Behavioral Pipeline ─────────────────────────────────────────
     #[serde(skip_serializing_if = "Option::is_none")]
     pub observations: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub behavioral_observations: Option<Vec<BehavioralObservation>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub user_facts: Option<Vec<UserFact>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -448,6 +462,7 @@ impl ApiResponse {
             deleted: None,
             events: None,
             observations: None,
+            behavioral_observations: None,
             user_facts: None,
             suggestions: None,
             project_status: None,
@@ -469,6 +484,7 @@ impl ApiResponse {
             deleted: None,
             events: None,
             observations: None,
+            behavioral_observations: None,
             user_facts: None,
             suggestions: None,
             project_status: None,
@@ -490,6 +506,7 @@ impl ApiResponse {
             deleted: None,
             events: None,
             observations: None,
+            behavioral_observations: None,
             user_facts: None,
             suggestions: None,
             project_status: None,
@@ -511,6 +528,7 @@ impl ApiResponse {
             deleted: None,
             events: Some(events),
             observations: None,
+            behavioral_observations: None,
             user_facts: None,
             suggestions: None,
             project_status: None,
@@ -532,6 +550,7 @@ impl ApiResponse {
             deleted: None,
             events: None,
             observations: Some(observations),
+            behavioral_observations: None,
             user_facts: None,
             suggestions: None,
             project_status: None,
@@ -553,6 +572,7 @@ impl ApiResponse {
             deleted: None,
             events: None,
             observations: None,
+            behavioral_observations: None,
             user_facts: Some(facts),
             suggestions: None,
             project_status: None,
@@ -574,8 +594,31 @@ impl ApiResponse {
             deleted: None,
             events: None,
             observations: None,
+            behavioral_observations: None,
             user_facts: None,
             suggestions: Some(suggestions),
+            project_status: None,
+            error: None,
+        }
+    }
+
+    pub fn with_behavioral_observations(observations: Vec<BehavioralObservation>) -> Self {
+        Self {
+            ok: true,
+            cid: None,
+            data: None,
+            results: None,
+            agent_id: None,
+            agents: None,
+            memory: None,
+            tags: None,
+            neighbors: None,
+            deleted: None,
+            events: None,
+            observations: None,
+            behavioral_observations: Some(observations),
+            user_facts: None,
+            suggestions: None,
             project_status: None,
             error: None,
         }
@@ -595,6 +638,7 @@ impl ApiResponse {
             deleted: None,
             events: None,
             observations: None,
+            behavioral_observations: None,
             user_facts: None,
             suggestions: None,
             project_status: None,
