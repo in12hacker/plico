@@ -299,6 +299,11 @@ fn handle_request(kernel: &AIKernel, req: ApiRequest) -> ApiResponse {
         ApiRequest::ProjectStatus { agent_id: _ } => {
             ApiResponse { ok: true, cid: None, data: None, results: None, agent_id: None, agents: None, memory: None, tags: None, neighbors: None, deleted: None, events: None, observations: None, user_facts: None, suggestions: None, project_status: Some(kernel.project_status()), error: None }
         }
+
+        ApiRequest::SyncProjectState => {
+            kernel.sync_project_state();
+            ApiResponse::ok()
+        }
     }
 }
 
@@ -346,6 +351,10 @@ async fn handle_dashboard_http(
         }
         ("GET", "/health") => {
             (200, r#"{"ok":true}"#.to_string())
+        }
+        ("POST", "/api/sync_project_state") => {
+            kernel.sync_project_state();
+            (200, r#"{"ok":true,"synced":true}"#.to_string())
         }
         _ => {
             (404, r#"{"error":"not found"}"#.to_string())

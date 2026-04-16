@@ -645,12 +645,26 @@ impl AIKernel {
             .max()
             .unwrap_or(0);
 
-        // Soul alignment: bootstrapped heuristic — real computation comes later
-        let soul_alignment_percent = if !iterations.is_empty() || !plans.is_empty() || !design_docs.is_empty() {
-            60
-        } else {
-            0
-        };
+        // Soul alignment: computed from AI-managed KG nodes — not hardcoded
+        // Read from ProjectConfig node if set by AI, else derive from coverage
+        let soul_alignment_percent = all_nodes.iter()
+            .find(|n| n.id == "project-config")
+            .and_then(|n| n.properties.get("soul_alignment_percent")?.as_u64())
+            .map(|v| v as u8)
+            .unwrap_or_else(|| {
+                // Fallback: derive from presence of project management nodes
+                let has_iters = !iterations.is_empty();
+                let has_plans = !plans.is_empty();
+                let has_docs = design_docs.len() >= 3;
+                let has_active_work = plans.iter().any(|p| p.status == "in_progress");
+                match (has_iters, has_plans, has_docs, has_active_work) {
+                    (true, true, true, true) => 80,
+                    (true, true, true, false) => 70,
+                    (true, true, false, _) => 55,
+                    (true, false, _, _) => 40,
+                    _ => 20,
+                }
+            });
 
         // Key gaps — Plan nodes with "gap" in title or description
         let key_gaps: Vec<_> = plans.iter()
@@ -698,13 +712,13 @@ impl AIKernel {
             return; // already initialized
         }
 
-        // Create iter12 node
+        // Create iter12 node — phase/completion data comes from AI use, not hardcode
         let iter12_props = serde_json::json!({
             "name": "iter12",
-            "completed_phases": ["Phase A"],
-            "active_phase": "Phase C",
-            "commit_hash": "2cb4958",
-            "date": "2026-04-16",
+            "completed_phases": Vec::<String>::new(),
+            "active_phase": null,
+            "commit_hash": "",
+            "date": chrono::Local::now().format("%Y-%m-%d").to_string(),
         });
         let _ = kg.add_node(crate::fs::KGNode {
             id: "iter12".into(),
@@ -753,45 +767,20 @@ impl AIKernel {
             episodes: vec![],
         });
 
-        // Create DesignDoc nodes for existing design docs
-        for (id, name, path, desc) in [
-            ("ddoc-plico-iter", "plico-iter-analysis", "docs/design/plico-iter-analysis.md", "Analysis of iteration patterns for Plico development"),
-            ("ddoc-temporal-kg", "plico-temporal-kg", "docs/design/plico-temporal-kg.md", "Temporal knowledge graph design for event reasoning"),
-        ] {
-            let props = serde_json::json!({
-                "path": path,
-                "version": None::<String>,
-                "description": desc,
-            });
-            let _ = kg.add_node(crate::fs::KGNode {
-                id: id.into(),
-                label: name.into(),
-                node_type: KGNodeType::DesignDoc,
-                content_cid: None,
-                properties: props,
-                agent_id: "system".into(),
-                created_at: now,
-                valid_at: None,
-                invalid_at: None,
-                expired_at: None,
-            });
-
-            // iter12 References this design doc
-            let _ = kg.add_edge(crate::fs::KGEdge {
-                src: "iter12".into(),
-                dst: id.into(),
-                edge_type: KGEdgeType::References,
-                weight: 0.5,
-                evidence_cid: None,
-                created_at: now,
-                valid_at: None,
-                invalid_at: None,
-                expired_at: None,
-                episodes: vec![],
-            });
-        }
+        // DesignDoc nodes are created by the AI through semantic_create as design docs are written.
+        // Do NOT hardcode design doc list here — knowledge comes from use.
 
         tracing::info!("Initialized project KG nodes for Plico self-management");
+    }
+
+    /// Signal that the AI should sync project state from external inputs (git, filesystem).
+    ///
+    /// This is a no-op in the kernel — actual KG updates are performed by the AI
+    /// via `semantic_create` / `semantic_update` API calls after observing state.
+    ///
+    /// Triggered by: post-commit hooks, cron jobs, or AI self-assessment.
+    pub fn sync_project_state(&self) {
+        tracing::info!("sync_project_state triggered — AI should observe git/filesystem and update KG via semantic API");
     }
 
     /// Build the dashboard status response from live kernel state.

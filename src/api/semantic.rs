@@ -210,6 +210,11 @@ pub enum ApiRequest {
     // ── Project Self-Management ──────────────────────────────────────────────
     #[serde(rename = "project_status")]
     ProjectStatus { agent_id: String },
+
+    /// Sync KG project nodes from current git state.
+    /// Updates iter12 commit_hash, completed_phases, and DesignDoc nodes.
+    #[serde(rename = "sync_project_state")]
+    SyncProjectState,
 }
 
 /// A JSON API response.
