@@ -400,7 +400,7 @@ impl PatternExtractor {
         vec![
             format!(
                 "{}在{}场景下共出现{}次偏好{}",
-                subject, count, context, obj
+                subject, context, count, obj
             ),
             format!(
                 "根据历史行为模式，推断{}偏好{}",
