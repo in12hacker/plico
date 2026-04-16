@@ -160,7 +160,7 @@ fn handle_request(kernel: &AIKernel, req: ApiRequest) -> ApiResponse {
                 relevance: r.relevance,
                 tags: r.meta.tags,
             }).collect();
-            ApiResponse { ok: true, cid: None, data: None, results: Some(dto), agent_id: None, agents: None, memory: None, tags: None, neighbors: None, deleted: None, events: None, observations: None, user_facts: None, suggestions: None, error: None }
+            ApiResponse { ok: true, cid: None, data: None, results: Some(dto), agent_id: None, agents: None, memory: None, tags: None, neighbors: None, deleted: None, events: None, observations: None, user_facts: None, suggestions: None, project_status: None, error: None }
         }
 
         ApiRequest::Update { cid, content, content_encoding, new_tags, agent_id } => {
@@ -183,7 +183,7 @@ fn handle_request(kernel: &AIKernel, req: ApiRequest) -> ApiResponse {
 
         ApiRequest::RegisterAgent { name } => {
             let id = kernel.register_agent(name);
-            ApiResponse { ok: true, cid: None, data: None, results: None, agent_id: Some(id), agents: None, memory: None, tags: None, neighbors: None, deleted: None, events: None, observations: None, user_facts: None, suggestions: None, error: None }
+            ApiResponse { ok: true, cid: None, data: None, results: None, agent_id: Some(id), agents: None, memory: None, tags: None, neighbors: None, deleted: None, events: None, observations: None, user_facts: None, suggestions: None, project_status: None, error: None }
         }
 
         ApiRequest::ListAgents => {
@@ -192,7 +192,7 @@ fn handle_request(kernel: &AIKernel, req: ApiRequest) -> ApiResponse {
                 name: a.name,
                 state: format!("{:?}", a.state),
             }).collect();
-            ApiResponse { ok: true, cid: None, data: None, results: None, agent_id: None, agents: Some(agents), memory: None, tags: None, neighbors: None, deleted: None, events: None, observations: None, user_facts: None, suggestions: None, error: None }
+            ApiResponse { ok: true, cid: None, data: None, results: None, agent_id: None, agents: Some(agents), memory: None, tags: None, neighbors: None, deleted: None, events: None, observations: None, user_facts: None, suggestions: None, project_status: None, error: None }
         }
 
         ApiRequest::Remember { agent_id, content } => {
@@ -208,7 +208,7 @@ fn handle_request(kernel: &AIKernel, req: ApiRequest) -> ApiResponse {
                     _ => None,
                 })
                 .collect();
-            ApiResponse { ok: true, cid: None, data: None, results: None, agent_id: None, agents: None, memory: Some(memories), tags: None, neighbors: None, deleted: None, events: None, observations: None, user_facts: None, suggestions: None, error: None }
+            ApiResponse { ok: true, cid: None, data: None, results: None, agent_id: None, agents: None, memory: Some(memories), tags: None, neighbors: None, deleted: None, events: None, observations: None, user_facts: None, suggestions: None, project_status: None, error: None }
         }
 
         ApiRequest::Explore { cid, edge_type, depth, agent_id: _ } => {
@@ -217,7 +217,7 @@ fn handle_request(kernel: &AIKernel, req: ApiRequest) -> ApiResponse {
             let dto: Vec<NeighborDto> = raw.into_iter().map(|(node_id, label, node_type, edge_type, authority_score)| {
                 NeighborDto { node_id, label, node_type, edge_type, authority_score }
             }).collect();
-            ApiResponse { ok: true, cid: None, data: None, results: None, agent_id: None, agents: None, memory: None, tags: None, neighbors: Some(dto), deleted: None, events: None, observations: None, user_facts: None, suggestions: None, error: None }
+            ApiResponse { ok: true, cid: None, data: None, results: None, agent_id: None, agents: None, memory: None, tags: None, neighbors: Some(dto), deleted: None, events: None, observations: None, user_facts: None, suggestions: None, project_status: None, error: None }
         }
 
         ApiRequest::ListDeleted { agent_id } => {
@@ -229,7 +229,7 @@ fn handle_request(kernel: &AIKernel, req: ApiRequest) -> ApiResponse {
                     tags: e.original_meta.tags,
                 }
             }).collect();
-            ApiResponse { ok: true, cid: None, data: None, results: None, agent_id: None, agents: None, memory: None, tags: None, neighbors: None, deleted: Some(dto), events: None, observations: None, user_facts: None, suggestions: None, error: None }
+            ApiResponse { ok: true, cid: None, data: None, results: None, agent_id: None, agents: None, memory: None, tags: None, neighbors: None, deleted: Some(dto), events: None, observations: None, user_facts: None, suggestions: None, project_status: None, error: None }
         }
 
         ApiRequest::Restore { cid, agent_id } => {
@@ -296,6 +296,7 @@ fn handle_request(kernel: &AIKernel, req: ApiRequest) -> ApiResponse {
             }
         }
 
+
         ApiRequest::GetPendingSuggestions => {
             let suggestions = kernel.get_pending_suggestions();
             ApiResponse::with_suggestions(suggestions)
@@ -313,6 +314,10 @@ fn handle_request(kernel: &AIKernel, req: ApiRequest) -> ApiResponse {
                 Ok(()) => ApiResponse::ok(),
                 Err(e) => ApiResponse::error(e.to_string()),
             }
+        }
+
+        ApiRequest::ProjectStatus { agent_id: _ } => {
+            ApiResponse { ok: true, cid: None, data: None, results: None, agent_id: None, agents: None, memory: None, tags: None, neighbors: None, deleted: None, events: None, observations: None, user_facts: None, suggestions: None, project_status: Some(kernel.project_status()), error: None }
         }
     }
 }
@@ -354,8 +359,8 @@ async fn handle_dashboard_http(
     let path = parts.get(1).unwrap_or(&"/");
 
     let (status, body) = match (*method, *path) {
-        ("GET", "/api/status") | ("GET", "/") => {
-            let status = kernel.dashboard_status();
+        ("GET", "/api/project/status") | ("GET", "/api/status") | ("GET", "/") => {
+            let status = kernel.project_status();
             let json = serde_json::to_string(&status).unwrap_or_else(|_| r#"{"error":"serialization failed"}"#.to_string());
             (200, json)
         }

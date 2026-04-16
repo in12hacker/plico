@@ -350,7 +350,7 @@ fn cmd_agent(kernel: &AIKernel, args: &[String]) -> ApiResponse {
     let name = extract_arg(args, "--register").unwrap_or_else(|| "unnamed".to_string());
     let id = kernel.register_agent(name.clone());
     println!("Agent registered: {} (ID: {})", name, id);
-    ApiResponse { ok: true, cid: None, data: None, results: None, agent_id: Some(id), agents: None, memory: None, tags: None, neighbors: None, deleted: None, events: None, observations: None, user_facts: None, suggestions: None, error: None }
+ApiResponse { ok: true, cid: None, data: None, results: None, agent_id: Some(id), agents: None, memory: None, tags: None, neighbors: None, deleted: None, events: None, observations: None, user_facts: None, suggestions: None, project_status: None, error: None }
 }
 
 fn cmd_agents(kernel: &AIKernel, _args: &[String]) -> ApiResponse {

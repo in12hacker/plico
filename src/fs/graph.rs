@@ -42,7 +42,7 @@ pub enum KGNodeType {
     Agent,
     Memory,
     // ── Project Self-Management (Dogfooding Plico) ────────────────────────
-    /// An iteration/phase in the project lifecycle.
+/// An iteration/phase in the project lifecycle.
     Iteration,
     /// A plan item or milestone.
     Plan,
@@ -100,6 +100,13 @@ pub enum KGEdgeType {
     SuggestsAction,
     /// Action suggestion → event that triggered it.
     MotivatedBy,
+    // ── Project Self-Management edges ─────────────────────────────────
+    /// Project → Iteration (this iteration is part of the project).
+    HasIteration,
+    /// Iteration → Plan (plan item belongs to this iteration).
+    HasPlan,
+    /// Plan → DesignDoc (plan references this document).
+    References,
 }
 
 impl std::fmt::Display for KGEdgeType {
@@ -120,6 +127,9 @@ impl std::fmt::Display for KGEdgeType {
             KGEdgeType::SuggestsAction => write!(f, "suggests_action"),
             KGEdgeType::MotivatedBy => write!(f, "motivated_by"),
             KGEdgeType::HasPreference => write!(f, "has_preference"),
+            KGEdgeType::HasIteration => write!(f, "has_iteration"),
+            KGEdgeType::HasPlan => write!(f, "has_plan"),
+            KGEdgeType::References => write!(f, "references"),
         }
     }
 }
