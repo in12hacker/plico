@@ -183,3 +183,113 @@ fn test_tags_empty_filesystem() {
     assert!(output.status.success());
     assert_contains(&output, "No tags");
 }
+
+/// M3: Dogfood CRUD — full chain with non-default agent (plico-dev scenario)
+/// Tests: put → search → get → update → delete
+/// Corresponds to v0.6 Task A: non-default agent full CRUD automation
+#[test]
+fn test_dogfood_crud_chain_with_agent() {
+    let root = tempdir().unwrap();
+    let agent = "plico-dev";
+
+    // Step 1: CREATE (put with custom agent)
+    let put = run(root.path(), &[
+        "put",
+        "--content", "Dogfood milestone v0.5 notes",
+        "--tags", "plico,milestone,v0.5",
+        "--agent", agent,
+    ]);
+    assert!(put.status.success(), "put failed: {}", String::from_utf8_lossy(&put.stderr));
+    let cid = extract_cid(&put).expect("no CID in put output");
+    assert_eq!(cid.len(), 64);
+
+    // Step 2: SEARCH with tag filter + agent
+    let search = run(root.path(), &[
+        "search",
+        "--query", "milestone",
+        "--require-tags", "plico,v0.5",
+        "--agent", agent,
+    ]);
+    assert!(search.status.success(), "search failed: {}", String::from_utf8_lossy(&search.stderr));
+    let search_stdout = String::from_utf8_lossy(&search.stdout);
+    assert!(search_stdout.contains(&cid), "search should contain our CID");
+
+    // Step 3: READ with same agent (should succeed - owner matches)
+    let get = run(root.path(), &["get", &cid, "--agent", agent]);
+    assert!(get.status.success(), "get failed: {}", String::from_utf8_lossy(&get.stderr));
+    assert_contains(&get, "Dogfood milestone v0.5 notes");
+    assert_contains(&get, "plico");
+    assert_contains(&get, "v0.5");
+
+    // Step 4: UPDATE with same agent
+    let update = run(root.path(), &[
+        "update",
+        "--cid", &cid,
+        "--content", "Dogfood milestone v0.5 COMPLETED",
+        "--tags", "plico,milestone,v0.5,completed",
+        "--agent", agent,
+    ]);
+    assert!(update.status.success(), "update failed: {}", String::from_utf8_lossy(&update.stderr));
+    // Update returns new CID (CAS immutable semantics)
+    let update_stdout = String::from_utf8_lossy(&update.stdout);
+    assert!(update_stdout.contains("Updated"));
+
+    // Verify updated content via new CID (extract from "New CID: <hex>")
+    let new_cid = update_stdout
+        .lines()
+        .find(|l| l.starts_with("New CID:"))
+        .map(|l| l.trim_start_matches("New CID:").trim().to_string())
+        .unwrap_or(cid.clone());
+
+    let get_updated = run(root.path(), &["get", &new_cid, "--agent", agent]);
+    assert!(get_updated.status.success(), "get updated failed");
+    assert_contains(&get_updated, "COMPLETED");
+
+    // Step 5: DELETE without grant — expected to fail (permission denied)
+    // This is documented behavior: delete requires explicit grant
+    let delete = run(root.path(), &["delete", "--cid", &new_cid, "--agent", agent]);
+    let delete_stdout = String::from_utf8_lossy(&delete.stdout);
+    let delete_stderr = String::from_utf8_lossy(&delete.stderr);
+    let combined = format!("{}\n{}", delete_stdout, delete_stderr);
+    // Delete should fail with permission error
+    assert!(
+        combined.contains("permission") || combined.contains("Permission"),
+        "delete without grant should fail with permission error, got: {}",
+        combined
+    );
+}
+
+/// M3: Verify dogfood read bug fix — get with --agent flag works
+/// Historical bug: cmd_read hardcoded "cli" ignoring --agent parameter
+#[test]
+fn test_get_with_agent_flag_works() {
+    let root = tempdir().unwrap();
+    let agent = "dogfood-test";
+
+    // Create with custom agent
+    let put = run(root.path(), &[
+        "put",
+        "--content", "Agent-owned content",
+        "--tags", "test",
+        "--agent", agent,
+    ]);
+    let cid = extract_cid(&put).expect("no CID");
+
+    // Get WITHOUT agent flag — should fail (owner is not 'cli')
+    let get_default = run(root.path(), &["get", &cid]);
+    let default_stdout = String::from_utf8_lossy(&get_default.stdout);
+    let default_stderr = String::from_utf8_lossy(&get_default.stderr);
+    let default_combined = format!("{}\n{}", default_stdout, default_stderr);
+    // Should fail because 'cli' is not the owner
+    // Note: aicli exits 0 even on API error; check combined output for "cannot read"
+    assert!(
+        default_combined.contains("cannot read"),
+        "get without agent should fail for non-owned object, got: {}",
+        default_combined
+    );
+
+    // Get WITH correct agent flag — should succeed
+    let get_agent = run(root.path(), &["get", &cid, "--agent", agent]);
+    assert!(get_agent.status.success(), "get with correct agent should succeed");
+    assert_contains(&get_agent, "Agent-owned content");
+}

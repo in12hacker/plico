@@ -75,6 +75,9 @@ tests/               # Integration tests
 
 Cargo.toml           # Rust crate definition
 CLAUDE.md            # AI guidance (soul document reference)
+
+docs/                # Tier B — iteration-end human docs (not maintained per-commit)
+└── plans/           # Milestone plans (Git-visible); see docs/plans/INDEX.md
 ```
 
 ## Quick Navigation
@@ -94,6 +97,7 @@ CLAUDE.md            # AI guidance (soul document reference)
 | Temporal | `src/temporal/INDEX.md` | Time expression → Unix ms range resolution |
 | TCP daemon | `src/bin/plicod.rs` | JSON API server on port 7878 |
 | CLI tool | `src/bin/aicli.rs` | `put`, `get`, `search`, `agent` (incl. `set-resources`), `tool`, `intent` (NL resolve vs `--description`), `send` / `messages` / `ack`, `status`, `suspend`, `resume`, `terminate`, `node`, `edge`, etc. |
+| Milestone plans (Tier B) | `docs/plans/INDEX.md` | v0.5+ roadmap copies for Git; sync at iteration end |
 
 ## Build & Test
 
@@ -220,4 +224,5 @@ Cargo.lock       # Lock file
 .claude/         # Claude Code settings
 *.rlib           # Compiled Rust library files
 docs/design/     # Tier B design documents
+docs/plans/      # Tier B milestone plans (see docs/plans/INDEX.md)
 ```

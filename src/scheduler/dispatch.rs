@@ -317,13 +317,22 @@ async fn dispatch_loop(
                         scheduler.update_state(aid, AgentState::Running);
                     }
 
+                    // Get per-agent CPU time quota if set, otherwise use hardcoded limit.
+                    // cpu_time_quota=0 means unlimited (backward compatible default).
+                    let limit_ms = if let Some(ref aid) = intent.agent_id {
+                        scheduler.get(aid)
+                            .map(|a| a.resources().cpu_time_quota)
+                            .unwrap_or(cpu_time_limit_ms)
+                    } else {
+                        cpu_time_limit_ms
+                    };
+
                     // Run executor in a blocking thread so it doesn't block the tokio runtime.
                     // Wrap with timeout so a slow/hung intent can't hold the dispatch loop
-                    // indefinitely. cpu_time_limit_ms=0 means no limit.
+                    // indefinitely. limit_ms=0 means no limit.
                     let agent_id_exec = intent.agent_id.clone();
                     let executor_ref = Arc::clone(&executor);
                     let intent_ref = intent.clone();
-                    let limit_ms = cpu_time_limit_ms;
 
                     let output = async {
                         tokio::task::spawn_blocking(move || {
@@ -456,5 +465,158 @@ mod tests {
         dispatch.shutdown();
         let len = dispatch.queue_len().await;
         assert_eq!(len, 0);
+    }
+
+    #[tokio::test]
+    async fn test_kernel_executor_falls_back_without_action() {
+        // M1: When intent.action is None, KernelExecutor should acknowledge without error
+        let executor = KernelExecutor::new(|_| {
+            r#"{"ok":true}"#.to_string()
+        });
+
+        let intent = Intent::new(crate::scheduler::agent::IntentPriority::High, "descriptive intent".into());
+        let result = executor.execute(&intent, None, 5000);
+
+        assert!(result.is_ok());
+        assert!(result.unwrap().contains("acknowledged"));
+    }
+
+    #[test]
+    fn test_kernel_executor_valid_json_returns_response() {
+        // M1: Verify KernelExecutor correctly processes valid ApiRequest JSON
+        use crate::api::semantic::{ApiRequest, ApiResponse};
+
+        // Use a mock handler that echoes the request back as JSON
+        let executor = KernelExecutor::new(|action_json: &str| {
+            // Verify the JSON can be parsed as ApiRequest
+            let req: Result<ApiRequest, _> = serde_json::from_str(action_json);
+            match req {
+                Ok(_r) => {
+                    // Return a valid success response
+                    serde_json::to_string(&ApiResponse::ok()).unwrap_or_default()
+                }
+                Err(e) => {
+                    serde_json::to_string(&ApiResponse::error(format!("Invalid action JSON: {e}")))
+                        .unwrap_or_default()
+                }
+            }
+        });
+
+        // Valid ApiRequest JSON: create object (requires agent_id)
+        let action_json = r#"{"method":"create","content":"hello world","tags":["test"],"agent_id":"test-agent"}"#;
+        let intent = Intent::new(crate::scheduler::agent::IntentPriority::High, "test".into())
+            .with_action(action_json.to_string());
+
+        let result = executor.execute(&intent, None, 5000);
+        assert!(result.is_ok(), "execute should succeed");
+        let resp_text = result.unwrap();
+
+        // Response should be valid JSON containing ok=true
+        let resp: ApiResponse = serde_json::from_str(&resp_text)
+            .expect("response should be valid ApiResponse JSON");
+        assert!(resp.ok, "expected ok=true, got ok=false with error: {:?}", resp.error);
+    }
+
+    #[test]
+    fn test_kernel_executor_invalid_json_returns_error() {
+        // M1: Invalid JSON in intent.action returns error response
+        use crate::api::semantic::{ApiRequest, ApiResponse};
+
+        let executor = KernelExecutor::new(|action_json: &str| {
+            let req: Result<ApiRequest, _> = serde_json::from_str(action_json);
+            match req {
+                Ok(_r) => serde_json::to_string(&ApiResponse::ok()).unwrap_or_default(),
+                Err(e) => serde_json::to_string(&ApiResponse::error(format!("Invalid action JSON: {e}")))
+                    .unwrap_or_default(),
+            }
+        });
+
+        let intent = Intent::new(crate::scheduler::agent::IntentPriority::High, "test".into())
+            .with_action(r#"not valid json"#.to_string());
+
+        let result = executor.execute(&intent, None, 5000);
+        assert!(result.is_ok());
+        let resp_text = result.unwrap();
+
+        // Should contain the error message from our handler
+        assert!(resp_text.contains("Invalid action JSON"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_cpu_time_quota_enforced_on_dispatch() {
+        // M2: Agent with cpu_time_quota=50ms is killed after 50ms
+        use crate::scheduler::agent::{Agent, AgentResources, IntentPriority};
+
+        let scheduler = Arc::new(AgentScheduler::new());
+
+        // Create agent with 50ms CPU quota
+        let mut agent = Agent::new("quota-test-agent".to_string());
+        let agent_id = agent.id().clone();
+        {
+            let mut resources = AgentResources::default();
+            resources.cpu_time_quota = 50; // 50ms limit
+            agent.set_resources(resources);
+        }
+        scheduler.register(agent);
+
+        // Create executor that sleeps longer than quota
+        let executor: Arc<dyn AgentExecutor> = Arc::new(SlowExecutor(200)); // 200ms > 50ms quota
+        let loop_ = TokioDispatchLoop::new(Arc::clone(&scheduler), executor, 60_000); // hardcoded 60s
+        let dispatch = loop_.spawn();
+
+        // Submit intent from the quota-limited agent
+        let intent = Intent::new(IntentPriority::High, "slow task".to_string())
+            .with_agent(agent_id.clone());
+        scheduler.submit(intent);
+
+        // Wait for execution
+        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+
+        let results = dispatch.drain_results().await;
+        dispatch.shutdown();
+
+        // Result should show timeout/failure
+        assert!(!results.is_empty(), "should have a result");
+        let result = &results[0];
+        assert!(!result.success, "execution should have failed due to timeout");
+        assert!(result.output.contains("Timeout") || result.output.contains("timeout"),
+            "should mention timeout, got: {}", result.output);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_cpu_time_quota_zero_means_unlimited() {
+        // M2: Agent with cpu_time_quota=0 runs without timeout (backward compatible)
+        use crate::scheduler::agent::{Agent, AgentResources, IntentPriority};
+
+        let scheduler = Arc::new(AgentScheduler::new());
+
+        // Create agent with unlimited quota (0 = default)
+        let agent = Agent::new("unlimited-agent".to_string());
+        let agent_id = agent.id().clone();
+        // cpu_time_quota is 0 by default (unlimited)
+        scheduler.register(agent);
+
+        // Verify default is unlimited
+        let resources = scheduler.get(&agent_id).map(|a| a.resources().clone()).unwrap();
+        assert_eq!(resources.cpu_time_quota, 0, "default should be unlimited");
+
+        // Executor that would timeout if quota was enforced
+        let executor: Arc<dyn AgentExecutor> = Arc::new(SlowExecutor(100));
+        let loop_ = TokioDispatchLoop::new(Arc::clone(&scheduler), executor, 60_000);
+        let dispatch = loop_.spawn();
+
+        let intent = Intent::new(IntentPriority::High, "slow but allowed".to_string())
+            .with_agent(agent_id.clone());
+        scheduler.submit(intent);
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
+
+        let results = dispatch.drain_results().await;
+        dispatch.shutdown();
+
+        // With unlimited quota (0), slow executor should succeed
+        assert!(!results.is_empty(), "should have a result");
+        let result = &results[0];
+        assert!(result.success, "unlimited agent should succeed, got: {}", result.output);
     }
 }

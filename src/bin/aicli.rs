@@ -370,7 +370,8 @@ fn cmd_create(kernel: &AIKernel, args: &[String]) -> ApiResponse {
 
 fn cmd_read(kernel: &AIKernel, args: &[String]) -> ApiResponse {
     let cid = args.get(1).cloned().unwrap_or_default();
-    match kernel.get_object(&cid, "cli") {
+    let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
+    match kernel.get_object(&cid, &agent_id) {
         Ok(obj) => {
             println!("CID: {}", obj.cid);
             println!("Tags: {:?}", obj.meta.tags);
@@ -1018,6 +1019,7 @@ COMMANDS:
 
   get/read     Retrieve object by CID
     <CID>             Object CID to retrieve
+    --agent ID        Requesting agent (default: cli); must match ownership / grants for read
 
   search       Semantic search with optional tag/time filtering
     --query TEXT      Natural language query
