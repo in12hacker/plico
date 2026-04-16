@@ -470,6 +470,28 @@ impl AIKernel {
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
     }
 
+    /// Get all pending (unconfirmed/undismissed) suggestions across all events.
+    pub fn get_pending_suggestions(&self) -> Vec<crate::fs::ActionSuggestion> {
+        self.fs.get_pending_suggestions()
+    }
+
+    /// Get all suggestions for a specific event.
+    pub fn get_suggestions_for_event(&self, event_id: &str) -> Vec<crate::fs::ActionSuggestion> {
+        self.fs.get_suggestions_for_event(event_id)
+    }
+
+    /// Confirm a suggestion by ID.
+    pub fn confirm_suggestion(&self, suggestion_id: &str) -> std::io::Result<()> {
+        self.fs.confirm_suggestion(suggestion_id)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
+    }
+
+    /// Dismiss a suggestion by ID.
+    pub fn dismiss_suggestion(&self, suggestion_id: &str) -> std::io::Result<()> {
+        self.fs.dismiss_suggestion(suggestion_id)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
+    }
+
     /// Explore graph neighbors of a CID at a given depth.
     pub fn graph_explore(&self, cid: &str, edge_type: Option<crate::fs::KGEdgeType>, depth: u8) -> Vec<crate::fs::KGSearchHit> {
         let Some(ref kg) = self.knowledge_graph else {
@@ -621,7 +643,7 @@ impl AIKernel {
             kg_node_count,
             kg_edge_count,
             event_count: 0,
-            pending_suggestions: 0,
+            pending_suggestions: self.fs.pending_suggestion_count(),
             phases,
             modules,
             soul_alignment,
