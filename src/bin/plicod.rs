@@ -57,6 +57,11 @@ async fn main() {
     // Spawn the agent execution dispatch loop via kernel (no direct subsystem imports).
     let _dispatch = kernel.start_dispatch_loop();
 
+    // Spawn the suggestion notification poller (M15: alarm → notification pipeline).
+    // Polls every 60 seconds for pending suggestions and submits notification intents.
+    let poller_kernel = Arc::clone(&kernel);
+    let _poller = poller_kernel.start_suggestion_poller(std::time::Duration::from_secs(60));
+
     println!("Agent dispatch loop started.");
 
     let addr: SocketAddr = format!("0.0.0.0:{}", port).parse().unwrap();
@@ -292,6 +297,26 @@ fn handle_request(kernel: &AIKernel, req: ApiRequest) -> ApiResponse {
         ApiRequest::InferSuggestions { event_id } => {
             match kernel.infer_suggestions_for_event(&event_id) {
                 Ok(suggestions) => ApiResponse::with_suggestions(suggestions),
+                Err(e) => ApiResponse::error(e.to_string()),
+            }
+        }
+
+
+        ApiRequest::GetPendingSuggestions => {
+            let suggestions = kernel.get_pending_suggestions();
+            ApiResponse::with_suggestions(suggestions)
+        }
+
+        ApiRequest::ConfirmSuggestion { suggestion_id } => {
+            match kernel.confirm_suggestion(&suggestion_id) {
+                Ok(()) => ApiResponse::ok(),
+                Err(e) => ApiResponse::error(e.to_string()),
+            }
+        }
+
+        ApiRequest::DismissSuggestion { suggestion_id } => {
+            match kernel.dismiss_suggestion(&suggestion_id) {
+                Ok(()) => ApiResponse::ok(),
                 Err(e) => ApiResponse::error(e.to_string()),
             }
         }

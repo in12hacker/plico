@@ -207,6 +207,19 @@ pub enum ApiRequest {
         event_id: String,
     },
 
+    #[serde(rename = "get_pending_suggestions")]
+    GetPendingSuggestions,
+
+    #[serde(rename = "confirm_suggestion")]
+    ConfirmSuggestion {
+        suggestion_id: String,
+    },
+
+    #[serde(rename = "dismiss_suggestion")]
+    DismissSuggestion {
+        suggestion_id: String,
+    },
+
     // ── Project Self-Management ──────────────────────────────────────────────
     #[serde(rename = "project_status")]
     ProjectStatus { agent_id: String },

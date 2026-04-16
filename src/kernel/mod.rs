@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use crate::cas::{CASStorage, AIObject, AIObjectMeta};
 use crate::memory::{LayeredMemory, MemoryEntry, CASPersister, MemoryPersister};
-use crate::scheduler::{AgentScheduler, Agent, Intent, IntentPriority, AgentHandle};
+use crate::scheduler::{AgentScheduler, Agent, Intent, IntentPriority, AgentHandle, AgentId};
 use crate::scheduler::dispatch::{TokioDispatchLoop, LocalExecutor, AgentExecutor, DispatchHandle};
 use crate::fs::{SemanticFS, Query, OllamaBackend, InMemoryBackend, EmbeddingProvider, SemanticSearch, OllamaSummarizer, Summarizer, KnowledgeGraph, PetgraphBackend, LocalEmbeddingBackend, StubEmbeddingProvider, EmbedError, EventType, EventRelation, EventSummary};
 use crate::temporal::{TemporalResolver, RULE_BASED_RESOLVER};
@@ -341,6 +341,39 @@ impl AIKernel {
         let loop_ = TokioDispatchLoop::new(Arc::clone(&self.scheduler), executor, 60_000);
         let (_join, handle) = loop_.spawn();
         handle
+    }
+
+    /// Start the suggestion notification poller as a background tokio task.
+    ///
+    /// Periodically (every `interval`) queries `get_pending_suggestions()` and
+    /// submits notification intents to the scheduler for each suggestion's target
+    /// person. This drives the M15 alarm → notification pipeline.
+    ///
+    /// Returns a `tokio::task::JoinHandle<()>` — drop to stop polling.
+    pub fn start_suggestion_poller(self: &Arc<Self>, interval: tokio::time::Duration) -> tokio::task::JoinHandle<()> {
+        let kernel = Arc::clone(self);
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(interval);
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                ticker.tick().await;
+                let suggestions = kernel.fs.get_pending_suggestions();
+                for suggestion in suggestions {
+                    let description = format!(
+                        "[通知] 建议：{} (置信度 {:.0}%)",
+                        suggestion.action,
+                        suggestion.confidence * 100.0,
+                    );
+                    let intent = Intent::new(IntentPriority::Medium, description)
+                        .with_agent(AgentId(suggestion.target_person_id.clone()));
+                    kernel.scheduler.submit(intent);
+                    tracing::debug!(
+                        "Submitted suggestion notification for person {}: {}",
+                        suggestion.target_person_id, suggestion.action
+                    );
+                }
+            }
+        })
     }
 
     /// Explore graph neighbors of a CID, returning plain data (no fs types).
