@@ -1531,6 +1531,19 @@ impl SemanticFS {
         kg.add_node(node)
             .map_err(|e| FSError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
 
+        // M17: Auto-trigger Preference Inference when an attendee is attached.
+        // Per plico-multi-hop-reasoning.md §4.1: "Event 触发（最常见）"
+        // When a person is added as attendee, infer suggestions for the updated event.
+        if matches!(relation, EventRelation::Attendee) {
+            if let Ok(suggestions) = self.infer_suggestions_for_event(event_id) {
+                if !suggestions.is_empty() {
+                    let mut store = self.suggestion_store.write().unwrap();
+                    store.insert(event_id.to_string(), suggestions);
+                }
+            }
+            // Inference errors are best-effort — do not fail the attach operation.
+        }
+
         Ok(())
     }
 
@@ -2086,6 +2099,41 @@ mod tests {
 
         let events = fs.list_events(None, None, &[], None).unwrap();
         assert_eq!(events[0].related_count, 1);
+    }
+
+    #[test]
+    fn event_attach_auto_infers_suggestions_for_attendee() {
+        // M17: Attaching an attendee with known preferences auto-generates suggestions.
+        let dir = TempDir::new().unwrap();
+        let kg = Arc::new(PetgraphBackend::new());
+        let fs = SemanticFS::new(
+            dir.path().to_path_buf(),
+            Arc::new(StubEmbeddingProvider::new()),
+            Arc::new(InMemoryBackend::new()),
+            None,
+            Some(kg.clone()),
+        )
+        .unwrap();
+
+        // Add a UserFact for the person (preference)
+        fs.add_user_fact(UserFact {
+            id: "fact:1".to_string(),
+            subject_id: "person:wang".to_string(),
+            predicate: "prefers".to_string(),
+            object: "wine".to_string(),
+            context: "at_dinner".to_string(),
+            confidence: 0.85,
+            evidence_ids: vec![],
+            updated_at: 0,
+        });
+
+        // Create event and attach attendee — suggestions should auto-generate
+        let event_id = fs.create_event("商务晚餐", EventType::Meeting, None, None, None, vec![], "a").unwrap();
+        fs.event_attach(&event_id, "person:wang", EventRelation::Attendee, "a").unwrap();
+
+        // Verify suggestions were auto-generated and stored
+        let suggestions = fs.get_suggestions_for_event(&event_id);
+        assert!(!suggestions.is_empty(), "event_attach should auto-infer suggestions for attendee");
     }
 
     #[test]
