@@ -261,6 +261,119 @@ impl Clone for OllamaBackend {
     }
 }
 
+impl OllamaBackend {
+    /// Send a chat request to Ollama with JSON structured output mode.
+    ///
+    /// Uses Ollama's `format: json` option to get parseable JSON responses.
+    /// This enables structured entity extraction without SDK dependencies.
+    ///
+    /// Per research: Ollama JSON mode provides 90%+ parse success with clear prompts.
+    /// See: markaicode.com/ollama-structured-outputs-json-schema-validation/
+    ///
+    /// `model_override` — use a different model for chat (e.g. "llama3.2" for reasoning).
+    /// If None, uses the same model as embeddings.
+    pub async fn chat_async(
+        &self,
+        prompt: &str,
+        system: Option<&str>,
+        model_override: Option<&str>,
+    ) -> Result<String, EmbedError> {
+        #[derive(serde::Serialize)]
+        struct ChatRequest<'a> {
+            model: &'a str,
+            messages: Vec<ChatMessage<'a>>,
+            format: &'a str,
+            stream: bool,
+            options: serde_json::Value,
+        }
+
+        #[derive(serde::Serialize)]
+        struct ChatMessage<'a> {
+            role: &'a str,
+            content: &'a str,
+        }
+
+        #[derive(serde::Deserialize)]
+        struct ChatResponse {
+            message: ChatMessageOut,
+        }
+
+        #[derive(serde::Deserialize)]
+        struct ChatMessageOut {
+            content: String,
+        }
+
+        let model = model_override.unwrap_or(&self.model);
+
+        let mut messages = Vec::new();
+        if let Some(sys) = system {
+            messages.push(ChatMessage { role: "system", content: sys });
+        }
+        messages.push(ChatMessage { role: "user", content: prompt });
+
+        let req = ChatRequest {
+            model,
+            messages,
+            format: "json",
+            stream: false,
+            options: serde_json::json!({
+                "temperature": 0.1,  // Low temperature for deterministic extraction
+                "num_predict": 512  // Cap response length
+            }),
+        };
+
+        let resp = self
+            .client
+            .post(format!("{}/api/chat", self.url.trim_end_matches('/')))
+            .json(&req)
+            .send()
+            .await
+            .map_err(|e| {
+                if e.is_connect() {
+                    EmbedError::ServerUnavailable(self.url.clone())
+                } else {
+                    EmbedError::Http(e)
+                }
+            })?;
+
+        let status = resp.status();
+        let body_bytes = resp.bytes().await.map_err(EmbedError::Http)?;
+
+        if !status.is_success() {
+            return Err(EmbedError::Ollama(format!(
+                "chat API returned {}: {}",
+                status,
+                String::from_utf8_lossy(&body_bytes)
+            )));
+        }
+
+        let parsed: ChatResponse = serde_json::from_slice(&body_bytes)
+            .map_err(|e| EmbedError::Ollama(format!("failed to parse chat response: {e}")))?;
+
+        Ok(parsed.message.content)
+    }
+
+    /// Synchronous wrapper for `chat_async`.
+    ///
+    /// Uses `block_in_place` when inside a Tokio runtime (plicod),
+    /// and `block_on` otherwise (aicli).
+    pub fn chat(
+        &self,
+        prompt: &str,
+        system: Option<&str>,
+        model_override: Option<&str>,
+    ) -> Result<String, EmbedError> {
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => {
+                tokio::task::block_in_place(|| {
+                    handle.block_on(self.chat_async(prompt, system, model_override))
+                })
+            }
+            Err(_) => self.rt.block_on(self.chat_async(prompt, system, model_override)),
+        }
+    }
+}
+
 // ─── Local Embedding Backend (Python subprocess) ───────────────────────────────
 
 /// Local embedding backend via Python subprocess.

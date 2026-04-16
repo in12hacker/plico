@@ -549,6 +549,13 @@ pub struct SemanticFS {
     /// Per Hindsight (91.4%) vs Zep (63.8%) research: BM25 fills the gap where
     /// vector similarity fails on exact terms (SKU codes, names, error strings).
     bm25_index: Arc<Bm25Index>,
+    /// Persistent store of generated ActionSuggestions.
+    ///
+    /// Suggestions are created by `infer_suggestions_for_event()` and stored here
+    /// so they can be queried (pending), confirmed, or dismissed later.
+    ///
+    /// Key: event_id that triggered the suggestion. Value: list of suggestions.
+    suggestion_store: RwLock<HashMap<String, Vec<ActionSuggestion>>>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -645,6 +652,7 @@ impl SemanticFS {
             knowledge_graph,
             user_facts: RwLock::new(HashMap::new()),
             bm25_index: Arc::new(Bm25Index::new()),
+            suggestion_store: RwLock::new(HashMap::new()),
         };
 
         // Rebuild vector index from persisted CAS objects.
@@ -1645,7 +1653,70 @@ impl SemanticFS {
             all_suggestions.extend(suggestions);
         }
 
+        // Store generated suggestions for later query/confirm/dismiss
+        if !all_suggestions.is_empty() {
+            let mut store = self.suggestion_store.write().unwrap();
+            store.insert(event_id.to_string(), all_suggestions.clone());
+        }
+
         Ok(all_suggestions)
+    }
+
+    /// Get all pending (unconfirmed/undismissed) suggestions across all events.
+    ///
+    /// Used by the notification system to surface actionable suggestions to users.
+    ///
+    /// Per plico-multi-hop-reasoning.md §4.1: "4. Proactive（主动提议）"
+    pub fn get_pending_suggestions(&self) -> Vec<ActionSuggestion> {
+        let store = self.suggestion_store.read().unwrap();
+        store
+            .values()
+            .flatten()
+            .filter(|s| s.status == SuggestionStatus::Pending)
+            .filter(|s| !s.is_too_uncertain()) // filter out very uncertain ones
+            .cloned()
+            .collect()
+    }
+
+    /// Get all suggestions for a specific event.
+    pub fn get_suggestions_for_event(&self, event_id: &str) -> Vec<ActionSuggestion> {
+        let store = self.suggestion_store.read().unwrap();
+        store.get(event_id).cloned().unwrap_or_default()
+    }
+
+    /// Confirm a suggestion by ID, marking it as accepted by the user.
+    pub fn confirm_suggestion(&self, suggestion_id: &str) -> Result<(), FSError> {
+        let mut store = self.suggestion_store.write().unwrap();
+        for suggestions in store.values_mut() {
+            if let Some(sug) = suggestions.iter_mut().find(|s| s.id == suggestion_id) {
+                sug.confirm();
+                return Ok(());
+            }
+        }
+        Err(FSError::Io(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("suggestion {} not found", suggestion_id),
+        )))
+    }
+
+    /// Dismiss a suggestion by ID, marking it as rejected by the user.
+    pub fn dismiss_suggestion(&self, suggestion_id: &str) -> Result<(), FSError> {
+        let mut store = self.suggestion_store.write().unwrap();
+        for suggestions in store.values_mut() {
+            if let Some(sug) = suggestions.iter_mut().find(|s| s.id == suggestion_id) {
+                sug.dismiss();
+                return Ok(());
+            }
+        }
+        Err(FSError::Io(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("suggestion {} not found", suggestion_id),
+        )))
+    }
+
+    /// Count of pending suggestions (for dashboard status).
+    pub fn pending_suggestion_count(&self) -> usize {
+        self.get_pending_suggestions().len()
     }
 
     /// Detect preference conflicts among event attendees.
@@ -2838,5 +2909,127 @@ mod tests {
         // Check that compromise has lower confidence
         let compromise = suggestions.iter().find(|s| s.preference_object == "香槟").unwrap();
         assert_eq!(compromise.confidence, 0.5);
+    }
+
+    #[test]
+    fn test_suggestion_store_infer_and_query() {
+        let dir = TempDir::new().unwrap();
+        let kg = Arc::new(PetgraphBackend::new());
+        let fs = SemanticFS::new(
+            dir.path().to_path_buf(),
+            Arc::new(StubEmbeddingProvider::new()),
+            Arc::new(InMemoryBackend::new()),
+            None,
+            Some(kg.clone()),
+        )
+        .unwrap();
+
+        // Create event with attendee
+        let event_id = fs.create_event("商务晚餐", EventType::Meeting, None, None, None, vec![], "a").unwrap();
+        fs.event_attach(&event_id, "person:wang", EventRelation::Attendee, "a").unwrap();
+
+        // Add UserFact
+        let fact = UserFact {
+            id: "fact:1".to_string(),
+            subject_id: "person:wang".to_string(),
+            predicate: "prefers".to_string(),
+            object: "wine".to_string(),
+            context: "at_dinner".to_string(),
+            confidence: 0.85,
+            evidence_ids: vec!["obs:1".to_string(), "obs:2".to_string(), "obs:3".to_string()],
+            updated_at: 0,
+        };
+        fs.add_user_fact(fact);
+
+        // Infer suggestions (should store them)
+        let suggestions = fs.infer_suggestions_for_event(&event_id).unwrap();
+        assert_eq!(suggestions.len(), 1);
+        let sug_id = suggestions[0].id.clone();
+
+        // Query suggestions for this event
+        let event_sugs = fs.get_suggestions_for_event(&event_id);
+        assert_eq!(event_sugs.len(), 1);
+
+        // Query pending suggestions
+        let pending = fs.get_pending_suggestions();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].status, SuggestionStatus::Pending);
+
+        // Dismiss the suggestion
+        fs.dismiss_suggestion(&sug_id).unwrap();
+
+        // Pending should now be empty
+        let pending_after = fs.get_pending_suggestions();
+        assert!(pending_after.is_empty());
+    }
+
+    #[test]
+    fn test_suggestion_store_confirm() {
+        let dir = TempDir::new().unwrap();
+        let kg = Arc::new(PetgraphBackend::new());
+        let fs = SemanticFS::new(
+            dir.path().to_path_buf(),
+            Arc::new(StubEmbeddingProvider::new()),
+            Arc::new(InMemoryBackend::new()),
+            None,
+            Some(kg.clone()),
+        )
+        .unwrap();
+
+        let event_id = fs.create_event("晚餐", EventType::Meeting, None, None, None, vec![], "a").unwrap();
+        fs.event_attach(&event_id, "person:wang", EventRelation::Attendee, "a").unwrap();
+        let fact = UserFact {
+            id: "fact:x".to_string(),
+            subject_id: "person:wang".to_string(),
+            predicate: "prefers".to_string(),
+            object: "wine".to_string(),
+            context: "at_dinner".to_string(),
+            confidence: 0.9,
+            evidence_ids: vec![],
+            updated_at: 0,
+        };
+        fs.add_user_fact(fact);
+
+        let suggestions = fs.infer_suggestions_for_event(&event_id).unwrap();
+        assert_eq!(suggestions.len(), 1);
+        let sug_id = suggestions[0].id.clone();
+
+        fs.confirm_suggestion(&sug_id).unwrap();
+
+        let after = fs.get_pending_suggestions();
+        assert!(after.is_empty()); // confirmed = no longer pending
+    }
+
+    #[test]
+    fn test_pending_suggestion_count() {
+        let dir = TempDir::new().unwrap();
+        let kg = Arc::new(PetgraphBackend::new());
+        let fs = SemanticFS::new(
+            dir.path().to_path_buf(),
+            Arc::new(StubEmbeddingProvider::new()),
+            Arc::new(InMemoryBackend::new()),
+            None,
+            Some(kg.clone()),
+        )
+        .unwrap();
+
+        assert_eq!(fs.pending_suggestion_count(), 0);
+
+        let event_id = fs.create_event("晚餐", EventType::Meeting, None, None, None, vec![], "a").unwrap();
+        fs.event_attach(&event_id, "person:wang", EventRelation::Attendee, "a").unwrap();
+        let fact = UserFact {
+            id: "fact:y".to_string(),
+            subject_id: "person:wang".to_string(),
+            predicate: "prefers".to_string(),
+            object: "wine".to_string(),
+            context: "at_dinner".to_string(),
+            confidence: 0.85,
+            evidence_ids: vec!["obs:1".to_string(), "obs:2".to_string(), "obs:3".to_string()],
+            updated_at: 0,
+        };
+        fs.add_user_fact(fact);
+        fs.infer_suggestions_for_event(&event_id).unwrap();
+
+        assert_eq!(fs.pending_suggestion_count(), 1);
     }
 }
