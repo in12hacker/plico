@@ -1494,12 +1494,14 @@ impl SemanticFS {
         let kg = self.knowledge_graph.as_ref()
             .ok_or_else(|| FSError::Io(std::io::Error::new(std::io::ErrorKind::Other, "knowledge graph not initialized")))?;
 
-        // Add the KG edge with temporal validity
-        let edge = KGEdge::new(
+        // Add the KG edge with episode provenance.
+        // The event_id is the episode that produced this edge — enables provenance queries.
+        let edge = KGEdge::new_with_episode(
             event_id.to_string(),
             target_id.to_string(),
             relation.edge_type(),
             1.0,
+            event_id,
         );
         kg.add_edge(edge)
             .map_err(|e| FSError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
