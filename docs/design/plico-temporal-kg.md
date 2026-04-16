@@ -406,3 +406,37 @@ fn invalidate_conflicts(&self, new_edge: &KGEdge) -> Result<usize, KGError>;
 - `BehavioralObservation.id` 自然作为 episode 引用（未来 `create_event` 调用时会传入）
 
 **测试**: 194 tests passed ✅ (新增1个graph测试)
+
+### 2026-04-16: 第九轮迭代完成 — ActionSuggestion 持久化存储 (iter14)
+
+**目标**: 为 Phase D M15（通知集成）打下基础。Suggestions 生成后需要持久化存储才能被查询/确认/拒绝。
+
+**背景**:
+- Phase D 的 `infer_suggestions_for_event()` 每次调用都生成新的 suggestions 但不存储
+- 通知系统无法查询待处理的 suggestions
+- `dashboard_status.pending_suggestions` 始终为 0
+
+**修改**:
+
+`src/fs/semantic_fs.rs`:
+- `SemanticFS` 新增 `suggestion_store: RwLock<HashMap<String, Vec<ActionSuggestion>>>` 字段
+- `infer_suggestions_for_event()`: 生成后将 suggestions 存入 store（按 event_id 作为 key）
+- `get_pending_suggestions()`: 返回所有 Pending 且非 "too uncertain" 的 suggestions
+- `get_suggestions_for_event(event_id)`: 获取特定事件的 suggestions
+- `confirm_suggestion(id)` / `dismiss_suggestion(id)`: 更新 lifecycle 状态
+- `pending_suggestion_count()`: 用于 dashboard 状态计数
+
+`src/kernel/mod.rs`:
+- AIKernel 转发上述新方法
+- `dashboard_status.pending_suggestions`: 改为调用 `fs.pending_suggestion_count()`
+
+**设计说明**:
+- Suggestions 按 event_id 存储（而非全局 UUID），因为每个 suggestion 都与触发事件强关联
+- `get_pending_suggestions()` 过滤 `is_too_uncertain()` 的建议（confidence < 0.4），避免噪音通知
+- 状态机: Pending → Confirmed / Dismissed，不可逆
+
+**测试**: 197 tests passed ✅ (新增3个 suggestion store 测试)
+
+**下一步**: 
+- 添加 API endpoints: `GetPendingSuggestions`, `ConfirmSuggestion`, `DismissSuggestion`
+- 集成 Scheduler: alarm 触发时查询 pending suggestions 并推送通知
