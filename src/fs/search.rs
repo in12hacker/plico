@@ -393,3 +393,79 @@ mod tests {
         assert!(results[0].meta.tags.contains(&"new".to_string()));
     }
 }
+
+// ─── BM25 Keyword Search Backend ─────────────────────────────────────────────
+
+/// BM25 keyword search index using the `bm25` crate.
+///
+/// Complements vector semantic search with exact-term matching (BM25).
+/// This enables precise keyword lookups (SKU codes, names, error strings)
+/// that semantic similarity cannot reliably retrieve.
+///
+/// Per Hindsight (91.4%) vs Zep (63.8%) research: BM25 is a key ingredient
+/// that vector-only retrieval misses.
+pub struct Bm25Index {
+    engine: std::sync::RwLock<bm25::SearchEngine<String>>,
+}
+
+impl Bm25Index {
+    /// Create a new Bm25Index with default average document length (100 tokens).
+    ///
+    /// avgdl=100 is a reasonable default for short snippets (first 200 chars).
+    /// The BM25 scorer adjusts automatically as documents are added.
+    pub fn new() -> Self {
+        Self {
+            engine: std::sync::RwLock::new(
+                bm25::SearchEngineBuilder::<String>::with_avgdl(100.0).build(),
+            ),
+        }
+    }
+
+    /// Upsert a document: index `text` under `cid`.
+    ///
+    /// If the CID already exists, its content is replaced.
+    /// Empty text is skipped (BM25 can't index nothing).
+    pub fn upsert(&self, cid: &str, text: &str) {
+        if text.trim().is_empty() {
+            return;
+        }
+        let doc = bm25::Document::new(cid.to_string(), text);
+        self.engine.write().unwrap().upsert(doc);
+    }
+
+    /// Remove a document from the BM25 index.
+    pub fn remove(&self, cid: &str) {
+        self.engine.write().unwrap().remove(&cid.to_string());
+    }
+
+    /// Search the index for `query`, returning up to `limit` CIDs with BM25 scores.
+    ///
+    /// Returns `Vec<(cid, bm25_score)>` sorted by score descending.
+    /// Returns empty vec if no matches found.
+    pub fn search(&self, query: &str, limit: usize) -> Vec<(String, f32)> {
+        if query.trim().is_empty() {
+            return Vec::new();
+        }
+        let results = self.engine.read().unwrap().search(query, Some(limit));
+        results
+            .into_iter()
+            .map(|r| (r.document.id, r.score))
+            .collect()
+    }
+
+    /// Total number of documents in the index.
+    pub fn len(&self) -> usize {
+        self.engine.read().unwrap().iter().count()
+    }
+
+    /// Check if the index is empty.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+impl Default for Bm25Index {
+    fn default() -> Self {
+        Self::new()
+    }
+}

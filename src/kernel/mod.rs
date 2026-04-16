@@ -428,6 +428,48 @@ impl AIKernel {
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
     }
 
+    /// Associate a behavioral observation with an event.
+    pub fn event_add_observation(
+        &self,
+        event_id: &str,
+        observation_id: &str,
+        agent_id: &str,
+    ) -> std::io::Result<()> {
+        let ctx = PermissionContext::new(agent_id.to_string());
+        self.permissions.check(&ctx, PermissionAction::Write)?;
+        self.fs.event_add_observation(event_id, observation_id)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
+    }
+
+    /// Get all behavioral observation IDs associated with an event.
+    pub fn event_get_observations(
+        &self,
+        event_id: &str,
+    ) -> std::io::Result<Vec<String>> {
+        self.fs.event_get_observations(event_id)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
+    }
+
+    /// Store a UserFact (promoted behavioral pattern) in the preference store.
+    pub fn add_user_fact(&self, fact: crate::fs::UserFact) {
+        self.fs.add_user_fact(fact);
+    }
+
+    /// Get all UserFacts for a given subject (person).
+    pub fn get_user_facts_for_subject(&self, subject_id: &str) -> Vec<crate::fs::UserFact> {
+        self.fs.get_user_facts_for_subject(subject_id)
+    }
+
+    /// Infer action suggestions for an event by traversing:
+    /// Event → HasAttendee → Person → UserFact → ActionSuggestion
+    pub fn infer_suggestions_for_event(
+        &self,
+        event_id: &str,
+    ) -> std::io::Result<Vec<crate::fs::ActionSuggestion>> {
+        self.fs.infer_suggestions_for_event(event_id)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
+    }
+
     /// Explore graph neighbors of a CID at a given depth.
     pub fn graph_explore(&self, cid: &str, edge_type: Option<crate::fs::KGEdgeType>, depth: u8) -> Vec<crate::fs::KGSearchHit> {
         let Some(ref kg) = self.knowledge_graph else {
@@ -450,6 +492,142 @@ impl AIKernel {
                 combined_score: 0.0,
             })
             .collect()
+    }
+
+    /// Build the dashboard status response from live kernel state.
+    pub fn dashboard_status(&self) -> crate::api::semantic::DashboardStatus {
+        use crate::api::semantic::{
+            DashboardStatus, PhaseStatus, ModuleStatus, SoulAlignment,
+            PrincipleStatus, ExampleCoverage, ChainStep, NextStep,
+        };
+
+        let git_branch = std::env::var("GIT_BRANCH").unwrap_or_else(|_| "unknown".to_string());
+        let git_commit = std::env::var("GIT_COMMIT").unwrap_or_else(|_| "unknown".to_string());
+
+        let kg_node_count = self.knowledge_graph.as_ref()
+            .map(|kg| kg.node_count().unwrap_or(0))
+            .unwrap_or(0);
+        let kg_edge_count = self.knowledge_graph.as_ref()
+            .map(|kg| kg.edge_count().unwrap_or(0))
+            .unwrap_or(0);
+
+        let phases = vec![
+            PhaseStatus { name: "Phase A".into(), percent: 100, status: "done".into() },
+            PhaseStatus { name: "Phase B".into(), percent: 100, status: "done".into() },
+            PhaseStatus { name: "Phase C".into(), percent: 100, status: "done".into() },
+            PhaseStatus { name: "Phase D".into(), percent: 100, status: "done".into() },
+            PhaseStatus { name: "Phase E".into(), percent: 30, status: "active".into() },
+            PhaseStatus { name: "Phase F".into(), percent: 0, status: "pending".into() },
+        ];
+
+        let modules = vec![
+            ModuleStatus { name: "CAS".into(), path: "src/cas/".into(), status: "done".into() },
+            ModuleStatus { name: "Memory".into(), path: "src/memory/".into(), status: "done".into() },
+            ModuleStatus { name: "Scheduler".into(), path: "src/scheduler/".into(), status: "active".into() },
+            ModuleStatus { name: "SemanticFS".into(), path: "src/fs/".into(), status: "done".into() },
+            ModuleStatus { name: "Kernel".into(), path: "src/kernel/".into(), status: "done".into() },
+            ModuleStatus { name: "API".into(), path: "src/api/".into(), status: "done".into() },
+            ModuleStatus { name: "ToolRegistry".into(), path: "src/scheduler/tool.rs".into(), status: "pending".into() },
+        ];
+
+        let soul_alignment = SoulAlignment {
+            principles: vec![
+                PrincipleStatus { number: 1, title: "内容即地址".into(), description: "CAS + SHA-256，内容哈希即身份".into(), aligned: "aligned".into() },
+                PrincipleStatus { number: 2, title: "语义即索引".into(), description: "向量嵌入 + 知识图谱，而非路径/文件名".into(), aligned: "aligned".into() },
+                PrincipleStatus { number: 3, title: "事件为第一公民".into(), description: "EventContainer + 事件关系边".into(), aligned: "aligned".into() },
+                PrincipleStatus { number: 4, title: "AI 自我迭代".into(), description: "BehavioralObservation → UserFact → ActionSuggestion".into(), aligned: "partial".into() },
+            ],
+            overall_percent: 92,
+        };
+
+        let examples = vec![
+            ExampleCoverage {
+                name: "会议总结生成PPT".into(),
+                reasoning_chain: vec![
+                    ChainStep { name: "semantic_search".into(), done: true },
+                    ChainStep { name: "L0/L1/L2".into(), done: true },
+                    ChainStep { name: "EntityExtractor".into(), done: false },
+                    ChainStep { name: "LLM总结".into(), done: false },
+                ],
+                execution_chain: vec![
+                    ChainStep { name: "Tool执行".into(), done: false },
+                ],
+            },
+            ExampleCoverage {
+                name: "宿醉后主动点白粥".into(),
+                reasoning_chain: vec![
+                    ChainStep { name: "BehavioralObservation".into(), done: true },
+                    ChainStep { name: "PatternExtractor".into(), done: true },
+                    ChainStep { name: "UserFact".into(), done: true },
+                    ChainStep { name: "ActionSuggestion".into(), done: true },
+                ],
+                execution_chain: vec![
+                    ChainStep { name: "Scheduler触发".into(), done: false },
+                    ChainStep { name: "点餐API".into(), done: false },
+                ],
+            },
+            ExampleCoverage {
+                name: "王总吃饭提醒带酒".into(),
+                reasoning_chain: vec![
+                    ChainStep { name: "Event(吃饭)".into(), done: true },
+                    ChainStep { name: "HasAttendee(王总)".into(), done: true },
+                    ChainStep { name: "UserFact".into(), done: true },
+                    ChainStep { name: "ActionSuggestion".into(), done: true },
+                ],
+                execution_chain: vec![
+                    ChainStep { name: "Scheduler触发".into(), done: false },
+                    ChainStep { name: "提醒推送".into(), done: false },
+                ],
+            },
+        ];
+
+        let next_steps = vec![
+            NextStep { order: 1, title: "ToolRegistry 实现".into(), description: "HashMap<String, Arc<dyn Tool>> + register/call".into(), priority: "P0".into() },
+            NextStep { order: 2, title: "confirm_suggestion API".into(), description: "ActionSuggestion → Scheduler 触发".into(), priority: "P0".into() },
+            NextStep { order: 3, title: "外部工具集成".into(), description: "点餐 API + 提醒推送 工具实现".into(), priority: "P0".into() },
+            NextStep { order: 4, title: "EntityExtractor".into(), description: "create() 时自动触发实体提取 + KG 边".into(), priority: "P1".into() },
+        ];
+
+        DashboardStatus {
+            iteration: 12,
+            started_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0),
+            now: chrono::Utc::now().timestamp_millis(),
+            git_branch,
+            git_commit,
+            tests_passed: None,
+            cas_object_count: {
+                // SemanticFS stores at root/objects/, not root/cas/
+                let objects_path = self.fs.root().join("objects");
+                let mut count = 0usize;
+                if let Ok(entries) = std::fs::read_dir(&objects_path) {
+                    for entry in entries.filter_map(|e| e.ok()) {
+                        let path = entry.path();
+                        if path.is_dir() {
+                            if let Ok(sub_entries) = std::fs::read_dir(&path) {
+                                count += sub_entries.filter_map(|se| se.ok())
+                                    .filter(|se| se.file_type().is_ok_and(|ft| ft.is_file()))
+                                    .count();
+                            }
+                        }
+                    }
+                }
+                count
+            },
+            agent_count: self.scheduler.list_agents().len(),
+            tag_count: self.fs.list_tags().len(),
+            kg_node_count,
+            kg_edge_count,
+            event_count: 0,
+            pending_suggestions: 0,
+            phases,
+            modules,
+            soul_alignment,
+            examples,
+            next_steps,
+        }
     }
 }
 

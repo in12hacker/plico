@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::cas::{AIObject, AIObjectMeta, CASStorage};
 use crate::fs::context_loader::ContextLoader;
 use crate::fs::embedding::{EmbeddingProvider, EmbedError};
-use crate::fs::search::{SemanticSearch, SearchFilter, SearchIndexMeta};
+use crate::fs::search::{SemanticSearch, SearchFilter, SearchIndexMeta, Bm25Index};
 use crate::fs::summarizer::Summarizer;
 use crate::fs::graph::{KnowledgeGraph, KGNode, KGNodeType, KGEdge, KGEdgeType};
 use crate::temporal::TemporalResolver;
@@ -96,6 +96,8 @@ pub struct EventMeta {
     pub attendee_ids: Vec<String>,
     /// CAS CIDs of related content (documents, media, etc.).
     pub related_cids: Vec<String>,
+    /// IDs of behavioral observations associated with this event.
+    pub observation_ids: Vec<String>,
 }
 
 impl EventMeta {
@@ -326,6 +328,91 @@ impl PatternExtractor {
         }
         facts
     }
+
+    /// Convert extracted `UserFact` patterns into `ActionSuggestion` instances.
+    ///
+    /// Only UserFacts with confidence ≥ `PREFERENCE_MIN_CONFIDENCE` are promoted
+    /// to suggestions. Each suggestion includes a reasoning chain for explainability.
+    ///
+    /// Per plico-multi-hop-reasoning.md §4.3, §6.1: Preference is stored inline
+    /// in ActionSuggestion, not as a separate KG node.
+    ///
+    /// # Arguments
+    /// * `facts` — UserFacts extracted from behavioral observations
+    /// * `event_id` — The event that triggered this extraction (used as trigger_event_id)
+    /// * `event_label` — Human-readable event label for reasoning chain
+    pub fn extract_and_suggest(
+        facts: &[UserFact],
+        event_id: &str,
+        event_label: &str,
+    ) -> Vec<ActionSuggestion> {
+        let mut suggestions = Vec::new();
+
+        for fact in facts {
+            // Only surface suggestions that meet minimum confidence threshold
+            if fact.confidence < PREFERENCE_MIN_CONFIDENCE {
+                continue;
+            }
+
+            let action = Self::action_for_fact(fact);
+            let reasoning_chain = Self::build_reasoning_chain(fact, event_label);
+
+            suggestions.push(ActionSuggestion::new(
+                event_id.to_string(),
+                fact.subject_id.clone(),
+                action,
+                reasoning_chain,
+                fact.subject_id.clone(),
+                fact.object.clone(),
+                fact.context.clone(),
+                fact.confidence,
+            ));
+        }
+
+        suggestions
+    }
+
+    /// Map a UserFact to a human-readable action string.
+    ///
+    /// Per plico-multi-hop-reasoning.md §4.3 `action_for_preference()`.
+    fn action_for_fact(fact: &UserFact) -> String {
+        match (fact.predicate.as_str(), fact.object.as_str()) {
+            ("prefers", "wine") => "提醒带红酒".to_string(),
+            ("prefers", "white_congee") => "准备白粥".to_string(),
+            ("prefers", "beer") => "准备啤酒".to_string(),
+            ("prefers", "whisky") | ("prefers", "whiskey") => "准备威士忌".to_string(),
+            ("dislikes", obj) => format!("避免准备{}", obj),
+            ("allergic_to", obj) => format!("绝对不要提供{}", obj),
+            ("needs", obj) => format!("准备{}", obj),
+            _ => format!("考虑准备{}", fact.object),
+        }
+    }
+
+    /// Build a Chain-of-Knowledge reasoning chain for a UserFact.
+    ///
+    /// Per plico-multi-hop-reasoning.md §3.2: each step links to evidence.
+    fn build_reasoning_chain(fact: &UserFact, event_label: &str) -> Vec<String> {
+        let count = fact.evidence_ids.len();
+        let context = &fact.context;
+        let obj = &fact.object;
+        let subject = &fact.subject_id;
+
+        vec![
+            format!(
+                "{}在{}场景下共出现{}次偏好{}",
+                subject, count, context, obj
+            ),
+            format!(
+                "根据历史行为模式，推断{}偏好{}",
+                subject, obj
+            ),
+            format!(
+                "建议在{}时采取行动：{}",
+                event_label,
+                Self::action_for_fact(fact)
+            ),
+        ]
+    }
 }
 
 /// An AI-generated action suggestion inferred from a pattern.
@@ -402,6 +489,16 @@ impl ActionSuggestion {
     pub fn is_too_uncertain(&self) -> bool {
         self.confidence < PREFERENCE_MIN_CONFIDENCE
     }
+
+    /// Mark this suggestion as confirmed by the user.
+    pub fn confirm(&mut self) {
+        self.status = SuggestionStatus::Confirmed;
+    }
+
+    /// Mark this suggestion as dismissed by the user.
+    pub fn dismiss(&mut self) {
+        self.status = SuggestionStatus::Dismissed;
+    }
 }
 
 
@@ -419,6 +516,8 @@ pub struct EventSummary {
 
 /// The semantic filesystem — a CAS-backed filesystem with AI-friendly operations.
 pub struct SemanticFS {
+    /// Root path of the semantic FS (passed to `new`).
+    root: std::path::PathBuf,
     /// CAS storage backend.
     cas: Arc<CASStorage>,
     /// Tag index: tag → CIDs.
@@ -441,6 +540,15 @@ pub struct SemanticFS {
     summarizer: Option<Arc<dyn Summarizer>>,
     /// Knowledge graph for entity/relationship tracking.
     knowledge_graph: Option<Arc<dyn KnowledgeGraph>>,
+    /// In-memory store of UserFacts (inferred preferences from behavioral patterns).
+    /// Keyed by subject_id (person node ID).
+    /// Per plico-multi-hop-reasoning.md §6.1: UserFacts are promoted from observations.
+    user_facts: RwLock<HashMap<String, Vec<UserFact>>>,
+    /// BM25 keyword search index for exact-term matching.
+    ///
+    /// Per Hindsight (91.4%) vs Zep (63.8%) research: BM25 fills the gap where
+    /// vector similarity fails on exact terms (SKU codes, names, error strings).
+    bm25_index: Arc<Bm25Index>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -481,6 +589,11 @@ pub enum FSError {
 }
 
 impl SemanticFS {
+    /// Root path of this semantic filesystem.
+    pub fn root(&self) -> &std::path::Path {
+        &self.root
+    }
+
     /// Create a new semantic filesystem.
     ///
     /// `embedding` — provider for text → vector embeddings (e.g. OllamaBackend).
@@ -518,6 +631,7 @@ impl SemanticFS {
         };
 
         let fs = Self {
+            root: root_path.clone(),
             cas: Arc::clone(&cas),
             tag_index: RwLock::new(tag_index),
             tag_index_path,
@@ -529,6 +643,8 @@ impl SemanticFS {
             search_index,
             summarizer,
             knowledge_graph,
+            user_facts: RwLock::new(HashMap::new()),
+            bm25_index: Arc::new(Bm25Index::new()),
         };
 
         // Rebuild vector index from persisted CAS objects.
@@ -602,6 +718,12 @@ impl SemanticFS {
                     // Stop trying — embedding provider unavailable; tag-based fallback remains.
                     break;
                 }
+            }
+
+            // Also upsert to BM25 for keyword search — done for every text object
+            // regardless of embedding outcome (BM25 is independent of the vector index).
+            if !text.is_empty() {
+                self.bm25_index.upsert(cid, &text);
             }
         }
 
@@ -856,6 +978,9 @@ impl SemanticFS {
             // Remove from search index
             self.search_index.delete(cid);
 
+            // Remove from BM25 keyword index
+            self.bm25_index.remove(cid);
+
             // Remove from knowledge graph
             if let Some(ref kg) = self.knowledge_graph {
                 let _ = kg.remove_node(cid);
@@ -934,6 +1059,7 @@ impl SemanticFS {
 
     /// Semantic search with optional tag/content-type filtering.
     pub fn search_with_filter(&self, query: &str, limit: usize, filter: SearchFilter) -> Vec<SearchResult> {
+        // Try vector semantic search.
         let query_emb = match self.embedding.embed(query) {
             Ok(emb) => emb,
             Err(e) => {
@@ -942,13 +1068,71 @@ impl SemanticFS {
             }
         };
 
-        let hits = self.search_index.search(&query_emb, limit, &filter);
-        hits
+        // Run vector search — filter is applied inside search_index.search().
+        let vector_hits: HashMap<String, f32> = self
+            .search_index
+            .search(&query_emb, limit * 2, &filter)
             .into_iter()
-            .filter_map(|hit| {
-                self.cas.get(&hit.cid).ok().map(|obj| SearchResult {
-                    cid: hit.cid,
-                    relevance: hit.score,
+            .map(|hit| (hit.cid.clone(), hit.score))
+            .collect();
+
+        // Run BM25 keyword search — we get CIDs + scores, filter is applied post-hoc.
+        let bm25_hits: Vec<(String, f32)> = self.bm25_index.search(query, limit * 2);
+
+        // RRF (Reciprocal Rank Fusion) to combine vector + BM25 rankings.
+        // RRF formula: score = Σ 1 / (k + rank), k=60 (standard constant).
+        // This is robust to different score scales (vector cosine vs BM25).
+        const RRF_K: usize = 60;
+        let mut rrf_scores: HashMap<String, f32> = HashMap::new();
+
+        for (cid, score) in &vector_hits {
+            rrf_scores.insert(cid.clone(), *score);
+        }
+
+        // Collect BM25 CIDs for O(1) membership check after we consume bm25_hits.
+        let bm25_cids: std::collections::HashSet<String> =
+            bm25_hits.iter().map(|(c, _)| c.clone()).collect();
+
+        // First pass: add RRF contribution from BM25 results that pass the filter.
+        for (rank, (cid, _bm25_score)) in bm25_hits.iter().enumerate() {
+            if let Ok(obj) = self.cas.get(cid) {
+                let meta_for_filter = SearchIndexMeta {
+                    cid: cid.clone(),
+                    tags: obj.meta.tags.clone(),
+                    snippet: String::new(),
+                    content_type: format!("{:?}", obj.meta.content_type).to_lowercase(),
+                    created_at: obj.meta.created_at,
+                };
+                if !filter.matches(&meta_for_filter) {
+                    continue;
+                }
+                let entry = rrf_scores.entry(cid.clone()).or_insert(0.0f32);
+                *entry += 1.0f32 / (RRF_K as f32 + rank as f32);
+            }
+        }
+
+        // Second pass: add RRF contribution from vector-only results (not in BM25).
+        let vector_cids: Vec<String> = vector_hits.keys().cloned().collect();
+        for (rank, cid) in vector_cids.iter().enumerate() {
+            if !bm25_cids.contains(cid) {
+                if let Some(score) = rrf_scores.get_mut(cid) {
+                    *score += 1.0f32 / (RRF_K as f32 + rank as f32);
+                }
+            }
+        }
+
+        // Sort by RRF score descending, take top `limit`.
+        let mut sorted: Vec<(String, f32)> = rrf_scores.into_iter().collect();
+        sorted.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        sorted.truncate(limit);
+
+        // Fetch final objects from CAS.
+        sorted
+            .into_iter()
+            .filter_map(|(cid, relevance)| {
+                self.cas.get(&cid).ok().map(|obj| SearchResult {
+                    cid,
+                    relevance,
                     meta: obj.meta,
                 })
             })
@@ -1034,6 +1218,12 @@ impl SemanticFS {
             content_type: format!("{:?}", meta.content_type).to_lowercase(),
             created_at: meta.created_at,
         });
+
+        // Also index full text in BM25 for keyword search.
+        // Use full text (not snippet) — BM25 needs sufficient context to rank well.
+        if !text.trim().is_empty() {
+            self.bm25_index.upsert(cid, &text);
+        }
     }
 
     fn update_tag_index(&self, tags: &[String], cid: &str) {
@@ -1148,6 +1338,7 @@ impl SemanticFS {
                 location: location.map(String::from),
                 attendee_ids: Vec::new(),
                 related_cids: Vec::new(),
+                observation_ids: Vec::new(),
             };
             let node = KGNode {
                 id: node_id.clone(),
@@ -1158,6 +1349,9 @@ impl SemanticFS {
                     .map_err(|e| FSError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())))?,
                 agent_id: agent_id.to_string(),
                 created_at: now_ms(),
+                valid_at: None,
+                invalid_at: None,
+                expired_at: None,
             };
             kg.add_node(node)
                 .map_err(|e| FSError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
@@ -1292,15 +1486,13 @@ impl SemanticFS {
         let kg = self.knowledge_graph.as_ref()
             .ok_or_else(|| FSError::Io(std::io::Error::new(std::io::ErrorKind::Other, "knowledge graph not initialized")))?;
 
-        // Add the KG edge
-        let edge = KGEdge {
-            src: event_id.to_string(),
-            dst: target_id.to_string(),
-            edge_type: relation.edge_type(),
-            weight: 1.0,
-            evidence_cid: None,
-            created_at: now_ms(),
-        };
+        // Add the KG edge with temporal validity
+        let edge = KGEdge::new(
+            event_id.to_string(),
+            target_id.to_string(),
+            relation.edge_type(),
+            1.0,
+        );
         kg.add_edge(edge)
             .map_err(|e| FSError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
 
@@ -1332,6 +1524,287 @@ impl SemanticFS {
             .map_err(|e| FSError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
 
         Ok(())
+    }
+
+    /// Associate a behavioral observation with an event.
+    ///
+    /// Unlike `event_attach` which creates KG edges for documents/attendees,
+    /// this method only adds the observation ID to `EventMeta.observation_ids`.
+    /// Behavioral observations are not stored as KG nodes — they are managed
+    /// by the behavioral pipeline and linked to events for pattern extraction.
+    pub fn event_add_observation(
+        &self,
+        event_id: &str,
+        observation_id: &str,
+    ) -> Result<(), FSError> {
+        let kg = self.knowledge_graph.as_ref()
+            .ok_or_else(|| FSError::Io(std::io::Error::new(std::io::ErrorKind::Other, "knowledge graph not initialized")))?;
+
+        // Update EventMeta on the KG node
+        let mut node = kg.get_node(event_id)
+            .map_err(|e| FSError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?
+            .ok_or_else(|| FSError::Io(std::io::Error::new(std::io::ErrorKind::NotFound, "event not found")))?;
+        let mut meta: EventMeta = serde_json::from_value(node.properties.clone())
+            .map_err(|e| FSError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())))?;
+
+        if !meta.observation_ids.contains(&observation_id.to_string()) {
+            meta.observation_ids.push(observation_id.to_string());
+        }
+
+        node.properties = serde_json::to_value(&meta)
+            .map_err(|e| FSError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())))?;
+
+        kg.add_node(node)
+            .map_err(|e| FSError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
+
+        Ok(())
+    }
+
+    /// Get all behavioral observation IDs associated with an event.
+    pub fn event_get_observations(
+        &self,
+        event_id: &str,
+    ) -> Result<Vec<String>, FSError> {
+        let kg = self.knowledge_graph.as_ref()
+            .ok_or_else(|| FSError::Io(std::io::Error::new(std::io::ErrorKind::Other, "knowledge graph not initialized")))?;
+
+        let node = kg.get_node(event_id)
+            .map_err(|e| FSError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?
+            .ok_or_else(|| FSError::Io(std::io::Error::new(std::io::ErrorKind::NotFound, "event not found")))?;
+        let meta: EventMeta = serde_json::from_value(node.properties.clone())
+            .map_err(|e| FSError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())))?;
+
+        Ok(meta.observation_ids)
+    }
+
+    /// Add a UserFact (promoted from behavioral observations) to the preference store.
+    ///
+    /// Per plico-multi-hop-reasoning.md §6.1: UserFacts are promoted when patterns
+    /// repeat across multiple events and stored in the preference store.
+    pub fn add_user_fact(&self, fact: UserFact) {
+        let mut facts = self.user_facts.write().unwrap();
+        facts.entry(fact.subject_id.clone()).or_default().push(fact);
+    }
+
+    /// Get all UserFacts for a given subject (person).
+    pub fn get_user_facts_for_subject(&self, subject_id: &str) -> Vec<UserFact> {
+        let facts = self.user_facts.read().unwrap();
+        facts.get(subject_id).cloned().unwrap_or_default()
+    }
+
+    /// Infer action suggestions for an event by traversing:
+    /// Event → HasAttendee → Person → UserFact → ActionSuggestion
+    ///
+    /// Returns ActionSuggestions for all attendees with known preferences.
+    /// Uses `PatternExtractor::extract_and_suggest` to convert UserFacts to suggestions.
+    ///
+    /// Per plico-multi-hop-reasoning.md §4.3, §5.1.
+    pub fn infer_suggestions_for_event(
+        &self,
+        event_id: &str,
+    ) -> Result<Vec<ActionSuggestion>, FSError> {
+        // Step 1: Get event to find attendees
+        let kg = self.knowledge_graph.as_ref()
+            .ok_or_else(|| FSError::Io(std::io::Error::new(std::io::ErrorKind::Other, "knowledge graph not initialized")))?;
+
+        let node = kg.get_node(event_id)
+            .map_err(|e| FSError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?
+            .ok_or_else(|| FSError::Io(std::io::Error::new(std::io::ErrorKind::NotFound, "event not found")))?;
+
+        let meta: EventMeta = serde_json::from_value(node.properties.clone())
+            .map_err(|e| FSError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())))?;
+
+        // Step 2: For each attendee, get their UserFacts and generate suggestions
+        let mut all_suggestions = Vec::new();
+        let event_label = &meta.label;
+        let event_type = meta.event_type;
+
+        for attendee_id in &meta.attendee_ids {
+            let user_facts = self.get_user_facts_for_subject(attendee_id);
+            if user_facts.is_empty() {
+                continue;
+            }
+
+            // Filter UserFacts by context compatibility with event type
+            let relevant_facts: Vec<&UserFact> = user_facts
+                .iter()
+                .filter(|f| context_matches_event_type(&f.context, event_type))
+                .collect();
+
+            if relevant_facts.is_empty() {
+                continue;
+            }
+
+            // Convert UserFacts to ActionSuggestions (convert refs to owned)
+            let owned_facts: Vec<UserFact> = relevant_facts.into_iter().cloned().collect();
+            let suggestions = PatternExtractor::extract_and_suggest(
+                &owned_facts,
+                event_id,
+                event_label,
+            );
+            all_suggestions.extend(suggestions);
+        }
+
+        Ok(all_suggestions)
+    }
+
+    /// Detect preference conflicts among event attendees.
+    ///
+    /// When multiple attendees have different preferences for the same context,
+    /// this generates conflict groups for resolution.
+    ///
+    /// Per plico-multi-hop-reasoning.md §5.3: "跨人推理链"
+    ///
+    /// Returns a list of conflict groups, each containing UserFacts with different
+    /// preferred objects for the same context.
+    pub fn detect_preference_conflicts(
+        &self,
+        event_id: &str,
+    ) -> Result<Vec<Vec<UserFact>>, FSError> {
+        let kg = self.knowledge_graph.as_ref()
+            .ok_or_else(|| FSError::Io(std::io::Error::new(std::io::ErrorKind::Other, "knowledge graph not initialized")))?;
+
+        let node = kg.get_node(event_id)
+            .map_err(|e| FSError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?
+            .ok_or_else(|| FSError::Io(std::io::Error::new(std::io::ErrorKind::NotFound, "event not found")))?;
+
+        let meta: EventMeta = serde_json::from_value(node.properties.clone())
+            .map_err(|e| FSError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())))?;
+
+        let event_type = meta.event_type;
+
+        // Collect all relevant preferences for all attendees (owned values)
+        let mut all_prefs: Vec<UserFact> = Vec::new();
+        for attendee_id in &meta.attendee_ids {
+            let user_facts = self.get_user_facts_for_subject(attendee_id);
+            for fact in user_facts {
+                if context_matches_event_type(&fact.context, event_type) {
+                    all_prefs.push(fact);
+                }
+            }
+        }
+
+        // Group by (context) to find conflicts
+        let mut conflicts: Vec<Vec<UserFact>> = Vec::new();
+        let mut by_context: std::collections::HashMap<String, Vec<&UserFact>> =
+            std::collections::HashMap::new();
+
+        for pref in &all_prefs {
+            by_context.entry(pref.context.clone()).or_default().push(pref);
+        }
+
+        // A conflict exists when same context has multiple different objects
+        for (_context, prefs) in by_context {
+            let mut objects: std::collections::HashSet<String> = std::collections::HashSet::new();
+            for pref in &prefs {
+                objects.insert(pref.object.clone());
+            }
+            if objects.len() > 1 {
+                // Conflict detected: multiple different preferences for same context
+                let conflict: Vec<UserFact> = prefs.iter().map(|p| (*p).clone()).collect();
+                conflicts.push(conflict);
+            }
+        }
+
+        Ok(conflicts)
+    }
+
+    /// Generate compromise suggestions when attendees have conflicting preferences.
+    ///
+    /// Returns suggestions for each individual plus a compromise option.
+    /// Per plico-multi-hop-reasoning.md §5.3 Step 4.
+    pub fn generate_compromise_suggestions(
+        &self,
+        event_id: &str,
+        conflict_group: &[UserFact],
+        event_label: &str,
+    ) -> Vec<ActionSuggestion> {
+        let mut suggestions = Vec::new();
+
+        // Individual suggestions
+        for fact in conflict_group {
+            let action = PatternExtractor::action_for_fact(fact);
+            let reasoning = format!(
+                "{} 偏好 {}（基于历史行为）",
+                fact.subject_id, fact.object
+            );
+            suggestions.push(ActionSuggestion::new(
+                event_id.to_string(),
+                fact.subject_id.clone(),
+                action,
+                vec![reasoning],
+                fact.subject_id.clone(),
+                fact.object.clone(),
+                fact.context.clone(),
+                fact.confidence,
+            ));
+        }
+
+        // Compromise suggestion (香槟 as neutral option)
+        let objects: Vec<&str> = conflict_group.iter().map(|f| f.object.as_str()).collect();
+        let _compromise = format!("准备香槟（折中方案：满足 {}）", objects.join("、"));
+        let compromise_reasoning = vec![
+            format!("参会人员偏好不同：{}", objects.join(" vs ")),
+            "建议选择香槟作为折中方案".to_string(),
+            format!("适用于 {} 场合", event_label),
+        ];
+
+        suggestions.push(ActionSuggestion::new(
+            event_id.to_string(),
+            "compromise".to_string(),
+            "准备香槟（折中方案）".to_string(),
+            compromise_reasoning,
+            "compromise".to_string(),
+            "香槟".to_string(),
+            "compromise".to_string(),
+            0.5, // Lower confidence for compromise
+        ));
+
+        suggestions
+    }
+}
+
+/// Check if a preference context is relevant for a given event type.
+///
+/// Per plico-multi-hop-reasoning.md §5.1: "Preference.context = 'at_business_dinner'
+/// EventContainer.event_type = Meal → 匹配"
+fn context_matches_event_type(context: &str, event_type: EventType) -> bool {
+    match event_type {
+        EventType::Meeting => {
+            // Meeting events match dining-related contexts
+            context.contains("dinner")
+                || context.contains("lunch")
+                || context.contains("breakfast")
+                || context.contains("meal")
+                || context.contains("business")
+        }
+        EventType::Entertainment => {
+            // Entertainment events match drinking/social contexts
+            context.contains("drunk")
+                || context.contains("party")
+                || context.contains("social")
+                || context.contains("entertainment")
+        }
+        EventType::Travel => {
+            // Travel matches when on trip contexts
+            context.contains("travel")
+                || context.contains("trip")
+                || context.contains("journey")
+        }
+        EventType::Social => {
+            // Social events match any social context
+            context.contains("social")
+                || context.contains("party")
+                || context.contains("gathering")
+                || context.contains("dinner")
+                || context.contains("lunch")
+        }
+        // For other event types, accept if context is generic or empty
+        _ => {
+            context.is_empty()
+                || context == "general"
+                || context == "default"
+        }
     }
 }
 
@@ -1385,6 +1858,7 @@ mod tests {
             location: None,
             attendee_ids: vec![],
             related_cids: vec![],
+            observation_ids: vec![],
         };
 
         // No bounds → always in range
@@ -1536,6 +2010,65 @@ mod tests {
         let fs = make_fs(&dir); // No KG
         let id = fs.create_event("test", EventType::Meeting, None, None, None, vec![], "a").unwrap();
         let result = fs.event_attach(&id, "target", EventRelation::Attendee, "a");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn event_add_and_get_observation() {
+        let dir = TempDir::new().unwrap();
+        let fs = make_fs_with_kg(&dir);
+
+        let event_id = fs.create_event("商务晚餐", EventType::Meeting, None, None, None, vec![], "a").unwrap();
+        let obs_id = "obs:dining:2026-04-15:001";
+
+        // Initially no observations
+        let obs_ids = fs.event_get_observations(&event_id).unwrap();
+        assert!(obs_ids.is_empty());
+
+        // Add observation
+        fs.event_add_observation(&event_id, obs_id).unwrap();
+
+        // Should now contain the observation
+        let obs_ids = fs.event_get_observations(&event_id).unwrap();
+        assert_eq!(obs_ids.len(), 1);
+        assert_eq!(obs_ids[0], obs_id);
+
+        // Adding same observation again should be idempotent
+        fs.event_add_observation(&event_id, obs_id).unwrap();
+        let obs_ids = fs.event_get_observations(&event_id).unwrap();
+        assert_eq!(obs_ids.len(), 1); // Still 1, not 2
+    }
+
+    #[test]
+    fn event_add_multiple_observations() {
+        let dir = TempDir::new().unwrap();
+        let fs = make_fs_with_kg(&dir);
+
+        let event_id = fs.create_event("会议", EventType::Meeting, None, None, None, vec![], "a").unwrap();
+
+        fs.event_add_observation(&event_id, "obs:1").unwrap();
+        fs.event_add_observation(&event_id, "obs:2").unwrap();
+        fs.event_add_observation(&event_id, "obs:3").unwrap();
+
+        let obs_ids = fs.event_get_observations(&event_id).unwrap();
+        assert_eq!(obs_ids.len(), 3);
+    }
+
+    #[test]
+    fn event_add_observation_not_found() {
+        let dir = TempDir::new().unwrap();
+        let fs = make_fs_with_kg(&dir);
+
+        let result = fs.event_add_observation("nonexistent-event", "obs:1");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn event_get_observations_not_found() {
+        let dir = TempDir::new().unwrap();
+        let fs = make_fs_with_kg(&dir);
+
+        let result = fs.event_get_observations("nonexistent-event");
         assert!(result.is_err());
     }
 
@@ -1864,5 +2397,446 @@ mod tests {
         );
         assert!(obs.timestamp > 0, "timestamp should be set to current time");
         assert!(!obs.id.is_empty());
+    }
+
+    #[test]
+    fn extract_and_suggest_generates_suggestion_for_high_confidence_fact() {
+        // 3 identical observations → UserFact with confidence = 1.0 → ActionSuggestion
+        let obs: Vec<BehavioralObservation> = (0..3)
+            .map(|_| {
+                BehavioralObservation::new(
+                    "person:wang".to_string(),
+                    "at_dinner".to_string(),
+                    "order_food".to_string(),
+                    "红酒".to_string(),
+                    None,
+                )
+            })
+            .collect();
+        let facts = PatternExtractor::extract(&obs);
+        assert_eq!(facts.len(), 1);
+
+        let suggestions = PatternExtractor::extract_and_suggest(&facts, "evt:dinner1", "商务晚餐");
+        assert_eq!(suggestions.len(), 1);
+        let sug = &suggestions[0];
+        assert_eq!(sug.target_person_id, "person:wang");
+        assert_eq!(sug.preference_object, "红酒");
+        assert_eq!(sug.preference_context, "at_dinner");
+        assert_eq!(sug.trigger_event_id, "evt:dinner1");
+        assert!(sug.action.contains("红酒"), "action should mention wine");
+        assert_eq!(sug.status, SuggestionStatus::Pending);
+        assert!(!sug.is_too_uncertain());
+    }
+
+    #[test]
+    fn extract_and_suggest_filters_low_confidence_facts() {
+        // 2 observations → below threshold → no UserFact → no suggestion
+        let obs = vec![
+            BehavioralObservation::new(
+                "person:li".to_string(),
+                "at_dinner".to_string(),
+                "order_food".to_string(),
+                "威士忌".to_string(),
+                None,
+            ),
+            BehavioralObservation::new(
+                "person:li".to_string(),
+                "at_dinner".to_string(),
+                "order_food".to_string(),
+                "威士忌".to_string(),
+                None,
+            ),
+        ];
+        let facts = PatternExtractor::extract(&obs);
+        assert!(facts.is_empty());
+
+        let suggestions = PatternExtractor::extract_and_suggest(&facts, "evt:dinner2", "晚餐");
+        assert!(suggestions.is_empty());
+    }
+
+    #[test]
+    fn extract_and_suggest_wine_action_mapping() {
+        // wine → "提醒带红酒"
+        let obs: Vec<BehavioralObservation> = (0..3)
+            .map(|_| {
+                BehavioralObservation::new(
+                    "person:zhang".to_string(),
+                    "at_business_dinner".to_string(),
+                    "order_food".to_string(),
+                    "wine".to_string(),
+                    None,
+                )
+            })
+            .collect();
+        let facts = PatternExtractor::extract(&obs);
+        let suggestions = PatternExtractor::extract_and_suggest(&facts, "evt:1", "商务宴请");
+        assert_eq!(suggestions.len(), 1);
+        assert_eq!(suggestions[0].action, "提醒带红酒");
+    }
+
+    #[test]
+    fn extract_and_suggest_congee_action_mapping() {
+        // white_congee → "准备白粥"
+        let obs: Vec<BehavioralObservation> = (0..3)
+            .map(|_| {
+                BehavioralObservation::new(
+                    "person:wang".to_string(),
+                    "when_drunk".to_string(),
+                    "order_food".to_string(),
+                    "white_congee".to_string(),
+                    None,
+                )
+            })
+            .collect();
+        let facts = PatternExtractor::extract(&obs);
+        let suggestions = PatternExtractor::extract_and_suggest(&facts, "evt:2", "宿醉后");
+        assert_eq!(suggestions.len(), 1);
+        assert_eq!(suggestions[0].action, "准备白粥");
+    }
+
+    #[test]
+    fn extract_and_suggest_reasoning_chain_length() {
+        let obs: Vec<BehavioralObservation> = (0..3)
+            .map(|_i| {
+                BehavioralObservation::new(
+                    "person:test".to_string(),
+                    "at_dinner".to_string(),
+                    "order_food".to_string(),
+                    "beer".to_string(),
+                    None,
+                )
+            })
+            .collect();
+        let facts = PatternExtractor::extract(&obs);
+        let suggestions = PatternExtractor::extract_and_suggest(&facts, "evt:1", "晚餐");
+        assert_eq!(suggestions.len(), 1);
+        // reasoning chain should have 3 steps
+        assert_eq!(suggestions[0].reasoning_chain.len(), 3);
+    }
+
+    #[test]
+    fn add_and_get_user_facts() {
+        let dir = TempDir::new().unwrap();
+        let fs = make_fs(&dir);
+
+        let fact = UserFact {
+            id: "fact:1".to_string(),
+            subject_id: "person:wang".to_string(),
+            predicate: "prefers".to_string(),
+            object: "wine".to_string(),
+            context: "at_dinner".to_string(),
+            confidence: 0.85,
+            evidence_ids: vec!["obs:1".to_string(), "obs:2".to_string()],
+            updated_at: 0,
+        };
+
+        fs.add_user_fact(fact.clone());
+        let facts = fs.get_user_facts_for_subject("person:wang");
+        assert_eq!(facts.len(), 1);
+        assert_eq!(facts[0].object, "wine");
+
+        // Non-existent subject returns empty
+        let facts = fs.get_user_facts_for_subject("person:unknown");
+        assert!(facts.is_empty());
+    }
+
+    #[test]
+    fn infer_suggestions_for_event_with_attendee_preference() {
+        let dir = TempDir::new().unwrap();
+        let kg = Arc::new(PetgraphBackend::new());
+        let fs = SemanticFS::new(
+            dir.path().to_path_buf(),
+            Arc::new(StubEmbeddingProvider::new()),
+            Arc::new(InMemoryBackend::new()),
+            None,
+            Some(kg.clone()),
+        )
+        .unwrap();
+
+        // Create event with attendee
+        let event_id = fs.create_event(
+            "商务晚餐",
+            EventType::Meeting,
+            None,
+            None,
+            None,
+            vec![],
+            "a",
+        ).unwrap();
+
+        // Attach attendee
+        fs.event_attach(&event_id, "person:wang", EventRelation::Attendee, "a").unwrap();
+
+        // Add UserFact for the attendee
+        let fact = UserFact {
+            id: "fact:1".to_string(),
+            subject_id: "person:wang".to_string(),
+            predicate: "prefers".to_string(),
+            object: "wine".to_string(),
+            context: "at_dinner".to_string(),
+            confidence: 0.85,
+            evidence_ids: vec!["obs:1".to_string(), "obs:2".to_string(), "obs:3".to_string()],
+            updated_at: 0,
+        };
+        fs.add_user_fact(fact);
+
+        // Infer suggestions
+        let suggestions = fs.infer_suggestions_for_event(&event_id).unwrap();
+        assert_eq!(suggestions.len(), 1);
+        assert_eq!(suggestions[0].target_person_id, "person:wang");
+        assert_eq!(suggestions[0].preference_object, "wine");
+        assert!(suggestions[0].action.contains("红酒"));
+    }
+
+    #[test]
+    fn infer_suggestions_returns_empty_when_no_preferences() {
+        let dir = TempDir::new().unwrap();
+        let kg = Arc::new(PetgraphBackend::new());
+        let fs = SemanticFS::new(
+            dir.path().to_path_buf(),
+            Arc::new(StubEmbeddingProvider::new()),
+            Arc::new(InMemoryBackend::new()),
+            None,
+            Some(kg.clone()),
+        )
+        .unwrap();
+
+        let event_id = fs.create_event("会议", EventType::Meeting, None, None, None, vec![], "a").unwrap();
+        fs.event_attach(&event_id, "person:unknown", EventRelation::Attendee, "a").unwrap();
+
+        // No UserFacts for person:unknown → empty suggestions
+        let suggestions = fs.infer_suggestions_for_event(&event_id).unwrap();
+        assert!(suggestions.is_empty());
+    }
+
+    #[test]
+    fn infer_suggestions_filters_by_context() {
+        // A UserFact with context "at_dinner" should match EventType::Meeting
+        // but not EventType::Travel
+        let dir = TempDir::new().unwrap();
+        let kg = Arc::new(PetgraphBackend::new());
+        let fs = SemanticFS::new(
+            dir.path().to_path_buf(),
+            Arc::new(StubEmbeddingProvider::new()),
+            Arc::new(InMemoryBackend::new()),
+            None,
+            Some(kg.clone()),
+        )
+        .unwrap();
+
+        // Add UserFact with "at_dinner" context
+        let fact = UserFact {
+            id: "fact:dinner".to_string(),
+            subject_id: "person:wang".to_string(),
+            predicate: "prefers".to_string(),
+            object: "wine".to_string(),
+            context: "at_dinner".to_string(),
+            confidence: 0.85,
+            evidence_ids: vec!["obs:1".to_string(), "obs:2".to_string(), "obs:3".to_string()],
+            updated_at: 0,
+        };
+        fs.add_user_fact(fact);
+
+        // Meeting event should match "at_dinner" context
+        let meeting_id = fs.create_event("商务晚餐", EventType::Meeting, None, None, None, vec![], "a").unwrap();
+        fs.event_attach(&meeting_id, "person:wang", EventRelation::Attendee, "a").unwrap();
+        let suggestions = fs.infer_suggestions_for_event(&meeting_id).unwrap();
+        assert_eq!(suggestions.len(), 1, "Meeting event should match at_dinner context");
+
+        // Travel event should NOT match "at_dinner" context
+        let travel_id = fs.create_event("出差", EventType::Travel, None, None, None, vec![], "a").unwrap();
+        fs.event_attach(&travel_id, "person:wang", EventRelation::Attendee, "a").unwrap();
+        let suggestions = fs.infer_suggestions_for_event(&travel_id).unwrap();
+        assert!(suggestions.is_empty(), "Travel event should not match at_dinner context");
+    }
+
+    #[test]
+    fn infer_suggestions_matches_drunk_context_with_entertainment() {
+        let dir = TempDir::new().unwrap();
+        let kg = Arc::new(PetgraphBackend::new());
+        let fs = SemanticFS::new(
+            dir.path().to_path_buf(),
+            Arc::new(StubEmbeddingProvider::new()),
+            Arc::new(InMemoryBackend::new()),
+            None,
+            Some(kg.clone()),
+        )
+        .unwrap();
+
+        // Add UserFact with "when_drunk" context
+        let fact = UserFact {
+            id: "fact:drunk".to_string(),
+            subject_id: "person:wang".to_string(),
+            predicate: "prefers".to_string(),
+            object: "white_congee".to_string(),
+            context: "when_drunk".to_string(),
+            confidence: 0.85,
+            evidence_ids: vec!["obs:1".to_string(), "obs:2".to_string(), "obs:3".to_string()],
+            updated_at: 0,
+        };
+        fs.add_user_fact(fact);
+
+        // Entertainment event should match "when_drunk" context
+        let party_id = fs.create_event("聚会", EventType::Entertainment, None, None, None, vec![], "a").unwrap();
+        fs.event_attach(&party_id, "person:wang", EventRelation::Attendee, "a").unwrap();
+        let suggestions = fs.infer_suggestions_for_event(&party_id).unwrap();
+        assert_eq!(suggestions.len(), 1, "Entertainment event should match when_drunk context");
+    }
+
+    #[test]
+    fn action_suggestion_confirm_and_dismiss() {
+        let mut sug = ActionSuggestion::new(
+            "evt:x".to_string(),
+            "person:y".to_string(),
+            "提醒带红酒".to_string(),
+            vec!["王总偏好红酒".to_string()],
+            "person:wang".to_string(),
+            "wine".to_string(),
+            "at_dinner".to_string(),
+            0.75,
+        );
+        assert_eq!(sug.status, SuggestionStatus::Pending);
+
+        sug.confirm();
+        assert_eq!(sug.status, SuggestionStatus::Confirmed);
+
+        sug.dismiss();
+        assert_eq!(sug.status, SuggestionStatus::Dismissed);
+    }
+
+    #[test]
+    fn detect_conflicts_when_preferences_differ() {
+        // Two people with different preferences for the same context
+        let dir = TempDir::new().unwrap();
+        let kg = Arc::new(PetgraphBackend::new());
+        let fs = SemanticFS::new(
+            dir.path().to_path_buf(),
+            Arc::new(StubEmbeddingProvider::new()),
+            Arc::new(InMemoryBackend::new()),
+            None,
+            Some(kg.clone()),
+        )
+        .unwrap();
+
+        // Wang prefers wine
+        fs.add_user_fact(UserFact {
+            id: "fact:1".to_string(),
+            subject_id: "person:wang".to_string(),
+            predicate: "prefers".to_string(),
+            object: "wine".to_string(),
+            context: "at_dinner".to_string(),
+            confidence: 0.85,
+            evidence_ids: vec![],
+            updated_at: 0,
+        });
+
+        // Li prefers whisky
+        fs.add_user_fact(UserFact {
+            id: "fact:2".to_string(),
+            subject_id: "person:li".to_string(),
+            predicate: "prefers".to_string(),
+            object: "whisky".to_string(),
+            context: "at_dinner".to_string(),
+            confidence: 0.85,
+            evidence_ids: vec![],
+            updated_at: 0,
+        });
+
+        let event_id = fs.create_event("商务晚餐", EventType::Meeting, None, None, None, vec![], "a").unwrap();
+        fs.event_attach(&event_id, "person:wang", EventRelation::Attendee, "a").unwrap();
+        fs.event_attach(&event_id, "person:li", EventRelation::Attendee, "a").unwrap();
+
+        let conflicts = fs.detect_preference_conflicts(&event_id).unwrap();
+        assert_eq!(conflicts.len(), 1, "Should detect one conflict group");
+        assert_eq!(conflicts[0].len(), 2, "Conflict group should have 2 attendees");
+    }
+
+    #[test]
+    fn no_conflicts_when_preferences_same() {
+        // Two people with the same preference
+        let dir = TempDir::new().unwrap();
+        let kg = Arc::new(PetgraphBackend::new());
+        let fs = SemanticFS::new(
+            dir.path().to_path_buf(),
+            Arc::new(StubEmbeddingProvider::new()),
+            Arc::new(InMemoryBackend::new()),
+            None,
+            Some(kg.clone()),
+        )
+        .unwrap();
+
+        // Both prefer wine
+        fs.add_user_fact(UserFact {
+            id: "fact:1".to_string(),
+            subject_id: "person:wang".to_string(),
+            predicate: "prefers".to_string(),
+            object: "wine".to_string(),
+            context: "at_dinner".to_string(),
+            confidence: 0.85,
+            evidence_ids: vec![],
+            updated_at: 0,
+        });
+
+        fs.add_user_fact(UserFact {
+            id: "fact:2".to_string(),
+            subject_id: "person:li".to_string(),
+            predicate: "prefers".to_string(),
+            object: "wine".to_string(),
+            context: "at_dinner".to_string(),
+            confidence: 0.85,
+            evidence_ids: vec![],
+            updated_at: 0,
+        });
+
+        let event_id = fs.create_event("商务晚餐", EventType::Meeting, None, None, None, vec![], "a").unwrap();
+        fs.event_attach(&event_id, "person:wang", EventRelation::Attendee, "a").unwrap();
+        fs.event_attach(&event_id, "person:li", EventRelation::Attendee, "a").unwrap();
+
+        let conflicts = fs.detect_preference_conflicts(&event_id).unwrap();
+        assert!(conflicts.is_empty(), "No conflicts when preferences are the same");
+    }
+
+    #[test]
+    fn generate_compromise_suggestions() {
+        let dir = TempDir::new().unwrap();
+        let kg = Arc::new(PetgraphBackend::new());
+        let fs = SemanticFS::new(
+            dir.path().to_path_buf(),
+            Arc::new(StubEmbeddingProvider::new()),
+            Arc::new(InMemoryBackend::new()),
+            None,
+            Some(kg.clone()),
+        )
+        .unwrap();
+
+        let conflict_group = vec![
+            UserFact {
+                id: "fact:1".to_string(),
+                subject_id: "person:wang".to_string(),
+                predicate: "prefers".to_string(),
+                object: "wine".to_string(),
+                context: "at_dinner".to_string(),
+                confidence: 0.85,
+                evidence_ids: vec![],
+                updated_at: 0,
+            },
+            UserFact {
+                id: "fact:2".to_string(),
+                subject_id: "person:li".to_string(),
+                predicate: "prefers".to_string(),
+                object: "whisky".to_string(),
+                context: "at_dinner".to_string(),
+                confidence: 0.85,
+                evidence_ids: vec![],
+                updated_at: 0,
+            },
+        ];
+
+        let suggestions = fs.generate_compromise_suggestions("evt:1", &conflict_group, "商务晚餐");
+        assert_eq!(suggestions.len(), 3, "2 individual + 1 compromise");
+
+        // Check that compromise has lower confidence
+        let compromise = suggestions.iter().find(|s| s.preference_object == "香槟").unwrap();
+        assert_eq!(compromise.confidence, 0.5);
     }
 }

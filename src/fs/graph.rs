@@ -41,6 +41,13 @@ pub enum KGNodeType {
     Document,
     Agent,
     Memory,
+    // ── Project Self-Management (Dogfooding Plico) ────────────────────────
+    /// An iteration/phase in the project lifecycle.
+    Iteration,
+    /// A plan item or milestone.
+    Plan,
+    /// A design document or specification.
+    DesignDoc,
 }
 
 impl std::fmt::Display for KGNodeType {
@@ -51,6 +58,9 @@ impl std::fmt::Display for KGNodeType {
             KGNodeType::Document => write!(f, "document"),
             KGNodeType::Agent => write!(f, "agent"),
             KGNodeType::Memory => write!(f, "memory"),
+            KGNodeType::Iteration => write!(f, "iteration"),
+            KGNodeType::Plan => write!(f, "plan"),
+            KGNodeType::DesignDoc => write!(f, "design_doc"),
         }
     }
 }
@@ -84,6 +94,8 @@ pub enum KGEdgeType {
     /// Event → ActionItem (decision, task, or resolution from the event).
     HasDecision,
     // ── Reasoning / Action Suggestion edges ───────────────────────────────
+    /// Person → UserFact (inferred preference from behavioral patterns).
+    HasPreference,
     /// Preference node → suggested action (cross-event inference).
     SuggestsAction,
     /// Action suggestion → event that triggered it.
@@ -107,11 +119,24 @@ impl std::fmt::Display for KGEdgeType {
             KGEdgeType::HasDecision => write!(f, "has_decision"),
             KGEdgeType::SuggestsAction => write!(f, "suggests_action"),
             KGEdgeType::MotivatedBy => write!(f, "motivated_by"),
+            KGEdgeType::HasPreference => write!(f, "has_preference"),
         }
     }
 }
 
 /// A node in the knowledge graph.
+///
+/// # Temporal Validity (Bi-temporal Model)
+///
+/// Per Graphiti's bi-temporal model:
+/// - `created_at`: when this node was first ingested into the system
+/// - `valid_at`: when this node became true/existent in the real world
+/// - `invalid_at`: when this node was invalidated/merged (None = still valid)
+/// - `expired_at`: when this node was soft-deleted (admin/user delete, None = active)
+///
+/// For example, after entity resolution merges "Wang Zong" and "王总" into one node,
+/// the old node gets invalid_at set. Soft-deleted nodes are excluded from normal
+/// queries but retained for audit.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KGNode {
     pub id: String,
@@ -122,9 +147,43 @@ pub struct KGNode {
     pub properties: serde_json::Value,
     pub agent_id: String,
     pub created_at: u64,
+    /// When this node became valid (Unix ms). None = unknown.
+    #[serde(default)]
+    pub valid_at: Option<u64>,
+    /// When this node was invalidated (Unix ms). None = still valid.
+    #[serde(default)]
+    pub invalid_at: Option<u64>,
+    /// Soft deletion marker (admin/user delete). Expired nodes are excluded from
+    /// normal queries but retained for audit. None = active.
+    #[serde(default)]
+    pub expired_at: Option<u64>,
+}
+
+impl KGNode {
+    /// Returns true if this node is currently valid at the given timestamp.
+    ///
+    /// An node is valid at time T if:
+    /// - `valid_at <= T`, and
+    /// - `invalid_at.is_none() || invalid_at > T`, and
+    /// - `expired_at.is_none()` (soft-deleted nodes are excluded)
+    pub fn is_valid_at(&self, t: u64) -> bool {
+        self.valid_at.map_or(true, |v| v <= t)
+            && self.invalid_at.map_or(true, |i| i > t)
+            && self.expired_at.map_or(true, |e| e > t)
+    }
 }
 
 /// An edge in the knowledge graph.
+///
+/// # Temporal Validity (Bi-temporal Model)
+///
+/// Per Graphiti's bi-temporal model:
+/// - `created_at`: when this edge was first ingested into the system
+/// - `valid_at`: when this edge became true in the real world
+/// - `invalid_at`: when this edge was superseded in the real world (None = still valid)
+/// - `expired_at`: when this edge was soft-deleted (admin/user delete, None = active)
+///
+/// Soft-deleted (`expired_at` set) edges are excluded from normal queries but retained for audit.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KGEdge {
     pub src: String,
@@ -134,6 +193,85 @@ pub struct KGEdge {
     pub weight: f32,
     pub evidence_cid: Option<String>,
     pub created_at: u64,
+    /// When this edge became valid (Unix ms). None = unknown.
+    #[serde(default)]
+    pub valid_at: Option<u64>,
+    /// When this edge was invalidated (Unix ms). None = still valid.
+    #[serde(default)]
+    pub invalid_at: Option<u64>,
+    /// Soft deletion marker (admin/user delete). Expired edges are excluded from
+    /// normal queries but retained for audit. None = active.
+    #[serde(default)]
+    pub expired_at: Option<u64>,
+    /// Source episode IDs that produced or modified this fact.
+    ///
+    /// Enables provenance queries: "which conversation/event produced this fact?"
+    /// Also enables credibility assessment — facts from official documents vs casual chat.
+    ///
+    /// Per Graphiti's provenance model: each fact links to the episodes that created it.
+    #[serde(default)]
+    pub episodes: Vec<String>,
+}
+
+impl KGEdge {
+    /// Create a new edge with temporal validity initialized to now.
+    ///
+    /// `valid_at` is set to `now_ms()`, `invalid_at` is `None` (still valid).
+    pub fn new(src: String, dst: String, edge_type: KGEdgeType, weight: f32) -> Self {
+        let now = now_ms();
+        Self {
+            src,
+            dst,
+            edge_type,
+            weight,
+            evidence_cid: None,
+            created_at: now,
+            valid_at: Some(now),
+            invalid_at: None,
+            expired_at: None,
+            episodes: Vec::new(),
+        }
+    }
+
+    /// Create a new edge with an initial episode ID.
+    ///
+    /// Use this when the edge is produced by a specific episode (e.g., document CID,
+    /// conversation ID). The episode traces the provenance of this fact.
+    ///
+    /// Per Graphiti's provenance model: each fact links to the episodes that created it.
+    pub fn new_with_episode(
+        src: String,
+        dst: String,
+        edge_type: KGEdgeType,
+        weight: f32,
+        episode: impl Into<String>,
+    ) -> Self {
+        let now = now_ms();
+        Self {
+            src,
+            dst,
+            edge_type,
+            weight,
+            evidence_cid: None,
+            created_at: now,
+            valid_at: Some(now),
+            invalid_at: None,
+            expired_at: None,
+            episodes: vec![episode.into()],
+        }
+    }
+
+    /// Returns true if this edge is currently valid at the given timestamp.
+    ///
+    /// An edge is valid at time T if:
+    /// - `valid_at <= T`, and
+    /// - `invalid_at.is_none() || invalid_at > T`, and
+    /// - `expired_at.is_none()` (soft-deleted edges are excluded)
+    pub fn is_valid_at(&self, t: u64) -> bool {
+        self.valid_at.map_or(true, |v| v <= t)
+            && self.invalid_at.map_or(true, |i| i > t)
+            && self.expired_at.map_or(true, |e| e > t)
+    }
 }
 
 /// A hybrid search result combining vector similarity and graph authority.
@@ -187,6 +325,50 @@ pub trait KnowledgeGraph: Send + Sync {
     fn upsert_document(&self, cid: &str, tags: &[String], agent_id: &str) -> Result<(), KGError>;
     /// Compute authority score (log-scaled degree, normalized 0–1).
     fn authority_score(&self, node_id: &str) -> Result<f32, KGError>;
+
+    /// Number of nodes in the graph.
+    fn node_count(&self) -> Result<usize, KGError>;
+
+    /// Number of edges in the graph.
+    fn edge_count(&self) -> Result<usize, KGError>;
+
+    // ── Temporal query methods ─────────────────────────────────────────────
+
+    /// Return edges valid at the given timestamp (per `KGEdge::is_valid_at`).
+    ///
+    /// This enables historical queries: "what facts were true at time T?"
+    fn get_valid_edges_at(&self, t: u64) -> Result<Vec<KGEdge>, KGError>;
+
+    /// Return the currently valid edge between two nodes, if any.
+    ///
+    /// Returns the most recently valid edge (highest `valid_at`) that is currently valid.
+    fn get_valid_edge_between(
+        &self,
+        src: &str,
+        dst: &str,
+        edge_type: Option<KGEdgeType>,
+        t: u64,
+    ) -> Result<Option<KGEdge>, KGError>;
+
+    /// Invalidate all conflicting edges before adding a new one.
+    ///
+    /// Per Graphiti's conflict resolution: when a new fact contradicts a prior one,
+    /// the old edge is invalidated (not deleted) to preserve history.
+    ///
+    /// Conflicts are edges where:
+    /// - Same `(src, dst, edge_type)` exists
+    /// - AND the existing edge is valid at the new edge's `valid_at`
+    fn invalidate_conflicts(&self, new_edge: &KGEdge) -> Result<usize, KGError>;
+
+    /// Return nodes valid at the given timestamp (per `KGNode::is_valid_at`).
+    ///
+    /// This enables historical queries: "what entities existed at time T?"
+    fn get_valid_nodes_at(
+        &self,
+        agent_id: &str,
+        node_type: Option<KGNodeType>,
+        t: u64,
+    ) -> Result<Vec<KGNode>, KGError>;
 }
 
 /// Flattened edge record for JSON serialization (restores bidirectional edges on load).
@@ -310,6 +492,9 @@ impl PetgraphBackend {
             properties: serde_json::json!({ "tags": tags }),
             agent_id: agent_id.to_string(),
             created_at: now_ms(),
+            valid_at: None,
+            invalid_at: None,
+            expired_at: None,
         };
 
         // Find docs sharing ≥2 tags
@@ -331,23 +516,21 @@ impl PetgraphBackend {
 
         for (other_id, shared) in candidates {
             let w = (shared as f32).min(1.0);
-            let ts = now_ms();
-            let e1 = KGEdge {
-                src: cid.to_string(),
-                dst: other_id.clone(),
-                edge_type: KGEdgeType::AssociatesWith,
-                weight: w,
-                evidence_cid: None,
-                created_at: ts,
-            };
-            let e2 = KGEdge {
-                src: other_id.clone(),
-                dst: cid.to_string(),
-                edge_type: KGEdgeType::AssociatesWith,
-                weight: w,
-                evidence_cid: None,
-                created_at: ts,
-            };
+            // Both directions carry the new document's CID as the episode source.
+            let e1 = KGEdge::new_with_episode(
+                cid.to_string(),
+                other_id.clone(),
+                KGEdgeType::AssociatesWith,
+                w,
+                cid,
+            );
+            let e2 = KGEdge::new_with_episode(
+                other_id.clone(),
+                cid.to_string(),
+                KGEdgeType::AssociatesWith,
+                w,
+                cid,
+            );
             let _ = self.add_edge(e1);
             let _ = self.add_edge(e2);
         }
@@ -626,6 +809,125 @@ impl KnowledgeGraph for PetgraphBackend {
     fn authority_score(&self, node_id: &str) -> Result<f32, KGError> {
         Ok(PetgraphBackend::authority_score(self, node_id))
     }
+
+    fn node_count(&self) -> Result<usize, KGError> {
+        let nodes = self.nodes.read().unwrap();
+        Ok(nodes.len())
+    }
+
+    fn edge_count(&self) -> Result<usize, KGError> {
+        let out = self.out_edges.read().unwrap();
+        let total: usize = out.values().map(|v| v.len()).sum();
+        Ok(total)
+    }
+
+    fn get_valid_edges_at(&self, t: u64) -> Result<Vec<KGEdge>, KGError> {
+        let out = self.out_edges.read().unwrap();
+        let mut valid = Vec::new();
+        for (_, out_list) in out.iter() {
+            for (_, edge) in out_list {
+                if edge.is_valid_at(t) {
+                    valid.push(edge.clone());
+                }
+            }
+        }
+        Ok(valid)
+    }
+
+    fn get_valid_edge_between(
+        &self,
+        src: &str,
+        dst: &str,
+        edge_type: Option<KGEdgeType>,
+        t: u64,
+    ) -> Result<Option<KGEdge>, KGError> {
+        let out = self.out_edges.read().unwrap();
+        let candidates = out.get(src).map(|v| {
+            v.iter()
+                .filter(|(d, e)| *d == dst && edge_type.is_none_or(|et| e.edge_type == et))
+                .filter(|(_, e)| e.is_valid_at(t))
+                .collect::<Vec<_>>()
+        });
+        Ok(candidates
+            .and_then(|c| {
+                c.iter()
+                    .filter(|(_, e)| e.is_valid_at(t))
+                    .max_by_key(|(_, e)| e.valid_at)
+                    .map(|(_, e)| e.clone())
+            }))
+    }
+
+    fn invalidate_conflicts(&self, new_edge: &KGEdge) -> Result<usize, KGError> {
+        let now = now_ms();
+        let t = new_edge.valid_at.unwrap_or(now);
+
+        // Phase 1: collect conflicts (read-only)
+        let conflicts: Vec<(String, String)> = {
+            let out = self.out_edges.read().unwrap();
+            out.get(&new_edge.src)
+                .map(|edges| {
+                    edges
+                        .iter()
+                        .filter(|(_, e)| {
+                            e.dst == new_edge.dst
+                                && e.edge_type == new_edge.edge_type
+                                && e.is_valid_at(t)
+                        })
+                        .map(|(d, _)| (new_edge.src.clone(), d.clone()))
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+
+        // Phase 2: invalidate conflicts (write)
+        if conflicts.is_empty() {
+            return Ok(0);
+        }
+
+        let mut out = self.out_edges.write().unwrap();
+        let mut in_edges = self.in_edges.write().unwrap();
+        let mut count = 0;
+
+        for (src, dst) in conflicts {
+            if let Some(list) = out.get_mut(&src) {
+                for e in list.iter_mut() {
+                    if e.1.dst == dst && e.1.edge_type == new_edge.edge_type {
+                        e.1.invalid_at = Some(now);
+                        count += 1;
+                    }
+                }
+            }
+            if let Some(list) = in_edges.get_mut(&dst) {
+                for e in list.iter_mut() {
+                    if e.1.src == src && e.1.edge_type == new_edge.edge_type {
+                        e.1.invalid_at = Some(now);
+                    }
+                }
+            }
+        }
+        drop(out);
+        drop(in_edges);
+        self.persist();
+        Ok(count)
+    }
+
+    fn get_valid_nodes_at(
+        &self,
+        agent_id: &str,
+        node_type: Option<KGNodeType>,
+        t: u64,
+    ) -> Result<Vec<KGNode>, KGError> {
+        let nodes = self.nodes.read().unwrap();
+        Ok(nodes
+            .values()
+            .filter(|n| {
+                n.agent_id == agent_id
+                    && node_type.is_none_or(|nt| n.node_type == nt)
+                    && n.is_valid_at(t)
+            })
+            .cloned()
+            .collect())
+    }
 }
 
 // ─── Tests ─────────────────────────────────────────────────────────────────────────
@@ -643,8 +945,271 @@ mod tests {
             properties: serde_json::json!({ "tags": tags }),
             agent_id: agent.to_string(),
             created_at: 0,
+            valid_at: None,
+            invalid_at: None,
+            expired_at: None,
         }
     }
+
+    /// Create a test edge with temporal validity fields initialized.
+    fn make_edge(src: &str, dst: &str, edge_type: KGEdgeType, weight: f32) -> KGEdge {
+        KGEdge::new(src.to_string(), dst.to_string(), edge_type, weight)
+    }
+
+    // ── is_valid_at tests ─────────────────────────────────────────────────────
+
+    #[test]
+    fn test_is_valid_at_currently_valid() {
+        let edge = make_edge("a", "b", KGEdgeType::RelatedTo, 1.0);
+        let now = now_ms();
+        assert!(edge.is_valid_at(now), "newly created edge should be valid at current time");
+        assert!(edge.is_valid_at(now + 1000), "edge should be valid in the future");
+    }
+
+    #[test]
+    fn test_is_valid_at_after_invalidation() {
+        let mut edge = make_edge("a", "b", KGEdgeType::RelatedTo, 1.0);
+        edge.invalid_at = Some(now_ms() + 1000);
+        assert!(edge.is_valid_at(now_ms()), "edge should be valid before invalid_at");
+        assert!(!edge.is_valid_at(now_ms() + 2000), "edge should be invalid after invalid_at");
+    }
+
+    #[test]
+    fn test_is_valid_at_with_valid_at_in_future() {
+        let mut edge = make_edge("a", "b", KGEdgeType::RelatedTo, 1.0);
+        edge.valid_at = Some(now_ms() + 1000); // becomes valid in the future
+        edge.invalid_at = None;
+        assert!(!edge.is_valid_at(now_ms()), "edge should not be valid before valid_at");
+        assert!(edge.is_valid_at(now_ms() + 2000), "edge should be valid after valid_at");
+    }
+
+    #[test]
+    fn test_is_valid_at_edge_case_boundaries() {
+        let mut edge = make_edge("a", "b", KGEdgeType::RelatedTo, 1.0);
+        let t = 1000;
+        edge.valid_at = Some(t);
+        edge.invalid_at = Some(t + 100);
+        assert!(edge.is_valid_at(t), "valid_at boundary: edge is valid at exact valid_at");
+        assert!(!edge.is_valid_at(t - 1), "edge invalid before valid_at");
+        assert!(!edge.is_valid_at(t + 100), "invalid_at boundary: edge invalid at exact invalid_at");
+        assert!(edge.is_valid_at(t + 99), "edge valid at invalid_at - 1");
+    }
+
+    // ── get_valid_edges_at tests ──────────────────────────────────────────────
+
+    #[test]
+    fn test_get_valid_edges_at_filters_by_time() {
+        let kg = PetgraphBackend::new();
+        kg.add_node(make_node("a", KGNodeType::Entity, vec![], "agent1")).unwrap();
+        kg.add_node(make_node("b", KGNodeType::Entity, vec![], "agent1")).unwrap();
+
+        let mut edge = make_edge("a", "b", KGEdgeType::RelatedTo, 1.0);
+        edge.valid_at = Some(1000);
+        edge.invalid_at = Some(2000);
+        kg.add_edge(edge).unwrap();
+
+        assert!(kg.get_valid_edges_at(500).unwrap().is_empty(), "before valid_at");
+        assert_eq!(kg.get_valid_edges_at(1000).unwrap().len(), 1, "at valid_at");
+        assert_eq!(kg.get_valid_edges_at(1500).unwrap().len(), 1, "between valid_at and invalid_at");
+        assert!(kg.get_valid_edges_at(2000).unwrap().is_empty(), "at invalid_at boundary");
+        assert!(kg.get_valid_edges_at(3000).unwrap().is_empty(), "after invalid_at");
+    }
+
+    #[test]
+    fn test_get_valid_edges_at_current_time() {
+        let kg = PetgraphBackend::new();
+        kg.add_node(make_node("x", KGNodeType::Entity, vec![], "a")).unwrap();
+        kg.add_node(make_node("y", KGNodeType::Entity, vec![], "a")).unwrap();
+        kg.add_edge(make_edge("x", "y", KGEdgeType::RelatedTo, 1.0)).unwrap();
+
+        let now = now_ms();
+        let valid = kg.get_valid_edges_at(now).unwrap();
+        assert_eq!(valid.len(), 1);
+    }
+
+    #[test]
+    fn test_get_valid_edges_at_no_edges() {
+        let kg = PetgraphBackend::new();
+        assert!(kg.get_valid_edges_at(now_ms()).unwrap().is_empty());
+    }
+
+    // ── get_valid_edge_between tests ─────────────────────────────────────────
+
+    #[test]
+    fn test_get_valid_edge_between_returns_most_recent() {
+        let kg = PetgraphBackend::new();
+        kg.add_node(make_node("p", KGNodeType::Entity, vec![], "a")).unwrap();
+        kg.add_node(make_node("w1", KGNodeType::Entity, vec![], "a")).unwrap();
+        kg.add_node(make_node("w2", KGNodeType::Entity, vec![], "a")).unwrap();
+
+        // Two different preference edges: p→w1 (valid_at=1000) and p→w2 (valid_at=2000)
+        let e1 = {
+            let mut e = make_edge("p", "w1", KGEdgeType::HasPreference, 0.8);
+            e.valid_at = Some(1000);
+            e
+        };
+        kg.add_edge(e1).unwrap();
+
+        let e2 = {
+            let mut e = make_edge("p", "w2", KGEdgeType::HasPreference, 0.9);
+            e.valid_at = Some(2000);
+            e
+        };
+        kg.add_edge(e2).unwrap();
+
+        // At time 1500, only e1 is valid (prefers w1 at t=1000)
+        let found = kg.get_valid_edge_between("p", "w1", None, 1500).unwrap();
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().valid_at, Some(1000));
+
+        // At time 2500, e2 is valid (prefers w2 at t=2000)
+        let found = kg.get_valid_edge_between("p", "w2", None, 2500).unwrap();
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().valid_at, Some(2000));
+    }
+
+    #[test]
+    fn test_get_valid_edge_between_filters_by_edge_type() {
+        let kg = PetgraphBackend::new();
+        kg.add_node(make_node("x", KGNodeType::Entity, vec![], "a")).unwrap();
+        kg.add_node(make_node("y1", KGNodeType::Entity, vec![], "a")).unwrap();
+        kg.add_node(make_node("y2", KGNodeType::Entity, vec![], "a")).unwrap();
+
+        // Two edges: x→y1 (RelatedTo) and x→y2 (Mentions)
+        kg.add_edge(make_edge("x", "y1", KGEdgeType::RelatedTo, 1.0)).unwrap();
+        kg.add_edge(make_edge("x", "y2", KGEdgeType::Mentions, 0.5)).unwrap();
+
+        let found = kg.get_valid_edge_between("x", "y2", Some(KGEdgeType::HasPreference), now_ms()).unwrap();
+        assert!(found.is_none(), "HasPreference edge does not exist");
+        let found = kg.get_valid_edge_between("x", "y1", Some(KGEdgeType::RelatedTo), now_ms()).unwrap();
+        assert!(found.is_some());
+    }
+
+    // ── invalidate_conflicts tests ───────────────────────────────────────────
+
+    #[test]
+    fn test_invalidate_conflicts_replaces_prior_edge() {
+        let kg = PetgraphBackend::new();
+        kg.add_node(make_node("person", KGNodeType::Entity, vec![], "a")).unwrap();
+        kg.add_node(make_node("wine", KGNodeType::Entity, vec![], "a")).unwrap();
+        kg.add_node(make_node("beer", KGNodeType::Entity, vec![], "a")).unwrap();
+
+        // person prefers wine
+        let old = KGEdge::new("person".into(), "wine".into(), KGEdgeType::HasPreference, 0.9);
+        kg.add_edge(old).unwrap();
+
+        // New preference: person prefers beer (different dst, same edge_type)
+        let new = KGEdge::new("person".into(), "beer".into(), KGEdgeType::HasPreference, 0.85);
+        let count = kg.invalidate_conflicts(&new).unwrap();
+        // Different dst → no same-(src,dst,type) conflict → count = 0
+        assert_eq!(count, 0);
+        // wine preference still exists (not invalidated since different dst)
+        let still_valid = kg.get_valid_edge_between("person", "wine", None, now_ms()).unwrap();
+        assert!(still_valid.is_some());
+    }
+
+    #[test]
+    fn test_invalidate_conflicts_none_found() {
+        let kg = PetgraphBackend::new();
+        kg.add_node(make_node("a", KGNodeType::Entity, vec![], "x")).unwrap();
+        kg.add_node(make_node("b", KGNodeType::Entity, vec![], "x")).unwrap();
+
+        let edge = make_edge("a", "b", KGEdgeType::RelatedTo, 1.0);
+        kg.add_edge(edge).unwrap();
+
+        let new = make_edge("c", "d", KGEdgeType::RelatedTo, 0.5);
+        let count = kg.invalidate_conflicts(&new).unwrap();
+        assert_eq!(count, 0, "no conflicts for unrelated edge");
+    }
+
+    #[test]
+    fn test_invalidate_conflicts_preserves_history() {
+        let kg = PetgraphBackend::new();
+        kg.add_node(make_node("s", KGNodeType::Entity, vec![], "a")).unwrap();
+        kg.add_node(make_node("t", KGNodeType::Entity, vec![], "a")).unwrap();
+
+        let old_time = now_ms() - 1000;
+        let mut old_edge = make_edge("s", "t", KGEdgeType::HasPreference, 0.9);
+        old_edge.valid_at = Some(old_time);
+        kg.add_edge(old_edge).unwrap();
+
+        let new_edge = KGEdge::new("s".into(), "t".into(), KGEdgeType::HasPreference, 0.8);
+        kg.invalidate_conflicts(&new_edge).unwrap();
+
+        // History preserved: can still query at old_time
+        let historical = kg.get_valid_edge_between("s", "t", None, old_time).unwrap();
+        assert!(historical.is_some(), "historical edge should still be queryable");
+    }
+
+    // ── get_valid_nodes_at tests ──────────────────────────────────────────────
+
+    #[test]
+    fn test_get_valid_nodes_at_filters_by_time() {
+        let kg = PetgraphBackend::new();
+        kg.add_node(make_node("entity1", KGNodeType::Entity, vec![], "agent1")).unwrap();
+        kg.add_node(make_node("entity2", KGNodeType::Entity, vec![], "agent1")).unwrap();
+
+        // entity1 becomes valid at t=1000, invalid at t=2000
+        let mut node1 = make_node("entity1", KGNodeType::Entity, vec![], "agent1");
+        node1.valid_at = Some(1000);
+        node1.invalid_at = Some(2000);
+        kg.add_node(node1).unwrap();
+
+        // entity2 is always valid (default)
+        let node2 = make_node("entity2", KGNodeType::Entity, vec![], "agent1");
+        kg.add_node(node2).unwrap();
+
+        // entity2 is always valid (valid_at=None), so it's returned at all times
+        let at_500 = kg.get_valid_nodes_at("agent1", None, 500).unwrap();
+        assert_eq!(at_500.len(), 1, "entity2 always valid");
+        assert_eq!(at_500[0].id, "entity2");
+        let at_1000 = kg.get_valid_nodes_at("agent1", None, 1000).unwrap();
+        assert_eq!(at_1000.len(), 2, "at valid_at both nodes valid");
+        let at_1500 = kg.get_valid_nodes_at("agent1", None, 1500).unwrap();
+        assert_eq!(at_1500.len(), 2, "both still valid at 1500");
+        // At exact invalid_at boundary, entity1 is NOT valid
+        let at_2000 = kg.get_valid_nodes_at("agent1", None, 2000).unwrap();
+        assert_eq!(at_2000.len(), 1, "entity1 invalid at exact invalid_at boundary, only entity2");
+        let at_2500 = kg.get_valid_nodes_at("agent1", None, 2500).unwrap();
+        assert_eq!(at_2500.len(), 1, "only entity2 valid after 2000");
+        assert!(at_2500[0].id == "entity2");
+    }
+
+    #[test]
+    fn test_get_valid_nodes_at_filters_by_agent_and_type() {
+        let kg = PetgraphBackend::new();
+        kg.add_node(make_node("e1", KGNodeType::Entity, vec![], "agent1")).unwrap();
+        kg.add_node(make_node("e2", KGNodeType::Entity, vec![], "agent2")).unwrap();
+        kg.add_node(make_node("d1", KGNodeType::Document, vec![], "agent1")).unwrap();
+
+        let now = now_ms();
+        let all_agent1 = kg.get_valid_nodes_at("agent1", None, now).unwrap();
+        assert_eq!(all_agent1.len(), 2);
+
+        let entities_only = kg.get_valid_nodes_at("agent1", Some(KGNodeType::Entity), now).unwrap();
+        assert_eq!(entities_only.len(), 1);
+        assert_eq!(entities_only[0].id, "e1");
+
+        let other_agent = kg.get_valid_nodes_at("agent2", None, now).unwrap();
+        assert_eq!(other_agent.len(), 1);
+        assert_eq!(other_agent[0].id, "e2");
+    }
+
+    #[test]
+    fn test_get_valid_nodes_at_respects_expired() {
+        let kg = PetgraphBackend::new();
+        let mut node = make_node("expired_node", KGNodeType::Entity, vec![], "a");
+        node.expired_at = Some(now_ms() - 1000); // soft-deleted in the past
+        kg.add_node(node).unwrap();
+
+        let now = now_ms();
+        assert!(kg.get_valid_nodes_at("a", None, now).unwrap().is_empty(), "soft-deleted node excluded");
+        // But it was valid before expiration
+        let before = kg.get_valid_nodes_at("a", None, now_ms() - 2000).unwrap();
+        assert_eq!(before.len(), 1, "node valid before expired_at");
+    }
+
+    // ── existing tests updated ────────────────────────────────────────────────
 
     #[test]
     fn test_add_node_and_get() {
@@ -664,11 +1229,7 @@ mod tests {
         kg.add_node(n1).unwrap();
         kg.add_node(n2).unwrap();
 
-        kg.add_edge(KGEdge {
-            src: "n1".into(), dst: "n2".into(),
-            edge_type: KGEdgeType::RelatedTo, weight: 0.9,
-            evidence_cid: None, created_at: 0,
-        }).unwrap();
+        kg.add_edge(make_edge("n1", "n2", KGEdgeType::RelatedTo, 0.9)).unwrap();
 
         let neighbors = kg.get_neighbors("n1", None, 1).unwrap();
         assert_eq!(neighbors.len(), 1);
@@ -681,18 +1242,9 @@ mod tests {
         kg.add_node(make_node("a", KGNodeType::Entity, vec![], "x")).unwrap();
         kg.add_node(make_node("b", KGNodeType::Entity, vec![], "x")).unwrap();
 
-        kg.add_edge(KGEdge {
-            src: "a".into(), dst: "b".into(),
-            edge_type: KGEdgeType::RelatedTo, weight: 0.5,
-            evidence_cid: None, created_at: 0,
-        }).unwrap();
+        kg.add_edge(make_edge("a", "b", KGEdgeType::RelatedTo, 0.5)).unwrap();
 
-        let err = kg.add_edge(KGEdge {
-            src: "a".into(), dst: "b".into(),
-            edge_type: KGEdgeType::Mentions, weight: 0.5,
-            evidence_cid: None, created_at: 0,
-        }).unwrap_err();
-
+        let err = kg.add_edge(make_edge("a", "b", KGEdgeType::Mentions, 0.5)).unwrap_err();
         assert!(matches!(err, KGError::EdgeExists(_, _, _)));
     }
 
@@ -701,14 +1253,8 @@ mod tests {
         let kg = PetgraphBackend::new();
         kg.add_node(make_node("x", KGNodeType::Entity, vec![], "a")).unwrap();
         kg.add_node(make_node("y", KGNodeType::Entity, vec![], "a")).unwrap();
-        // x → y
-        kg.add_edge(KGEdge {
-            src: "x".into(), dst: "y".into(),
-            edge_type: KGEdgeType::Follows, weight: 1.0,
-            evidence_cid: None, created_at: 0,
-        }).unwrap();
+        kg.add_edge(make_edge("x", "y", KGEdgeType::Follows, 1.0)).unwrap();
 
-        // y has inbound neighbor x
         let n = kg.get_neighbors("y", None, 1).unwrap();
         assert_eq!(n.len(), 1);
         assert_eq!(n[0].0.id, "x");
@@ -717,12 +1263,11 @@ mod tests {
     #[test]
     fn test_neighbors_depth2_chain() {
         let kg = PetgraphBackend::new();
-        // a → b → c
         kg.add_node(make_node("a", KGNodeType::Entity, vec![], "x")).unwrap();
         kg.add_node(make_node("b", KGNodeType::Entity, vec![], "x")).unwrap();
         kg.add_node(make_node("c", KGNodeType::Entity, vec![], "x")).unwrap();
-        kg.add_edge(KGEdge { src: "a".into(), dst: "b".into(), edge_type: KGEdgeType::Follows, weight: 1.0, evidence_cid: None, created_at: 0 }).unwrap();
-        kg.add_edge(KGEdge { src: "b".into(), dst: "c".into(), edge_type: KGEdgeType::Follows, weight: 1.0, evidence_cid: None, created_at: 0 }).unwrap();
+        kg.add_edge(make_edge("a", "b", KGEdgeType::Follows, 1.0)).unwrap();
+        kg.add_edge(make_edge("b", "c", KGEdgeType::Follows, 1.0)).unwrap();
 
         let n1 = kg.get_neighbors("a", None, 1).unwrap();
         assert_eq!(n1.len(), 1);
@@ -738,17 +1283,47 @@ mod tests {
     fn test_upsert_document_auto_associates() {
         let kg = PetgraphBackend::new();
 
-        // Doc1 with 3 tags
         kg.upsert_document("doc1", &["rust".into(), "async".into(), "concurrency".into()], "agent1")
             .unwrap();
 
-        // Doc2 sharing 2 tags (≥2 → AssociatesWith)
         kg.upsert_document("doc2", &["rust".into(), "async".into(), "networking".into()], "agent1")
             .unwrap();
 
-        // Doc1 should have AssociatesWith edge to doc2
         let n1_neighbors = kg.get_neighbors("doc1", Some(KGEdgeType::AssociatesWith), 1).unwrap();
         assert!(!n1_neighbors.is_empty(), "doc1 should have AssociatesWith edge to doc2");
+    }
+
+    #[test]
+    fn test_upsert_document_episodes_populated() {
+        // Verifies that upsert_document creates edges whose episodes include the source document CID.
+        // Per Graphiti provenance model: each fact links to the episode that produced it.
+        let kg = PetgraphBackend::new();
+
+        // Create two docs sharing ≥2 tags so an AssociatesWith edge is created.
+        kg.upsert_document("doc_a", &["x".into(), "y".into(), "z".into()], "agent1")
+            .unwrap();
+        kg.upsert_document("doc_b", &["x".into(), "y".into(), "w".into()], "agent1")
+            .unwrap();
+
+        // The edge doc_b → doc_a (and vice versa) should have doc_b as an episode.
+        let neighbors = kg
+            .get_neighbors("doc_b", Some(KGEdgeType::AssociatesWith), 1)
+            .unwrap();
+        let edge_to_a = neighbors
+            .iter()
+            .find(|(n, _)| n.id == "doc_a")
+            .map(|(_, e)| e);
+
+        assert!(
+            edge_to_a.is_some(),
+            "doc_b should have an AssociatesWith edge to doc_a"
+        );
+        let edge = edge_to_a.unwrap();
+        assert!(
+            edge.episodes.contains(&"doc_b".to_string()),
+            "edge episodes should contain source doc_b CID, got {:?}",
+            edge.episodes
+        );
     }
 
     #[test]
@@ -758,7 +1333,6 @@ mod tests {
         kg.upsert_document("a", &["rust".into()], "ag").unwrap();
         kg.upsert_document("b", &["rust".into()], "ag").unwrap();
 
-        // Only 1 shared tag → should NOT create AssociatesWith edge
         let n = kg.get_neighbors("a", Some(KGEdgeType::AssociatesWith), 1).unwrap();
         assert!(n.is_empty(), "single shared tag should not create AssociatesWith edge");
     }
@@ -766,12 +1340,11 @@ mod tests {
     #[test]
     fn test_find_paths() {
         let kg = PetgraphBackend::new();
-        // x → y → z
         kg.add_node(make_node("x", KGNodeType::Entity, vec![], "a")).unwrap();
         kg.add_node(make_node("y", KGNodeType::Entity, vec![], "a")).unwrap();
         kg.add_node(make_node("z", KGNodeType::Entity, vec![], "a")).unwrap();
-        kg.add_edge(KGEdge { src: "x".into(), dst: "y".into(), edge_type: KGEdgeType::RelatedTo, weight: 1.0, evidence_cid: None, created_at: 0 }).unwrap();
-        kg.add_edge(KGEdge { src: "y".into(), dst: "z".into(), edge_type: KGEdgeType::RelatedTo, weight: 1.0, evidence_cid: None, created_at: 0 }).unwrap();
+        kg.add_edge(make_edge("x", "y", KGEdgeType::RelatedTo, 1.0)).unwrap();
+        kg.add_edge(make_edge("y", "z", KGEdgeType::RelatedTo, 1.0)).unwrap();
 
         let paths = kg.find_paths("x", "z", 5).unwrap();
         assert!(!paths.is_empty());
@@ -784,7 +1357,7 @@ mod tests {
         kg.add_node(make_node("n1", KGNodeType::Document, vec![], "a")).unwrap();
         kg.add_node(make_node("n2", KGNodeType::Entity, vec![], "a")).unwrap();
         kg.add_node(make_node("n3", KGNodeType::Document, vec![], "a")).unwrap();
-        kg.add_node(make_node("n4", KGNodeType::Document, vec![], "b")).unwrap(); // diff agent
+        kg.add_node(make_node("n4", KGNodeType::Document, vec![], "b")).unwrap();
 
         let docs = kg.list_nodes("a", Some(KGNodeType::Document)).unwrap();
         assert_eq!(docs.len(), 2);
@@ -798,7 +1371,7 @@ mod tests {
         let kg = PetgraphBackend::new();
         kg.add_node(make_node("x", KGNodeType::Entity, vec![], "a")).unwrap();
         kg.add_node(make_node("y", KGNodeType::Entity, vec![], "a")).unwrap();
-        kg.add_edge(KGEdge { src: "x".into(), dst: "y".into(), edge_type: KGEdgeType::RelatedTo, weight: 1.0, evidence_cid: None, created_at: 0 }).unwrap();
+        kg.add_edge(make_edge("x", "y", KGEdgeType::RelatedTo, 1.0)).unwrap();
 
         kg.remove_node("x").unwrap();
         assert!(kg.get_node("x").unwrap().is_none());
@@ -812,14 +1385,11 @@ mod tests {
         kg.add_node(make_node("center", KGNodeType::Entity, vec![], "a")).unwrap();
         kg.add_node(make_node("leaf1", KGNodeType::Entity, vec![], "a")).unwrap();
         kg.add_node(make_node("leaf2", KGNodeType::Entity, vec![], "a")).unwrap();
-        kg.add_edge(KGEdge { src: "center".into(), dst: "leaf1".into(), edge_type: KGEdgeType::RelatedTo, weight: 1.0, evidence_cid: None, created_at: 0 }).unwrap();
-        kg.add_edge(KGEdge { src: "center".into(), dst: "leaf2".into(), edge_type: KGEdgeType::RelatedTo, weight: 1.0, evidence_cid: None, created_at: 0 }).unwrap();
-        kg.add_edge(KGEdge { src: "leaf1".into(), dst: "center".into(), edge_type: KGEdgeType::RelatedTo, weight: 1.0, evidence_cid: None, created_at: 0 }).unwrap();
+        kg.add_edge(make_edge("center", "leaf1", KGEdgeType::RelatedTo, 1.0)).unwrap();
+        kg.add_edge(make_edge("center", "leaf2", KGEdgeType::RelatedTo, 1.0)).unwrap();
+        kg.add_edge(make_edge("leaf1", "center", KGEdgeType::RelatedTo, 1.0)).unwrap();
 
-        // center has 2 unique neighbors: {leaf1, leaf2}
-        // (leaf1 is also bidirectional, but unique neighbors = set)
         assert_eq!(kg.degree("center"), 2);
-        // leaf1 has 1 neighbor: {center} (outbound to center)
         assert_eq!(kg.degree("leaf1"), 1);
     }
 
@@ -827,13 +1397,12 @@ mod tests {
 
     #[test]
     fn test_event_edge_types_serialize_roundtrip() {
-        use serde_json;
-
         let variants = [
             KGEdgeType::HasAttendee,
             KGEdgeType::HasDocument,
             KGEdgeType::HasMedia,
             KGEdgeType::HasDecision,
+            KGEdgeType::HasPreference,
         ];
 
         for edge_type in variants {
@@ -851,44 +1420,46 @@ mod tests {
         assert_eq!(KGEdgeType::HasDecision.to_string(), "has_decision");
         assert_eq!(KGEdgeType::SuggestsAction.to_string(), "suggests_action");
         assert_eq!(KGEdgeType::MotivatedBy.to_string(), "motivated_by");
+        assert_eq!(KGEdgeType::HasPreference.to_string(), "has_preference");
     }
 
     #[test]
     fn test_event_edge_add_and_query() {
         let kg = PetgraphBackend::new();
-        // Simulate: Event("Q2规划会议") → Person("王总") via HasAttendee
         kg.add_node(make_node("evt1", KGNodeType::Entity, vec![], "agent1")).unwrap();
         kg.add_node(make_node("person1", KGNodeType::Entity, vec![], "agent1")).unwrap();
-        kg.add_edge(KGEdge {
-            src: "evt1".into(),
-            dst: "person1".into(),
-            edge_type: KGEdgeType::HasAttendee,
-            weight: 1.0,
-            evidence_cid: None,
-            created_at: 0,
-        }).unwrap();
+        kg.add_edge(make_edge("evt1", "person1", KGEdgeType::HasAttendee, 1.0)).unwrap();
 
         let attendees = kg.get_neighbors("evt1", Some(KGEdgeType::HasAttendee), 1).unwrap();
         assert_eq!(attendees.len(), 1, "event should have 1 attendee");
         assert_eq!(attendees[0].0.label, "person1");
 
-        // Event → Document via HasDocument
         kg.add_node(make_node("doc1", KGNodeType::Document, vec![], "agent1")).unwrap();
-        kg.add_edge(KGEdge {
-            src: "evt1".into(),
-            dst: "doc1".into(),
-            edge_type: KGEdgeType::HasDocument,
-            weight: 1.0,
-            evidence_cid: None,
-            created_at: 0,
-        }).unwrap();
+        kg.add_edge(make_edge("evt1", "doc1", KGEdgeType::HasDocument, 1.0)).unwrap();
 
         let docs = kg.get_neighbors("evt1", Some(KGEdgeType::HasDocument), 1).unwrap();
         assert_eq!(docs.len(), 1, "event should have 1 document");
         assert_eq!(docs[0].0.label, "doc1");
 
-        // HasAttendee neighbors should not include doc1
         let attendees_only = kg.get_neighbors("evt1", Some(KGEdgeType::HasAttendee), 1).unwrap();
         assert!(attendees_only.iter().all(|(n, _)| n.id != "doc1"), "HasAttendee filter must exclude documents");
+    }
+
+    // ── Temporal validity edge tests ─────────────────────────────────────────
+
+    #[test]
+    fn test_temporal_edge_new_has_valid_at() {
+        let edge = make_edge("a", "b", KGEdgeType::RelatedTo, 1.0);
+        assert!(edge.valid_at.is_some(), "new edge should have valid_at set");
+        assert!(edge.invalid_at.is_none(), "new edge should have invalid_at = None");
+    }
+
+    #[test]
+    fn test_edge_serialization_includes_temporal_fields() {
+        let edge = make_edge("a", "b", KGEdgeType::RelatedTo, 0.8);
+        let json = serde_json::to_string(&edge).unwrap();
+        let roundtrip: KGEdge = serde_json::from_str(&json).unwrap();
+        assert_eq!(roundtrip.valid_at, edge.valid_at);
+        assert_eq!(roundtrip.invalid_at, edge.invalid_at);
     }
 }
