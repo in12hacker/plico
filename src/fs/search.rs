@@ -28,6 +28,7 @@
 //! Results are ranked by similarity score (higher = more relevant).
 
 use std::sync::RwLock;
+use serde::{Deserialize, Serialize};
 
 /// Metadata attached to a stored embedding entry.
 #[derive(Debug, Clone)]
@@ -186,6 +187,52 @@ impl InMemoryBackend {
             0.0
         } else {
             dot / norm_product
+        }
+    }
+}
+
+/// Serializable search index entry for persistence.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchIndexEntry {
+    pub cid: String,
+    pub embedding: Vec<f32>,
+    pub tags: Vec<String>,
+    pub snippet: String,
+    pub content_type: String,
+    pub created_at: u64,
+}
+
+impl InMemoryBackend {
+    /// Export all index entries for persistence.
+    pub fn snapshot(&self) -> Vec<SearchIndexEntry> {
+        self.entries.read().unwrap().iter().map(|e| SearchIndexEntry {
+            cid: e.cid.clone(),
+            embedding: e.embedding.clone(),
+            tags: e.meta.tags.clone(),
+            snippet: e.meta.snippet.clone(),
+            content_type: e.meta.content_type.clone(),
+            created_at: e.meta.created_at,
+        }).collect()
+    }
+
+    /// Bulk-load entries from a persisted snapshot.
+    pub fn restore(&self, entries: Vec<SearchIndexEntry>) {
+        let mut store = self.entries.write().unwrap();
+        for e in entries {
+            let exists = store.iter().any(|existing| existing.cid == e.cid);
+            if !exists {
+                store.push(IndexEntry {
+                    cid: e.cid.clone(),
+                    embedding: e.embedding,
+                    meta: SearchIndexMeta {
+                        cid: e.cid,
+                        tags: e.tags,
+                        snippet: e.snippet,
+                        content_type: e.content_type,
+                        created_at: e.created_at,
+                    },
+                });
+            }
         }
     }
 }

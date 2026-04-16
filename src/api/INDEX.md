@@ -32,7 +32,7 @@ Status: stable | Fan-in: 3 | Fan-out: 1
 |--------|------|-------------|
 | `PermissionGuard` | `permission.rs` | Global access control registry |
 | `PermissionContext` | `permission.rs` | Per-request agent identity + embedded grants |
-| `PermissionAction` | `permission.rs` | Action enum (Read/Write/Delete/Network/Execute/All) |
+| `PermissionAction` | `permission.rs` | Read/Write/ReadAny/Delete/Network/Execute/SendMessage/All |
 | `PermissionGrant` | `permission.rs` | Grant with optional scope + expiry |
 
 ### Protocol

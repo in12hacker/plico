@@ -10,7 +10,7 @@
 //! JSON messages over TCP. Connect, send ApiRequest as JSON, receive ApiResponse.
 
 use plico::kernel::AIKernel;
-use plico::api::semantic::{ApiRequest, ApiResponse, SearchResultDto, AgentDto, NeighborDto, decode_content};
+use plico::api::semantic::{ApiRequest, ApiResponse};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -126,146 +126,7 @@ async fn send_error(stream: &mut TcpStream, msg: String) -> Result<(), Box<dyn s
 }
 
 fn handle_request(kernel: &AIKernel, req: ApiRequest) -> ApiResponse {
-    match req {
-        ApiRequest::Create { content, content_encoding, tags, agent_id, intent } => {
-            let bytes = match decode_content(&content, &content_encoding) {
-                Ok(b) => b,
-                Err(e) => return ApiResponse::error(e),
-            };
-            match kernel.semantic_create(bytes, tags, &agent_id, intent) {
-                Ok(cid) => ApiResponse::with_cid(cid),
-                Err(e) => ApiResponse::error(e.to_string()),
-            }
-        }
-
-        ApiRequest::Read { cid, agent_id: _ } => {
-            match kernel.get_object(&cid, "kernel") {
-                Ok(obj) => ApiResponse::with_data(String::from_utf8_lossy(&obj.data).to_string()),
-                Err(e) => ApiResponse::error(e.to_string()),
-            }
-        }
-
-        ApiRequest::Search { query, agent_id, limit, require_tags, exclude_tags, since, until } => {
-            let results = kernel.semantic_search_with_time(
-                &query,
-                &agent_id,
-                limit.unwrap_or(10),
-                require_tags,
-                exclude_tags,
-                since,
-                until,
-            );
-            let dto: Vec<SearchResultDto> = results.into_iter().map(|r| SearchResultDto {
-                cid: r.cid,
-                relevance: r.relevance,
-                tags: r.meta.tags,
-            }).collect();
-            ApiResponse { ok: true, cid: None, data: None, results: Some(dto), agent_id: None, agents: None, memory: None, tags: None, neighbors: None, deleted: None, events: None, error: None }
-        }
-
-        ApiRequest::Update { cid, content, content_encoding, new_tags, agent_id } => {
-            let bytes = match decode_content(&content, &content_encoding) {
-                Ok(b) => b,
-                Err(e) => return ApiResponse::error(e),
-            };
-            match kernel.semantic_update(&cid, bytes, new_tags, &agent_id) {
-                Ok(new_cid) => ApiResponse::with_cid(new_cid),
-                Err(e) => ApiResponse::error(e.to_string()),
-            }
-        }
-
-        ApiRequest::Delete { cid, agent_id } => {
-            match kernel.semantic_delete(&cid, &agent_id) {
-                Ok(()) => ApiResponse::ok(),
-                Err(e) => ApiResponse::error(e.to_string()),
-            }
-        }
-
-        ApiRequest::RegisterAgent { name } => {
-            let id = kernel.register_agent(name);
-            ApiResponse { ok: true, cid: None, data: None, results: None, agent_id: Some(id), agents: None, memory: None, tags: None, neighbors: None, deleted: None, events: None, error: None }
-        }
-
-        ApiRequest::ListAgents => {
-            let agents: Vec<AgentDto> = kernel.list_agents().into_iter().map(|a| AgentDto {
-                id: a.id,
-                name: a.name,
-                state: format!("{:?}", a.state),
-            }).collect();
-            ApiResponse { ok: true, cid: None, data: None, results: None, agent_id: None, agents: Some(agents), memory: None, tags: None, neighbors: None, deleted: None, events: None, error: None }
-        }
-
-        ApiRequest::Remember { agent_id, content } => {
-            kernel.remember(&agent_id, content);
-            ApiResponse::ok()
-        }
-
-        ApiRequest::Recall { agent_id } => {
-            let memories: Vec<String> = kernel.recall(&agent_id)
-                .into_iter()
-                .filter_map(|m| match m.content {
-                    plico::memory::MemoryContent::Text(t) => Some(t),
-                    _ => None,
-                })
-                .collect();
-            ApiResponse { ok: true, cid: None, data: None, results: None, agent_id: None, agents: None, memory: Some(memories), tags: None, neighbors: None, deleted: None, events: None, error: None }
-        }
-
-        ApiRequest::Explore { cid, edge_type, depth, agent_id: _ } => {
-            let depth = depth.unwrap_or(1).min(3);
-            let raw = kernel.graph_explore_raw(&cid, edge_type.as_deref(), depth);
-            let dto: Vec<NeighborDto> = raw.into_iter().map(|(node_id, label, node_type, edge_type, authority_score)| {
-                NeighborDto { node_id, label, node_type, edge_type, authority_score }
-            }).collect();
-            ApiResponse { ok: true, cid: None, data: None, results: None, agent_id: None, agents: None, memory: None, tags: None, neighbors: Some(dto), deleted: None, events: None, error: None }
-        }
-
-        ApiRequest::ListDeleted { agent_id } => {
-            let entries = kernel.list_deleted(&agent_id);
-            let dto: Vec<plico::api::semantic::DeletedDto> = entries.into_iter().map(|e| {
-                plico::api::semantic::DeletedDto {
-                    cid: e.cid,
-                    deleted_at: e.deleted_at,
-                    tags: e.original_meta.tags,
-                }
-            }).collect();
-            ApiResponse { ok: true, cid: None, data: None, results: None, agent_id: None, agents: None, memory: None, tags: None, neighbors: None, deleted: Some(dto), events: None, error: None }
-        }
-
-        ApiRequest::Restore { cid, agent_id } => {
-            match kernel.restore_deleted(&cid, &agent_id) {
-                Ok(()) => ApiResponse::ok(),
-                Err(e) => ApiResponse::error(e.to_string()),
-            }
-        }
-
-        ApiRequest::CreateEvent { label, event_type, start_time, end_time, location, tags, agent_id } => {
-            match kernel.create_event(&label, event_type, start_time, end_time, location.as_deref(), tags, &agent_id) {
-                Ok(id) => ApiResponse::with_cid(id),
-                Err(e) => ApiResponse::error(e.to_string()),
-            }
-        }
-
-        ApiRequest::ListEvents { since, until, tags, event_type, agent_id: _ } => {
-            let events = kernel.list_events(since, until, &tags, event_type);
-            ApiResponse::with_events(events)
-        }
-
-        ApiRequest::ListEventsText { time_expression, tags, event_type, agent_id: _ } => {
-            match kernel.list_events_text(&time_expression, &tags, event_type) {
-                Ok(events) => ApiResponse::with_events(events),
-                Err(e) => ApiResponse::error(e.to_string()),
-            }
-        }
-
-        ApiRequest::EventAttach { event_id, target_id, relation, agent_id } => {
-            match kernel.event_attach(&event_id, &target_id, relation, &agent_id) {
-                Ok(()) => ApiResponse::ok(),
-                Err(e) => ApiResponse::error(e.to_string()),
-            }
-        }
-
-    }
+    kernel.handle_api_request(req)
 }
 
 // ─── HTTP Dashboard Server ────────────────────────────────────────────────────────

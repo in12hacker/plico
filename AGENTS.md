@@ -17,13 +17,21 @@ src/
 │   ├── storage.rs   # CASStorage engine (sharded, atomic writes)
 │   └── mod.rs       # Re-exports
 ├── memory/          # Layered memory — Ephemeral / Working / LongTerm / Procedural
-│   ├── layered.rs   # LayeredMemory, MemoryTier, MemoryEntry, MemoryContent
+│   ├── layered.rs   # LayeredMemory, MemoryTier, MemoryEntry, MemoryContent, cognitive methods
 │   ├── persist.rs   # CASPersister, MemoryPersister trait, MemoryLoader
+│   ├── relevance.rs # RelevanceScore, scoring, budget selection, TTL, promotion thresholds
+│   ├── context_snapshot.rs # ContextSnapshot — suspend/resume cognitive continuity
 │   └── mod.rs       # MemoryQuery, MemoryResult (public types)
-├── scheduler/       # Agent lifecycle — registration, priority queue, intent dispatch
-│   ├── agent.rs     # Agent, AgentId, AgentState, Intent, IntentPriority
+├── intent/          # Intent router — NL → ApiRequest (heuristic + optional LLM chain)
+│   ├── mod.rs       # IntentRouter, ChainRouter, ResolvedIntent, IntentError
+│   ├── heuristic.rs # HeuristicRouter — keyword/pattern + temporal bounds
+│   ├── llm.rs       # LlmRouter — Ollama-backed resolution
+│   └── INDEX.md
+├── scheduler/       # Agent lifecycle — registration, priority queue, intent dispatch, messaging
+│   ├── agent.rs     # Agent, AgentId, AgentState, Intent, IntentPriority, AgentResources
 │   ├── queue.rs     # SchedulerQueue (binary heap, priority + timestamp ordering)
-│   ├── dispatch.rs  # AgentExecutor trait, TokioDispatchLoop, DispatchHandle
+│   ├── dispatch.rs  # AgentExecutor, KernelExecutor, LocalExecutor, TokioDispatchLoop, DispatchHandle
+│   ├── messaging.rs # MessageBus — bounded mailboxes, send/read/ack
 │   └── mod.rs       # AgentScheduler
 ├── fs/              # Semantic filesystem — tag-based CRUD, vector search, KG
 │   ├── semantic_fs.rs  # ~1540 lines; SemanticFS + event container + CRUD + search
@@ -34,11 +42,17 @@ src/
 │   ├── summarizer.rs   # Summarizer trait, OllamaSummarizer
 │   └── mod.rs          # Re-exports
 ├── kernel/          # AI Kernel — orchestrates all subsystems
-│   └── mod.rs       # ~560 lines; AIKernel (pure orchestrator, runtime metrics only)
+│   ├── mod.rs       # AIKernel — orchestrator, API dispatch, lifecycle
+│   ├── builtin_tools.rs # Built-in ToolRegistry + execute_tool (quotas, allowlist)
+│   ├── persistence.rs   # Restore/persist agents, intents, memories, search index
+│   └── INDEX.md
 ├── api/             # API layer — permission guardrails + semantic JSON protocol
 │   ├── semantic.rs  # ApiRequest, ApiResponse, JSON-over-TCP protocol types
-│   ├── permission.rs # PermissionGuard, PermissionContext, PermissionAction
+│   ├── permission.rs # PermissionGuard, PermissionContext, PermissionAction (incl. ReadAny, ownership isolation)
 │   └── mod.rs       # Re-exports
+├── tool/            # Tool Abstraction — "Everything is a Tool" capability system
+│   ├── mod.rs       # Tool trait, ToolResult, ToolSchema, ToolDescriptor
+│   └── registry.rs  # ToolRegistry — agent-discoverable capability catalog
 ├── temporal/        # Temporal reasoning — natural language time → time ranges
 │   ├── resolver.rs  # TemporalResolver trait, OllamaTemporalResolver
 │   ├── rules.rs     # HeuristicTemporalResolver, pre-defined temporal rules
@@ -69,13 +83,17 @@ CLAUDE.md            # AI guidance (soul document reference)
 |------|-------------|---------|
 | CAS storage | `src/cas/INDEX.md` | AIObject, CASStorage, content addressing |
 | Memory system | `src/memory/INDEX.md` | LayeredMemory, 4-tier hierarchy, persistence |
-| Agent scheduling | `src/scheduler/INDEX.md` | AgentScheduler, Intent, priority dispatch |
+| Intent router | `src/intent/INDEX.md` | NL → `ApiRequest`, ChainRouter, heuristic + LLM |
+| Agent scheduling | `src/scheduler/INDEX.md` | AgentScheduler, Intent, messaging, resources, dispatch |
 | Semantic FS | `src/fs/INDEX.md` | SemanticFS, vector search, KG, context loading |
 | AI Kernel | `src/kernel/INDEX.md` | AIKernel — central orchestrator |
 | API layer | `src/api/INDEX.md` | Permission guard, semantic JSON protocol |
+| Tool system | `src/tool/INDEX.md` | ToolRegistry, ToolDescriptor, execute_tool — "Everything is a Tool" |
+| Memory relevance | `src/memory/relevance.rs` | RelevanceScore, TTL eviction, tier promotion |
+| Context snapshot | `src/memory/context_snapshot.rs` | Suspend/resume cognitive continuity |
 | Temporal | `src/temporal/INDEX.md` | Time expression → Unix ms range resolution |
 | TCP daemon | `src/bin/plicod.rs` | JSON API server on port 7878 |
-| CLI tool | `src/bin/aicli.rs` | `put`, `get`, `search`, `agent`, `remember`, etc. |
+| CLI tool | `src/bin/aicli.rs` | `put`, `get`, `search`, `agent` (incl. `set-resources`), `tool`, `intent` (NL resolve vs `--description`), `send` / `messages` / `ack`, `status`, `suspend`, `resume`, `terminate`, `node`, `edge`, etc. |
 
 ## Build & Test
 
@@ -103,9 +121,9 @@ CLAUDE.md            # AI guidance (soul document reference)
 
 ## Architectural Constraints
 
-- Dependency direction: **api/bin → kernel → fs → cas/memory/scheduler** (never reverse)
+- Dependency direction: **api/bin → kernel → tool/fs → cas/memory/scheduler** (never reverse)
 - `kernel/` is the only module that imports all other modules — all subsystem calls go through `AIKernel`
-- `AIKernel` fields are `pub(crate)` — integration tests can access them, external crates cannot
+- `AIKernel` fields are `pub(crate)` — visible only inside the `plico` crate; integration tests in `tests/` use the public API
 - Binaries (`bin/`) import only `kernel/` and `api/`, never subsystem modules directly
 - CAS is the only module that touches the filesystem directly
 - No `unsafe` blocks in library code without a `# Safety` doc comment
@@ -141,6 +159,22 @@ CLAUDE.md            # AI guidance (soul document reference)
 
 ### Clippy Policy
 - `cargo clippy` runs clean (zero warnings) — all lint violations either fixed or suppressed with `#[allow(...)]` and an explanation
+
+## Dogfooding Tag Convention
+
+Plico manages its own project data (ADRs, progress, experiences) through its standard API.
+Tags use the `plico:` namespace with colon-separated hierarchical dimensions:
+
+| Dimension | Values | Purpose |
+|-----------|--------|---------|
+| `plico:type:<T>` | adr, progress, experience, test-result, bug, code-change, doc | Artifact type |
+| `plico:module:<M>` | cas, fs, kernel, api, scheduler, memory, graph, temporal, cli, daemon | Module scope |
+| `plico:status:<S>` | active, superseded, resolved, wip | Lifecycle state |
+| `plico:milestone:<V>` | v0.1, v0.2, v0.3, ... | Target milestone |
+| `plico:severity:<L>` | critical, high, medium, low | Bug severity only |
+
+KG nodes use generic types (Entity, Fact) with `properties` JSON to encode domain meaning.
+No project-specific KGNodeType or KGEdgeType — all semantics via tags + properties.
 
 ## Key Environment Variables
 

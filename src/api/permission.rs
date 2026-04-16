@@ -105,10 +105,14 @@ impl PermissionGrant {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PermissionAction {
     Read,
+    /// Read objects created by other agents (bypasses ownership isolation).
+    ReadAny,
     Write,
     Delete,
     Network,
     Execute,
+    /// Send messages to other agents.
+    SendMessage,
     All,
 }
 
@@ -158,10 +162,11 @@ impl PermissionGuard {
             }
         }
 
-        // Default policy: Read and Write are allowed by default
+        // Default policy: Read and Write are allowed by default.
+        // ReadAny, Delete, Network, Execute require explicit grants.
         match action {
             PermissionAction::Read | PermissionAction::Write => Ok(()),
-            PermissionAction::Delete | PermissionAction::Network | PermissionAction::Execute => {
+            PermissionAction::ReadAny | PermissionAction::Delete | PermissionAction::Network | PermissionAction::Execute | PermissionAction::SendMessage => {
                 Err(std::io::Error::new(
                     std::io::ErrorKind::PermissionDenied,
                     format!(
@@ -212,6 +217,59 @@ impl PermissionGuard {
     /// Check if an agent has any grants.
     pub fn has_grants(&self, agent_id: &str) -> bool {
         self.grants.contains_key(agent_id)
+    }
+
+    /// Check if agent is trusted (bypasses all checks including isolation).
+    pub fn is_trusted(&self, agent_id: &str) -> bool {
+        self.trusted_agents.contains(agent_id)
+    }
+
+    /// Check if an agent can read objects from all agents (trusted or has ReadAny/All grant).
+    pub fn can_read_any(&self, agent_id: &str) -> bool {
+        if self.trusted_agents.contains(agent_id) {
+            return true;
+        }
+        if let Some(grants) = self.grants.get(agent_id) {
+            return grants.iter().any(|g|
+                g.covers(PermissionAction::ReadAny) || g.covers(PermissionAction::All)
+            );
+        }
+        false
+    }
+
+    /// Check if an agent can read an object owned by `owner_id`.
+    ///
+    /// Returns Ok(()) if:
+    /// - agent is trusted
+    /// - agent is the owner
+    /// - agent has ReadAny or All grant
+    pub fn check_ownership(
+        &self,
+        agent_id: &str,
+        owner_id: &str,
+    ) -> std::io::Result<()> {
+        if self.trusted_agents.contains(agent_id) {
+            return Ok(());
+        }
+        if agent_id == owner_id {
+            return Ok(());
+        }
+        let ctx = PermissionContext::new(agent_id.to_string());
+        if let Some(grants) = self.grants.get(agent_id) {
+            if grants.iter().any(|g| g.covers(PermissionAction::ReadAny) || g.covers(PermissionAction::All)) {
+                return Ok(());
+            }
+        }
+        if ctx.has_permission(PermissionAction::ReadAny) {
+            return Ok(());
+        }
+        Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            format!(
+                "Agent '{}' cannot read objects owned by '{}'. Grant ReadAny to override.",
+                agent_id, owner_id
+            ),
+        ))
     }
 }
 

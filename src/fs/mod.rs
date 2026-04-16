@@ -35,7 +35,7 @@ pub mod graph;
 pub use semantic_fs::{SemanticFS, FSError, Query, SearchResult, AuditEntry, AuditAction, RecycleEntry, EventType, EventRelation, EventSummary};
 pub use context_loader::{ContextLoader, ContextLayer};
 pub use embedding::{EmbeddingProvider, Embedding, EmbeddingMeta, EmbedError, OllamaBackend, LocalEmbeddingBackend, StubEmbeddingProvider};
-pub use search::{SemanticSearch, SearchHit, SearchIndexMeta, SearchFilter, InMemoryBackend, Bm25Index};
+pub use search::{SemanticSearch, SearchHit, SearchIndexMeta, SearchFilter, InMemoryBackend, Bm25Index, SearchIndexEntry};
 pub use crate::temporal::{TemporalResolver, TemporalRange, Granularity};
 pub use summarizer::{Summarizer, OllamaSummarizer, SummaryLayer, SummarError};
 pub use graph::{

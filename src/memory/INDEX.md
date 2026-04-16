@@ -37,14 +37,18 @@ Status: stable | Fan-in: 2 | Fan-out: 1
 | `MemoryLoader` | `persist.rs` | Restores memory entries from CAS on startup |
 | `MemoryQuery` | `mod.rs` | Query struct for memory retrieval |
 | `MemoryResult` | `mod.rs` | Result struct for memory queries |
+| `RelevanceScore` | `relevance.rs` | Scoring, budget selection, TTL, promotion thresholds |
+| `ContextSnapshot` | `context_snapshot.rs` | Suspend/resume cognitive continuity |
 
 ## Files
 
 | File | Lines | Purpose |
 |------|-------|---------|
-| `layered.rs` | ⚠ ~482 | LayeredMemory, MemoryTier, MemoryEntry — needs split |
+| `layered.rs` | ⚠ ~482 | LayeredMemory, `store_checked` (per-agent entry quota), eviction |
 | `persist.rs` | ~384 | CASPersister, MemoryLoader, PersistenceIndex |
-| `mod.rs` | ~44 | MemoryQuery, MemoryResult, re-exports |
+| `relevance.rs` | ~253 | Relevance scoring utilities |
+| `context_snapshot.rs` | ~143 | Context snapshot types |
+| `mod.rs` | ~46 | MemoryQuery, MemoryResult, re-exports |
 
 ## Dependencies (Fan-out: 1)
 
@@ -53,6 +57,7 @@ Status: stable | Fan-in: 2 | Fan-out: 1
 ## Interface Contract
 
 - `LayeredMemory::store()`: adds entry to specified tier; auto-evicts if tier capacity exceeded
+- `LayeredMemory::store_checked()`: like `store` but rejects when per-agent entry quota exceeded (`MemoryError::QuotaExceeded`)
 - `LayeredMemory::recall()`: returns entries by agent_id + tier, sorted by last_accessed
 - `CASPersister::persist()`: serializes all entries for an agent to CAS; returns persisted CIDs
 - `MemoryLoader::load()`: restores entries from CAS using persistence index

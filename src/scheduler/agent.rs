@@ -1,4 +1,7 @@
-//! Agent definition and lifecycle states.
+//! Agent Definition and Lifecycle States
+//!
+//! Defines `Agent`, `AgentId`, `AgentState`, `Intent`, and `IntentPriority` —
+//! the core types for agent lifecycle management in the scheduler.
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -55,25 +58,25 @@ impl AgentState {
 }
 
 /// An AI agent — the fundamental unit of execution in Plico.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Agent {
     id: AgentId,
     pub name: String,
     state: AgentState,
-    /// Current intent being executed.
+    /// Current intent being executed (not serialized — transient).
+    #[serde(skip)]
     current_intent: Option<Intent>,
-    /// Resources allocated to this agent (enforcement point for future quota checks).
-    #[allow(dead_code)]
+    /// Resources allocated to this agent.
     resources: AgentResources,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentResources {
-    /// Memory quota (bytes).
+    /// Max number of memory entries this agent can store. 0 = unlimited.
     pub memory_quota: u64,
-    /// CPU time quota (ms).
+    /// Max CPU time per intent execution (ms). 0 = unlimited.
     pub cpu_time_quota: u64,
-    /// Tools available to this agent.
+    /// Tools available to this agent. Empty = all tools allowed.
     pub allowed_tools: Vec<String>,
 }
 
@@ -106,24 +109,36 @@ impl Agent {
             self.state = AgentState::Waiting;
         }
     }
+
+    pub fn resources(&self) -> &AgentResources {
+        &self.resources
+    }
+
+    pub fn set_resources(&mut self, resources: AgentResources) {
+        self.resources = resources;
+    }
 }
 
 impl Default for AgentResources {
     fn default() -> Self {
         Self {
-            memory_quota: 1_073_741_824, // 1 GB
-            cpu_time_quota: 60_000,       // 60 seconds
-            allowed_tools: Vec::new(),
+            memory_quota: 0,         // 0 = unlimited
+            cpu_time_quota: 0,       // 0 = unlimited
+            allowed_tools: Vec::new(), // empty = all tools allowed
         }
     }
 }
 
 /// An intent — a task or goal submitted to the scheduler.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Intent {
     pub id: IntentId,
     pub priority: IntentPriority,
     pub description: String,
+    /// JSON-encoded action payload (typically a serialized `ApiRequest`).
+    /// When present, the executor deserializes and dispatches this action
+    /// through the kernel. When None, the intent is descriptive only.
+    pub action: Option<String>,
     /// Which agent owns this intent (if any).
     pub agent_id: Option<AgentId>,
     /// Timestamp (ms) when submitted.
@@ -156,14 +171,24 @@ impl Intent {
             id: IntentId::new(),
             priority,
             description,
+            action: None,
             agent_id: None,
             submitted_at: now_ms(),
         }
     }
 
+    pub fn with_action(mut self, action: String) -> Self {
+        self.action = Some(action);
+        self
+    }
+
     pub fn with_agent(mut self, agent_id: AgentId) -> Self {
         self.agent_id = Some(agent_id);
         self
+    }
+
+    pub fn description(&self) -> &str {
+        &self.description
     }
 }
 

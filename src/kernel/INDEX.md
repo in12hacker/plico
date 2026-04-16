@@ -1,8 +1,8 @@
 # Module: kernel
 
-AI Kernel — the central orchestrator that wires together all Plico subsystems (CAS, memory, scheduler, FS, permissions).
+AI Kernel — the central orchestrator that wires together all Plico subsystems (CAS, memory, scheduler, FS, permissions, intent, tools, messaging).
 
-Status: active | Fan-in: 2 | Fan-out: 5
+Status: active | Fan-in: 2 | Fan-out: 7
 
 ## Dependents (Fan-in: 2)
 
@@ -11,17 +11,18 @@ Status: active | Fan-in: 2 | Fan-out: 5
 
 ## Modification Risk
 
-- Add `AIKernel` public method → compatible, no breaking change
+- Add `AIKernel` public method → compatible if callers updated in binaries
 - Change `AIKernel::new()` signature → BREAKING, update both binaries
 - Remove kernel method → BREAKING, update plicod.rs + aicli.rs dispatch
-- Change embedding provider selection → behavioral change, affects search quality
+- Change `execute_tool` dispatch → affects all tool clients; check `builtin_tools.rs`
 
 ## Task Routing
 
-- Add new API operation → modify `src/kernel/mod.rs` (add method) + `src/bin/plicod.rs` (add dispatch)
-- Change kernel initialization → modify `src/kernel/mod.rs` AIKernel::new()
-- Fix embedding fallback → modify `src/kernel/mod.rs` create_embedding_provider()
-- Fix dashboard → modify `src/kernel/mod.rs` dashboard_status() (⚠ soul violation area)
+- Add new API operation → `mod.rs` (`handle_api_request` / public method) + `plicod.rs` dispatch + `api/semantic.rs` if new variant
+- Built-in tool registration / `execute_tool` → `builtin_tools.rs`
+- Persistence / restore / embedding bootstrap → `persistence.rs`
+- Intent resolution wiring → `mod.rs` + `intent/`
+- Agent messaging → `mod.rs` + `scheduler/messaging.rs`
 
 ## Public API
 
@@ -29,36 +30,33 @@ Status: active | Fan-in: 2 | Fan-out: 5
 |--------|------|-------------|
 | `AIKernel` | `mod.rs` | Central orchestrator — all subsystem access |
 
-Key methods:
-- `AIKernel::new(root)` — initialize all subsystems from storage root
-- `AIKernel::start_dispatch_loop()` → DispatchHandle
-- `AIKernel::graph_explore_raw()` → Vec of KG neighbor tuples
-- `AIKernel::list_deleted()` / `restore_deleted()` — recycle bin API
-- `AIKernel::dashboard_status()` → DashboardStatus (⚠ contains hardcoded dev data)
+Key methods (non-exhaustive): `new`, `handle_api_request`, `execute_tool`, `intent_resolve`, `agent_set_resources`, `send_message`, `read_messages`, `ack_message`, dispatch/memory/FS graph helpers — see `mod.rs`.
 
 ## Files
 
 | File | Lines | Purpose |
 |------|-------|---------|
-| `mod.rs` | ⚠ ~1011 | AIKernel struct + all methods + dashboard — needs split |
+| `mod.rs` | ⚠ ~1154 | AIKernel struct, API dispatch, orchestration — still large; further splits TBD |
+| `builtin_tools.rs` | ~434 | `register_builtin_tools`, `execute_tool` (allowlist + memory quota) |
+| `persistence.rs` | ~217 | Persist/restore agents, intents, memories, search index; embedding factory |
 
-## Dependencies (Fan-out: 5)
+## Dependencies (Fan-out: 7)
 
-- `src/cas/` — CASStorage, AIObject, AIObjectMeta
-- `src/memory/` — LayeredMemory, MemoryEntry, CASPersister, MemoryPersister
-- `src/scheduler/` — AgentScheduler, Agent, Intent, dispatch types
-- `src/fs/` — SemanticFS, Query, embedding/search/KG types
-- `src/api/` — PermissionGuard, PermissionContext, PermissionAction; DashboardStatus types
+- `src/cas/` — CASStorage, AIObject
+- `src/memory/` — LayeredMemory, persistence traits, relevance, context snapshot
+- `src/scheduler/` — AgentScheduler, messaging, dispatch types
+- `src/fs/` — SemanticFS, search, KG, embedding
+- `src/api/` — PermissionGuard, semantic protocol
+- `src/intent/` — ChainRouter, intent resolution
+- `src/tool/` — ToolRegistry
 
 ## Interface Contract
 
-- `AIKernel::new()`: initializes all subsystems; embedding backend auto-detected from env vars (local → ollama → stub fallback)
-- All `pub(crate)` fields: accessible in integration tests, not in external crates
-- Thread safety: kernel itself is not Clone; daemon wraps in `Arc<AIKernel>` for shared access
-- Side effect: constructor creates directory structure under `root`
+- `AIKernel::new()`: initializes subsystems; embedding backend from env (`EMBEDDING_BACKEND`, etc.)
+- `pub(crate)` fields: library-internal only; crate integration tests in `tests/` must use public API
+- Thread safety: kernel not `Clone`; daemon uses `Arc<AIKernel>`
 
 ## Tests
 
-- Unit: none (kernel is integration-level)
 - Integration: `tests/kernel_test.rs`
-- Critical: `test_kernel_create_and_read`, `test_semantic_search_through_kernel`
+- Critical: semantic CRUD through kernel, agent + intent + tool paths, v0.5 E2E (resources, messaging, intent temporal)

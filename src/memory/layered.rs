@@ -80,6 +80,11 @@ pub struct MemoryEntry {
 
     /// Embedding vector for semantic search (L1+ tiers only).
     pub embedding: Option<Vec<f32>>,
+
+    /// Time-to-live in milliseconds. When set, the entry expires after
+    /// `created_at + ttl_ms` and is evicted during the next cleanup pass.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ttl_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -160,6 +165,7 @@ impl MemoryEntry {
             created_at: now,
             tags: Vec::new(),
             embedding: None,
+            ttl_ms: None,
         }
     }
 
@@ -181,6 +187,7 @@ impl MemoryEntry {
             created_at: now,
             tags,
             embedding: None,
+            ttl_ms: None,
         }
     }
 
@@ -205,6 +212,9 @@ pub enum MemoryError {
 
     #[error("Tier capacity exceeded: tier={tier}, agent={agent}")]
     TierCapacityExceeded { tier: MemoryTier, agent: String },
+
+    #[error("Memory quota exceeded: agent={agent_id}, current={current}, limit={limit}")]
+    QuotaExceeded { agent_id: String, current: usize, limit: u64 },
 }
 
 pub struct LayeredMemory {
@@ -353,6 +363,41 @@ impl LayeredMemory {
         self.store_inner(entry);
     }
 
+    /// Store with quota enforcement. Returns Err if the agent's total memory
+    /// entry count would exceed `quota`. `quota == 0` means unlimited.
+    pub fn store_checked(&self, entry: MemoryEntry, quota: u64) -> Result<(), MemoryError> {
+        if quota > 0 {
+            let current = self.count_for_agent(&entry.agent_id);
+            if current as u64 >= quota {
+                return Err(MemoryError::QuotaExceeded {
+                    agent_id: entry.agent_id.clone(),
+                    current,
+                    limit: quota,
+                });
+            }
+        }
+        self.store(entry);
+        Ok(())
+    }
+
+    /// Count total memory entries across all tiers for an agent.
+    pub fn count_for_agent(&self, agent_id: &str) -> usize {
+        let mut count = 0;
+        if let Ok(map) = self.ephemeral.read() {
+            count += map.get(agent_id).map(|v| v.len()).unwrap_or(0);
+        }
+        if let Ok(map) = self.working.read() {
+            count += map.get(agent_id).map(|v| v.len()).unwrap_or(0);
+        }
+        if let Ok(map) = self.long_term.read() {
+            count += map.get(agent_id).map(|v| v.len()).unwrap_or(0);
+        }
+        if let Ok(map) = self.procedural.read() {
+            count += map.get(agent_id).map(|v| v.len()).unwrap_or(0);
+        }
+        count
+    }
+
     fn store_inner(&self, entry: MemoryEntry) {
         match entry.tier {
             MemoryTier::Ephemeral => {
@@ -465,6 +510,119 @@ impl LayeredMemory {
             .filter(|e| tags.iter().any(|t| e.tags.contains(t)))
             .collect()
     }
+
+    // ─── Cognitive Memory Behavior ──────────────────────────────────
+
+    /// Retrieve all memories with access tracking.
+    ///
+    /// Unlike `get_all()`, this updates `access_count` and `last_accessed`
+    /// on every returned entry, then checks for tier promotion.
+    pub fn recall_with_tracking(&self, agent_id: &str) -> Vec<MemoryEntry> {
+        let now = now_ms();
+        let mut all = Vec::new();
+
+        for tier in [MemoryTier::Ephemeral, MemoryTier::Working, MemoryTier::LongTerm, MemoryTier::Procedural] {
+            let map = match tier {
+                MemoryTier::Ephemeral => &self.ephemeral,
+                MemoryTier::Working => &self.working,
+                MemoryTier::LongTerm => &self.long_term,
+                MemoryTier::Procedural => &self.procedural,
+            };
+            if let Some(entries) = map.write().unwrap().get_mut(agent_id) {
+                for entry in entries.iter_mut() {
+                    entry.access_count += 1;
+                    entry.last_accessed = now;
+                }
+                all.extend(entries.iter().cloned());
+            }
+        }
+
+        self.promote_check(agent_id);
+        all
+    }
+
+    /// Retrieve the most relevant memories within a token budget.
+    ///
+    /// Uses relevance scoring (recency × frequency × importance) to rank
+    /// all memories, then greedily selects entries fitting the budget.
+    pub fn recall_relevant(&self, agent_id: &str, budget_tokens: usize) -> Vec<MemoryEntry> {
+        let now = now_ms();
+        let all = self.recall_with_tracking(agent_id);
+        let selected = crate::memory::relevance::select_within_budget(&all, budget_tokens, now);
+        selected.into_iter().map(|(entry, _score)| entry).collect()
+    }
+
+    /// Evict expired entries (TTL-based) across all tiers for an agent.
+    ///
+    /// Returns the number of entries evicted.
+    pub fn evict_expired(&self, agent_id: &str) -> usize {
+        let now = now_ms();
+        let mut evicted = 0;
+
+        for tier_map in [&self.ephemeral, &self.working, &self.long_term] {
+            let mut map = tier_map.write().unwrap();
+            if let Some(entries) = map.get_mut(agent_id) {
+                let before = entries.len();
+                entries.retain(|e| !crate::memory::relevance::is_expired(e, now));
+                evicted += before - entries.len();
+            }
+        }
+
+        evicted
+    }
+
+    /// Check and execute tier promotions for an agent.
+    ///
+    /// Moves entries that meet promotion thresholds to the next tier:
+    /// - Ephemeral → Working (access_count >= 3)
+    /// - Working → LongTerm (access_count >= 10 && importance >= 50)
+    pub fn promote_check(&self, agent_id: &str) {
+        let thresholds = crate::memory::relevance::PromotionThresholds::default();
+
+        // Ephemeral → Working
+        let to_promote_working = {
+            let mut eph = self.ephemeral.write().unwrap();
+            if let Some(entries) = eph.get_mut(agent_id) {
+                let (promote, keep): (Vec<_>, Vec<_>) = entries.drain(..).partition(|e| {
+                    crate::memory::relevance::check_promotion(e, &thresholds) == Some(MemoryTier::Working)
+                });
+                *entries = keep;
+                promote
+            } else {
+                Vec::new()
+            }
+        };
+        if !to_promote_working.is_empty() {
+            let mut working = self.working.write().unwrap();
+            let vec = working.entry(agent_id.to_string()).or_default();
+            for mut e in to_promote_working {
+                e.tier = MemoryTier::Working;
+                vec.push(e);
+            }
+        }
+
+        // Working → LongTerm
+        let to_promote_lt = {
+            let mut wk = self.working.write().unwrap();
+            if let Some(entries) = wk.get_mut(agent_id) {
+                let (promote, keep): (Vec<_>, Vec<_>) = entries.drain(..).partition(|e| {
+                    crate::memory::relevance::check_promotion(e, &thresholds) == Some(MemoryTier::LongTerm)
+                });
+                *entries = keep;
+                promote
+            } else {
+                Vec::new()
+            }
+        };
+        if !to_promote_lt.is_empty() {
+            let mut lt = self.long_term.write().unwrap();
+            let vec = lt.entry(agent_id.to_string()).or_default();
+            for mut e in to_promote_lt {
+                e.tier = MemoryTier::LongTerm;
+                vec.push(e);
+            }
+        }
+    }
 }
 
 impl Default for LayeredMemory {
@@ -473,7 +631,7 @@ impl Default for LayeredMemory {
     }
 }
 
-fn now_ms() -> u64 {
+pub(crate) fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)

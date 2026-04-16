@@ -20,10 +20,11 @@
 pub mod agent;
 pub mod queue;
 pub mod dispatch;
+pub mod messaging;
 
-pub use agent::{Agent, AgentId, AgentState, Intent, IntentPriority, IntentId};
+pub use agent::{Agent, AgentId, AgentState, AgentResources, Intent, IntentPriority, IntentId};
 pub use queue::{SchedulerQueue, SchedulerError};
-pub use dispatch::{DispatchHandle, AgentExecutor, LocalExecutor, TokioDispatchLoop, DispatchError, ExecutionResult};
+pub use dispatch::{DispatchHandle, AgentExecutor, LocalExecutor, KernelExecutor, TokioDispatchLoop, DispatchError, ExecutionResult};
 
 use serde::{Deserialize, Serialize};
 use std::sync::RwLock;
@@ -106,6 +107,64 @@ impl AgentScheduler {
     /// Remove an agent.
     pub fn remove(&self, agent_id: &AgentId) {
         self.agents.write().unwrap().remove(agent_id);
+    }
+
+    /// Snapshot all agents for persistence (serializable copies).
+    pub fn snapshot_agents(&self) -> Vec<Agent> {
+        self.agents.read().unwrap().values().cloned().collect()
+    }
+
+    /// Restore agents from a persisted snapshot.
+    /// Replaces any existing agents with the same ID.
+    pub fn restore_agents(&self, agents: Vec<Agent>) {
+        let mut map = self.agents.write().unwrap();
+        for agent in agents {
+            map.insert(agent.id().clone(), agent);
+        }
+    }
+
+    /// Re-register an already-constructed Agent (e.g. deserialized from CAS).
+    pub fn register_existing(&self, agent: Agent) {
+        let mut agents = self.agents.write().unwrap();
+        agents.insert(agent.id().clone(), agent);
+    }
+
+    /// Get an agent's resource limits.
+    pub fn get_resources(&self, agent_id: &AgentId) -> Option<AgentResources> {
+        self.agents.read().unwrap().get(agent_id).map(|a| a.resources().clone())
+    }
+
+    /// Update an agent's resource limits.
+    pub fn set_resources(&self, agent_id: &AgentId, resources: AgentResources) -> bool {
+        if let Ok(mut agents) = self.agents.write() {
+            if let Some(agent) = agents.get_mut(agent_id) {
+                agent.set_resources(resources);
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Drain all pending intents for persistence snapshot.
+    /// Returns a copy of all intents currently in the queue.
+    pub fn snapshot_intents(&self) -> Vec<Intent> {
+        let mut queue = self.queue.write().unwrap();
+        let mut intents = Vec::new();
+        while let Some(intent) = queue.pop() {
+            intents.push(intent);
+        }
+        for intent in &intents {
+            queue.push(intent.clone());
+        }
+        intents
+    }
+
+    /// Restore intents from a persisted snapshot.
+    pub fn restore_intents(&self, intents: Vec<Intent>) {
+        let mut queue = self.queue.write().unwrap();
+        for intent in intents {
+            queue.push(intent);
+        }
     }
 }
 

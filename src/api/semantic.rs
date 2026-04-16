@@ -37,7 +37,7 @@
 
 use base64::Engine;
 use serde::{Deserialize, Serialize};
-use crate::fs::{EventType, EventRelation, EventSummary};
+use crate::fs::{EventType, EventRelation, EventSummary, KGNodeType, KGEdgeType};
 
 /// Content encoding field for binary-safe API payloads.
 ///
@@ -179,7 +179,124 @@ pub enum ApiRequest {
         agent_id: String,
     },
 
+    // ── Knowledge Graph direct operations ────────────────────────────────
 
+    #[serde(rename = "add_node")]
+    AddNode {
+        label: String,
+        node_type: KGNodeType,
+        #[serde(default)]
+        properties: serde_json::Value,
+        agent_id: String,
+    },
+
+    #[serde(rename = "add_edge")]
+    AddEdge {
+        src_id: String,
+        dst_id: String,
+        edge_type: KGEdgeType,
+        #[serde(default)]
+        weight: Option<f32>,
+        agent_id: String,
+    },
+
+    #[serde(rename = "list_nodes")]
+    ListNodes {
+        #[serde(default)]
+        node_type: Option<KGNodeType>,
+        agent_id: String,
+    },
+
+    #[serde(rename = "find_paths")]
+    FindPaths {
+        src_id: String,
+        dst_id: String,
+        #[serde(default)]
+        max_depth: Option<u8>,
+        agent_id: String,
+    },
+
+    // ── Agent Lifecycle operations ────────────────────────────────────
+
+    #[serde(rename = "submit_intent")]
+    SubmitIntent {
+        description: String,
+        priority: String,
+        /// JSON-encoded ApiRequest to execute when this intent is dispatched.
+        #[serde(default)]
+        action: Option<String>,
+        agent_id: String,
+    },
+
+    #[serde(rename = "agent_status")]
+    AgentStatus { agent_id: String },
+
+    #[serde(rename = "agent_suspend")]
+    AgentSuspend { agent_id: String },
+
+    #[serde(rename = "agent_resume")]
+    AgentResume { agent_id: String },
+
+    #[serde(rename = "agent_terminate")]
+    AgentTerminate { agent_id: String },
+
+    // ── Tool operations ──────────────────────────────────────────────
+
+    #[serde(rename = "tool_call")]
+    ToolCall {
+        tool: String,
+        #[serde(default)]
+        params: serde_json::Value,
+        agent_id: String,
+    },
+
+    #[serde(rename = "tool_list")]
+    ToolList { agent_id: String },
+
+    #[serde(rename = "tool_describe")]
+    ToolDescribe { tool: String, agent_id: String },
+
+    // ── Intent Resolution ─────────────────────────────────────────────
+
+    #[serde(rename = "intent_resolve")]
+    IntentResolve { text: String, agent_id: String },
+
+    // ── Agent Resource Management ─────────────────────────────────────
+
+    #[serde(rename = "agent_set_resources")]
+    AgentSetResources {
+        agent_id: String,
+        #[serde(default)]
+        memory_quota: Option<u64>,
+        #[serde(default)]
+        cpu_time_quota: Option<u64>,
+        #[serde(default)]
+        allowed_tools: Option<Vec<String>>,
+        /// Agent performing the operation (must be owner or trusted).
+        caller_agent_id: String,
+    },
+
+    // ── Agent Messaging ───────────────────────────────────────────────
+
+    #[serde(rename = "send_message")]
+    SendMessage {
+        from: String,
+        to: String,
+        payload: serde_json::Value,
+    },
+
+    #[serde(rename = "read_messages")]
+    ReadMessages {
+        agent_id: String,
+        #[serde(default)]
+        unread_only: bool,
+    },
+
+    #[serde(rename = "ack_message")]
+    AckMessage {
+        agent_id: String,
+        message_id: String,
+    },
 }
 
 /// A JSON API response.
@@ -188,6 +305,8 @@ pub struct ApiResponse {
     pub ok: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cid: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub node_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub data: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -206,6 +325,24 @@ pub struct ApiResponse {
     pub deleted: Option<Vec<DeletedDto>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub events: Option<Vec<EventSummary>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nodes: Option<Vec<KGNodeDto>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub paths: Option<Vec<Vec<KGNodeDto>>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub intent_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_state: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pending_intents: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools: Option<Vec<crate::tool::ToolDescriptor>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_result: Option<crate::tool::ToolResult>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resolved_intents: Option<Vec<crate::intent::ResolvedIntent>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub messages: Option<Vec<crate::scheduler::messaging::AgentMessage>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
@@ -240,6 +377,18 @@ pub struct DeletedDto {
     pub tags: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KGNodeDto {
+    pub id: String,
+    pub label: String,
+    pub node_type: KGNodeType,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_cid: Option<String>,
+    pub properties: serde_json::Value,
+    pub agent_id: String,
+    pub created_at: u64,
+}
+
 // ── Project Self-Management (Dogfooding Plico) ─────────────────────────────────
 
 
@@ -263,87 +412,59 @@ pub struct DashboardStatus {
 impl ApiResponse {
     pub fn ok() -> Self {
         Self {
-            ok: true,
-            cid: None,
-            data: None,
-            results: None,
-            agent_id: None,
-            agents: None,
-            memory: None,
-            tags: None,
-            neighbors: None,
-            deleted: None,
-            events: None,
-            error: None,
+            ok: true, cid: None, node_id: None, data: None, results: None,
+            agent_id: None, agents: None, memory: None, tags: None,
+            neighbors: None, deleted: None, events: None, nodes: None,
+            paths: None, intent_id: None, agent_state: None,
+            pending_intents: None, tools: None, tool_result: None,
+            resolved_intents: None, messages: None, error: None,
         }
     }
 
     pub fn with_cid(cid: String) -> Self {
-        Self {
-            ok: true,
-            cid: Some(cid),
-            data: None,
-            results: None,
-            agent_id: None,
-            agents: None,
-            memory: None,
-            tags: None,
-            neighbors: None,
-            deleted: None,
-            events: None,
-            error: None,
-        }
+        let mut r = Self::ok();
+        r.cid = Some(cid);
+        r
+    }
+
+    pub fn with_node_id(node_id: String) -> Self {
+        let mut r = Self::ok();
+        r.node_id = Some(node_id);
+        r
     }
 
     pub fn with_data(data: String) -> Self {
-        Self {
-            ok: true,
-            cid: None,
-            data: Some(data),
-            results: None,
-            agent_id: None,
-            agents: None,
-            memory: None,
-            tags: None,
-            neighbors: None,
-            deleted: None,
-            events: None,
-            error: None,
-        }
+        let mut r = Self::ok();
+        r.data = Some(data);
+        r
     }
 
     pub fn with_events(events: Vec<EventSummary>) -> Self {
-        Self {
-            ok: true,
-            cid: None,
-            data: None,
-            results: None,
-            agent_id: None,
-            agents: None,
-            memory: None,
-            tags: None,
-            neighbors: None,
-            deleted: None,
-            events: Some(events),
-            error: None,
-        }
+        let mut r = Self::ok();
+        r.events = Some(events);
+        r
     }
 
+    pub fn with_nodes(nodes: Vec<KGNodeDto>) -> Self {
+        let mut r = Self::ok();
+        r.nodes = Some(nodes);
+        r
+    }
 
+    pub fn with_paths(paths: Vec<Vec<KGNodeDto>>) -> Self {
+        let mut r = Self::ok();
+        r.paths = Some(paths);
+        r
+    }
 
     pub fn error(msg: impl Into<String>) -> Self {
         Self {
-            ok: false,
-            cid: None,
-            data: None,
-            results: None,
-            agent_id: None,
-            agents: None,
-            memory: None,
-            tags: None,
-            neighbors: None,
-            deleted: None,
-            events: None,
+            ok: false, cid: None, node_id: None, data: None, results: None,
+            agent_id: None, agents: None, memory: None, tags: None,
+            neighbors: None, deleted: None, events: None, nodes: None,
+            paths: None, intent_id: None, agent_state: None,
+            pending_intents: None, tools: None, tool_result: None,
+            resolved_intents: None, messages: None,
             error: Some(msg.into()),
         }
     }

@@ -83,12 +83,19 @@ pub struct DispatchHandle {
     result_rx: Arc<RwLock<mpsc::Receiver<ExecutionResult>>>,
     /// Reference to the scheduler queue (shared with dispatch loop).
     queue: Arc<RwLock<SchedulerQueue>>,
+    /// Background task handle — abort on drop to prevent runtime leak.
+    task_handle: Arc<RwLock<Option<tokio::task::JoinHandle<()>>>>,
 }
 
 impl DispatchHandle {
-    /// Send a shutdown signal. Idempotent — safe to call multiple times.
+    /// Send a shutdown signal and abort the background task.
     pub fn shutdown(&self) {
         let _ = self.shutdown_tx.send(());
+        if let Ok(mut handle) = self.task_handle.try_write() {
+            if let Some(h) = handle.take() {
+                h.abort();
+            }
+        }
     }
 
     /// Take all pending execution results.
@@ -128,11 +135,8 @@ pub trait AgentExecutor: Send + Sync {
     ) -> Result<String, String>;
 }
 
-/// Simple in-process executor — runs intent descriptions as async tasks.
-///
-/// For the MVP, execution is simulated: the intent description is logged
-/// and returned as the output. A future implementation would invoke actual
-/// model inference or tool calls.
+/// Simple in-process executor — logs the intent and returns a stub result.
+/// Used for testing the dispatch loop without a real kernel.
 pub struct LocalExecutor;
 
 impl AgentExecutor for LocalExecutor {
@@ -142,10 +146,8 @@ impl AgentExecutor for LocalExecutor {
         _agent_id: Option<&AgentId>,
         _cpu_time_limit_ms: u64,
     ) -> Result<String, String> {
-        // MVP: log the intent and return a simulated result.
-        // Real implementation would: load agent memory, call model, invoke tools.
         tracing::info!(
-            "Executing intent {}: \"{}\" (priority={:?})",
+            "LocalExecutor: intent {}: \"{}\" (priority={:?})",
             intent.id,
             intent.description,
             intent.priority
@@ -154,6 +156,51 @@ impl AgentExecutor for LocalExecutor {
             "[Executed] Intent '{}' completed successfully.",
             intent.description
         ))
+    }
+}
+
+/// Kernel-backed executor — deserializes the intent's `action` as an
+/// `ApiRequest`, dispatches it through the kernel, and returns the JSON
+/// response. Falls back to LocalExecutor behavior if no action is present.
+pub struct KernelExecutor {
+    /// Callback that executes an ApiRequest JSON and returns an ApiResponse JSON.
+    /// Uses a boxed closure so the executor doesn't depend on kernel types directly,
+    /// preserving the dependency direction (scheduler never imports kernel).
+    handler: Box<dyn Fn(&str) -> String + Send + Sync>,
+}
+
+impl KernelExecutor {
+    /// Create a KernelExecutor with a request handler closure.
+    ///
+    /// The closure receives a JSON-serialized `ApiRequest` and must return
+    /// a JSON-serialized `ApiResponse`.
+    pub fn new(handler: impl Fn(&str) -> String + Send + Sync + 'static) -> Self {
+        Self { handler: Box::new(handler) }
+    }
+}
+
+impl AgentExecutor for KernelExecutor {
+    fn execute(
+        &self,
+        intent: &Intent,
+        _agent_id: Option<&AgentId>,
+        _cpu_time_limit_ms: u64,
+    ) -> Result<String, String> {
+        let Some(ref action_json) = intent.action else {
+            tracing::info!(
+                "KernelExecutor: no action for intent {}, treating as descriptive",
+                intent.id
+            );
+            return Ok(format!("[No action] Intent '{}' acknowledged.", intent.description));
+        };
+
+        tracing::info!(
+            "KernelExecutor: executing intent {} action",
+            intent.id
+        );
+
+        let response_json = (self.handler)(action_json);
+        Ok(response_json)
     }
 }
 
@@ -189,7 +236,7 @@ impl TokioDispatchLoop {
 
     /// Run the dispatch loop as a background tokio task.
     /// Returns a `DispatchHandle` for controlling the loop.
-    pub fn spawn(self) -> (tokio::task::JoinHandle<()>, DispatchHandle) {
+    pub fn spawn(self) -> DispatchHandle {
         let (shutdown_tx, _) = broadcast::channel(1);
         let (result_tx, result_rx) = mpsc::channel(100);
         let queue = Arc::new(RwLock::new(SchedulerQueue::new()));
@@ -216,14 +263,13 @@ impl TokioDispatchLoop {
             .await;
         });
 
-        (
-            handle,
-            DispatchHandle {
-                shutdown_tx,
-                result_rx: Arc::new(RwLock::new(result_rx)),
-                queue,
-            },
-        )
+        let dispatch_handle = DispatchHandle {
+            shutdown_tx,
+            result_rx: Arc::new(RwLock::new(result_rx)),
+            queue,
+            task_handle: Arc::new(RwLock::new(Some(handle))),
+        };
+        dispatch_handle
     }
 }
 
@@ -309,10 +355,12 @@ async fn dispatch_loop(
                         }
                     };
 
-                    // Update agent state
+                    // After execution, set agent to Waiting (ready for more intents)
+                    // unless it failed. Terminal states (Completed/Terminated) are
+                    // only set explicitly by lifecycle API.
                     if let Some(ref aid) = agent_id {
                         let next_state = if result.success {
-                            AgentState::Completed
+                            AgentState::Waiting
                         } else {
                             AgentState::Failed
                         };
@@ -402,7 +450,7 @@ mod tests {
         let scheduler = Arc::new(AgentScheduler::new());
         let executor = Arc::new(LocalExecutor);
         let loop_ = TokioDispatchLoop::new(scheduler, executor, 5000);
-        let (_handle, dispatch) = loop_.spawn();
+        let dispatch = loop_.spawn();
 
         // Shutdown should not panic
         dispatch.shutdown();

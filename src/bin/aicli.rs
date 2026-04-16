@@ -169,6 +169,19 @@ fn execute_local(kernel: &AIKernel, args: &[String]) -> ApiResponse {
         Some("explore") => cmd_explore(kernel, args),
         Some("deleted") => cmd_deleted(kernel, args),
         Some("restore") => cmd_restore(kernel, args),
+        Some("node") => cmd_add_node(kernel, args),
+        Some("edge") => cmd_add_edge(kernel, args),
+        Some("nodes") => cmd_list_nodes(kernel, args),
+        Some("paths") => cmd_find_paths(kernel, args),
+        Some("intent") => cmd_intent(kernel, args),
+        Some("status") => cmd_agent_status(kernel, args),
+        Some("suspend") => cmd_agent_suspend(kernel, args),
+        Some("resume") => cmd_agent_resume(kernel, args),
+        Some("terminate") => cmd_agent_terminate(kernel, args),
+        Some("tool") => cmd_tool(kernel, args),
+        Some("send") => cmd_send_message(kernel, args),
+        Some("messages") => cmd_read_messages(kernel, args),
+        Some("ack") => cmd_ack_message(kernel, args),
         _ => ApiResponse::error("Unknown command. Run: aicli --help"),
     }
 }
@@ -240,6 +253,102 @@ fn build_request(args: &[String]) -> Option<ApiRequest> {
             let cid = extract_arg(args, "--cid").unwrap_or_default();
             let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
             Some(ApiRequest::Restore { cid, agent_id })
+        }
+        Some("node") => {
+            let label = extract_arg(args, "--label").unwrap_or_default();
+            let node_type = parse_node_type(&extract_arg(args, "--type").unwrap_or_else(|| "entity".to_string()));
+            let props = extract_arg(args, "--props")
+                .and_then(|s| serde_json::from_str(&s).ok())
+                .unwrap_or(serde_json::Value::Null);
+            let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
+            Some(ApiRequest::AddNode { label, node_type, properties: props, agent_id })
+        }
+        Some("edge") => {
+            let src_id = extract_arg(args, "--src").unwrap_or_default();
+            let dst_id = extract_arg(args, "--dst").unwrap_or_default();
+            let edge_type = parse_edge_type(&extract_arg(args, "--type").unwrap_or_else(|| "related_to".to_string()));
+            let weight = extract_arg(args, "--weight").and_then(|s| s.parse().ok());
+            let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
+            Some(ApiRequest::AddEdge { src_id, dst_id, edge_type, weight, agent_id })
+        }
+        Some("nodes") => {
+            let node_type = extract_arg(args, "--type").map(|s| parse_node_type(&s));
+            let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
+            Some(ApiRequest::ListNodes { node_type, agent_id })
+        }
+        Some("paths") => {
+            let src_id = extract_arg(args, "--src").unwrap_or_default();
+            let dst_id = extract_arg(args, "--dst").unwrap_or_default();
+            let max_depth = extract_arg(args, "--depth").and_then(|s| s.parse().ok());
+            let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
+            Some(ApiRequest::FindPaths { src_id, dst_id, max_depth, agent_id })
+        }
+        Some("intent") => {
+            if extract_arg(args, "--description").is_some() {
+                let description = extract_arg(args, "--description").unwrap_or_default();
+                let priority = extract_arg(args, "--priority").unwrap_or_else(|| "medium".to_string());
+                let action = extract_arg(args, "--action");
+                let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
+                Some(ApiRequest::SubmitIntent { description, priority, action, agent_id })
+            } else {
+                let text = args.iter().skip(1)
+                    .filter(|a| !a.starts_with("--"))
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
+                Some(ApiRequest::IntentResolve { text, agent_id })
+            }
+        }
+        Some("status") => {
+            let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
+            Some(ApiRequest::AgentStatus { agent_id })
+        }
+        Some("suspend") => {
+            let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
+            Some(ApiRequest::AgentSuspend { agent_id })
+        }
+        Some("resume") => {
+            let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
+            Some(ApiRequest::AgentResume { agent_id })
+        }
+        Some("terminate") => {
+            let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
+            Some(ApiRequest::AgentTerminate { agent_id })
+        }
+        Some("send") => {
+            let from = extract_arg(args, "--from").unwrap_or_else(|| "cli".to_string());
+            let to = extract_arg(args, "--to").unwrap_or_default();
+            let payload_str = extract_arg(args, "--payload").unwrap_or_else(|| "{}".to_string());
+            let payload: serde_json::Value = serde_json::from_str(&payload_str).unwrap_or_default();
+            Some(ApiRequest::SendMessage { from, to, payload })
+        }
+        Some("messages") => {
+            let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
+            let unread_only = args.iter().any(|a| a == "--unread");
+            Some(ApiRequest::ReadMessages { agent_id, unread_only })
+        }
+        Some("ack") => {
+            let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
+            let message_id = args.get(1).cloned().unwrap_or_default();
+            Some(ApiRequest::AckMessage { agent_id, message_id })
+        }
+        Some("tool") => {
+            let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
+            match args.get(1).map(|s| s.as_str()) {
+                Some("list") => Some(ApiRequest::ToolList { agent_id }),
+                Some("describe") => {
+                    let name = args.get(2).cloned().unwrap_or_default();
+                    Some(ApiRequest::ToolDescribe { tool: name, agent_id })
+                }
+                Some("call") => {
+                    let name = args.get(2).cloned().unwrap_or_default();
+                    let params_str = extract_arg(args, "--params").unwrap_or_else(|| "{}".to_string());
+                    let params: serde_json::Value = serde_json::from_str(&params_str).unwrap_or_default();
+                    Some(ApiRequest::ToolCall { tool: name, params, agent_id })
+                }
+                _ => None,
+            }
         }
         _ => None,
     }
@@ -347,10 +456,28 @@ fn cmd_delete(kernel: &AIKernel, args: &[String]) -> ApiResponse {
 }
 
 fn cmd_agent(kernel: &AIKernel, args: &[String]) -> ApiResponse {
+    // agent set-resources <agent-id> --memory-quota N --cpu-time-quota N --allowed-tools "a,b"
+    if args.get(1).map(|s| s.as_str()) == Some("set-resources") {
+        let target = args.get(2).cloned().unwrap_or_default();
+        let mq = extract_arg(args, "--memory-quota").and_then(|s| s.parse().ok());
+        let cq = extract_arg(args, "--cpu-time-quota").and_then(|s| s.parse().ok());
+        let at = extract_arg(args, "--allowed-tools")
+            .map(|s| s.split(',').map(String::from).collect::<Vec<_>>());
+        return match kernel.agent_set_resources(&target, mq, cq, at) {
+            Ok(()) => {
+                println!("Resources updated for agent: {}", target);
+                ApiResponse::ok()
+            }
+            Err(e) => ApiResponse::error(e.to_string()),
+        };
+    }
+
     let name = extract_arg(args, "--register").unwrap_or_else(|| "unnamed".to_string());
     let id = kernel.register_agent(name.clone());
     println!("Agent registered: {} (ID: {})", name, id);
-ApiResponse { ok: true, cid: None, data: None, results: None, agent_id: Some(id), agents: None, memory: None, tags: None, neighbors: None, deleted: None, events: None, error: None }
+    let mut r = ApiResponse::ok();
+    r.agent_id = Some(id);
+    r
 }
 
 fn cmd_agents(kernel: &AIKernel, _args: &[String]) -> ApiResponse {
@@ -450,6 +577,311 @@ fn cmd_restore(kernel: &AIKernel, args: &[String]) -> ApiResponse {
     }
 }
 
+// ─── KG Command Handlers ─────────────────────────────────────────────
+
+fn cmd_add_node(kernel: &AIKernel, args: &[String]) -> ApiResponse {
+    let label = extract_arg(args, "--label").unwrap_or_default();
+    let node_type = parse_node_type(&extract_arg(args, "--type").unwrap_or_else(|| "entity".to_string()));
+    let props = extract_arg(args, "--props")
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or(serde_json::Value::Null);
+    let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
+
+    match kernel.kg_add_node(&label, node_type, props, &agent_id) {
+        Ok(id) => {
+            println!("Node created: {} (type={}, label=\"{}\")", id, node_type, label);
+            ApiResponse::with_node_id(id)
+        }
+        Err(e) => ApiResponse::error(e.to_string()),
+    }
+}
+
+fn cmd_add_edge(kernel: &AIKernel, args: &[String]) -> ApiResponse {
+    let src = extract_arg(args, "--src").unwrap_or_default();
+    let dst = extract_arg(args, "--dst").unwrap_or_default();
+    let edge_type = parse_edge_type(&extract_arg(args, "--type").unwrap_or_else(|| "related_to".to_string()));
+    let weight = extract_arg(args, "--weight").and_then(|s| s.parse().ok());
+    let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
+
+    match kernel.kg_add_edge(&src, &dst, edge_type, weight, &agent_id) {
+        Ok(()) => {
+            println!("Edge created: {} --[{}]--> {}", src, edge_type, dst);
+            ApiResponse::ok()
+        }
+        Err(e) => ApiResponse::error(e.to_string()),
+    }
+}
+
+fn cmd_list_nodes(kernel: &AIKernel, args: &[String]) -> ApiResponse {
+    let node_type = extract_arg(args, "--type").map(|s| parse_node_type(&s));
+    let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
+
+    let nodes = kernel.kg_list_nodes(node_type, &agent_id);
+    if nodes.is_empty() {
+        println!("No KG nodes found.");
+    } else {
+        println!("KG nodes ({} total):", nodes.len());
+        for n in &nodes {
+            println!("  {} [{}] \"{}\"", n.id, n.node_type, n.label);
+        }
+    }
+    ApiResponse::ok()
+}
+
+fn cmd_find_paths(kernel: &AIKernel, args: &[String]) -> ApiResponse {
+    let src = extract_arg(args, "--src").unwrap_or_default();
+    let dst = extract_arg(args, "--dst").unwrap_or_default();
+    let depth: u8 = extract_arg(args, "--depth")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(3)
+        .min(5);
+
+    let paths = kernel.kg_find_paths(&src, &dst, depth);
+    if paths.is_empty() {
+        println!("No paths from {} to {} (depth {})", src, dst, depth);
+    } else {
+        println!("Paths from {} to {} ({} found):", src, dst, paths.len());
+        for (i, path) in paths.iter().enumerate() {
+            let labels: Vec<&str> = path.iter().map(|n| n.label.as_str()).collect();
+            println!("  {}: {}", i + 1, labels.join(" → "));
+        }
+    }
+    ApiResponse::ok()
+}
+
+// ─── Agent Lifecycle CLI Commands ──────────────────────────────────
+
+fn cmd_intent(kernel: &AIKernel, args: &[String]) -> ApiResponse {
+    // If --description is present, this is a submit intent (legacy behavior).
+    // Otherwise, the positional text is NL to resolve.
+    if extract_arg(args, "--description").is_some() {
+        let description = extract_arg(args, "--description").unwrap_or_default();
+        let priority_str = extract_arg(args, "--priority").unwrap_or_else(|| "medium".to_string());
+        let action = extract_arg(args, "--action");
+        let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
+
+        let priority = match priority_str.to_lowercase().as_str() {
+            "critical" => plico::scheduler::IntentPriority::Critical,
+            "high" => plico::scheduler::IntentPriority::High,
+            "medium" => plico::scheduler::IntentPriority::Medium,
+            _ => plico::scheduler::IntentPriority::Low,
+        };
+
+        let id = kernel.submit_intent(priority, description, action, Some(agent_id));
+        println!("Intent submitted: {}", id);
+        let mut r = ApiResponse::ok();
+        r.intent_id = Some(id);
+        return r;
+    }
+
+    // NL intent resolution mode
+    let text = args.iter().skip(1)
+        .filter(|a| !a.starts_with("--"))
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
+
+    if text.is_empty() {
+        return ApiResponse::error("Usage: intent \"<natural language text>\" or intent --description \"...\"");
+    }
+
+    let results = kernel.intent_resolve(&text, &agent_id);
+    if results.is_empty() {
+        println!("Could not resolve: {}", text);
+        return ApiResponse::error("No intent resolved");
+    }
+
+    println!("Resolved {} action(s):", results.len());
+    for (i, ri) in results.iter().enumerate() {
+        println!("  {}. [{:.2}] {}", i + 1, ri.confidence, ri.explanation);
+    }
+
+    let mut r = ApiResponse::ok();
+    r.resolved_intents = Some(results);
+    r
+}
+
+fn cmd_send_message(kernel: &AIKernel, args: &[String]) -> ApiResponse {
+    let from = extract_arg(args, "--from").unwrap_or_else(|| "cli".to_string());
+    let to = extract_arg(args, "--to").unwrap_or_default();
+    let payload_str = extract_arg(args, "--payload").unwrap_or_else(|| "{}".to_string());
+    let payload: serde_json::Value = serde_json::from_str(&payload_str).unwrap_or_default();
+
+    match kernel.send_message(&from, &to, payload) {
+        Ok(msg_id) => {
+            println!("Message sent: {}", msg_id);
+            let mut r = ApiResponse::ok();
+            r.data = Some(msg_id);
+            r
+        }
+        Err(e) => ApiResponse::error(e.to_string()),
+    }
+}
+
+fn cmd_read_messages(kernel: &AIKernel, args: &[String]) -> ApiResponse {
+    let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
+    let unread_only = args.iter().any(|a| a == "--unread");
+
+    let msgs = kernel.read_messages(&agent_id, unread_only);
+    if msgs.is_empty() {
+        println!("No messages for agent: {}", agent_id);
+    } else {
+        println!("Messages for {} ({} total):", agent_id, msgs.len());
+        for m in &msgs {
+            let status = if m.read { "read" } else { "unread" };
+            println!("  [{}] from={} id={}", status, m.from, m.id);
+            println!("    payload: {}", serde_json::to_string(&m.payload).unwrap_or_default());
+        }
+    }
+    let mut r = ApiResponse::ok();
+    r.messages = Some(msgs);
+    r
+}
+
+fn cmd_ack_message(kernel: &AIKernel, args: &[String]) -> ApiResponse {
+    let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
+    let message_id = args.get(1).cloned().unwrap_or_default();
+
+    if kernel.ack_message(&agent_id, &message_id) {
+        println!("Message acknowledged: {}", message_id);
+        ApiResponse::ok()
+    } else {
+        ApiResponse::error(format!("Message not found: {}", message_id))
+    }
+}
+
+fn cmd_agent_status(kernel: &AIKernel, args: &[String]) -> ApiResponse {
+    let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
+    match kernel.agent_status(&agent_id) {
+        Some((_id, state, pending)) => {
+            println!("Agent: {}", agent_id);
+            println!("State: {}", state);
+            println!("Pending intents: {}", pending);
+            let mut r = ApiResponse::ok();
+            r.agent_state = Some(state);
+            r.pending_intents = Some(pending);
+            r
+        }
+        None => {
+            println!("Agent not found: {}", agent_id);
+            ApiResponse::error(format!("Agent not found: {}", agent_id))
+        }
+    }
+}
+
+fn cmd_agent_suspend(kernel: &AIKernel, args: &[String]) -> ApiResponse {
+    let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
+    match kernel.agent_suspend(&agent_id) {
+        Ok(()) => { println!("Agent {} suspended", agent_id); ApiResponse::ok() }
+        Err(e) => { println!("Error: {}", e); ApiResponse::error(e.to_string()) }
+    }
+}
+
+fn cmd_agent_resume(kernel: &AIKernel, args: &[String]) -> ApiResponse {
+    let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
+    match kernel.agent_resume(&agent_id) {
+        Ok(()) => { println!("Agent {} resumed", agent_id); ApiResponse::ok() }
+        Err(e) => { println!("Error: {}", e); ApiResponse::error(e.to_string()) }
+    }
+}
+
+fn cmd_agent_terminate(kernel: &AIKernel, args: &[String]) -> ApiResponse {
+    let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
+    match kernel.agent_terminate(&agent_id) {
+        Ok(()) => { println!("Agent {} terminated", agent_id); ApiResponse::ok() }
+        Err(e) => { println!("Error: {}", e); ApiResponse::error(e.to_string()) }
+    }
+}
+
+// ─── Tool CLI Commands ──────────────────────────────────────────────
+
+fn cmd_tool(kernel: &AIKernel, args: &[String]) -> ApiResponse {
+    match args.get(1).map(|s| s.as_str()) {
+        Some("list") => {
+            let req = ApiRequest::ToolList { agent_id: "cli".to_string() };
+            let resp = kernel.handle_api_request(req);
+            if let Some(ref tools) = resp.tools {
+                println!("Available tools ({} total):", tools.len());
+                for t in tools {
+                    println!("  {} — {}", t.name, t.description);
+                }
+            }
+            resp
+        }
+        Some("describe") => {
+            let name = args.get(2).cloned().unwrap_or_default();
+            let req = ApiRequest::ToolDescribe { tool: name, agent_id: "cli".to_string() };
+            let resp = kernel.handle_api_request(req);
+            if let Some(ref tools) = resp.tools {
+                if let Some(t) = tools.first() {
+                    println!("Tool: {}", t.name);
+                    println!("Description: {}", t.description);
+                    println!("Schema: {}", serde_json::to_string_pretty(&t.schema).unwrap_or_default());
+                }
+            }
+            resp
+        }
+        Some("call") => {
+            let name = args.get(2).cloned().unwrap_or_default();
+            let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
+            let params_str = extract_arg(args, "--params").unwrap_or_else(|| "{}".to_string());
+            let params: serde_json::Value = serde_json::from_str(&params_str).unwrap_or_default();
+            let req = ApiRequest::ToolCall { tool: name, params, agent_id };
+            let resp = kernel.handle_api_request(req);
+            if let Some(ref result) = resp.tool_result {
+                if result.success {
+                    println!("{}", serde_json::to_string_pretty(&result.output).unwrap_or_default());
+                } else {
+                    eprintln!("Tool error: {}", result.error.as_deref().unwrap_or("unknown"));
+                }
+            }
+            resp
+        }
+        _ => {
+            println!("Usage: tool <list|describe|call> ...");
+            println!("  tool list                  — list all available tools");
+            println!("  tool describe <name>       — describe a specific tool");
+            println!("  tool call <name> --params JSON --agent ID  — call a tool");
+            ApiResponse::error("unknown tool subcommand")
+        }
+    }
+}
+
+fn parse_node_type(s: &str) -> plico::fs::KGNodeType {
+    use plico::fs::KGNodeType;
+    match s {
+        "entity" => KGNodeType::Entity,
+        "fact" => KGNodeType::Fact,
+        "document" => KGNodeType::Document,
+        "agent" => KGNodeType::Agent,
+        "memory" => KGNodeType::Memory,
+        _ => KGNodeType::Entity,
+    }
+}
+
+fn parse_edge_type(s: &str) -> plico::fs::KGEdgeType {
+    use plico::fs::KGEdgeType;
+    match s {
+        "associates_with" => KGEdgeType::AssociatesWith,
+        "follows" => KGEdgeType::Follows,
+        "mentions" => KGEdgeType::Mentions,
+        "causes" => KGEdgeType::Causes,
+        "reminds" => KGEdgeType::Reminds,
+        "part_of" => KGEdgeType::PartOf,
+        "similar_to" => KGEdgeType::SimilarTo,
+        "related_to" => KGEdgeType::RelatedTo,
+        "has_attendee" => KGEdgeType::HasAttendee,
+        "has_document" => KGEdgeType::HasDocument,
+        "has_media" => KGEdgeType::HasMedia,
+        "has_decision" => KGEdgeType::HasDecision,
+        "has_preference" => KGEdgeType::HasPreference,
+        "suggests_action" => KGEdgeType::SuggestsAction,
+        "motivated_by" => KGEdgeType::MotivatedBy,
+        _ => KGEdgeType::RelatedTo,
+    }
+}
+
 // ─── Utilities ───────────────────────────────────────────────────────
 
 fn extract_arg(args: &[String], flag: &str) -> Option<String> {
@@ -505,6 +937,57 @@ fn print_result(response: &ApiResponse) {
         for d in deleted {
             println!("CID: {} (deleted)", d.cid);
             println!("   Tags: {:?}", d.tags);
+        }
+    }
+    if let Some(node_id) = &response.node_id {
+        println!("Node ID: {}", node_id);
+    }
+    if let Some(nodes) = &response.nodes {
+        println!("KG nodes ({} total):", nodes.len());
+        for n in nodes {
+            println!("  {} [{:?}] \"{}\"", n.id, n.node_type, n.label);
+        }
+    }
+    if let Some(paths) = &response.paths {
+        println!("Paths ({} found):", paths.len());
+        for (i, path) in paths.iter().enumerate() {
+            let labels: Vec<&str> = path.iter().map(|n| n.label.as_str()).collect();
+            println!("  {}: {}", i + 1, labels.join(" → "));
+        }
+    }
+    if let Some(intent_id) = &response.intent_id {
+        println!("Intent ID: {}", intent_id);
+    }
+    if let Some(state) = &response.agent_state {
+        println!("Agent state: {}", state);
+    }
+    if let Some(pending) = &response.pending_intents {
+        println!("Pending intents: {}", pending);
+    }
+    if let Some(tools) = &response.tools {
+        println!("Tools ({} total):", tools.len());
+        for t in tools {
+            println!("  {} — {}", t.name, t.description);
+        }
+    }
+    if let Some(result) = &response.tool_result {
+        if result.success {
+            println!("{}", serde_json::to_string_pretty(&result.output).unwrap_or_default());
+        } else if let Some(err) = &result.error {
+            eprintln!("Tool error: {}", err);
+        }
+    }
+    if let Some(intents) = &response.resolved_intents {
+        println!("Resolved intents ({} total):", intents.len());
+        for (i, ri) in intents.iter().enumerate() {
+            println!("  {}. [{:.2}] {}", i + 1, ri.confidence, ri.explanation);
+        }
+    }
+    if let Some(msgs) = &response.messages {
+        println!("Messages ({} total):", msgs.len());
+        for m in msgs {
+            let status = if m.read { "read" } else { "unread" };
+            println!("  [{}] from={} id={}", status, m.from, m.id);
         }
     }
     if !response.ok {
@@ -576,6 +1059,51 @@ COMMANDS:
 
   restore       Restore a deleted object
     --cid CID        Object CID to restore
+
+  node          Create a KG node (Entity/Fact/Document/Agent/Memory)
+    --label TEXT     Node label
+    --type TYPE      Node type: entity|fact|document|agent|memory (default: entity)
+    --props JSON     JSON properties (optional)
+    --agent ID       Agent ID
+
+  edge          Create a KG edge between two nodes
+    --src ID         Source node ID
+    --dst ID         Destination node ID
+    --type TYPE      Edge type: related_to|part_of|mentions|causes|... (default: related_to)
+    --weight N       Edge weight 0.0-1.0 (optional, default: 1.0)
+    --agent ID       Agent ID
+
+  nodes         List KG nodes
+    --type TYPE      Filter by node type (optional)
+    --agent ID       Agent ID
+
+  paths         Find paths between two KG nodes
+    --src ID         Source node ID
+    --dst ID         Destination node ID
+    --depth N        Max traversal depth (default: 3, max: 5)
+
+  intent        Submit an intent for agent execution
+    --description TEXT  Intent description
+    --priority P     Priority: critical|high|medium|low (default: medium)
+    --action JSON    Optional JSON-encoded ApiRequest to execute
+    --agent ID       Agent ID
+
+  status        Query agent state
+    --agent ID       Agent ID
+
+  suspend       Suspend a running agent
+    --agent ID       Agent ID
+
+  resume        Resume a suspended agent
+    --agent ID       Agent ID
+
+  terminate     Permanently terminate an agent
+    --agent ID       Agent ID
+
+  tool list     List all available tools (Everything is a Tool)
+  tool describe NAME  Describe a specific tool's schema
+  tool call NAME --params JSON  Call a tool with JSON parameters
+    --agent ID       Agent ID
 
 NOTES:
   • delete/restore require Delete permission (use --agent kernel, or grant first)
