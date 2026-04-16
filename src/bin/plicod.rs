@@ -339,8 +339,8 @@ async fn handle_dashboard_http(
     let path = parts.get(1).unwrap_or(&"/");
 
     let (status, body) = match (*method, *path) {
-        ("GET", "/api/status") | ("GET", "/") => {
-            let status = kernel.dashboard_status();
+        ("GET", "/api/project/status") | ("GET", "/api/status") | ("GET", "/") => {
+            let status = kernel.project_status();
             let json = serde_json::to_string(&status).unwrap_or_else(|_| r#"{"error":"serialization failed"}"#.to_string());
             (200, json)
         }
