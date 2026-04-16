@@ -205,6 +205,19 @@ pub enum ApiRequest {
     InferSuggestions {
         event_id: String,
     },
+
+    #[serde(rename = "get_pending_suggestions")]
+    GetPendingSuggestions,
+
+    #[serde(rename = "confirm_suggestion")]
+    ConfirmSuggestion {
+        suggestion_id: String,
+    },
+
+    #[serde(rename = "dismiss_suggestion")]
+    DismissSuggestion {
+        suggestion_id: String,
+    },
 }
 
 /// Dashboard API response — served over HTTP on a separate port.

@@ -295,6 +295,25 @@ fn handle_request(kernel: &AIKernel, req: ApiRequest) -> ApiResponse {
                 Err(e) => ApiResponse::error(e.to_string()),
             }
         }
+
+        ApiRequest::GetPendingSuggestions => {
+            let suggestions = kernel.get_pending_suggestions();
+            ApiResponse::with_suggestions(suggestions)
+        }
+
+        ApiRequest::ConfirmSuggestion { suggestion_id } => {
+            match kernel.confirm_suggestion(&suggestion_id) {
+                Ok(()) => ApiResponse::ok(),
+                Err(e) => ApiResponse::error(e.to_string()),
+            }
+        }
+
+        ApiRequest::DismissSuggestion { suggestion_id } => {
+            match kernel.dismiss_suggestion(&suggestion_id) {
+                Ok(()) => ApiResponse::ok(),
+                Err(e) => ApiResponse::error(e.to_string()),
+            }
+        }
     }
 }
 
