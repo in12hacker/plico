@@ -91,12 +91,13 @@ impl SemanticFS {
             let tag_index = self.tag_index.read().unwrap();
             let mut intersection: Option<HashSet<String>> = None;
             for tag in tags {
-                if let Some(ids) = tag_index.get(tag) {
-                    let set: HashSet<String> = ids.iter().cloned().collect();
-                    match intersection.take() {
-                        Some(existing) => intersection = Some(existing.intersection(&set).cloned().collect()),
-                        None => intersection = Some(set),
-                    }
+                let ids = tag_index.get(tag);
+                // Tag not in index → no candidate can match ALL required tags
+                let Some(set) = ids else { return Ok(Vec::new()); };
+                let set: HashSet<String> = set.iter().cloned().collect();
+                match intersection.take() {
+                    Some(existing) => intersection = Some(existing.intersection(&set).cloned().collect()),
+                    None => intersection = Some(set),
                 }
             }
             intersection.unwrap_or_default().into_iter().collect()
