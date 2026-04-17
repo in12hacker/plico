@@ -3,6 +3,7 @@
 use plico::kernel::AIKernel;
 use plico::api::semantic::ApiResponse;
 use plico::fs::{KGNodeType, KGEdgeType};
+use plico::memory::MemoryTier;
 
 /// Execute a command locally (direct kernel access).
 pub fn execute_local(kernel: &AIKernel, args: &[String]) -> ApiResponse {
@@ -33,6 +34,8 @@ pub fn execute_local(kernel: &AIKernel, args: &[String]) -> ApiResponse {
         Some("send") => cmd_send_message(kernel, args),
         Some("messages") => cmd_read_messages(kernel, args),
         Some("ack") => cmd_ack_message(kernel, args),
+        Some("memmove") => cmd_memmove(kernel, args),
+        Some("memdelete") => cmd_memdelete(kernel, args),
         _ => ApiResponse::error("Unknown command. Run: aicli --help"),
     }
 }
@@ -552,6 +555,52 @@ pub fn extract_tags_opt(args: &[String], flag: &str) -> Option<Vec<String>> {
         .position(|a| a == flag)
         .and_then(|i| args.get(i + 1))
         .map(|s| s.split(',').map(String::from).collect())
+}
+
+pub fn cmd_memmove(kernel: &AIKernel, args: &[String]) -> ApiResponse {
+    let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
+    let entry_id = match extract_arg(args, "--id") {
+        Some(id) => id,
+        None => {
+            eprintln!("Usage: memmove --id <entry-id> --tier <ephemeral|working|longterm|procedural>");
+            return ApiResponse::error("memmove requires --id and --tier");
+        }
+    };
+    let tier_str = extract_arg(args, "--tier").unwrap_or_default();
+    let tier = parse_memory_tier(&tier_str);
+    if kernel.memory_move(&agent_id, &entry_id, tier) {
+        println!("Moved memory {} to {:?} tier", entry_id, tier);
+        ApiResponse::ok()
+    } else {
+        ApiResponse::error(format!("Memory entry not found: {}", entry_id))
+    }
+}
+
+fn cmd_memdelete(kernel: &AIKernel, args: &[String]) -> ApiResponse {
+    let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
+    let entry_id = match extract_arg(args, "--id") {
+        Some(id) => id,
+        None => {
+            eprintln!("Usage: memdelete --id <entry-id>");
+            return ApiResponse::error("memdelete requires --id");
+        }
+    };
+    if kernel.memory_delete(&agent_id, &entry_id) {
+        println!("Deleted memory: {}", entry_id);
+        ApiResponse::ok()
+    } else {
+        ApiResponse::error(format!("Memory entry not found: {}", entry_id))
+    }
+}
+
+fn parse_memory_tier(s: &str) -> MemoryTier {
+    match s.to_lowercase().as_str() {
+        "ephemeral" | "l0" | "ephem" => MemoryTier::Ephemeral,
+        "working" | "l1" | "wk" => MemoryTier::Working,
+        "longterm" | "l2" | "lt" | "long" => MemoryTier::LongTerm,
+        "procedural" | "l3" | "proc" => MemoryTier::Procedural,
+        _ => MemoryTier::Working,
+    }
 }
 
 pub fn parse_node_type(s: &str) -> KGNodeType {
