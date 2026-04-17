@@ -51,4 +51,19 @@ impl crate::kernel::AIKernel {
     pub fn promote_check(&self, agent_id: &str) {
         self.memory.promote_check(agent_id);
     }
+
+    /// Move a memory entry to a different tier.
+    ///
+    /// Allows an agent to explicitly promote or demote a memory entry
+    /// to a different tier. Returns `true` if the entry was found and moved.
+    pub fn memory_move(&self, agent_id: &str, entry_id: &str, target_tier: MemoryTier) -> bool {
+        self.memory.move_entry(agent_id, entry_id, target_tier)
+    }
+
+    /// Delete a specific memory entry by ID across all tiers.
+    ///
+    /// Returns `true` if the entry was found and deleted.
+    pub fn memory_delete(&self, agent_id: &str, entry_id: &str) -> bool {
+        self.memory.delete_entry(agent_id, entry_id)
+    }
 }

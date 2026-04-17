@@ -623,6 +623,52 @@ impl LayeredMemory {
             }
         }
     }
+
+    /// Move a memory entry to a different tier for a specific agent.
+    ///
+    /// Returns `true` if the entry was found and moved, `false` if not found.
+    pub fn move_entry(&self, agent_id: &str, entry_id: &str, target_tier: MemoryTier) -> bool {
+        let mut entry_to_move = None;
+
+        for tier_map in [&self.ephemeral, &self.working, &self.long_term, &self.procedural] {
+            let mut map = tier_map.write().unwrap();
+            if let Some(entries) = map.get_mut(agent_id) {
+                if let Some(pos) = entries.iter().position(|e| e.id == entry_id) {
+                    entry_to_move = Some(entries.remove(pos));
+                    break;
+                }
+            }
+        }
+
+        let Some(mut entry) = entry_to_move else { return false; };
+        entry.tier = target_tier;
+
+        let target_map = match target_tier {
+            MemoryTier::Ephemeral => &self.ephemeral,
+            MemoryTier::Working => &self.working,
+            MemoryTier::LongTerm => &self.long_term,
+            MemoryTier::Procedural => &self.procedural,
+        };
+        let mut map = target_map.write().unwrap();
+        map.entry(agent_id.to_string()).or_default().push(entry);
+        true
+    }
+
+    /// Delete a specific memory entry by ID.
+    ///
+    /// Returns `true` if the entry was found and deleted, `false` if not found.
+    pub fn delete_entry(&self, agent_id: &str, entry_id: &str) -> bool {
+        for tier_map in [&self.ephemeral, &self.working, &self.long_term, &self.procedural] {
+            let mut map = tier_map.write().unwrap();
+            if let Some(entries) = map.get_mut(agent_id) {
+                if let Some(pos) = entries.iter().position(|e| e.id == entry_id) {
+                    entries.remove(pos);
+                    return true;
+                }
+            }
+        }
+        false
+    }
 }
 
 impl Default for LayeredMemory {
@@ -638,3 +684,61 @@ pub(crate) fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
+
+#[cfg(test)]
+mod tier_tests {
+    use super::*;
+
+    #[test]
+    fn test_move_entry_between_tiers() {
+        let mem = LayeredMemory::new();
+        let agent = "test-agent";
+        
+        // Store in ephemeral
+        let entry = MemoryEntry::ephemeral(agent, "test content");
+        let entry_id = entry.id.clone();
+        mem.store(entry);
+        
+        // Verify it's in ephemeral
+        assert_eq!(mem.get_tier(agent, MemoryTier::Ephemeral).len(), 1);
+        assert_eq!(mem.get_tier(agent, MemoryTier::Working).len(), 0);
+        
+        // Move to working
+        let moved = mem.move_entry(agent, &entry_id, MemoryTier::Working);
+        assert!(moved);
+        
+        // Verify moved
+        assert_eq!(mem.get_tier(agent, MemoryTier::Ephemeral).len(), 0);
+        assert_eq!(mem.get_tier(agent, MemoryTier::Working).len(), 1);
+        assert_eq!(mem.get_tier(agent, MemoryTier::Working)[0].id, entry_id);
+    }
+
+    #[test]
+    fn test_move_entry_not_found() {
+        let mem = LayeredMemory::new();
+        let moved = mem.move_entry("agent", "nonexistent", MemoryTier::Working);
+        assert!(!moved);
+    }
+
+    #[test]
+    fn test_delete_entry() {
+        let mem = LayeredMemory::new();
+        let agent = "test-agent";
+        
+        let entry = MemoryEntry::ephemeral(agent, "to delete");
+        let entry_id = entry.id.clone();
+        mem.store(entry);
+        assert_eq!(mem.get_tier(agent, MemoryTier::Ephemeral).len(), 1);
+        
+        let deleted = mem.delete_entry(agent, &entry_id);
+        assert!(deleted);
+        assert_eq!(mem.get_tier(agent, MemoryTier::Ephemeral).len(), 0);
+    }
+
+    #[test]
+    fn test_delete_entry_not_found() {
+        let mem = LayeredMemory::new();
+        let deleted = mem.delete_entry("agent", "nonexistent");
+        assert!(!deleted);
+    }
+}
