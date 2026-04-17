@@ -5,6 +5,7 @@
 
 pub mod backend;
 pub mod types;
+pub mod tests;
 
 pub use types::{KGNode, KGEdge, KGNodeType, KGEdgeType, DiskGraph, KGError, KGSearchHit};
 pub use backend::{PetgraphBackend, EdgeRecord};
