@@ -215,12 +215,25 @@ impl InMemoryBackend {
         }).collect()
     }
 
-    /// Bulk-load entries from a persisted snapshot.
+    /// Bulk-load entries from a persisted snapshot (upsert semantics).
+    ///
+    /// Replaces existing entries with the same CID, so a snapshot restore
+    /// correctly overwrites any stale/zero embeddings created during rebuild.
+    /// New entries are appended.
     pub fn restore(&self, entries: Vec<SearchIndexEntry>) {
         let mut store = self.entries.write().unwrap();
         for e in entries {
-            let exists = store.iter().any(|existing| existing.cid == e.cid);
-            if !exists {
+            if let Some(existing) = store.iter_mut().find(|existing| existing.cid == e.cid) {
+                // Overwrite stale rebuilt entry with snapshot's real embedding
+                existing.embedding = e.embedding;
+                existing.meta = SearchIndexMeta {
+                    cid: e.cid.clone(),
+                    tags: e.tags,
+                    snippet: e.snippet,
+                    content_type: e.content_type,
+                    created_at: e.created_at,
+                };
+            } else {
                 store.push(IndexEntry {
                     cid: e.cid.clone(),
                     embedding: e.embedding,
@@ -247,10 +260,16 @@ impl SemanticSearch for InMemoryBackend {
     fn upsert(&self, cid: &str, embedding: &[f32], meta: SearchIndexMeta) {
         let mut entries = self.entries.write().unwrap();
 
-        // Replace existing entry for this CID
+        // Replace existing entry for this CID, but only if the new embedding
+        // is non-trivial. This prevents a rebuild-from-CAS (which uses stub/zero
+        // embeddings) from overwriting a real embedding that was restored from
+        // a snapshot.
         if let Some(existing) = entries.iter_mut().find(|e| e.cid == cid) {
-            existing.embedding = embedding.to_vec();
-            existing.meta = meta;
+            let is_stub = embedding.iter().all(|&v| v == 0.0);
+            if !is_stub {
+                existing.embedding = embedding.to_vec();
+                existing.meta = meta;
+            }
             return;
         }
 

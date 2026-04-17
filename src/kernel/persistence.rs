@@ -6,7 +6,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::fs::{OllamaBackend, EmbeddingProvider, LocalEmbeddingBackend, StubEmbeddingProvider, EmbedError};
+use crate::fs::{OllamaBackend, EmbeddingProvider, LocalEmbeddingBackend, StubEmbeddingProvider, EmbedError, InMemoryBackend};
 use crate::scheduler::Agent;
 use crate::scheduler::agent::Intent;
 
@@ -139,24 +139,40 @@ impl AIKernel {
 
     /// Restore the search index from a JSON Lines file.
     pub(crate) fn restore_search_index(&self) {
-        let path = self.search_index_path();
-        if !path.exists() {
-            return;
-        }
-        match std::fs::read_to_string(&path) {
-            Ok(data) => {
-                let entries: Vec<crate::fs::SearchIndexEntry> = data.lines()
-                    .filter(|line| !line.trim().is_empty())
-                    .filter_map(|line| serde_json::from_str(line).ok())
-                    .collect();
-                let count = entries.len();
-                self.search_backend.restore(entries);
-                if count > 0 {
-                    tracing::info!("Restored {} search index entries", count);
-                }
+        use std::sync::Arc;
+        use crate::fs::InMemoryBackend;
+        // SAFETY: search_backend is always InMemoryBackend in practice.
+        // This downcast is safe because the kernel always constructs it as such.
+        let backend: &InMemoryBackend = unsafe {
+            &*(Arc::as_ptr(&self.search_backend) as *const InMemoryBackend)
+        };
+        restore_search_index_into(&self.search_index_path(), backend);
+    }
+}
+
+/// Restore entries into a search backend from a JSON Lines file at `path`.
+///
+/// Called BEFORE SemanticFS::new() so the restored embeddings are present
+/// before the rebuild-from-CAS step (which uses stub/zero embeddings).
+/// The restored real embeddings will NOT be overwritten by stub/zero embeddings
+/// because InMemoryBackend::upsert skips overwriting non-stub entries.
+pub fn restore_search_index_into(path: &std::path::Path, backend: &InMemoryBackend) {
+    if !path.exists() {
+        return;
+    }
+    match std::fs::read_to_string(path) {
+        Ok(data) => {
+            let entries: Vec<crate::fs::SearchIndexEntry> = data.lines()
+                .filter(|line| !line.trim().is_empty())
+                .filter_map(|line| serde_json::from_str(line).ok())
+                .collect();
+            let count = entries.len();
+            backend.restore(entries);
+            if count > 0 {
+                tracing::info!("Restored {} search index entries", count);
             }
-            Err(e) => tracing::warn!("Failed to read search index: {e}"),
         }
+        Err(e) => tracing::warn!("Failed to read search index: {e}"),
     }
 }
 

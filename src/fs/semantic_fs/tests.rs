@@ -7,7 +7,7 @@ use crate::fs::embedding::StubEmbeddingProvider;
 use crate::fs::graph::PetgraphBackend;
 use crate::fs::search::InMemoryBackend;
 use crate::fs::semantic_fs::{SemanticFS, Query, EventType, EventRelation};
-use crate::fs::context_loader::{ContextLayer, ContextLoader};
+use crate::fs::context_loader::ContextLayer;
 
 fn make_fs() -> (SemanticFS, tempfile::TempDir) {
     let dir = TempDir::new().unwrap();
@@ -158,7 +158,7 @@ fn event_meta_in_range_filters_correctly() {
     let dir = TempDir::new().unwrap();
     let fs = make_fs_with_kg(&dir);
     let now = chrono::Utc::now().timestamp_millis() as u64;
-    let id = fs.create_event("recent-meeting", EventType::Meeting, Some(now - 3_600_000), None, None, vec![], "a").unwrap();
+    let _id = fs.create_event("recent-meeting", EventType::Meeting, Some(now - 3_600_000), None, None, vec![], "a").unwrap();
     let events = fs.list_events(Some(now - 86_400_000), Some(now), &[], None).unwrap();
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].label, "recent-meeting");
@@ -194,7 +194,7 @@ fn create_event_without_kg_returns_id() {
 fn create_and_list_event_with_kg() {
     let dir = TempDir::new().unwrap();
     let fs = make_fs_with_kg(&dir);
-    let id = fs.create_event("team-sync", EventType::Meeting, None, None, None, vec!["sync".to_string()], "a").unwrap();
+    let _id = fs.create_event("team-sync", EventType::Meeting, None, None, None, vec!["sync".to_string()], "a").unwrap();
     let events = fs.list_events(None, None, &[], None).unwrap();
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].label, "team-sync");

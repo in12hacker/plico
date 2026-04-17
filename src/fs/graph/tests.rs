@@ -1,7 +1,9 @@
 //! Graph backend tests.
 
-use crate::fs::graph::{PetgraphBackend, KGNode, KGEdge, KGNodeType, KGEdgeType, KnowledgeGraph};
+#[allow(unused_imports)]
+use crate::fs::graph::{KGNode, KGEdge, KGNodeType, KGEdgeType, PetgraphBackend, KnowledgeGraph};
 
+#[allow(dead_code)]
 fn make_node(id: &str, node_type: KGNodeType, tags: Vec<String>, agent: &str) -> KGNode {
     KGNode {
         id: id.to_string(),
@@ -17,6 +19,7 @@ fn make_node(id: &str, node_type: KGNodeType, tags: Vec<String>, agent: &str) ->
     }
 }
 
+#[allow(dead_code)]
 fn make_edge(src: &str, dst: &str, edge_type: KGEdgeType, weight: f32) -> KGEdge {
     KGEdge {
         src: src.to_string(),

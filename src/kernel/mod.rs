@@ -17,7 +17,7 @@ pub mod ops;
 use crate::api::semantic::{ApiRequest, ApiResponse};
 
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, atomic::{AtomicU64, Ordering}};
 
 use crate::cas::CASStorage;
 use crate::memory::{LayeredMemory, CASPersister, MemoryPersister};
@@ -43,6 +43,9 @@ pub struct AIKernel {
     pub(crate) summarizer: Option<Arc<dyn Summarizer>>,
     pub(crate) knowledge_graph: Option<Arc<dyn KnowledgeGraph>>,
     pub(crate) search_backend: Arc<InMemoryBackend>,
+    /// Counter for search index auto-persist. Every SEARCH_PERSIST_EVERY_N operations,
+    /// the search index snapshot is saved to disk for crash recovery.
+    search_op_count: Arc<AtomicU64>,
     pub(crate) tool_registry: Arc<ToolRegistry>,
     pub(crate) intent_router: Arc<dyn IntentRouter>,
     pub(crate) message_bus: Arc<MessageBus>,
@@ -74,6 +77,17 @@ impl AIKernel {
         };
 
         let search_backend = Arc::new(InMemoryBackend::new());
+        // Restore search index BEFORE SemanticFS::new() rebuilds from CAS.
+        // This ensures snapshot's real embeddings overwrite any stub/zero embeddings
+        // created during the rebuild-from-CAS step.
+        {
+            let search_path = root.join("search_index.jsonl");
+            // SAFETY: search_backend is guaranteed to be InMemoryBackend
+            let backend_ref: &InMemoryBackend = unsafe {
+                &*(Arc::as_ptr(&search_backend) as *const InMemoryBackend)
+            };
+            crate::kernel::persistence::restore_search_index_into(&search_path, backend_ref);
+        }
         let search_index: Arc<dyn SemanticSearch> = search_backend.clone();
         let knowledge_graph: Option<Arc<dyn KnowledgeGraph>> = {
             let kg: Arc<dyn KnowledgeGraph> = Arc::new(PetgraphBackend::open(root.clone()));
@@ -133,6 +147,7 @@ impl AIKernel {
             summarizer,
             knowledge_graph,
             search_backend,
+            search_op_count: Arc::new(AtomicU64::new(0)),
             tool_registry,
             intent_router,
             message_bus,
@@ -145,6 +160,18 @@ impl AIKernel {
         kernel.restore_search_index();
 
         Ok(kernel)
+    }
+
+    /// Auto-persist hook: call after each write operation (create/update/delete).
+    /// Persists the search index snapshot every N operations to prevent
+    /// loss of real embeddings if the process crashes.
+    const SEARCH_PERSIST_EVERY_N: u64 = 50;
+
+    fn maybe_persist_search_index(&self) {
+        let count = self.search_op_count.fetch_add(1, Ordering::Relaxed) + 1;
+        if count % Self::SEARCH_PERSIST_EVERY_N == 0 {
+            self.persist_search_index();
+        }
     }
 
     // ─── API Request Handler ───────────────────────────────────────────
@@ -167,7 +194,10 @@ impl AIKernel {
                     Err(e) => return ApiResponse::error(e),
                 };
                 match self.semantic_create(bytes, tags, &agent_id, intent) {
-                    Ok(cid) => ApiResponse::with_cid(cid),
+                    Ok(cid) => {
+                        self.maybe_persist_search_index();
+                        ApiResponse::with_cid(cid)
+                    }
                     Err(e) => ApiResponse::error(e.to_string()),
                 }
             }
@@ -195,13 +225,19 @@ impl AIKernel {
                     Err(e) => return ApiResponse::error(e),
                 };
                 match self.semantic_update(&cid, bytes, new_tags, &agent_id) {
-                    Ok(new_cid) => ApiResponse::with_cid(new_cid),
+                    Ok(new_cid) => {
+                        self.maybe_persist_search_index();
+                        ApiResponse::with_cid(new_cid)
+                    }
                     Err(e) => ApiResponse::error(e.to_string()),
                 }
             }
             ApiRequest::Delete { cid, agent_id } => {
                 match self.semantic_delete(&cid, &agent_id) {
-                    Ok(()) => ApiResponse::ok(),
+                    Ok(()) => {
+                        self.maybe_persist_search_index();
+                        ApiResponse::ok()
+                    }
                     Err(e) => ApiResponse::error(e.to_string()),
                 }
             }

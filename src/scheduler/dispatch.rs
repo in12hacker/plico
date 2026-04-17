@@ -586,7 +586,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_cpu_time_quota_zero_means_unlimited() {
         // M2: Agent with cpu_time_quota=0 runs without timeout (backward compatible)
-        use crate::scheduler::agent::{Agent, AgentResources, IntentPriority};
+        use crate::scheduler::agent::{Agent, IntentPriority};
 
         let scheduler = Arc::new(AgentScheduler::new());
 
