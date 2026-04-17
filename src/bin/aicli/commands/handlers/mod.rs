@@ -11,6 +11,7 @@ pub mod deleted;
 pub mod intent;
 pub mod messaging;
 pub mod tool;
+pub mod events;
 
 // Re-export shared utilities for handler submodules.
 // Re-export shared utilities for handler submodules (defined in parent commands/mod.rs).
@@ -35,3 +36,4 @@ pub use deleted::{cmd_deleted, cmd_restore};
 pub use intent::cmd_intent;
 pub use messaging::{cmd_send_message, cmd_read_messages, cmd_ack_message};
 pub use tool::cmd_tool;
+pub use events::cmd_events;

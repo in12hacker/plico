@@ -274,6 +274,38 @@ fn build_request(args: &[String]) -> Option<ApiRequest> {
                 _ => None,
             }
         }
+        Some("events") => {
+            let agent_id = commands::extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
+            let tags: Vec<String> = commands::extract_tags(args, "--tags");
+            match args.get(1).map(|s| s.as_str()) {
+                // events list [--since TS] [--until TS] [--tags TAGS]
+                Some("list") => {
+                    let since = commands::extract_arg(args, "--since")
+                        .and_then(|s| s.parse().ok());
+                    let until = commands::extract_arg(args, "--until")
+                        .and_then(|s| s.parse().ok());
+                    Some(ApiRequest::ListEvents { since, until, tags, event_type: None, agent_id })
+                }
+                // events by-time "last week" [--tags TAGS]
+                Some("by-time") | Some("text") => {
+                    let time_expression = args.get(2..)
+                        .map(|v| v.iter().take_while(|s| !s.starts_with("--")).cloned().collect::<Vec<_>>().join(" "))
+                        .unwrap_or_default();
+                    Some(ApiRequest::ListEventsText { time_expression, tags, event_type: None, agent_id })
+                }
+                _ => {
+                    // Default: show help hint
+                    println!("Usage: events <list|by-time> [options]");
+                    println!("  list    --since TS --until TS --tags TAGS");
+                    println!("  by-time \"last week\" --tags TAGS");
+                    println!("");
+                    println!("Examples:");
+                    println!("  events list --since 1713000000000 --until 1713100000000");
+                    println!("  events by-time \"上周\" --tags work");
+                    None
+                }
+            }
+        }
         _ => None,
     }
 }
