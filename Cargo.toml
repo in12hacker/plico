@@ -33,7 +33,7 @@ path = "src/bin/plicod.rs"
 
 [[bin]]
 name = "aicli"
-path = "src/bin/aicli.rs"
+path = "src/bin/aicli/main.rs"
 
 [profile.release]
 opt-level = 3
