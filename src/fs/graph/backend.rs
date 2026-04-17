@@ -286,7 +286,7 @@ impl KnowledgeGraph for PetgraphBackend {
     fn get_neighbors(
         &self,
         id: &str,
-        edge_type: Option<KGEdgeType>,
+        _edge_type: Option<KGEdgeType>,
         depth: u8,
     ) -> Result<Vec<(KGNode, KGEdge)>, KGError> {
         if depth == 0 {
@@ -297,7 +297,7 @@ impl KnowledgeGraph for PetgraphBackend {
         let mut result = Vec::new();
         if let Some(edges) = out.get(id) {
             for (dst, edge) in edges {
-                if edge_type.map_or(true, |et| et == edge.edge_type) {
+                if _edge_type.map_or(true, |et| et == edge.edge_type) {
                     if let Some(node) = nodes.get(dst) {
                         result.push((node.clone(), edge.clone()));
                     }
@@ -441,7 +441,7 @@ impl KnowledgeGraph for PetgraphBackend {
         &self,
         src: &str,
         dst: &str,
-        edge_type: Option<KGEdgeType>,
+        _edge_type: Option<KGEdgeType>,
         t: u64,
     ) -> Result<Option<KGEdge>, KGError> {
         let out = self.out_edges.read().unwrap();
@@ -477,10 +477,11 @@ impl KnowledgeGraph for PetgraphBackend {
             .collect())
     }
 
-    fn save_to_disk(&self, path: &std::path::Path) -> Result<(), KGError> {
+    fn save_to_disk(&self, _path: &std::path::Path) -> Result<(), KGError> {
         todo!("use persist() with custom path")
     }
 
+    #[allow(dead_code)]
     fn load_from_disk(path: &std::path::Path) -> Result<Self, KGError> {
         Ok(Self::open(path.to_path_buf()))
     }
