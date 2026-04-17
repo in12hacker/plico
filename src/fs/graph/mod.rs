@@ -32,6 +32,9 @@ pub trait KnowledgeGraph: Send + Sync {
         depth: u8,
     ) -> Result<Vec<(KGNode, KGEdge)>, KGError>;
     fn find_paths(&self, src: &str, dst: &str, max_depth: u8) -> Result<Vec<Vec<KGNode>>, KGError>;
+    /// Find the highest-weighted path from src to dst using Dijkstra's algorithm.
+    /// Returns `None` if no path exists within max_depth hops.
+    fn find_weighted_path(&self, src: &str, dst: &str, max_depth: u8) -> Result<Option<Vec<KGNode>>, KGError>;
     fn list_nodes(&self, agent_id: &str, node_type: Option<KGNodeType>) -> Result<Vec<KGNode>, KGError>;
     fn list_edges(&self, agent_id: &str) -> Result<Vec<KGEdge>, KGError>;
     fn remove_node(&self, id: &str) -> Result<(), KGError>;

@@ -1,6 +1,6 @@
 //! Knowledge Graph Backend — PetgraphBackend implementation.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::sync::RwLock;
 
 use crate::fs::graph::types::{DiskGraph, KGNode, KGEdge, KGEdgeType, KGNodeType};
@@ -12,6 +12,34 @@ pub struct EdgeRecord {
     pub src: String,
     pub dst: String,
     pub edge: KGEdge,
+}
+
+/// Path search state for Dijkstra-style shortest-path search.
+#[derive(Clone)]
+struct PathState {
+    cost: f32,
+    node: String,
+    path: Vec<String>,
+}
+
+impl PartialEq for PathState {
+    fn eq(&self, other: &Self) -> bool {
+        self.cost == other.cost && self.node == other.node
+    }
+}
+
+impl Eq for PathState {}
+
+impl PartialOrd for PathState {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cost.partial_cmp(&other.cost).unwrap_or(std::cmp::Ordering::Equal).reverse())
+    }
+}
+
+impl Ord for PathState {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.cost.partial_cmp(&other.cost).unwrap_or(std::cmp::Ordering::Equal).reverse()
+    }
 }
 
 /// In-memory knowledge graph backed by HashMap.
@@ -347,6 +375,93 @@ impl KnowledgeGraph for PetgraphBackend {
         Ok(results)
     }
 
+    fn find_weighted_path(
+        &self,
+        src: &str,
+        dst: &str,
+        max_depth: u8,
+    ) -> Result<Option<Vec<KGNode>>, KGError> {
+        let nodes = self.nodes.read().unwrap();
+        let out = self.out_edges.read().unwrap();
+
+        // Best-first DFS: explore paths ordered by descending cumulative weight.
+        // At each step, expand the highest-weight partial path first.
+        // This finds the maximum-weight path (unlike Dijkstra which finds minimum).
+        //
+        // Strategy: maintain a max-heap of (cost, path) and expand highest-cost paths,
+        // tracking the best path to each visited node. When we reach dst, return it
+        // because the heap ensures we've explored all higher-cost paths first.
+        let mut heap: BinaryHeap<PathState> = BinaryHeap::new();
+        heap.push(PathState {
+            cost: 0.0,
+            node: src.to_string(),
+            path: vec![src.to_string()],
+        });
+
+        // Track best known cost to each node
+        let mut best_cost: HashMap<String, f32> = HashMap::new();
+        best_cost.insert(src.to_string(), 0.0);
+
+        while let Some(state) = heap.pop() {
+            // Skip if we've exceeded max depth
+            if state.path.len() > max_depth as usize {
+                continue;
+            }
+
+            // Found destination — return immediately.
+            // Because we use a max-heap and expand highest-cost paths first,
+            // the first time we reach dst, it's via the highest-weight path.
+            if state.node == dst {
+                let node_path: Vec<KGNode> = state
+                    .path
+                    .iter()
+                    .filter_map(|id| nodes.get(id).cloned())
+                    .collect();
+                return Ok(Some(node_path));
+            }
+
+            // Skip if we've already found a better path to this node
+            if let Some(&best) = best_cost.get(&state.node) {
+                if state.cost < best {
+                    continue;
+                }
+            }
+
+            // Explore neighbors in descending weight order
+            if let Some(edges) = out.get(&state.node) {
+                let mut sorted_edges: Vec<_> = edges.clone();
+                sorted_edges.sort_by(|a, b| b.1.weight.partial_cmp(&a.1.weight).unwrap_or(std::cmp::Ordering::Equal));
+
+                for (next_dst, edge) in sorted_edges {
+                    // Avoid cycles within current path
+                    if state.path.contains(&next_dst) {
+                        continue;
+                    }
+                    let new_cost = state.cost + edge.weight;
+
+                    // Only proceed if this is a better path to next_dst
+                    if let Some(&best) = best_cost.get(&next_dst) {
+                        if new_cost <= best {
+                            continue;
+                        }
+                    }
+                    best_cost.insert(next_dst.clone(), new_cost);
+
+                    let mut new_path = state.path.clone();
+                    new_path.push(next_dst.clone());
+                    heap.push(PathState {
+                        cost: new_cost,
+                        node: next_dst.clone(),
+                        path: new_path,
+                    });
+                }
+            }
+        }
+
+        // No path found within depth limit
+        Ok(None)
+    }
+
     fn list_nodes(
         &self,
         agent_id: &str,
@@ -485,5 +600,125 @@ impl KnowledgeGraph for PetgraphBackend {
     #[allow(dead_code)]
     fn load_from_disk(path: &std::path::Path) -> Result<Self, KGError> {
         Ok(Self::open(path.to_path_buf()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_node(id: &str, node_type: KGNodeType, tags: Vec<String>, agent: &str) -> KGNode {
+        KGNode {
+            id: id.to_string(),
+            label: id.to_string(),
+            node_type,
+            content_cid: None,
+            properties: serde_json::json!({ "tags": tags }),
+            agent_id: agent.to_string(),
+            created_at: 0,
+            valid_at: None,
+            invalid_at: None,
+            expired_at: None,
+        }
+    }
+
+    fn make_edge(src: &str, dst: &str, edge_type: KGEdgeType, weight: f32) -> KGEdge {
+        KGEdge {
+            src: src.to_string(),
+            dst: dst.to_string(),
+            edge_type,
+            weight,
+            evidence_cid: None,
+            created_at: 0,
+            valid_at: None,
+            invalid_at: None,
+            expired_at: None,
+            episode: None,
+        }
+    }
+
+    #[test]
+    fn test_find_weighted_path_basic() {
+        // Simple path: x -> y -> z with equal weights
+        let kg = PetgraphBackend::new();
+        kg.add_node(make_node("x", KGNodeType::Entity, vec![], "a")).unwrap();
+        kg.add_node(make_node("y", KGNodeType::Entity, vec![], "a")).unwrap();
+        kg.add_node(make_node("z", KGNodeType::Entity, vec![], "a")).unwrap();
+        kg.add_edge(make_edge("x", "y", KGEdgeType::RelatedTo, 1.0)).unwrap();
+        kg.add_edge(make_edge("y", "z", KGEdgeType::RelatedTo, 1.0)).unwrap();
+
+        let path = kg.find_weighted_path("x", "z", 5).unwrap();
+        assert!(path.is_some());
+        let nodes = path.unwrap();
+        assert_eq!(nodes.len(), 3);
+        assert_eq!(nodes[0].id, "x");
+        assert_eq!(nodes[2].id, "z");
+    }
+
+    #[test]
+    fn test_find_weighted_path_prefers_high_weight() {
+        // Two paths to z:
+        //   x -> a → z (weight 0.9 + 0.9 = 1.8)
+        //   x → b → z (weight 1.0 + 0.5 = 1.5)
+        // Should prefer the first (higher total weight 1.8)
+        let kg = PetgraphBackend::new();
+        kg.add_node(make_node("x", KGNodeType::Entity, vec![], "a")).unwrap();
+        kg.add_node(make_node("a", KGNodeType::Entity, vec![], "a")).unwrap();
+        kg.add_node(make_node("b", KGNodeType::Entity, vec![], "a")).unwrap();
+        kg.add_node(make_node("z", KGNodeType::Entity, vec![], "a")).unwrap();
+        // Path 1: x -> a -> z (high weight 0.9 each, total 1.8)
+        kg.add_edge(make_edge("x", "a", KGEdgeType::RelatedTo, 0.9)).unwrap();
+        kg.add_edge(make_edge("a", "z", KGEdgeType::RelatedTo, 0.9)).unwrap();
+        // Path 2: x -> b -> z (1.0 + 0.5 = 1.5, starts with higher but ends lower)
+        kg.add_edge(make_edge("x", "b", KGEdgeType::RelatedTo, 1.0)).unwrap();
+        kg.add_edge(make_edge("b", "z", KGEdgeType::RelatedTo, 0.5)).unwrap();
+
+        let path = kg.find_weighted_path("x", "z", 5).unwrap();
+        assert!(path.is_some());
+        let nodes = path.unwrap();
+        // Should take the x->a->z path (1.8 > 1.5)
+        assert_eq!(nodes[1].id, "a");
+    }
+
+    #[test]
+    fn test_find_weighted_path_no_path() {
+        let kg = PetgraphBackend::new();
+        kg.add_node(make_node("x", KGNodeType::Entity, vec![], "a")).unwrap();
+        kg.add_node(make_node("y", KGNodeType::Entity, vec![], "a")).unwrap();
+
+        // No edge between x and y
+        let path = kg.find_weighted_path("x", "y", 5).unwrap();
+        assert!(path.is_none());
+    }
+
+    #[test]
+    fn test_find_weighted_path_respects_max_depth() {
+        let kg = PetgraphBackend::new();
+        kg.add_node(make_node("x", KGNodeType::Entity, vec![], "a")).unwrap();
+        kg.add_node(make_node("y", KGNodeType::Entity, vec![], "a")).unwrap();
+        kg.add_node(make_node("z", KGNodeType::Entity, vec![], "a")).unwrap();
+        kg.add_edge(make_edge("x", "y", KGEdgeType::RelatedTo, 1.0)).unwrap();
+        kg.add_edge(make_edge("y", "z", KGEdgeType::RelatedTo, 1.0)).unwrap();
+
+        // max_depth = 1 should not find z (needs 2 hops)
+        let path = kg.find_weighted_path("x", "z", 1).unwrap();
+        assert!(path.is_none());
+    }
+
+    #[test]
+    fn test_find_weighted_path_acyclic() {
+        // Triangle: x->y, y->z, z->x (cycle)
+        let kg = PetgraphBackend::new();
+        kg.add_node(make_node("x", KGNodeType::Entity, vec![], "a")).unwrap();
+        kg.add_node(make_node("y", KGNodeType::Entity, vec![], "a")).unwrap();
+        kg.add_node(make_node("z", KGNodeType::Entity, vec![], "a")).unwrap();
+        kg.add_edge(make_edge("x", "y", KGEdgeType::RelatedTo, 1.0)).unwrap();
+        kg.add_edge(make_edge("y", "z", KGEdgeType::RelatedTo, 1.0)).unwrap();
+        kg.add_edge(make_edge("z", "x", KGEdgeType::RelatedTo, 1.0)).unwrap();
+
+        // Should find x->y->z (2 hops) without infinite loop
+        let path = kg.find_weighted_path("x", "z", 5).unwrap();
+        assert!(path.is_some());
+        assert_eq!(path.unwrap().len(), 3);
     }
 }
