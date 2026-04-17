@@ -212,6 +212,7 @@ impl PetgraphBackend {
         ((degree as f32).ln() / ((max_degree.max(1)) as f32).ln()).clamp(0.0, 1.0)
     }
 
+    #[allow(dead_code)]
     fn load_from_disk(_path: &std::path::Path) -> Result<DiskGraph, KGError> {
         unimplemented!("use PetgraphBackend::open")
     }

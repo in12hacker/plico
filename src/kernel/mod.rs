@@ -19,16 +19,14 @@ use crate::api::semantic::{ApiRequest, ApiResponse};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::cas::{CASStorage, AIObjectMeta};
+use crate::cas::CASStorage;
 use crate::memory::{LayeredMemory, CASPersister, MemoryPersister};
-use crate::scheduler::{AgentScheduler, Agent, AgentResources, IntentPriority, AgentHandle};
-use crate::scheduler::dispatch::DispatchHandle;
+use crate::scheduler::{AgentScheduler, IntentPriority};
 use crate::scheduler::messaging::MessageBus;
-use crate::fs::{SemanticFS, InMemoryBackend, EmbeddingProvider, SemanticSearch, OllamaSummarizer, Summarizer, KnowledgeGraph, PetgraphBackend, StubEmbeddingProvider, EventType, EventRelation, EventSummary, KGNode, KGNodeType, KGEdgeType, KGEdge};
-use crate::temporal::RULE_BASED_RESOLVER;
-use crate::api::permission::{PermissionGuard, PermissionContext, PermissionAction};
+use crate::fs::{SemanticFS, InMemoryBackend, EmbeddingProvider, SemanticSearch, OllamaSummarizer, Summarizer, KnowledgeGraph, PetgraphBackend, StubEmbeddingProvider};
+use crate::api::permission::PermissionGuard;
 use crate::tool::ToolRegistry;
-use crate::intent::{ChainRouter, IntentRouter, ResolvedIntent};
+use crate::intent::{ChainRouter, IntentRouter};
 
 /// The AI Kernel — all subsystems wired together.
 pub struct AIKernel {
@@ -424,14 +422,3 @@ impl AIKernel {
         }
     }
 }
-
-// Bring in all operation impl blocks from ops/
-use crate::kernel::ops::fs;
-use crate::kernel::ops::agent;
-use crate::kernel::ops::memory;
-use crate::kernel::ops::events;
-use crate::kernel::ops::graph;
-use crate::kernel::ops::dispatch;
-use crate::kernel::ops::intent;
-use crate::kernel::ops::messaging;
-use crate::kernel::ops::dashboard;
