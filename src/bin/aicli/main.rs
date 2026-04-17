@@ -204,8 +204,9 @@ fn build_request(args: &[String]) -> Option<ApiRequest> {
             let src_id = commands::extract_arg(args, "--src").unwrap_or_default();
             let dst_id = commands::extract_arg(args, "--dst").unwrap_or_default();
             let max_depth = commands::extract_arg(args, "--depth").and_then(|s| s.parse().ok());
+            let weighted = args.iter().any(|a| a == "--weighted");
             let agent_id = commands::extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
-            Some(ApiRequest::FindPaths { src_id, dst_id, max_depth, agent_id })
+            Some(ApiRequest::FindPaths { src_id, dst_id, max_depth, weighted, agent_id })
         }
         Some("intent") => {
             if commands::extract_arg(args, "--description").is_some() {

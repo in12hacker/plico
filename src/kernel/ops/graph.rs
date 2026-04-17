@@ -145,4 +145,18 @@ impl crate::kernel::AIKernel {
         };
         kg.find_paths(src, dst, max_depth).unwrap_or_default()
     }
+
+    /// Find the highest-weighted path between two KG nodes using best-first search.
+    /// Returns `None` if no path exists within max_depth hops.
+    pub fn kg_find_weighted_path(
+        &self,
+        src: &str,
+        dst: &str,
+        max_depth: u8,
+    ) -> Option<Vec<KGNode>> {
+        let Some(ref kg) = self.knowledge_graph else {
+            return None;
+        };
+        kg.find_weighted_path(src, dst, max_depth).unwrap_or_default()
+    }
 }

@@ -213,6 +213,9 @@ pub enum ApiRequest {
         dst_id: String,
         #[serde(default)]
         max_depth: Option<u8>,
+        /// If true, find the highest-weight path using best-first search.
+        #[serde(default)]
+        weighted: bool,
         agent_id: String,
     },
 

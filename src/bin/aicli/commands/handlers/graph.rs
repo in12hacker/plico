@@ -82,15 +82,30 @@ pub fn cmd_find_paths(kernel: &AIKernel, args: &[String]) -> ApiResponse {
         .and_then(|s| s.parse().ok())
         .unwrap_or(3)
         .min(5);
+    let weighted = args.iter().any(|a| a == "--weighted");
 
-    let paths = kernel.kg_find_paths(&src, &dst, depth);
-    if paths.is_empty() {
-        println!("No paths from {} to {} (depth {})", src, dst, depth);
+    if weighted {
+        // Find highest-weight path
+        match kernel.kg_find_weighted_path(&src, &dst, depth) {
+            Some(path) => {
+                let labels: Vec<&str> = path.iter().map(|n| n.label.as_str()).collect();
+                println!("Best path (weighted): {}", labels.join(" → "));
+            }
+            None => {
+                println!("No path from {} to {} (depth {}, weighted)", src, dst, depth);
+            }
+        }
     } else {
-        println!("Paths from {} to {} ({} found):", src, dst, paths.len());
-        for (i, path) in paths.iter().enumerate() {
-            let labels: Vec<&str> = path.iter().map(|n| n.label.as_str()).collect();
-            println!("  {}: {}", i + 1, labels.join(" → "));
+        // Find all paths
+        let paths = kernel.kg_find_paths(&src, &dst, depth);
+        if paths.is_empty() {
+            println!("No paths from {} to {} (depth {})", src, dst, depth);
+        } else {
+            println!("Paths from {} to {} ({} found):", src, dst, paths.len());
+            for (i, path) in paths.iter().enumerate() {
+                let labels: Vec<&str> = path.iter().map(|n| n.label.as_str()).collect();
+                println!("  {}: {}", i + 1, labels.join(" → "));
+            }
         }
     }
     ApiResponse::ok()

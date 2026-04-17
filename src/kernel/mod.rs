@@ -301,16 +301,30 @@ impl AIKernel {
                 }).collect();
                 ApiResponse::with_nodes(dto)
             }
-            ApiRequest::FindPaths { src_id, dst_id, max_depth, agent_id: _ } => {
+            ApiRequest::FindPaths { src_id, dst_id, max_depth, weighted, agent_id: _ } => {
                 let depth = max_depth.unwrap_or(3).min(5);
-                let paths = self.kg_find_paths(&src_id, &dst_id, depth);
-                let dto: Vec<Vec<KGNodeDto>> = paths.into_iter().map(|path| {
-                    path.into_iter().map(|n| KGNodeDto {
-                        id: n.id, label: n.label, node_type: n.node_type,
-                        content_cid: n.content_cid, properties: n.properties,
-                        agent_id: n.agent_id, created_at: n.created_at,
+                let dto: Vec<Vec<KGNodeDto>> = if weighted {
+                    // Find single highest-weight path
+                    if let Some(path) = self.kg_find_weighted_path(&src_id, &dst_id, depth) {
+                        vec![path.into_iter().map(|n| KGNodeDto {
+                            id: n.id, label: n.label, node_type: n.node_type,
+                            content_cid: n.content_cid, properties: n.properties,
+                            agent_id: n.agent_id, created_at: n.created_at,
+                        }).collect()]
+                    } else {
+                        vec![]
+                    }
+                } else {
+                    // Find all paths
+                    let paths = self.kg_find_paths(&src_id, &dst_id, depth);
+                    paths.into_iter().map(|path| {
+                        path.into_iter().map(|n| KGNodeDto {
+                            id: n.id, label: n.label, node_type: n.node_type,
+                            content_cid: n.content_cid, properties: n.properties,
+                            agent_id: n.agent_id, created_at: n.created_at,
+                        }).collect()
                     }).collect()
-                }).collect();
+                };
                 ApiResponse::with_paths(dto)
             }
             ApiRequest::SubmitIntent { description, priority, action, agent_id } => {

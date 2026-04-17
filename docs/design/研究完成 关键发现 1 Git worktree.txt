@@ -1,0 +1,18 @@
+● 研究完成。关键发现：                              
+                                                                                
+  1. Git worktree 共享模型（来源：Andrew Roat）：                               
+    - 所有 worktree 共享同一个 .git 对象库（.git/worktrees/）
+    - 每个 worktree 有独立的 working directory 文件                             
+    - 在一个 worktree fetch → 所有 worktree 立即可见                            
+    - 代码（git objects）天然同步，工作目录文件隔离                             
+  2. Claude Code 的 GitHub Issue #34437（与 Plico 完全对应的问题）：            
+    - Worktree 中 Claude Code 创建了分离的 ~/.claude/projects/                  
+    - 造成记忆碎片化                                                            
+    - Git 提供 git worktree list --porcelain 和 git rev-parse --git-common-dir
+  来检测 worktree 并找到主仓库                                                  
+  3. Bare repo 模式（来源：dev.to）：                       
+  git clone --bare git@.../.git .bare                                           
+  echo "gitdir: ./.bare" > .git                                                 
+  git worktree add main
+  git worktree add feat-x                                                       
+    - 所有 worktree 完全平等，共享 bare repo    
