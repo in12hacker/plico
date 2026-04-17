@@ -19,9 +19,32 @@ pub mod llm;
 use serde::{Deserialize, Serialize};
 use crate::api::semantic::ApiRequest;
 
+/// Routing action — first-class routing decision type (AgentGate-inspired).
+/// Explicit representation of what the router decided to do with the query.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RoutingAction {
+    /// Route to a single API action (CRUD, agent management, etc.)
+    SingleAction,
+    /// Query requires multiple agents or actions in sequence/coordination.
+    MultiAction,
+    /// Router returns direct response without invoking any agent.
+    DirectResponse,
+    /// Query rejected/deferred due to safety, authorization, or policy.
+    SafeEscalation,
+    /// Fallback when routing confidence is below threshold.
+    LowConfidence,
+}
+
+impl Default for RoutingAction {
+    fn default() -> Self {
+        RoutingAction::SingleAction
+    }
+}
+
 /// A resolved intent — a structured action derived from natural language.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResolvedIntent {
+    pub routing_action: RoutingAction,
     pub confidence: f32,
     pub action: ApiRequest,
     pub explanation: String,
@@ -140,11 +163,13 @@ mod tests {
     #[test]
     fn resolved_intent_serializable() {
         let ri = ResolvedIntent {
+            routing_action: RoutingAction::SingleAction,
             confidence: 0.9,
             action: crate::api::semantic::ApiRequest::ListAgents,
             explanation: "test".into(),
         };
         let json = serde_json::to_string(&ri).unwrap();
         assert!(json.contains("0.9"));
+        assert!(json.contains("SingleAction"));
     }
 }

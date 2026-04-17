@@ -4,7 +4,7 @@
 //! The LLM receives a system prompt with the full tool catalog and
 //! returns structured JSON describing the intended actions.
 
-use super::{IntentRouter, ResolvedIntent, IntentError};
+use super::{IntentRouter, ResolvedIntent, IntentError, RoutingAction};
 use crate::api::semantic::ApiRequest;
 use crate::tool::ToolDescriptor;
 
@@ -69,6 +69,7 @@ IMPORTANT: Return ONLY valid JSON, no markdown, no extra text."#
         };
 
         Ok(vec![ResolvedIntent {
+            routing_action: RoutingAction::SingleAction,
             confidence,
             action,
             explanation,

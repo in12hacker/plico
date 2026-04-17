@@ -6,7 +6,7 @@
 
 use crate::api::semantic::ApiRequest;
 use crate::temporal::resolve_heuristic;
-use super::{IntentRouter, ResolvedIntent, IntentError};
+use super::{IntentRouter, ResolvedIntent, IntentError, RoutingAction};
 
 pub struct HeuristicRouter;
 
@@ -190,6 +190,7 @@ fn classify(text: &str) -> Option<PatternMatch> {
 }
 
 fn to_api_request(m: PatternMatch, agent_id: &str) -> ResolvedIntent {
+    let routing_action = RoutingAction::SingleAction;
     let (action, explanation) = match m.action_type {
         ActionType::Search => {
             let (since, until) = resolve_temporal_bounds(m.temporal_text.as_deref());
@@ -268,6 +269,7 @@ fn to_api_request(m: PatternMatch, agent_id: &str) -> ResolvedIntent {
         }
     };
     ResolvedIntent {
+        routing_action,
         confidence: m.confidence,
         action,
         explanation,
@@ -281,6 +283,62 @@ impl IntentRouter for HeuristicRouter {
             return Err(IntentError::Unresolvable("empty input".to_string()));
         }
 
+        // Multi-intent detection: split on compound connectors.
+        let parts = split_compound(trimmed);
+        if parts.len() > 1 {
+            // Compound query → MultiAction
+            let intents: Vec<ResolvedIntent> = parts
+                .iter()
+                .map(|part| {
+                    let part = part.trim();
+                    if part.is_empty() {
+                        return None;
+                    }
+                    match classify(part) {
+                        Some(m) => {
+                            let mut ri = to_api_request(m, agent_id);
+                            ri.routing_action = RoutingAction::SingleAction;
+                            Some(ri)
+                        }
+                        None => {
+                            // Fallback search for this part
+                            let temporal = extract_temporal_hint(&part.to_lowercase());
+                            let (since, until) = resolve_temporal_bounds(temporal.as_deref());
+                            let action = ApiRequest::Search {
+                                query: part.to_string(),
+                                agent_id: agent_id.to_string(),
+                                limit: Some(10),
+                                require_tags: vec![],
+                                exclude_tags: vec![],
+                                since,
+                                until,
+                            };
+                            Some(ResolvedIntent {
+                                routing_action: RoutingAction::LowConfidence,
+                                confidence: 0.3,
+                                action,
+                                explanation: format!("Fallback search for '{}'", truncate(part, 50)),
+                            })
+                        }
+                    }
+                })
+                .filter_map(|x| x)
+                .collect();
+            if intents.len() == 1 {
+                return Ok(intents);
+            }
+            // Mark all as MultiAction
+            let intents: Vec<ResolvedIntent> = intents
+                .into_iter()
+                .map(|mut ri| {
+                    ri.routing_action = RoutingAction::MultiAction;
+                    ri
+                })
+                .collect();
+            return Ok(intents);
+        }
+
+        // Single intent
         match classify(trimmed) {
             Some(m) => Ok(vec![to_api_request(m, agent_id)]),
             None => {
@@ -297,6 +355,7 @@ impl IntentRouter for HeuristicRouter {
                     until,
                 };
                 Ok(vec![ResolvedIntent {
+                    routing_action: RoutingAction::LowConfidence,
                     confidence: 0.3,
                     action,
                     explanation: format!("Fallback search for '{}'", truncate(trimmed, 50)),
@@ -307,6 +366,45 @@ impl IntentRouter for HeuristicRouter {
 }
 
 // ─── Helper Functions ───────────────────────────────────────────────
+
+/// Split a compound query into parts.
+/// Connectors: " and ", " also ", " then ", " and then "
+fn split_compound(text: &str) -> Vec<String> {
+    let separators = [" and then ", " then ", " also ", " and "];
+    let lower = text.to_lowercase();
+
+    // Find the earliest separator
+    let mut earliest: Option<(usize, &str)> = None;
+    for sep in &separators {
+        if let Some(pos) = lower.find(sep) {
+            match earliest {
+                None => earliest = Some((pos, sep)),
+                Some((epos, _)) if pos < epos => earliest = Some((pos, sep)),
+                _ => {}
+            }
+        }
+    }
+
+    match earliest {
+        Some((pos, sep)) => {
+            let mut parts = Vec::new();
+            let before = text[..pos].trim();
+            let after = text[pos + sep.len()..].trim();
+            if !before.is_empty() {
+                parts.push(before.to_string());
+            }
+            if !after.is_empty() {
+                // Recursively split the rest
+                parts.extend(split_compound(after));
+            }
+            if parts.is_empty() {
+                parts.push(text.to_string());
+            }
+            parts
+        }
+        None => vec![text.to_string()],
+    }
+}
 
 fn matches_any(text: &str, patterns: &[&str]) -> bool {
     patterns.iter().any(|p| text.contains(p))
@@ -506,5 +604,43 @@ mod tests {
         } else {
             panic!("Expected Delete");
         }
+    }
+
+    #[test]
+    fn test_split_compound_simple() {
+        let parts = split_compound("search docs and create ticket");
+        assert_eq!(parts.len(), 2);
+        assert!(parts[0].contains("search docs"));
+        assert!(parts[1].contains("create ticket"));
+    }
+
+    #[test]
+    fn test_split_compound_three_way() {
+        let parts = split_compound("search docs and create ticket and send message");
+        assert_eq!(parts.len(), 3);
+    }
+
+    #[test]
+    fn test_split_compound_no_split() {
+        let parts = split_compound("search docs");
+        assert_eq!(parts.len(), 1);
+    }
+
+    #[test]
+    fn test_multi_intent_compound_query() {
+        let router = HeuristicRouter::new();
+        let results = router.resolve("search docs and create ticket", "agent1").unwrap();
+        assert!(results.len() == 2, "compound query should produce 2 intents, got {}", results.len());
+        // When multiple intents detected, routing_action = MultiAction
+        assert_eq!(results[0].routing_action, RoutingAction::MultiAction);
+        assert_eq!(results[1].routing_action, RoutingAction::MultiAction);
+    }
+
+    #[test]
+    fn test_single_intent_has_single_action_routing() {
+        let router = HeuristicRouter::new();
+        let results = router.resolve("search docs", "agent1").unwrap();
+        assert!(results.len() == 1);
+        assert_eq!(results[0].routing_action, RoutingAction::SingleAction);
     }
 }
