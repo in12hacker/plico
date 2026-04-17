@@ -2,7 +2,7 @@
 
 use std::collections::HashSet;
 
-use crate::fs::graph::{KGNode, KGNodeType, KGEdge, KGEdgeType, KnowledgeGraph};
+use crate::fs::graph::{KGNode, KGNodeType, KGEdge, KGEdgeType};
 use crate::fs::types::{EventMeta, EventRelation, EventSummary, EventType, FSError};
 use crate::temporal::TemporalResolver;
 

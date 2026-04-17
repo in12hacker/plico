@@ -12,15 +12,12 @@ pub mod tests;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
-use serde::{Deserialize, Serialize};
-
 use crate::cas::{AIObject, AIObjectMeta, CASStorage};
 use crate::fs::context_loader::ContextLoader;
-use crate::fs::embedding::{EmbeddingProvider, EmbedError};
+use crate::fs::embedding::EmbeddingProvider;
 use crate::fs::search::{SemanticSearch, SearchFilter, SearchIndexMeta, Bm25Index};
 use crate::fs::summarizer::Summarizer;
-use crate::fs::graph::{KnowledgeGraph, KGNode, KGNodeType, KGEdge, KGEdgeType};
-use crate::temporal::TemporalResolver;
+use crate::fs::graph::KnowledgeGraph;
 
 // Re-export types from fs/types (single source of truth)
 pub use crate::fs::types::{

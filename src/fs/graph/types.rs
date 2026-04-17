@@ -4,7 +4,7 @@
 //! Nodes represent entities, facts, and memory blocks from CAS objects.
 //! Edges represent typed relationships (RelatedTo, Follows, Mentions, etc.).
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 

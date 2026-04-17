@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::RwLock;
 
 use crate::fs::graph::types::{DiskGraph, KGNode, KGEdge, KGEdgeType, KGNodeType};
-use crate::fs::graph::{KGError, KGSearchHit, KnowledgeGraph};
+use crate::fs::graph::{KGError, KnowledgeGraph};
 
 /// Flattened edge record for JSON serialization.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
