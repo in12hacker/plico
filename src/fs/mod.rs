@@ -31,6 +31,7 @@ pub mod embedding;
 pub mod search;
 pub mod summarizer;
 pub mod graph;
+pub mod types;
 
 pub use semantic_fs::{SemanticFS, FSError, Query, SearchResult, AuditEntry, AuditAction, RecycleEntry, EventType, EventRelation, EventSummary};
 pub use context_loader::{ContextLoader, ContextLayer};

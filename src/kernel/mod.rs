@@ -730,7 +730,7 @@ impl AIKernel {
             valid_at: Some(now),
             invalid_at: None,
             expired_at: None,
-            episodes: Vec::new(),
+            episode: None,
         };
         kg.add_edge(edge)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
