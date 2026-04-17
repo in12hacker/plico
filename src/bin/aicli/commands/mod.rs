@@ -70,7 +70,15 @@ pub fn extract_tags_opt(args: &[String], flag: &str) -> Option<Vec<String>> {
 
 // ─── Output Formatting ──────────────────────────────────────────────
 
+/// If AICLI_OUTPUT=json, print ApiResponse as JSON; otherwise human-readable.
 pub fn print_result(response: &ApiResponse) {
+    if std::env::var("AICLI_OUTPUT").as_deref().ok() == Some("json") {
+        // Machine-readable JSON output for AI agents
+        println!("{}", serde_json::to_string_pretty(response).unwrap_or_default());
+        return;
+    }
+
+    // Human-readable output
     if let Some(cid) = &response.cid {
         println!("CID: {}", cid);
     }
