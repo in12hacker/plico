@@ -21,8 +21,10 @@
 //! ```
 
 use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::Mutex as StdMutex;
 use std::time::Duration;
-use tokio::sync::{broadcast, mpsc, RwLock};
+use tokio::sync::{broadcast, mpsc, Mutex as TokioMutex, RwLock};
 use tokio::time::{interval, Instant};
 
 use super::agent::{AgentId, AgentState, Intent, IntentId};
@@ -286,114 +288,120 @@ async fn dispatch_loop(
     let mut poll_timer = interval(poll_interval);
     poll_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
+    let agent_locks: Arc<StdMutex<HashMap<String, Arc<TokioMutex<()>>>>> =
+        Arc::new(StdMutex::new(HashMap::new()));
+
     loop {
         tokio::select! {
-            // Shutdown signal received
             _ = shutdown_rx.recv() => {
                 tracing::info!("Dispatch loop shutting down");
                 break;
             }
 
-            // Poll timer tick
             _ = poll_timer.tick() => {
-                // Drain pending intents from the scheduler into our queue
                 while let Some(intent) = scheduler.dequeue() {
                     tracing::debug!("Draining intent {} from scheduler", intent.id);
                     queue.write().await.push(intent);
                 }
 
-                // Execute next intent if any
-                let intent = {
+                let mut intents = Vec::new();
+                {
                     let mut q = queue.write().await;
-                    q.pop()
-                };
+                    while let Some(intent) = q.pop() {
+                        intents.push(intent);
+                    }
+                }
 
-                if let Some(intent) = intent {
-                    let start = Instant::now();
-                    let intent_id = intent.id.clone();
-                    let agent_id = intent.agent_id.clone();
+                for intent in intents {
+                    let agent_key = intent.agent_id.as_ref()
+                        .map(|a| a.0.clone())
+                        .unwrap_or_else(|| format!("_anon_{}", intent.id.0));
 
-                    // Update agent state to Running (skip if transition is illegal)
-                    if let Some(ref aid) = intent.agent_id {
-                        if let Err(e) = scheduler.update_state(aid, AgentState::Running) {
-                            let elapsed_ms = start.elapsed().as_millis() as u64;
-                            let result = ExecutionResult::failure(
-                                intent_id.clone(),
-                                agent_id.clone(),
-                                format!("Cannot execute: {}", e),
-                                elapsed_ms,
-                            );
-                            if result_tx.send(result).await.is_err() {
-                                tracing::warn!("Dispatch loop: result receiver dropped");
-                                break;
+                    let lock = {
+                        let mut locks = agent_locks.lock().unwrap();
+                        locks.entry(agent_key)
+                            .or_insert_with(|| Arc::new(TokioMutex::new(())))
+                            .clone()
+                    };
+
+                    let scheduler = Arc::clone(&scheduler);
+                    let executor = Arc::clone(&executor);
+                    let result_tx = result_tx.clone();
+
+                    tokio::spawn(async move {
+                        let _guard = lock.lock().await;
+
+                        let start = Instant::now();
+                        let intent_id = intent.id.clone();
+                        let agent_id = intent.agent_id.clone();
+
+                        if let Some(ref aid) = intent.agent_id {
+                            if let Err(e) = scheduler.update_state(aid, AgentState::Running) {
+                                let elapsed_ms = start.elapsed().as_millis() as u64;
+                                let result = ExecutionResult::failure(
+                                    intent_id,
+                                    agent_id,
+                                    format!("Cannot execute: {}", e),
+                                    elapsed_ms,
+                                );
+                                let _ = result_tx.send(result).await;
+                                return;
                             }
-                            continue;
                         }
-                    }
 
-                    // Get per-agent CPU time quota if set, otherwise use hardcoded limit.
-                    // cpu_time_quota=0 means unlimited (backward compatible default).
-                    let limit_ms = if let Some(ref aid) = intent.agent_id {
-                        scheduler.get(aid)
-                            .map(|a| a.resources().cpu_time_quota)
-                            .unwrap_or(cpu_time_limit_ms)
-                    } else {
-                        cpu_time_limit_ms
-                    };
-
-                    // Run executor in a blocking thread so it doesn't block the tokio runtime.
-                    // Wrap with timeout so a slow/hung intent can't hold the dispatch loop
-                    // indefinitely. limit_ms=0 means no limit.
-                    let agent_id_exec = intent.agent_id.clone();
-                    let executor_ref = Arc::clone(&executor);
-                    let intent_ref = intent.clone();
-
-                    let output = async {
-                        tokio::task::spawn_blocking(move || {
-                            executor_ref.execute(&intent_ref, agent_id_exec.as_ref(), limit_ms)
-                        }).await
-                    };
-
-                    let output = if limit_ms > 0 {
-                        match tokio::time::timeout(Duration::from_millis(limit_ms), output).await {
-                            Ok(Ok(result)) => result,
-                            Ok(Err(e)) => Err(format!("Task panicked: {e}")),
-                            Err(_) => Err(format!("Timeout after {limit_ms}ms")),
-                        }
-                    } else {
-                        match output.await {
-                            Ok(result) => result,
-                            Err(e) => Err(format!("Task panicked: {e}")),
-                        }
-                    };
-
-                    let elapsed_ms = start.elapsed().as_millis() as u64;
-
-                    let result = match output {
-                        Ok(out) => {
-                            ExecutionResult::success(intent_id.clone(), agent_id.clone(), out, elapsed_ms)
-                        }
-                        Err(msg) => {
-                            ExecutionResult::failure(intent_id.clone(), agent_id.clone(), msg, elapsed_ms)
-                        }
-                    };
-
-                    // After execution, set agent to Waiting (ready for more intents)
-                    // unless it failed. Terminal states (Completed/Terminated) are
-                    // only set explicitly by lifecycle API.
-                    if let Some(ref aid) = agent_id {
-                        let next_state = if result.success {
-                            AgentState::Waiting
+                        let limit_ms = if let Some(ref aid) = intent.agent_id {
+                            scheduler.get(aid)
+                                .map(|a| a.resources().cpu_time_quota)
+                                .unwrap_or(cpu_time_limit_ms)
                         } else {
-                            AgentState::Failed
+                            cpu_time_limit_ms
                         };
-                        let _ = scheduler.update_state(aid, next_state);
-                    }
 
-                    if result_tx.send(result).await.is_err() {
-                        tracing::warn!("Dispatch loop: result receiver dropped");
-                        break;
-                    }
+                        let agent_id_exec = intent.agent_id.clone();
+                        let executor_ref = Arc::clone(&executor);
+                        let intent_ref = intent.clone();
+
+                        let output = async {
+                            tokio::task::spawn_blocking(move || {
+                                executor_ref.execute(&intent_ref, agent_id_exec.as_ref(), limit_ms)
+                            }).await
+                        };
+
+                        let output = if limit_ms > 0 {
+                            match tokio::time::timeout(Duration::from_millis(limit_ms), output).await {
+                                Ok(Ok(result)) => result,
+                                Ok(Err(e)) => Err(format!("Task panicked: {e}")),
+                                Err(_) => Err(format!("Timeout after {limit_ms}ms")),
+                            }
+                        } else {
+                            match output.await {
+                                Ok(result) => result,
+                                Err(e) => Err(format!("Task panicked: {e}")),
+                            }
+                        };
+
+                        let elapsed_ms = start.elapsed().as_millis() as u64;
+
+                        let result = match output {
+                            Ok(out) => {
+                                ExecutionResult::success(intent_id, agent_id.clone(), out, elapsed_ms)
+                            }
+                            Err(msg) => {
+                                ExecutionResult::failure(intent_id, agent_id.clone(), msg, elapsed_ms)
+                            }
+                        };
+
+                        if let Some(ref aid) = agent_id {
+                            let next_state = if result.success {
+                                AgentState::Waiting
+                            } else {
+                                AgentState::Failed
+                            };
+                            let _ = scheduler.update_state(aid, next_state);
+                        }
+
+                        let _ = result_tx.send(result).await;
+                    });
                 }
             }
         }
@@ -631,5 +639,89 @@ mod tests {
         assert!(!results.is_empty(), "should have a result");
         let result = &results[0];
         assert!(result.success, "unlimited agent should succeed, got: {}", result.output);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_concurrent_different_agents_run_in_parallel() {
+        use crate::scheduler::agent::{Agent, IntentPriority};
+
+        let scheduler = Arc::new(AgentScheduler::new());
+        let agent_a = Agent::new("agent-a".into());
+        let aid_a = agent_a.id().clone();
+        let agent_b = Agent::new("agent-b".into());
+        let aid_b = agent_b.id().clone();
+        scheduler.register(agent_a);
+        scheduler.register(agent_b);
+
+        let executor: Arc<dyn AgentExecutor> = Arc::new(SlowExecutor(200));
+        let loop_ = TokioDispatchLoop::new(Arc::clone(&scheduler), executor, 60_000);
+        let dispatch = loop_.spawn();
+
+        let intent_a = Intent::new(IntentPriority::High, "task-a".into())
+            .with_agent(aid_a.clone());
+        let intent_b = Intent::new(IntentPriority::High, "task-b".into())
+            .with_agent(aid_b.clone());
+        scheduler.submit(intent_a);
+        scheduler.submit(intent_b);
+
+        let start = Instant::now();
+        tokio::time::sleep(tokio::time::Duration::from_millis(800)).await;
+        let elapsed = start.elapsed().as_millis() as u64;
+
+        let results = dispatch.drain_results().await;
+        dispatch.shutdown();
+
+        assert_eq!(results.len(), 2, "both agents should complete");
+        assert!(results.iter().all(|r| r.success), "both should succeed");
+        let max_elapsed = results.iter().map(|r| r.elapsed_ms).max().unwrap_or(0);
+        assert!(max_elapsed < 400, "parallel execution should complete in ~200ms, not {}ms", max_elapsed);
+        let _ = elapsed;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_same_agent_intents_serialize() {
+        use crate::scheduler::agent::{Agent, IntentPriority};
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        let scheduler = Arc::new(AgentScheduler::new());
+        let agent = Agent::new("serial-agent".into());
+        let aid = agent.id().clone();
+        scheduler.register(agent);
+
+        let call_count = Arc::new(AtomicU32::new(0));
+        let cc = Arc::clone(&call_count);
+
+        struct CountingExecutor {
+            count: Arc<AtomicU32>,
+            delay_ms: u64,
+        }
+        impl AgentExecutor for CountingExecutor {
+            fn execute(&self, intent: &Intent, _agent_id: Option<&AgentId>, _cpu_time_limit_ms: u64) -> Result<String, String> {
+                let n = self.count.fetch_add(1, Ordering::SeqCst);
+                std::thread::sleep(std::time::Duration::from_millis(self.delay_ms));
+                Ok(format!("exec-{}-{}", n, intent.description))
+            }
+        }
+
+        let executor: Arc<dyn AgentExecutor> = Arc::new(CountingExecutor { count: cc, delay_ms: 100 });
+        let loop_ = TokioDispatchLoop::new(Arc::clone(&scheduler), executor, 60_000);
+        let dispatch = loop_.spawn();
+
+        let intent1 = Intent::new(IntentPriority::High, "first".into())
+            .with_agent(aid.clone());
+        let intent2 = Intent::new(IntentPriority::High, "second".into())
+            .with_agent(aid.clone());
+        scheduler.submit(intent1);
+        scheduler.submit(intent2);
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(900)).await;
+
+        let results = dispatch.drain_results().await;
+        dispatch.shutdown();
+
+        assert_eq!(results.len(), 2, "both intents should complete");
+        assert_eq!(call_count.load(Ordering::SeqCst), 2);
+        let total_elapsed: u64 = results.iter().map(|r| r.elapsed_ms).sum();
+        assert!(total_elapsed >= 180, "serialized execution should take ~200ms total, got {}ms", total_elapsed);
     }
 }

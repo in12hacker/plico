@@ -54,6 +54,11 @@ impl crate::kernel::AIKernel {
                         .map(|a| a.0.as_str())
                         .unwrap_or("system");
 
+                    kernel.event_bus.emit(crate::kernel::event_bus::KernelEvent::IntentCompleted {
+                        intent_id: result.intent_id.0.clone(),
+                        success: result.success,
+                    });
+
                     let output_preview: String = result.output.chars().take(120).collect();
                     let label = format!(
                         "dispatch:{}:{}",
