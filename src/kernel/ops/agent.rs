@@ -112,8 +112,32 @@ impl crate::kernel::AIKernel {
         })?;
 
         let memories = self.memory.get_all(agent_id);
-        if let Some(snapshot) = crate::memory::context_snapshot::find_latest_snapshot(&memories) {
-            let ctx_text = snapshot.to_context_string();
+
+        // Extract context summary BEFORE any restore (snapshot may be cleared by restore)
+        let ctx_summary = crate::memory::context_snapshot::find_latest_snapshot(&memories)
+            .map(|s| s.to_context_string());
+
+        // Try to auto-restore from the latest checkpoint CID
+        let checkpoint_cid = memories.iter()
+            .filter(|e| e.tags.contains(&crate::memory::context_snapshot::SNAPSHOT_TAG.to_string()))
+            .max_by_key(|e| e.created_at)
+            .and_then(|e| {
+                e.tags.iter()
+                    .find(|t| t.starts_with("checkpoint:"))
+                    .map(|t| t[11..].to_string())
+            });
+
+        if let Some(ref cid) = checkpoint_cid {
+            if let Ok(count) = self.restore_agent_checkpoint(agent_id, cid) {
+                tracing::info!(
+                    "Agent {} auto-restored from checkpoint {} ({} entries)",
+                    agent_id, cid, count
+                );
+            }
+        }
+
+        // Inject context summary for cognitive continuity
+        if let Some(ctx_text) = ctx_summary {
             let entry = crate::memory::MemoryEntry::ephemeral(agent_id, ctx_text);
             self.memory.store(entry);
         }

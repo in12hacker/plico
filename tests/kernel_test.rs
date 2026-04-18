@@ -2316,3 +2316,58 @@ fn test_suspend_auto_checkpoints() {
     });
     assert!(has_checkpoint_tag, "suspend should create a checkpoint CID tag on the context snapshot");
 }
+
+// ─── v4.1: Auto-restore on resume ─────────────────────────────────
+
+#[test]
+fn test_full_suspend_resume_cycle_preserves_memory() {
+    let (kernel, _dir) = make_kernel_arc();
+    let agent_id = kernel.register_agent("cycle-test".into());
+
+    use plico::api::permission::PermissionAction;
+    kernel.permission_grant(&agent_id, PermissionAction::Read, None, None);
+    kernel.permission_grant(&agent_id, PermissionAction::Write, None, None);
+
+    // Store working memory
+    kernel.remember_working(&agent_id, "important fact 1".into(), vec!["fact".into()]).unwrap();
+    kernel.remember_working(&agent_id, "important fact 2".into(), vec!["fact".into()]).unwrap();
+    let pre_suspend_count = kernel.recall(&agent_id).len();
+    assert_eq!(pre_suspend_count, 2);
+
+    // Move to Running so we can suspend
+    kernel.handle_api_request(plico::api::semantic::ApiRequest::SubmitIntent {
+        priority: "normal".into(),
+        description: "work".into(),
+        action: None,
+        agent_id: agent_id.clone(),
+    });
+
+    // Suspend — auto-checkpoints, stores snapshot
+    kernel.agent_suspend(&agent_id).unwrap();
+
+    // Verify suspended state
+    let (_, state, _) = kernel.agent_status(&agent_id).unwrap();
+    assert_eq!(state, "Suspended");
+
+    // Resume — should auto-restore from checkpoint + inject context
+    kernel.agent_resume(&agent_id).unwrap();
+
+    let (_, state, _) = kernel.agent_status(&agent_id).unwrap();
+    assert_eq!(state, "Waiting");
+
+    // Memory should contain the original facts (restored from checkpoint)
+    // plus an ephemeral context summary
+    let post_resume = kernel.recall(&agent_id);
+    let has_fact1 = post_resume.iter().any(|e| {
+        if let plico::memory::MemoryContent::Text(t) = &e.content { t.contains("important fact 1") } else { false }
+    });
+    let has_fact2 = post_resume.iter().any(|e| {
+        if let plico::memory::MemoryContent::Text(t) = &e.content { t.contains("important fact 2") } else { false }
+    });
+    let has_context = post_resume.iter().any(|e| {
+        if let plico::memory::MemoryContent::Text(t) = &e.content { t.contains("Context restored") } else { false }
+    });
+    assert!(has_fact1, "should restore fact 1 from checkpoint");
+    assert!(has_fact2, "should restore fact 2 from checkpoint");
+    assert!(has_context, "should inject context summary");
+}
