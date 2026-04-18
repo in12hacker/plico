@@ -147,4 +147,56 @@ impl crate::kernel::AIKernel {
             Err(_) => self.memory.recall_relevant(agent_id, budget_tokens),
         }
     }
+
+    /// Store a procedural memory entry (L3 tier — learned skills/workflows).
+    pub fn remember_procedural(
+        &self,
+        agent_id: &str,
+        name: String,
+        description: String,
+        steps: Vec<crate::memory::layered::ProcedureStep>,
+        learned_from: String,
+        tags: Vec<String>,
+    ) -> Result<String, String> {
+        let ctx = PermissionContext::new(agent_id.to_string());
+        self.permissions.check(&ctx, PermissionAction::Write).map_err(|e| e.to_string())?;
+        let procedure = crate::memory::layered::Procedure {
+            name,
+            description,
+            steps,
+            learned_from,
+        };
+        let entry_id = uuid::Uuid::new_v4().to_string();
+        let entry = MemoryEntry {
+            id: entry_id.clone(),
+            agent_id: agent_id.to_string(),
+            tier: MemoryTier::Procedural,
+            content: MemoryContent::Procedure(procedure),
+            importance: 100,
+            access_count: 0,
+            last_accessed: crate::memory::layered::now_ms(),
+            created_at: crate::memory::layered::now_ms(),
+            tags,
+            embedding: None,
+            ttl_ms: None,
+        };
+        let quota = self.agent_memory_quota(agent_id);
+        self.memory.store_checked(entry, quota).map_err(|e| e.to_string())?;
+        Ok(entry_id)
+    }
+
+    /// Recall procedural memories, optionally filtered by procedure name.
+    pub fn recall_procedural(&self, agent_id: &str, name_filter: Option<&str>) -> Vec<MemoryEntry> {
+        let ctx = PermissionContext::new(agent_id.to_string());
+        if self.permissions.check(&ctx, PermissionAction::Read).is_err() {
+            return Vec::new();
+        }
+        let entries = self.memory.get_tier(agent_id, MemoryTier::Procedural);
+        match name_filter {
+            None => entries,
+            Some(name) => entries.into_iter().filter(|e| {
+                matches!(&e.content, MemoryContent::Procedure(p) if p.name == name)
+            }).collect(),
+        }
+    }
 }

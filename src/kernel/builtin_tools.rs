@@ -195,6 +195,25 @@ impl AIKernel {
             description: "Check if an agent has permission for a specific action".into(),
             schema: json!({"type":"object","properties":{"agent_id":{"type":"string"},"action":{"type":"string"}},"required":["agent_id","action"]}),
         });
+
+        // Intent execution
+        self.tool_registry.register(ToolDescriptor {
+            name: "intent.execute".into(),
+            description: "Resolve a natural language intent and execute the best-matching action".into(),
+            schema: json!({"type":"object","properties":{"text":{"type":"string","description":"Natural language intent"},"confidence_threshold":{"type":"number","description":"Minimum confidence to auto-execute (default 0.7)"},"priority":{"type":"string","description":"Intent priority: critical|high|medium|low"},"learn":{"type":"boolean","description":"Capture mapping as procedural memory"}},"required":["text"]}),
+        });
+
+        // Procedural memory
+        self.tool_registry.register(ToolDescriptor {
+            name: "memory.store_procedure".into(),
+            description: "Store a learned procedure (workflow/skill) in procedural memory (L3)".into(),
+            schema: json!({"type":"object","properties":{"name":{"type":"string"},"description":{"type":"string"},"steps":{"type":"array","items":{"type":"object","properties":{"description":{"type":"string"},"action":{"type":"string"},"expected_outcome":{"type":"string"}},"required":["description","action"]}},"learned_from":{"type":"string"},"tags":{"type":"array","items":{"type":"string"}}},"required":["name","description","steps"]}),
+        });
+        self.tool_registry.register(ToolDescriptor {
+            name: "memory.recall_procedure".into(),
+            description: "Retrieve procedural memories (learned workflows/skills) for an agent".into(),
+            schema: json!({"type":"object","properties":{"name":{"type":"string","description":"Optional: filter by procedure name"}},"required":[]}),
+        });
     }
 
     /// Execute a tool by name with JSON parameters.
@@ -218,7 +237,8 @@ impl AIKernel {
 
         if let Some(handler) = self.tool_registry.get_handler(name) {
             let ctx = crate::api::permission::PermissionContext::new(agent_id.to_string());
-            if self.permissions.check(&ctx, crate::api::permission::PermissionAction::Execute).is_err() {
+            let scope = format!("tool:{}", name);
+            if self.permissions.check_scoped(&ctx, crate::api::permission::PermissionAction::Execute, Some(&scope)).is_err() {
                 return ToolResult::error(format!(
                     "Agent '{}' lacks Execute permission for external tool '{}'", agent_id, name
                 ));
@@ -629,6 +649,63 @@ impl AIKernel {
                     }
                     None => ToolResult::error(format!("Unknown action: {}", action_str)),
                 }
+            }
+            "intent.execute" => {
+                let text = params.get("text").and_then(|v| v.as_str()).unwrap_or("");
+                let threshold = params.get("confidence_threshold").and_then(|v| v.as_f64()).unwrap_or(0.7) as f32;
+                let prio_str = params.get("priority").and_then(|v| v.as_str()).unwrap_or("medium");
+                let prio = match prio_str {
+                    "critical" => crate::scheduler::IntentPriority::Critical,
+                    "high" => crate::scheduler::IntentPriority::High,
+                    "low" => crate::scheduler::IntentPriority::Low,
+                    _ => crate::scheduler::IntentPriority::Medium,
+                };
+                let learn = params.get("learn").and_then(|v| v.as_bool()).unwrap_or(false);
+                match self.intent_execute(text, agent_id, threshold, prio, learn) {
+                    Ok((intent_id, resolved)) => {
+                        let intents: Vec<serde_json::Value> = resolved.iter().map(|ri| {
+                            json!({"confidence": ri.confidence, "explanation": ri.explanation})
+                        }).collect();
+                        ToolResult::ok(json!({
+                            "executed": intent_id.is_some(),
+                            "intent_id": intent_id,
+                            "resolved_intents": intents,
+                        }))
+                    }
+                    Err(e) => ToolResult::error(e),
+                }
+            }
+            "memory.store_procedure" => {
+                let name = params.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let description = params.get("description").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let learned_from = params.get("learned_from").and_then(|v| v.as_str()).unwrap_or("manual").to_string();
+                let tags: Vec<String> = params.get("tags")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                    .unwrap_or_default();
+                let steps: Vec<crate::memory::layered::ProcedureStep> = params.get("steps")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| arr.iter().enumerate().map(|(i, s)| {
+                        crate::memory::layered::ProcedureStep {
+                            step_number: (i + 1) as u32,
+                            description: s.get("description").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                            action: s.get("action").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                            expected_outcome: s.get("expected_outcome").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                        }
+                    }).collect())
+                    .unwrap_or_default();
+                match self.remember_procedural(agent_id, name, description, steps, learned_from, tags) {
+                    Ok(entry_id) => ToolResult::ok(json!({"entry_id": entry_id, "stored": true})),
+                    Err(e) => ToolResult::error(e),
+                }
+            }
+            "memory.recall_procedure" => {
+                let name = params.get("name").and_then(|v| v.as_str());
+                let entries = self.recall_procedural(agent_id, name);
+                let data: Vec<serde_json::Value> = entries.iter().map(|e| {
+                    json!({"id": e.id, "content": e.content.display(), "tags": e.tags, "importance": e.importance})
+                }).collect();
+                ToolResult::ok(json!({"procedures": data, "count": data.len()}))
             }
             _ => ToolResult::error(format!("unknown tool: {}", name)),
         }

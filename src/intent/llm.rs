@@ -4,7 +4,7 @@
 //! The LLM receives a system prompt with the full tool catalog and
 //! returns structured JSON describing the intended actions.
 
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use super::{IntentRouter, ResolvedIntent, IntentError, RoutingAction};
 use crate::api::semantic::ApiRequest;
 use crate::tool::ToolDescriptor;
@@ -12,17 +12,22 @@ use crate::llm::{LlmProvider, ChatMessage, ChatOptions};
 
 pub struct LlmRouter {
     provider: Arc<dyn LlmProvider>,
-    tool_catalog: Vec<ToolDescriptor>,
+    tool_catalog: RwLock<Vec<ToolDescriptor>>,
 }
 
 impl LlmRouter {
     pub fn new(provider: Arc<dyn LlmProvider>, tool_catalog: Vec<ToolDescriptor>) -> Self {
-        Self { provider, tool_catalog }
+        Self { provider, tool_catalog: RwLock::new(tool_catalog) }
+    }
+
+    pub fn set_tool_catalog(&self, catalog: Vec<ToolDescriptor>) {
+        *self.tool_catalog.write().unwrap() = catalog;
     }
 
     fn build_system_prompt(&self) -> String {
+        let catalog = self.tool_catalog.read().unwrap();
         let mut tools_desc = String::new();
-        for tool in &self.tool_catalog {
+        for tool in catalog.iter() {
             tools_desc.push_str(&format!("- {}: {}\n", tool.name, tool.description));
         }
 
@@ -44,6 +49,30 @@ IMPORTANT: Return ONLY valid JSON, no markdown, no extra text."#
         )
     }
 
+    fn validate_tool_call(&self, tool_name: &str, params: &serde_json::Value) -> Result<(), IntentError> {
+        let catalog = self.tool_catalog.read().unwrap();
+        if catalog.is_empty() {
+            return Ok(());
+        }
+        let tool = catalog.iter().find(|t| t.name == tool_name)
+            .ok_or_else(|| IntentError::Unresolvable(
+                format!("Unknown tool '{}' — not in registry", tool_name),
+            ))?;
+
+        if let Some(required) = tool.schema.get("required").and_then(|r| r.as_array()) {
+            for req in required {
+                if let Some(field) = req.as_str() {
+                    if params.get(field).is_none() {
+                        return Err(IntentError::Unresolvable(
+                            format!("Tool '{}' requires parameter '{}' but it was not provided", tool_name, field),
+                        ));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn parse_llm_response(&self, body: &str, agent_id: &str) -> Result<Vec<ResolvedIntent>, IntentError> {
         let json_str = body.trim().trim_start_matches("```json").trim_end_matches("```").trim();
 
@@ -58,6 +87,8 @@ IMPORTANT: Return ONLY valid JSON, no markdown, no extra text."#
         if tool_name == "none" || confidence < 0.1 {
             return Err(IntentError::Unresolvable(explanation));
         }
+
+        self.validate_tool_call(tool_name, &params)?;
 
         let action = ApiRequest::ToolCall {
             tool: tool_name.to_string(),

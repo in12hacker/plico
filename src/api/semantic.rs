@@ -74,6 +74,15 @@ pub fn decode_content(content: &str, encoding: &ContentEncoding) -> Result<Vec<u
 fn default_importance() -> u8 { 50 }
 fn default_k() -> usize { 10 }
 
+/// DTO for procedure steps in API requests.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProcedureStepDto {
+    pub description: String,
+    pub action: String,
+    #[serde(default)]
+    pub expected_outcome: Option<String>,
+}
+
 /// A JSON API request.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "method")]
@@ -326,6 +335,39 @@ pub enum ApiRequest {
 
     #[serde(rename = "intent_resolve")]
     IntentResolve { text: String, agent_id: String },
+
+    #[serde(rename = "intent_execute")]
+    IntentExecute {
+        text: String,
+        agent_id: String,
+        #[serde(default)]
+        confidence_threshold: Option<f32>,
+        #[serde(default)]
+        priority: Option<String>,
+        #[serde(default)]
+        learn: Option<bool>,
+    },
+
+    // ── Procedural Memory ────────────────────────────────────────────
+
+    #[serde(rename = "remember_procedural")]
+    RememberProcedural {
+        agent_id: String,
+        name: String,
+        description: String,
+        steps: Vec<ProcedureStepDto>,
+        #[serde(default)]
+        learned_from: Option<String>,
+        #[serde(default)]
+        tags: Vec<String>,
+    },
+
+    #[serde(rename = "recall_procedural")]
+    RecallProcedural {
+        agent_id: String,
+        #[serde(default)]
+        name: Option<String>,
+    },
 
     // ── Agent Resource Management ─────────────────────────────────────
 

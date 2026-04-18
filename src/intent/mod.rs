@@ -70,6 +70,8 @@ impl std::error::Error for IntentError {}
 /// Trait for NL → ApiRequest translation.
 pub trait IntentRouter: Send + Sync {
     fn resolve(&self, text: &str, agent_id: &str) -> Result<Vec<ResolvedIntent>, IntentError>;
+
+    fn set_tool_catalog(&self, _catalog: Vec<crate::tool::ToolDescriptor>) {}
 }
 
 /// Chain router — tries heuristic first, falls back to LLM if confidence is low.
@@ -129,6 +131,12 @@ impl IntentRouter for ChainRouter {
                     }
                 }
             }
+        }
+    }
+
+    fn set_tool_catalog(&self, catalog: Vec<crate::tool::ToolDescriptor>) {
+        if let Some(ref llm) = self.llm {
+            llm.set_tool_catalog(catalog);
         }
     }
 }

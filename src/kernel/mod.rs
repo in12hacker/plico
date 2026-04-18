@@ -153,6 +153,8 @@ impl AIKernel {
         };
 
         kernel.register_builtin_tools();
+        let catalog = kernel.tool_registry.list();
+        kernel.intent_router.set_tool_catalog(catalog);
         kernel.restore_agents();
         kernel.restore_intents();
         kernel.restore_memories();
@@ -570,6 +572,60 @@ impl AIKernel {
                     }
                     Err(e) => ApiResponse::error(e.to_string()),
                 }
+            }
+            ApiRequest::IntentExecute { text, agent_id, confidence_threshold, priority, learn } => {
+                let threshold = confidence_threshold.unwrap_or(0.7);
+                let prio = priority.as_deref().unwrap_or("medium");
+                let prio = match prio {
+                    "critical" => crate::scheduler::IntentPriority::Critical,
+                    "high" => crate::scheduler::IntentPriority::High,
+                    "low" => crate::scheduler::IntentPriority::Low,
+                    _ => crate::scheduler::IntentPriority::Medium,
+                };
+                match self.intent_execute(&text, &agent_id, threshold, prio, learn.unwrap_or(false)) {
+                    Ok((intent_id, resolved)) => {
+                        let mut r = ApiResponse::ok();
+                        r.resolved_intents = Some(resolved);
+                        if let Some(id) = intent_id {
+                            r.intent_id = Some(id);
+                        }
+                        r
+                    }
+                    Err(e) => ApiResponse::error(e.to_string()),
+                }
+            }
+            ApiRequest::RememberProcedural { agent_id, name, description, steps, learned_from, tags } => {
+                let proc_steps: Vec<crate::memory::layered::ProcedureStep> = steps.into_iter().enumerate().map(|(i, s)| {
+                    crate::memory::layered::ProcedureStep {
+                        step_number: (i + 1) as u32,
+                        description: s.description,
+                        action: s.action,
+                        expected_outcome: s.expected_outcome.unwrap_or_default(),
+                    }
+                }).collect();
+                match self.remember_procedural(&agent_id, name, description, proc_steps, learned_from.unwrap_or_default(), tags) {
+                    Ok(entry_id) => {
+                        let mut r = ApiResponse::ok();
+                        r.data = Some(serde_json::json!({"entry_id": entry_id}).to_string());
+                        r
+                    }
+                    Err(e) => ApiResponse::error(e),
+                }
+            }
+            ApiRequest::RecallProcedural { agent_id, name } => {
+                let entries = self.recall_procedural(&agent_id, name.as_deref());
+                let mut r = ApiResponse::ok();
+                let data: Vec<serde_json::Value> = entries.iter().map(|e| {
+                    serde_json::json!({
+                        "id": e.id,
+                        "tier": "procedural",
+                        "content": e.content.display(),
+                        "tags": e.tags,
+                        "importance": e.importance,
+                    })
+                }).collect();
+                r.data = Some(serde_json::to_string(&data).unwrap_or_default());
+                r
             }
             // Agent resource management
             ApiRequest::AgentSetResources { agent_id, memory_quota, cpu_time_quota, allowed_tools, caller_agent_id: _ } => {

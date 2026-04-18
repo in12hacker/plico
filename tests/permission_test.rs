@@ -296,3 +296,56 @@ fn test_parse_action() {
     assert_eq!(PermissionGuard::parse_action("all"), Some(PermissionAction::All));
     assert_eq!(PermissionGuard::parse_action("unknown"), None);
 }
+
+// ── Scope enforcement tests ──────────────────────────────────────
+
+#[test]
+fn test_covers_scoped_exact_match() {
+    let grant = PermissionGrant::new(PermissionAction::Execute)
+        .with_scope("tool:web_search");
+    assert!(grant.covers_scoped(PermissionAction::Execute, Some("tool:web_search")));
+}
+
+#[test]
+fn test_covers_scoped_mismatch() {
+    let grant = PermissionGrant::new(PermissionAction::Execute)
+        .with_scope("tool:web_search");
+    assert!(!grant.covers_scoped(PermissionAction::Execute, Some("tool:cas.search")));
+}
+
+#[test]
+fn test_covers_scoped_wildcard_grant() {
+    let grant = PermissionGrant::new(PermissionAction::Execute);
+    assert!(grant.covers_scoped(PermissionAction::Execute, Some("tool:anything")));
+    assert!(grant.covers_scoped(PermissionAction::Execute, None));
+}
+
+#[test]
+fn test_covers_scoped_glob_match() {
+    let grant = PermissionGrant::new(PermissionAction::Execute)
+        .with_scope("tool:*");
+    assert!(grant.covers_scoped(PermissionAction::Execute, Some("tool:web_search")));
+    assert!(grant.covers_scoped(PermissionAction::Execute, Some("tool:cas.search")));
+    assert!(!grant.covers_scoped(PermissionAction::Execute, Some("memory:write")));
+}
+
+#[test]
+fn test_check_scoped_on_guard() {
+    let guard = PermissionGuard::new();
+
+    guard.grant(
+        "agent1",
+        PermissionGrant::new(PermissionAction::Execute).with_scope("tool:cas.search"),
+    );
+
+    let ctx = PermissionContext::new("agent1".to_string());
+    assert!(guard.check_scoped(&ctx, PermissionAction::Execute, Some("tool:cas.search")).is_ok());
+    assert!(guard.check_scoped(&ctx, PermissionAction::Execute, Some("tool:web_search")).is_err());
+}
+
+#[test]
+fn test_covers_scoped_backward_compat() {
+    let grant = PermissionGrant::new(PermissionAction::Execute)
+        .with_scope("tool:web_search");
+    assert!(grant.covers(PermissionAction::Execute));
+}

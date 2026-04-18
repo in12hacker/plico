@@ -18,7 +18,7 @@
 //!
 //! ```
 //! use plico::{PermissionGuard, PermissionContext, PermissionAction, PermissionGrant};
-//! let mut guard = PermissionGuard::new();
+//! let guard = PermissionGuard::new();
 //! guard.grant("agent1", PermissionGrant::new(PermissionAction::Delete));
 //! let ctx = PermissionContext::new("agent1".into());
 //! guard.check(&ctx, PermissionAction::Delete).unwrap(); // OK
@@ -70,14 +70,41 @@ pub struct PermissionGrant {
 }
 
 impl PermissionGrant {
-    /// Check if this grant covers the requested action.
+    /// Check if this grant covers the requested action (ignores scope).
     pub fn covers(&self, action: PermissionAction) -> bool {
+        self.covers_scoped(action, None)
+    }
+
+    /// Check if this grant covers the requested action with scope context.
+    ///
+    /// Scope matching rules:
+    /// - Grant with no scope → covers all scope contexts (wildcard)
+    /// - Grant with scope + no context → does NOT cover (scoped grant requires context)
+    /// - Exact match: `"tool:web_search"` matches `"tool:web_search"`
+    /// - Glob: `"tool:*"` matches any `"tool:..."` prefix
+    pub fn covers_scoped(&self, action: PermissionAction, scope_context: Option<&str>) -> bool {
         if let Some(expiry) = self.expires_at {
             if now_ms() > expiry {
-                return false; // Grant expired
+                return false;
             }
         }
-        matches!(self.action, PermissionAction::All) || self.action == action
+        let action_ok = matches!(self.action, PermissionAction::All) || self.action == action;
+        if !action_ok {
+            return false;
+        }
+        match (&self.scope, scope_context) {
+            (None, _) => true,
+            (Some(_), None) => true,
+            (Some(grant_scope), Some(ctx)) => {
+                if grant_scope == ctx {
+                    return true;
+                }
+                if let Some(prefix) = grant_scope.strip_suffix('*') {
+                    return ctx.starts_with(prefix);
+                }
+                false
+            }
+        }
     }
 
     /// Create a new grant for an action with no expiry.
@@ -183,13 +210,39 @@ impl PermissionGuard {
         }
     }
 
+    /// Check permission with scope context — grants must match the scope.
+    pub fn check_scoped(&self, ctx: &PermissionContext, action: PermissionAction, scope: Option<&str>) -> std::io::Result<()> {
+        if self.trusted_agents.contains(&ctx.agent_id) {
+            return Ok(());
+        }
+        if ctx.embedded_grants.iter().any(|g| g.covers_scoped(action, scope)) {
+            return Ok(());
+        }
+        if let Some(grants) = self.grants.read().unwrap().get(&ctx.agent_id) {
+            if grants.iter().any(|g| g.covers_scoped(action, scope)) {
+                return Ok(());
+            }
+        }
+        match action {
+            PermissionAction::Read | PermissionAction::Write => Ok(()),
+            _ => Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                format!(
+                    "Agent '{}' lacks {:?} permission{}",
+                    ctx.agent_id, action,
+                    scope.map(|s| format!(" for scope '{}'", s)).unwrap_or_default()
+                ),
+            )),
+        }
+    }
+
     /// Grant a permission to an agent.
     ///
     /// # Example
     ///
     /// ```
     /// use plico::{PermissionGuard, PermissionAction, PermissionGrant};
-    /// let mut guard = PermissionGuard::new();
+    /// let guard = PermissionGuard::new();
     /// guard.grant("agent1", PermissionGrant::new(PermissionAction::Delete));
     /// guard.grant("agent2", PermissionGrant::new(PermissionAction::Execute).with_scope("tool:web_search"));
     /// ```
