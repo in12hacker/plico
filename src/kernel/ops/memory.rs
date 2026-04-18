@@ -41,7 +41,9 @@ impl crate::kernel::AIKernel {
         };
         let quota = self.agent_memory_quota(agent_id);
         self.memory.store_checked(entry, quota)
-            .map_err(|e| e.to_string())
+            .map_err(|e| e.to_string())?;
+        self.persist_memories();
+        Ok(())
     }
 
     /// Retrieve all entries from all tiers.
@@ -78,14 +80,18 @@ impl crate::kernel::AIKernel {
     /// Allows an agent to explicitly promote or demote a memory entry
     /// to a different tier. Returns `true` if the entry was found and moved.
     pub fn memory_move(&self, agent_id: &str, entry_id: &str, target_tier: MemoryTier) -> bool {
-        self.memory.move_entry(agent_id, entry_id, target_tier)
+        let moved = self.memory.move_entry(agent_id, entry_id, target_tier);
+        if moved { self.persist_memories(); }
+        moved
     }
 
     /// Delete a specific memory entry by ID across all tiers.
     ///
     /// Returns `true` if the entry was found and deleted.
     pub fn memory_delete(&self, agent_id: &str, entry_id: &str) -> bool {
-        self.memory.delete_entry(agent_id, entry_id)
+        let deleted = self.memory.delete_entry(agent_id, entry_id);
+        if deleted { self.persist_memories(); }
+        deleted
     }
 
     /// Store a memory entry in the agent's long-term tier with semantic embedding.
@@ -114,7 +120,9 @@ impl crate::kernel::AIKernel {
         };
         let quota = self.agent_memory_quota(agent_id);
         self.memory.store_checked(entry, quota)
-            .map_err(|e| e.to_string())
+            .map_err(|e| e.to_string())?;
+        self.persist_memories();
+        Ok(())
     }
 
     /// Retrieve semantically relevant long-term memories for an agent.
@@ -182,6 +190,7 @@ impl crate::kernel::AIKernel {
         };
         let quota = self.agent_memory_quota(agent_id);
         self.memory.store_checked(entry, quota).map_err(|e| e.to_string())?;
+        self.persist_memories();
         Ok(entry_id)
     }
 

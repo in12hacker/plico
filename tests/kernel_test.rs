@@ -411,7 +411,7 @@ fn test_kernel_executor_dispatches_intent_action() {
     }).unwrap();
 
     let kernel_ref = Arc::clone(&kernel);
-    let executor = KernelExecutor::new(move |json: &str| {
+    let executor = KernelExecutor::new(move |json: &str, _agent_id: Option<&str>| {
         let req: ApiRequest = serde_json::from_str(json).unwrap();
         let resp = kernel_ref.handle_api_request(req);
         serde_json::to_string(&resp).unwrap()
@@ -436,7 +436,7 @@ fn test_kernel_executor_no_action_acknowledged() {
     use plico::scheduler::dispatch::{KernelExecutor, AgentExecutor};
     use plico::scheduler::agent::{Intent, IntentPriority};
 
-    let executor = KernelExecutor::new(|_| "should not be called".to_string());
+    let executor = KernelExecutor::new(|_, _| "should not be called".to_string());
     let intent = Intent::new(IntentPriority::Low, "descriptive only".to_string());
     let result = executor.execute(&intent, None, 5000);
     assert!(result.is_ok());
@@ -450,7 +450,7 @@ fn test_kernel_executor_invalid_json_returns_error() {
 
     let (kernel, _dir) = make_kernel_arc();
     let kernel_ref = Arc::clone(&kernel);
-    let executor = KernelExecutor::new(move |json: &str| {
+    let executor = KernelExecutor::new(move |json: &str, _agent_id: Option<&str>| {
         let req: Result<plico::api::semantic::ApiRequest, _> = serde_json::from_str(json);
         match req {
             Ok(r) => serde_json::to_string(&kernel_ref.handle_api_request(r)).unwrap(),

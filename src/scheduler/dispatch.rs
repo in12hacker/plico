@@ -166,15 +166,15 @@ pub struct KernelExecutor {
     /// Callback that executes an ApiRequest JSON and returns an ApiResponse JSON.
     /// Uses a boxed closure so the executor doesn't depend on kernel types directly,
     /// preserving the dependency direction (scheduler never imports kernel).
-    handler: Box<dyn Fn(&str) -> String + Send + Sync>,
+    handler: Box<dyn Fn(&str, Option<&str>) -> String + Send + Sync>,
 }
 
 impl KernelExecutor {
     /// Create a KernelExecutor with a request handler closure.
     ///
-    /// The closure receives a JSON-serialized `ApiRequest` and must return
-    /// a JSON-serialized `ApiResponse`.
-    pub fn new(handler: impl Fn(&str) -> String + Send + Sync + 'static) -> Self {
+    /// The closure receives a JSON-serialized `ApiRequest` and an optional
+    /// agent ID, and must return a JSON-serialized `ApiResponse`.
+    pub fn new(handler: impl Fn(&str, Option<&str>) -> String + Send + Sync + 'static) -> Self {
         Self { handler: Box::new(handler) }
     }
 }
@@ -183,7 +183,7 @@ impl AgentExecutor for KernelExecutor {
     fn execute(
         &self,
         intent: &Intent,
-        _agent_id: Option<&AgentId>,
+        agent_id: Option<&AgentId>,
         _cpu_time_limit_ms: u64,
     ) -> Result<String, String> {
         let Some(ref action_json) = intent.action else {
@@ -199,7 +199,8 @@ impl AgentExecutor for KernelExecutor {
             intent.id
         );
 
-        let response_json = (self.handler)(action_json);
+        let aid_str = agent_id.map(|a| a.0.as_str());
+        let response_json = (self.handler)(action_json, aid_str);
         Ok(response_json)
     }
 }
@@ -483,7 +484,7 @@ mod tests {
     #[tokio::test]
     async fn test_kernel_executor_falls_back_without_action() {
         // M1: When intent.action is None, KernelExecutor should acknowledge without error
-        let executor = KernelExecutor::new(|_| {
+        let executor = KernelExecutor::new(|_, _| {
             r#"{"ok":true}"#.to_string()
         });
 
@@ -500,8 +501,7 @@ mod tests {
         use crate::api::semantic::{ApiRequest, ApiResponse};
 
         // Use a mock handler that echoes the request back as JSON
-        let executor = KernelExecutor::new(|action_json: &str| {
-            // Verify the JSON can be parsed as ApiRequest
+        let executor = KernelExecutor::new(|action_json: &str, _agent_id: Option<&str>| {
             let req: Result<ApiRequest, _> = serde_json::from_str(action_json);
             match req {
                 Ok(_r) => {
@@ -535,7 +535,7 @@ mod tests {
         // M1: Invalid JSON in intent.action returns error response
         use crate::api::semantic::{ApiRequest, ApiResponse};
 
-        let executor = KernelExecutor::new(|action_json: &str| {
+        let executor = KernelExecutor::new(|action_json: &str, _agent_id: Option<&str>| {
             let req: Result<ApiRequest, _> = serde_json::from_str(action_json);
             match req {
                 Ok(_r) => serde_json::to_string(&ApiResponse::ok()).unwrap_or_default(),

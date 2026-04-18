@@ -12,7 +12,7 @@ impl crate::kernel::AIKernel {
     pub fn start_dispatch_loop(self: &Arc<Self>) -> DispatchHandle {
         let kernel = Arc::clone(self);
         let executor: Arc<dyn AgentExecutor> = Arc::new(KernelExecutor::new(
-            move |action_json: &str| {
+            move |action_json: &str, agent_id: Option<&str>| {
                 use crate::api::semantic::{ApiRequest, ApiResponse};
                 let req: ApiRequest = match serde_json::from_str(action_json) {
                     Ok(r) => r,
@@ -21,6 +21,21 @@ impl crate::kernel::AIKernel {
                     ).unwrap_or_default(),
                 };
                 let resp = kernel.handle_api_request(req);
+                if resp.ok {
+                    if let Some(aid) = agent_id {
+                        let preview: String = action_json.chars().take(80).collect();
+                        let summary = format!(
+                            "Executed: {} → {}",
+                            preview,
+                            resp.data.as_deref().unwrap_or("ok")
+                        );
+                        let _ = kernel.remember_working(
+                            aid,
+                            summary,
+                            vec!["execution-result".to_string()],
+                        );
+                    }
+                }
                 serde_json::to_string(&resp).unwrap_or_default()
             }
         ));
