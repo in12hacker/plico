@@ -224,6 +224,17 @@ fn build_request(args: &[String]) -> Option<ApiRequest> {
                 let action = commands::extract_arg(args, "--action");
                 let agent_id = commands::extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
                 Some(ApiRequest::SubmitIntent { description, priority, action, agent_id })
+            } else if args.iter().any(|a| a == "--execute") {
+                let text = args.iter().skip(1)
+                    .filter(|a| !a.starts_with("--"))
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                let agent_id = commands::extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
+                let learn = args.iter().any(|a| a == "--learn");
+                let threshold = commands::extract_arg(args, "--threshold")
+                    .and_then(|s| s.parse().ok());
+                Some(ApiRequest::IntentExecuteSync { text, agent_id, confidence_threshold: threshold, learn: Some(learn) })
             } else {
                 let text = args.iter().skip(1)
                     .filter(|a| !a.starts_with("--"))

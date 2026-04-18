@@ -36,21 +36,42 @@ pub fn cmd_intent(kernel: &AIKernel, args: &[String]) -> ApiResponse {
     let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
 
     if text.is_empty() {
-        return ApiResponse::error("Usage: intent \"<natural language text>\" or intent --description \"...\"");
+        return ApiResponse::error("Usage: intent \"<text>\" [--execute] [--learn] [--threshold N]");
     }
 
-    let results = kernel.intent_resolve(&text, &agent_id);
-    if results.is_empty() {
-        println!("Could not resolve: {}", text);
-        return ApiResponse::error("No intent resolved");
-    }
+    if args.iter().any(|a| a == "--execute") {
+        let learn = args.iter().any(|a| a == "--learn");
+        let threshold = extract_arg(args, "--threshold")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0.7);
+        match kernel.intent_execute_sync(&text, &agent_id, threshold, learn) {
+            Ok(result) => {
+                if result.executed {
+                    println!("Executed: {} (success={})", text, result.success);
+                } else {
+                    println!("Not executed: {}", result.output);
+                }
+                let mut r = if result.success { ApiResponse::ok() } else { ApiResponse::error(result.output.clone()) };
+                r.resolved_intents = Some(result.resolved);
+                r.data = Some(result.output);
+                r
+            }
+            Err(e) => ApiResponse::error(e),
+        }
+    } else {
+        let results = kernel.intent_resolve(&text, &agent_id);
+        if results.is_empty() {
+            println!("Could not resolve: {}", text);
+            return ApiResponse::error("No intent resolved");
+        }
 
-    println!("Resolved {} action(s):", results.len());
-    for (i, ri) in results.iter().enumerate() {
-        println!("  {}. [{:.2}] {}", i + 1, ri.confidence, ri.explanation);
-    }
+        println!("Resolved {} action(s):", results.len());
+        for (i, ri) in results.iter().enumerate() {
+            println!("  {}. [{:.2}] {}", i + 1, ri.confidence, ri.explanation);
+        }
 
-    let mut r = ApiResponse::ok();
-    r.resolved_intents = Some(results);
-    r
+        let mut r = ApiResponse::ok();
+        r.resolved_intents = Some(results);
+        r
+    }
 }

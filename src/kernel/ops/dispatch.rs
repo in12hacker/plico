@@ -49,4 +49,44 @@ impl crate::kernel::AIKernel {
         let loop_ = TokioDispatchLoop::new(Arc::clone(&self.scheduler), executor, 60_000);
         loop_.spawn()
     }
+
+    /// Start a result consumer that drains execution results from the dispatch
+    /// handle and feeds outcomes into the memory system for autonomous learning.
+    ///
+    /// On success: stores structured outcome in working memory with "execution-success" tag.
+    /// On failure: stores failure in working memory with "execution-failure" tag.
+    pub fn start_result_consumer(self: &Arc<Self>, handle: &DispatchHandle) -> tokio::task::JoinHandle<()> {
+        let kernel = Arc::clone(self);
+        let handle = handle.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                interval.tick().await;
+                let results = handle.drain_results().await;
+                for result in results {
+                    let agent_id = result.agent_id.as_ref()
+                        .map(|a| a.0.as_str());
+                    let Some(aid) = agent_id else { continue };
+
+                    let tags = if result.success {
+                        vec!["execution-success".to_string(), "dispatch".to_string()]
+                    } else {
+                        vec!["execution-failure".to_string(), "dispatch".to_string()]
+                    };
+
+                    let output_preview: String = result.output.chars().take(120).collect();
+                    let summary = format!(
+                        "Dispatch {}: {} ({}ms) → {}",
+                        if result.success { "success" } else { "failure" },
+                        result.intent_id.0,
+                        result.elapsed_ms,
+                        output_preview,
+                    );
+
+                    let _ = kernel.remember_working(aid, summary, tags);
+                }
+            }
+        })
+    }
 }

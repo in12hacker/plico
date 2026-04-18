@@ -1364,3 +1364,120 @@ fn test_context_load_tool() {
     assert!(result.success, "context.load tool failed: {:?}", result.error);
     assert!(result.output["layer"].as_str() == Some("L0"));
 }
+
+// ─── M6: Synchronous Intent Execution ─────────────────────────────────────
+
+#[test]
+fn test_intent_execute_sync_stores_result_in_memory() {
+    let (kernel, _dir) = make_kernel();
+    let agent_id = kernel.register_agent("sync-exec-test".to_string());
+
+    kernel.semantic_create(
+        b"test document for intent".to_vec(),
+        vec!["test".to_string()],
+        &agent_id,
+        None,
+    ).unwrap();
+
+    let result = kernel.intent_execute_sync(
+        "search for test documents",
+        &agent_id,
+        0.0,
+        false,
+    );
+
+    match result {
+        Ok(r) => {
+            assert!(!r.resolved.is_empty(), "should have resolved intents");
+            if r.executed {
+                let memories = kernel.recall(&agent_id);
+                let has_exec_memory = memories.iter().any(|m| {
+                    m.tags.iter().any(|t| t == "execution-success" || t == "execution-failure")
+                });
+                assert!(has_exec_memory, "execution outcome should be stored in memory");
+            }
+        }
+        Err(e) => {
+            assert!(e.contains("resolution"), "unexpected error: {}", e);
+        }
+    }
+}
+
+#[test]
+fn test_intent_execute_sync_below_threshold_not_executed() {
+    let (kernel, _dir) = make_kernel();
+    let agent_id = kernel.register_agent("threshold-test".to_string());
+
+    let result = kernel.intent_execute_sync(
+        "do something vague",
+        &agent_id,
+        0.99,
+        false,
+    );
+
+    match result {
+        Ok(r) => {
+            assert!(!r.executed, "should not execute below threshold");
+        }
+        Err(_) => {}
+    }
+}
+
+#[test]
+fn test_intent_execute_sync_learn_creates_procedural_memory() {
+    let (kernel, _dir) = make_kernel();
+    let agent_id = kernel.register_agent("learn-test".to_string());
+
+    kernel.semantic_create(
+        b"searchable content".to_vec(),
+        vec!["data".to_string()],
+        &agent_id,
+        None,
+    ).unwrap();
+
+    let result = kernel.intent_execute_sync(
+        "search for data",
+        &agent_id,
+        0.0,
+        true,
+    );
+
+    if let Ok(r) = result {
+        if r.executed && r.success {
+            let proc_memories = kernel.recall_procedural(&agent_id, None);
+            let has_auto = proc_memories.iter().any(|m| {
+                m.tags.iter().any(|t| t == "auto-learned")
+            });
+            assert!(has_auto, "learn=true + success should create procedural memory");
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_result_consumer_captures_dispatch_outcomes() {
+    use plico::scheduler::agent::IntentPriority;
+
+    let (kernel, _dir) = make_kernel_arc();
+
+    let agent_id = kernel.register_agent("consumer-test".to_string());
+
+    let dispatch = kernel.start_dispatch_loop();
+    let _consumer = kernel.start_result_consumer(&dispatch);
+
+    kernel.submit_intent(
+        IntentPriority::Medium,
+        "test dispatch result".to_string(),
+        None,
+        Some(agent_id.clone()),
+    ).unwrap();
+
+    tokio::time::sleep(tokio::time::Duration::from_millis(2000)).await;
+
+    dispatch.shutdown();
+
+    let memories = kernel.recall(&agent_id);
+    let has_dispatch_tag = memories.iter().any(|m| {
+        m.tags.iter().any(|t| t == "dispatch")
+    });
+    assert!(has_dispatch_tag, "result consumer should store dispatch outcomes in memory. Found {} memories", memories.len());
+}

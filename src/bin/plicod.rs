@@ -57,9 +57,12 @@ async fn main() {
     };
 
     // Spawn the agent execution dispatch loop via kernel (no direct subsystem imports).
-    let _dispatch = kernel.start_dispatch_loop();
+    let dispatch = kernel.start_dispatch_loop();
 
-    println!("Agent dispatch loop started.");
+    // Spawn result consumer — drains execution results into memory for autonomous learning.
+    let _result_consumer = kernel.start_result_consumer(&dispatch);
+
+    println!("Agent dispatch loop + result consumer started.");
 
     let addr: SocketAddr = format!("0.0.0.0:{}", port).parse().unwrap();
     let listener = TcpListener::bind(addr).await.expect("Failed to bind port");

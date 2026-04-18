@@ -594,6 +594,30 @@ impl AIKernel {
                     Err(e) => ApiResponse::error(e.to_string()),
                 }
             }
+            ApiRequest::IntentExecuteSync { text, agent_id, confidence_threshold, learn } => {
+                let threshold = confidence_threshold.unwrap_or(0.7);
+                match self.intent_execute_sync(&text, &agent_id, threshold, learn.unwrap_or(false)) {
+                    Ok(result) => {
+                        let mut r = if result.success {
+                            ApiResponse::ok()
+                        } else if result.executed {
+                            let mut r = ApiResponse::ok();
+                            r.ok = false;
+                            r.error = Some("Action execution failed".to_string());
+                            r
+                        } else {
+                            let mut r = ApiResponse::ok();
+                            r.ok = false;
+                            r.error = Some(result.output.clone());
+                            r
+                        };
+                        r.resolved_intents = Some(result.resolved);
+                        r.data = Some(result.output);
+                        r
+                    }
+                    Err(e) => ApiResponse::error(e.to_string()),
+                }
+            }
             ApiRequest::RememberProcedural { agent_id, name, description, steps, learned_from, tags } => {
                 let proc_steps: Vec<crate::memory::layered::ProcedureStep> = steps.into_iter().enumerate().map(|(i, s)| {
                     crate::memory::layered::ProcedureStep {
