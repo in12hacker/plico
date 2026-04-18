@@ -1,6 +1,10 @@
 //! Agent lifecycle operations — register, suspend, resume, terminate.
 
-use crate::scheduler::{Agent, AgentHandle, AgentId, AgentState, AgentResources, Intent, IntentPriority};
+use crate::scheduler::{Agent, AgentHandle, AgentId, AgentState, AgentResources, Intent, IntentPriority, TransitionError};
+
+fn transition_err(e: TransitionError) -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::InvalidInput, e.to_string())
+}
 
 impl crate::kernel::AIKernel {
     pub fn register_agent(&self, name: String) -> String {
@@ -25,7 +29,21 @@ impl crate::kernel::AIKernel {
         description: String,
         action: Option<String>,
         agent_id: Option<String>,
-    ) -> String {
+    ) -> Result<String, String> {
+        if let Some(ref aid_str) = agent_id {
+            let aid = AgentId(aid_str.clone());
+            if let Some(agent) = self.scheduler.get(&aid) {
+                if agent.state().is_terminal() {
+                    return Err(format!(
+                        "Agent {} is in terminal state {:?} — cannot accept intents",
+                        aid_str, agent.state()
+                    ));
+                }
+                if agent.state() == AgentState::Created {
+                    let _ = self.scheduler.update_state(&aid, AgentState::Waiting);
+                }
+            }
+        }
         let mut intent = Intent::new(priority, description);
         if let Some(a) = action {
             intent = intent.with_action(a);
@@ -36,7 +54,7 @@ impl crate::kernel::AIKernel {
         let id = intent.id.0.clone();
         self.scheduler.submit(intent);
         self.persist_intents();
-        id
+        Ok(id)
     }
 
     pub fn agent_status(&self, agent_id: &str) -> Option<(String, String, usize)> {
@@ -53,12 +71,6 @@ impl crate::kernel::AIKernel {
         let agent = self.scheduler.get(&aid).ok_or_else(|| {
             std::io::Error::new(std::io::ErrorKind::NotFound, format!("Agent not found: {}", agent_id))
         })?;
-        if agent.state().is_terminal() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                format!("Agent {} is in terminal state {:?}", agent_id, agent.state()),
-            ));
-        }
 
         let state_before = format!("{:?}", agent.state());
         let memories = self.memory.get_all(agent_id);
@@ -67,9 +79,7 @@ impl crate::kernel::AIKernel {
             .filter(|i| i.agent_id.as_ref().map(|a| a.0.as_str()) == Some(agent_id))
             .count();
         let last_intent = self.scheduler.snapshot_intents()
-            .iter()
-            .filter(|i| i.agent_id.as_ref().map(|a| a.0.as_str()) == Some(agent_id))
-            .last()
+            .iter().rfind(|i| i.agent_id.as_ref().map(|a| a.0.as_str()) == Some(agent_id))
             .map(|i| i.description.clone());
 
         let snapshot = crate::memory::context_snapshot::ContextSnapshot {
@@ -83,39 +93,56 @@ impl crate::kernel::AIKernel {
 
         self.memory.store(snapshot.to_memory_entry());
 
-        self.scheduler.update_state(&aid, AgentState::Suspended);
+        self.scheduler.update_state(&aid, AgentState::Suspended).map_err(transition_err)?;
         self.persist_agents();
         Ok(())
     }
 
     pub fn agent_resume(&self, agent_id: &str) -> std::io::Result<()> {
         let aid = AgentId(agent_id.to_string());
-        let agent = self.scheduler.get(&aid).ok_or_else(|| {
+        let _agent = self.scheduler.get(&aid).ok_or_else(|| {
             std::io::Error::new(std::io::ErrorKind::NotFound, format!("Agent not found: {}", agent_id))
         })?;
-        if !matches!(agent.state(), AgentState::Suspended) {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                format!("Agent {} is not suspended (state={:?})", agent_id, agent.state()),
-            ));
+
+        let memories = self.memory.get_all(agent_id);
+        if let Some(snapshot) = crate::memory::context_snapshot::find_latest_snapshot(&memories) {
+            let ctx_text = snapshot.to_context_string();
+            let entry = crate::memory::MemoryEntry::ephemeral(agent_id, ctx_text);
+            self.memory.store(entry);
         }
-        self.scheduler.update_state(&aid, AgentState::Running);
+
+        self.scheduler.update_state(&aid, AgentState::Waiting).map_err(transition_err)?;
         self.persist_agents();
         Ok(())
     }
 
     pub fn agent_terminate(&self, agent_id: &str) -> std::io::Result<()> {
         let aid = AgentId(agent_id.to_string());
-        let agent = self.scheduler.get(&aid).ok_or_else(|| {
+        let _agent = self.scheduler.get(&aid).ok_or_else(|| {
             std::io::Error::new(std::io::ErrorKind::NotFound, format!("Agent not found: {}", agent_id))
         })?;
-        if agent.state().is_terminal() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::AlreadyExists,
-                format!("Agent {} already terminated", agent_id),
-            ));
-        }
-        self.scheduler.update_state(&aid, AgentState::Terminated);
+        self.scheduler.update_state(&aid, AgentState::Terminated).map_err(transition_err)?;
+        self.persist_agents();
+        Ok(())
+    }
+
+    pub fn agent_complete(&self, agent_id: &str) -> std::io::Result<()> {
+        let aid = AgentId(agent_id.to_string());
+        let _agent = self.scheduler.get(&aid).ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::NotFound, format!("Agent not found: {}", agent_id))
+        })?;
+        self.scheduler.update_state(&aid, AgentState::Completed).map_err(transition_err)?;
+        self.persist_agents();
+        Ok(())
+    }
+
+    pub fn agent_fail(&self, agent_id: &str, reason: &str) -> std::io::Result<()> {
+        let aid = AgentId(agent_id.to_string());
+        let _agent = self.scheduler.get(&aid).ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::NotFound, format!("Agent not found: {}", agent_id))
+        })?;
+        tracing::info!("Agent {} explicitly failed: {}", agent_id, reason);
+        self.scheduler.update_state(&aid, AgentState::Failed).map_err(transition_err)?;
         self.persist_agents();
         Ok(())
     }

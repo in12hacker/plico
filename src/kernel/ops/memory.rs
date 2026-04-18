@@ -1,16 +1,26 @@
 //! Memory tier operations — ephemeral, working, long-term.
 
 use crate::memory::{MemoryEntry, MemoryContent, MemoryTier};
+use crate::scheduler::AgentId;
 
 impl crate::kernel::AIKernel {
+    fn agent_memory_quota(&self, agent_id: &str) -> u64 {
+        self.scheduler
+            .get_resources(&AgentId(agent_id.to_string()))
+            .map(|r| r.memory_quota)
+            .unwrap_or(0)
+    }
+
     /// Store a memory entry in the agent's ephemeral (L0) tier.
-    pub fn remember(&self, agent_id: &str, content: String) {
+    pub fn remember(&self, agent_id: &str, content: String) -> Result<(), String> {
         let entry = MemoryEntry::ephemeral(agent_id.to_string(), content);
-        self.memory.store(entry);
+        let quota = self.agent_memory_quota(agent_id);
+        self.memory.store_checked(entry, quota)
+            .map_err(|e| e.to_string())
     }
 
     /// Store a memory entry in the agent's working (L1) tier.
-    pub fn remember_working(&self, agent_id: &str, content: String, tags: Vec<String>) {
+    pub fn remember_working(&self, agent_id: &str, content: String, tags: Vec<String>) -> Result<(), String> {
         let entry = MemoryEntry {
             id: uuid::Uuid::new_v4().to_string(),
             agent_id: agent_id.to_string(),
@@ -24,7 +34,9 @@ impl crate::kernel::AIKernel {
             embedding: None,
             ttl_ms: None,
         };
-        self.memory.store(entry);
+        let quota = self.agent_memory_quota(agent_id);
+        self.memory.store_checked(entry, quota)
+            .map_err(|e| e.to_string())
     }
 
     /// Retrieve all entries from all tiers.

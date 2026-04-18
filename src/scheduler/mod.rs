@@ -22,7 +22,7 @@ pub mod queue;
 pub mod dispatch;
 pub mod messaging;
 
-pub use agent::{Agent, AgentId, AgentState, AgentResources, Intent, IntentPriority, IntentId};
+pub use agent::{Agent, AgentId, AgentState, AgentResources, Intent, IntentPriority, IntentId, TransitionError};
 pub use queue::{SchedulerQueue, SchedulerError};
 pub use dispatch::{DispatchHandle, AgentExecutor, LocalExecutor, KernelExecutor, TokioDispatchLoop, DispatchError, ExecutionResult};
 
@@ -84,13 +84,14 @@ impl AgentScheduler {
         self.queue.write().unwrap().pop()
     }
 
-    /// Update agent state.
-    pub fn update_state(&self, agent_id: &AgentId, state: AgentState) {
+    /// Update agent state. Returns error if the transition is illegal.
+    pub fn update_state(&self, agent_id: &AgentId, state: AgentState) -> Result<(), TransitionError> {
         if let Ok(mut agents) = self.agents.write() {
             if let Some(agent) = agents.get_mut(agent_id) {
-                agent.set_state(state);
+                return agent.set_state(state);
             }
         }
+        Ok(())
     }
 
     /// List all active agents.

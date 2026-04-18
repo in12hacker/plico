@@ -17,6 +17,7 @@ fn main() {
     let env = std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string());
     tracing_subscriber::fmt()
         .with_env_filter(&env)
+        .with_writer(std::io::stderr)
         .finish()
         .init();
 
@@ -134,7 +135,8 @@ fn build_request(args: &[String]) -> Option<ApiRequest> {
             let exclude_tags = commands::extract_tags_opt(args, "--exclude-tags").unwrap_or_default();
             let since = commands::extract_arg(args, "--since").and_then(|s| s.parse::<i64>().ok());
             let until = commands::extract_arg(args, "--until").and_then(|s| s.parse::<i64>().ok());
-            Some(ApiRequest::Search { query, agent_id, limit, require_tags, exclude_tags, since, until })
+            let offset = commands::extract_arg(args, "--offset").and_then(|s| s.parse().ok());
+            Some(ApiRequest::Search { query, agent_id, limit, offset, require_tags, exclude_tags, since, until })
         }
         Some("update") => {
             let cid = commands::extract_arg(args, "--cid").unwrap_or_default();
@@ -198,7 +200,14 @@ fn build_request(args: &[String]) -> Option<ApiRequest> {
         Some("nodes") => {
             let node_type = commands::extract_arg(args, "--type").map(|s| commands::parse_node_type(&s));
             let agent_id = commands::extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
-            Some(ApiRequest::ListNodes { node_type, agent_id })
+            let limit = commands::extract_arg(args, "--limit").and_then(|s| s.parse().ok());
+            let offset = commands::extract_arg(args, "--offset").and_then(|s| s.parse().ok());
+            if let Some(at_str) = commands::extract_arg(args, "--at-time") {
+                let t: u64 = at_str.parse().unwrap_or(0);
+                Some(ApiRequest::ListNodesAtTime { node_type, agent_id, t })
+            } else {
+                Some(ApiRequest::ListNodes { node_type, agent_id, limit, offset })
+            }
         }
         Some("paths") => {
             let src_id = commands::extract_arg(args, "--src").unwrap_or_default();
@@ -251,7 +260,9 @@ fn build_request(args: &[String]) -> Option<ApiRequest> {
         Some("messages") => {
             let agent_id = commands::extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
             let unread_only = args.iter().any(|a| a == "--unread");
-            Some(ApiRequest::ReadMessages { agent_id, unread_only })
+            let limit = commands::extract_arg(args, "--limit").and_then(|s| s.parse().ok());
+            let offset = commands::extract_arg(args, "--offset").and_then(|s| s.parse().ok());
+            Some(ApiRequest::ReadMessages { agent_id, unread_only, limit, offset })
         }
         Some("ack") => {
             let agent_id = commands::extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
@@ -285,7 +296,7 @@ fn build_request(args: &[String]) -> Option<ApiRequest> {
                         .and_then(|s| s.parse().ok());
                     let until = commands::extract_arg(args, "--until")
                         .and_then(|s| s.parse().ok());
-                    Some(ApiRequest::ListEvents { since, until, tags, event_type: None, agent_id })
+                    Some(ApiRequest::ListEvents { since, until, tags, event_type: None, agent_id, limit: None, offset: None })
                 }
                 // events by-time "last week" [--tags TAGS]
                 Some("by-time") | Some("text") => {
@@ -299,7 +310,7 @@ fn build_request(args: &[String]) -> Option<ApiRequest> {
                     println!("Usage: events <list|by-time> [options]");
                     println!("  list    --since TS --until TS --tags TAGS");
                     println!("  by-time \"last week\" --tags TAGS");
-                    println!("");
+                    println!();
                     println!("Examples:");
                     println!("  events list --since 1713000000000 --until 1713100000000");
                     println!("  events by-time \"上周\" --tags work");
@@ -389,6 +400,7 @@ COMMANDS:
 
   nodes         List KG nodes
     --type TYPE      Filter by node type (optional)
+    --at-time MS     Unix timestamp (ms) to query temporal validity (optional)
     --agent ID       Agent ID
 
   paths         Find paths between two KG nodes

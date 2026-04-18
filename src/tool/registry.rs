@@ -8,13 +8,18 @@
 //! between registry → tool closures → kernel.
 
 use std::collections::HashMap;
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 
-use super::ToolDescriptor;
+use super::{ToolDescriptor, ToolHandler};
+
+struct RegistryEntry {
+    descriptor: ToolDescriptor,
+    handler: Option<Arc<dyn ToolHandler>>,
+}
 
 /// Central registry of all available tools.
 pub struct ToolRegistry {
-    tools: RwLock<HashMap<String, ToolDescriptor>>,
+    tools: RwLock<HashMap<String, RegistryEntry>>,
 }
 
 impl ToolRegistry {
@@ -22,20 +27,36 @@ impl ToolRegistry {
         Self { tools: RwLock::new(HashMap::new()) }
     }
 
-    /// Register a tool descriptor. Overwrites if name already exists.
+    /// Register a tool descriptor (no handler — execution via builtin match).
     pub fn register(&self, desc: ToolDescriptor) {
-        self.tools.write().unwrap().insert(desc.name.clone(), desc);
+        self.tools.write().unwrap().insert(desc.name.clone(), RegistryEntry {
+            descriptor: desc,
+            handler: None,
+        });
+    }
+
+    /// Register a tool with a dynamic handler.
+    pub fn register_with_handler(&self, desc: ToolDescriptor, handler: Arc<dyn ToolHandler>) {
+        self.tools.write().unwrap().insert(desc.name.clone(), RegistryEntry {
+            descriptor: desc,
+            handler: Some(handler),
+        });
+    }
+
+    /// Look up a tool handler by name.
+    pub fn get_handler(&self, name: &str) -> Option<Arc<dyn ToolHandler>> {
+        self.tools.read().unwrap().get(name).and_then(|e| e.handler.clone())
     }
 
     /// Look up a single tool by name.
     pub fn get(&self, name: &str) -> Option<ToolDescriptor> {
-        self.tools.read().unwrap().get(name).cloned()
+        self.tools.read().unwrap().get(name).map(|e| e.descriptor.clone())
     }
 
     /// List all registered tools (sorted by name for deterministic output).
     pub fn list(&self) -> Vec<ToolDescriptor> {
         let map = self.tools.read().unwrap();
-        let mut tools: Vec<ToolDescriptor> = map.values().cloned().collect();
+        let mut tools: Vec<ToolDescriptor> = map.values().map(|e| e.descriptor.clone()).collect();
         tools.sort_by(|a, b| a.name.cmp(&b.name));
         tools
     }
@@ -66,6 +87,7 @@ impl Default for ToolRegistry {
 mod tests {
     use super::*;
     use serde_json::json;
+    use crate::tool::ToolResult;
 
     fn make_desc(name: &str) -> ToolDescriptor {
         ToolDescriptor {
@@ -108,5 +130,57 @@ mod tests {
     fn get_missing_returns_none() {
         let reg = ToolRegistry::new();
         assert!(reg.get("nonexistent").is_none());
+    }
+
+    #[test]
+    fn test_register_handler_and_execute() {
+        let reg = ToolRegistry::new();
+        let handler: Arc<dyn ToolHandler> = Arc::new(|_params: &serde_json::Value, _agent: &str| {
+            ToolResult::ok(json!({"custom": true}))
+        });
+        reg.register_with_handler(make_desc("custom.tool"), handler);
+        let h = reg.get_handler("custom.tool").expect("handler should exist");
+        let result = h.execute(&json!({}), "test-agent");
+        assert!(result.success);
+        assert_eq!(result.output["custom"], true);
+    }
+
+    #[test]
+    fn test_handler_fallback_to_builtin() {
+        let reg = ToolRegistry::new();
+        reg.register(make_desc("cas.create"));
+        assert!(reg.get_handler("cas.create").is_none(), "descriptor-only should have no handler");
+        assert!(reg.get("cas.create").is_some(), "descriptor should still exist");
+    }
+
+    #[test]
+    fn test_closure_as_handler() {
+        let counter = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let counter_clone = counter.clone();
+        let handler: Arc<dyn ToolHandler> = Arc::new(move |_p: &serde_json::Value, _a: &str| {
+            counter_clone.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            ToolResult::ok(json!({"count": counter_clone.load(std::sync::atomic::Ordering::SeqCst)}))
+        });
+        let result = handler.execute(&json!({}), "agent");
+        assert!(result.success);
+        assert_eq!(result.output["count"], 1);
+        let result2 = handler.execute(&json!({}), "agent");
+        assert_eq!(result2.output["count"], 2);
+    }
+
+    #[test]
+    fn test_handler_overrides_builtin() {
+        let reg = ToolRegistry::new();
+        reg.register(make_desc("tools.list"));
+        assert!(reg.get_handler("tools.list").is_none());
+
+        let handler: Arc<dyn ToolHandler> = Arc::new(|_p: &serde_json::Value, _a: &str| {
+            ToolResult::ok(json!({"overridden": true}))
+        });
+        reg.register_with_handler(make_desc("tools.list"), handler);
+        let h = reg.get_handler("tools.list").expect("should have handler now");
+        let result = h.execute(&json!({}), "agent");
+        assert!(result.success);
+        assert_eq!(result.output["overridden"], true);
     }
 }

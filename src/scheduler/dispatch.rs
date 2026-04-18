@@ -263,13 +263,13 @@ impl TokioDispatchLoop {
             .await;
         });
 
-        let dispatch_handle = DispatchHandle {
+        
+        DispatchHandle {
             shutdown_tx,
             result_rx: Arc::new(RwLock::new(result_rx)),
             queue,
             task_handle: Arc::new(RwLock::new(Some(handle))),
-        };
-        dispatch_handle
+        }
     }
 }
 
@@ -312,9 +312,22 @@ async fn dispatch_loop(
                     let intent_id = intent.id.clone();
                     let agent_id = intent.agent_id.clone();
 
-                    // Update agent state to Running
+                    // Update agent state to Running (skip if transition is illegal)
                     if let Some(ref aid) = intent.agent_id {
-                        scheduler.update_state(aid, AgentState::Running);
+                        if let Err(e) = scheduler.update_state(aid, AgentState::Running) {
+                            let elapsed_ms = start.elapsed().as_millis() as u64;
+                            let result = ExecutionResult::failure(
+                                intent_id.clone(),
+                                agent_id.clone(),
+                                format!("Cannot execute: {}", e),
+                                elapsed_ms,
+                            );
+                            if result_tx.send(result).await.is_err() {
+                                tracing::warn!("Dispatch loop: result receiver dropped");
+                                break;
+                            }
+                            continue;
+                        }
                     }
 
                     // Get per-agent CPU time quota if set, otherwise use hardcoded limit.
@@ -373,7 +386,7 @@ async fn dispatch_loop(
                         } else {
                             AgentState::Failed
                         };
-                        scheduler.update_state(aid, next_state);
+                        let _ = scheduler.update_state(aid, next_state);
                     }
 
                     if result_tx.send(result).await.is_err() {

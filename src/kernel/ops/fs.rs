@@ -55,11 +55,12 @@ impl crate::kernel::AIKernel {
         limit: usize,
         require_tags: Vec<String>,
         exclude_tags: Vec<String>,
-    ) -> Vec<crate::fs::SearchResult> {
+    ) -> std::io::Result<Vec<crate::fs::SearchResult>> {
         self.semantic_search_with_time(query, agent_id, limit, require_tags, exclude_tags, None, None)
     }
 
     /// Semantic search with time-range bounds.
+    #[allow(clippy::too_many_arguments)]
     pub fn semantic_search_with_time(
         &self,
         query: &str,
@@ -69,9 +70,9 @@ impl crate::kernel::AIKernel {
         exclude_tags: Vec<String>,
         since: Option<i64>,
         until: Option<i64>,
-    ) -> Vec<crate::fs::SearchResult> {
+    ) -> std::io::Result<Vec<crate::fs::SearchResult>> {
         let ctx = PermissionContext::new(agent_id.to_string());
-        let _ = self.permissions.check(&ctx, PermissionAction::Read);
+        self.permissions.check(&ctx, PermissionAction::Read)?;
         let can_read_any = self.permissions.can_read_any(agent_id);
 
         let filter = crate::fs::SearchFilter {
@@ -83,14 +84,14 @@ impl crate::kernel::AIKernel {
         };
 
         let results = self.fs.search_with_filter(query, limit * 2, filter);
-        if can_read_any {
+        Ok(if can_read_any {
             results.into_iter().take(limit).collect()
         } else {
             results.into_iter()
                 .filter(|r| r.meta.created_by == agent_id)
                 .take(limit)
                 .collect()
-        }
+        })
     }
 
     /// Semantic read with ownership isolation.
@@ -153,5 +154,17 @@ impl crate::kernel::AIKernel {
         let ctx = PermissionContext::new(agent_id.to_string());
         self.permissions.check(&ctx, PermissionAction::Write)?;
         self.fs.restore(cid, agent_id.to_string())
+    }
+
+    /// Load context at a specified layer (L0/L1/L2) for a CID.
+    pub fn context_load(
+        &self,
+        cid: &str,
+        layer: crate::fs::ContextLayer,
+        agent_id: &str,
+    ) -> std::io::Result<crate::fs::LoadedContext> {
+        let ctx = PermissionContext::new(agent_id.to_string());
+        self.permissions.check(&ctx, PermissionAction::Read)?;
+        self.fs.ctx_loader().load(cid, layer)
     }
 }

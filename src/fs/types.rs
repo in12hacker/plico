@@ -41,34 +41,45 @@ pub struct SearchResult {
 // ── Event types ───────────────────────────────────────────────────────────────
 
 /// Event classification — stored as KGNode metadata for events.
+/// AI-native types: no human-social activities (Meeting/Travel/etc).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EventType {
-    Meeting,
-    Presentation,
-    Review,
-    Interview,
-    Travel,
-    Entertainment,
-    Social,
+    /// A unit of work or task.
+    Task,
+    /// A generated report or output.
+    Report,
+    /// An evaluation or assessment.
+    Evaluation,
+    /// An analysis or investigation.
+    Analysis,
+    /// Data or object transfer.
+    Transfer,
+    /// Computation or data processing.
+    Processing,
+    /// Agent synchronization or coordination.
+    Sync,
+    /// Generic work item.
     Work,
-    Personal,
-    Other,
+    /// Per-agent private event.
+    Agent,
+    /// User-defined event type.
+    Custom,
 }
 
 impl std::fmt::Display for EventType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            EventType::Meeting => write!(f, "meeting"),
-            EventType::Presentation => write!(f, "presentation"),
-            EventType::Review => write!(f, "review"),
-            EventType::Interview => write!(f, "interview"),
-            EventType::Travel => write!(f, "travel"),
-            EventType::Entertainment => write!(f, "entertainment"),
-            EventType::Social => write!(f, "social"),
+            EventType::Task => write!(f, "task"),
+            EventType::Report => write!(f, "report"),
+            EventType::Evaluation => write!(f, "evaluation"),
+            EventType::Analysis => write!(f, "analysis"),
+            EventType::Transfer => write!(f, "transfer"),
+            EventType::Processing => write!(f, "processing"),
+            EventType::Sync => write!(f, "sync"),
             EventType::Work => write!(f, "work"),
-            EventType::Personal => write!(f, "personal"),
-            EventType::Other => write!(f, "other"),
+            EventType::Agent => write!(f, "agent"),
+            EventType::Custom => write!(f, "custom"),
         }
     }
 }
@@ -82,7 +93,9 @@ pub struct EventMeta {
     pub start_time: Option<u64>,
     pub end_time: Option<u64>,
     pub location: Option<String>,
-    pub attendee_ids: Vec<String>,
+    /// Agent/user IDs of participants in this event.
+    pub participant_ids: Vec<String>,
+    /// CAS object references (artifacts, recordings, resolutions) related to this event.
     pub related_cids: Vec<String>,
 }
 
@@ -102,17 +115,18 @@ impl EventMeta {
 }
 
 /// Relation type when attaching a target to an event.
+/// AI-native: no human-social concepts.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EventRelation {
-    /// Target is a Person (attendee of the event).
-    Attendee,
-    /// Target is a Document (content from the event).
-    Document,
-    /// Target is Media (photo, recording, etc. from the event).
-    Media,
-    /// Target is an ActionItem (decision, task, resolution from the event).
-    Decision,
+    /// Target is a participant (agent or user) in the event.
+    Participant,
+    /// Target is an artifact (AI-generated content) from the event.
+    Artifact,
+    /// Target is a recording (log, data output) from the event.
+    Recording,
+    /// Target is a resolution (decision, conclusion) from the event.
+    Resolution,
 }
 
 impl EventRelation {
@@ -120,10 +134,10 @@ impl EventRelation {
     pub fn to_edge_type(self) -> super::graph::KGEdgeType {
         use super::graph::KGEdgeType;
         match self {
-            EventRelation::Attendee => KGEdgeType::HasAttendee,
-            EventRelation::Document => KGEdgeType::HasDocument,
-            EventRelation::Media => KGEdgeType::HasMedia,
-            EventRelation::Decision => KGEdgeType::HasDecision,
+            EventRelation::Participant => KGEdgeType::HasParticipant,
+            EventRelation::Artifact => KGEdgeType::HasArtifact,
+            EventRelation::Recording => KGEdgeType::HasRecording,
+            EventRelation::Resolution => KGEdgeType::HasResolution,
         }
     }
 }

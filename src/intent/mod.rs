@@ -22,8 +22,10 @@ use crate::api::semantic::ApiRequest;
 /// Routing action — first-class routing decision type (AgentGate-inspired).
 /// Explicit representation of what the router decided to do with the query.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Default)]
 pub enum RoutingAction {
     /// Route to a single API action (CRUD, agent management, etc.)
+    #[default]
     SingleAction,
     /// Query requires multiple agents or actions in sequence/coordination.
     MultiAction,
@@ -35,11 +37,6 @@ pub enum RoutingAction {
     LowConfidence,
 }
 
-impl Default for RoutingAction {
-    fn default() -> Self {
-        RoutingAction::SingleAction
-    }
-}
 
 /// A resolved intent — a structured action derived from natural language.
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -20,7 +20,7 @@ use crate::cas::CASStorage;
 use super::summarizer::{Summarizer, SummaryLayer};
 
 /// Context loading layer level.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ContextLayer {
     /// ~100 tokens: file summary for quick filtering
     L0,
@@ -46,10 +46,26 @@ impl ContextLayer {
             ContextLayer::L2 => "L2",
         }
     }
+
+    pub fn parse_layer(s: &str) -> Option<Self> {
+        s.parse().ok()
+    }
+}
+
+impl std::str::FromStr for ContextLayer {
+    type Err = ();
+    fn from_str(s: &str) -> Result<Self, ()> {
+        match s.to_uppercase().as_str() {
+            "L0" => Ok(ContextLayer::L0),
+            "L1" => Ok(ContextLayer::L1),
+            "L2" => Ok(ContextLayer::L2),
+            _ => Err(()),
+        }
+    }
 }
 
 /// A loaded context layer for a CID.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct LoadedContext {
     pub cid: String,
     pub layer: ContextLayer,

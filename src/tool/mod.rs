@@ -55,6 +55,23 @@ pub struct ToolDescriptor {
 
 pub use registry::ToolRegistry;
 
+/// Trait for dynamic tool execution handlers.
+///
+/// Implement this to register custom tool handlers that execute without
+/// modifying the kernel's built-in match arms.
+pub trait ToolHandler: Send + Sync {
+    fn execute(&self, params: &serde_json::Value, agent_id: &str) -> ToolResult;
+}
+
+impl<F> ToolHandler for F
+where
+    F: Fn(&serde_json::Value, &str) -> ToolResult + Send + Sync,
+{
+    fn execute(&self, params: &serde_json::Value, agent_id: &str) -> ToolResult {
+        (self)(params, agent_id)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

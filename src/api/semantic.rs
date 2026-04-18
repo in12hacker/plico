@@ -94,6 +94,8 @@ pub enum ApiRequest {
         query: String,
         agent_id: String,
         limit: Option<usize>,
+        #[serde(default)]
+        offset: Option<usize>,
         /// Require entries to have all of these tags (AND).
         #[serde(default)]
         require_tags: Vec<String>,
@@ -161,6 +163,10 @@ pub enum ApiRequest {
         tags: Vec<String>,
         event_type: Option<EventType>,
         agent_id: String,
+        #[serde(default)]
+        limit: Option<usize>,
+        #[serde(default)]
+        offset: Option<usize>,
     },
 
     #[serde(rename = "list_events_text")]
@@ -205,6 +211,19 @@ pub enum ApiRequest {
         #[serde(default)]
         node_type: Option<KGNodeType>,
         agent_id: String,
+        #[serde(default)]
+        limit: Option<usize>,
+        #[serde(default)]
+        offset: Option<usize>,
+    },
+
+    #[serde(rename = "list_nodes_at_time")]
+    ListNodesAtTime {
+        #[serde(default)]
+        node_type: Option<KGNodeType>,
+        agent_id: String,
+        /// Unix timestamp (ms) to query nodes valid at.
+        t: u64,
     },
 
     #[serde(rename = "find_paths")]
@@ -293,12 +312,101 @@ pub enum ApiRequest {
         agent_id: String,
         #[serde(default)]
         unread_only: bool,
+        #[serde(default)]
+        limit: Option<usize>,
+        #[serde(default)]
+        offset: Option<usize>,
     },
 
     #[serde(rename = "ack_message")]
     AckMessage {
         agent_id: String,
         message_id: String,
+    },
+
+    // ── Graph CRUD extensions (v0.7) ─────────────────────────────────
+
+    #[serde(rename = "get_node")]
+    GetNode { node_id: String, agent_id: String },
+
+    #[serde(rename = "list_edges")]
+    ListEdges {
+        agent_id: String,
+        #[serde(default)]
+        node_id: Option<String>,
+        #[serde(default)]
+        limit: Option<usize>,
+        #[serde(default)]
+        offset: Option<usize>,
+    },
+
+    #[serde(rename = "remove_node")]
+    RemoveNode { node_id: String, agent_id: String },
+
+    #[serde(rename = "remove_edge")]
+    RemoveEdge {
+        src_id: String,
+        dst_id: String,
+        #[serde(default)]
+        edge_type: Option<KGEdgeType>,
+        agent_id: String,
+    },
+
+    #[serde(rename = "update_node")]
+    UpdateNode {
+        node_id: String,
+        #[serde(default)]
+        label: Option<String>,
+        #[serde(default)]
+        properties: Option<serde_json::Value>,
+        agent_id: String,
+    },
+
+    // ── Agent lifecycle extensions (v0.7) ────────────────────────────
+
+    #[serde(rename = "agent_complete")]
+    AgentComplete { agent_id: String },
+
+    #[serde(rename = "agent_fail")]
+    AgentFail { agent_id: String, reason: String },
+
+    // ── Memory tier management (v0.7) ────────────────────────────────
+
+    #[serde(rename = "memory_move")]
+    MemoryMove {
+        agent_id: String,
+        entry_id: String,
+        target_tier: String,
+    },
+
+    #[serde(rename = "memory_delete")]
+    MemoryDeleteEntry {
+        agent_id: String,
+        entry_id: String,
+    },
+
+    #[serde(rename = "evict_expired")]
+    EvictExpired { agent_id: String },
+
+    // ── Context Loading (v0.9) ──────────────────────────────────────
+
+    #[serde(rename = "load_context")]
+    LoadContext {
+        cid: String,
+        /// "L0", "L1", or "L2"
+        layer: String,
+        agent_id: String,
+    },
+
+    // ── Temporal Edge History (v0.9) ────────────────────────────────
+
+    #[serde(rename = "edge_history")]
+    EdgeHistory {
+        src_id: String,
+        dst_id: String,
+        #[serde(default)]
+        edge_type: Option<KGEdgeType>,
+        agent_id: String,
     },
 }
 
@@ -333,6 +441,8 @@ pub struct ApiResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub paths: Option<Vec<Vec<KGNodeDto>>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub edges: Option<Vec<KGEdgeDto>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub intent_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent_state: Option<String>,
@@ -347,7 +457,13 @@ pub struct ApiResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub messages: Option<Vec<crate::scheduler::messaging::AgentMessage>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_data: Option<LoadedContextDto>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub has_more: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -392,6 +508,23 @@ pub struct KGNodeDto {
     pub created_at: u64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KGEdgeDto {
+    pub src: String,
+    pub dst: String,
+    pub edge_type: KGEdgeType,
+    pub weight: f32,
+    pub created_at: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoadedContextDto {
+    pub cid: String,
+    pub layer: String,
+    pub content: String,
+    pub tokens_estimate: usize,
+}
+
 // ── Project Self-Management (Dogfooding Plico) ─────────────────────────────────
 
 
@@ -418,9 +551,10 @@ impl ApiResponse {
             ok: true, cid: None, node_id: None, data: None, results: None,
             agent_id: None, agents: None, memory: None, tags: None,
             neighbors: None, deleted: None, events: None, nodes: None,
-            paths: None, intent_id: None, agent_state: None,
+            paths: None, edges: None, intent_id: None, agent_state: None,
             pending_intents: None, tools: None, tool_result: None,
-            resolved_intents: None, messages: None, error: None,
+            resolved_intents: None, messages: None, context_data: None,
+            error: None, total_count: None, has_more: None,
         }
     }
 
@@ -465,10 +599,11 @@ impl ApiResponse {
             ok: false, cid: None, node_id: None, data: None, results: None,
             agent_id: None, agents: None, memory: None, tags: None,
             neighbors: None, deleted: None, events: None, nodes: None,
-            paths: None, intent_id: None, agent_state: None,
+            paths: None, edges: None, intent_id: None, agent_state: None,
             pending_intents: None, tools: None, tool_result: None,
-            resolved_intents: None, messages: None,
+            resolved_intents: None, messages: None, context_data: None,
             error: Some(msg.into()),
+            total_count: None, has_more: None,
         }
     }
 }

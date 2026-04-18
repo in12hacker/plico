@@ -12,6 +12,7 @@ pub mod intent;
 pub mod messaging;
 pub mod tool;
 pub mod events;
+pub mod context;
 
 // Re-export shared utilities for handler submodules.
 // Re-export shared utilities for handler submodules (defined in parent commands/mod.rs).
@@ -23,6 +24,7 @@ pub use crud::{cmd_create, cmd_read, cmd_search, cmd_update, cmd_delete};
 pub use agent::{
     cmd_agent, cmd_agents, cmd_agent_status,
     cmd_agent_suspend, cmd_agent_resume, cmd_agent_terminate,
+    cmd_agent_complete, cmd_agent_fail,
 };
 pub use memory::{
     cmd_remember, cmd_recall, cmd_tags,
@@ -31,9 +33,12 @@ pub use memory::{
 pub use graph::{
     cmd_explore, cmd_add_node, cmd_add_edge,
     cmd_list_nodes, cmd_find_paths,
+    cmd_get_node, cmd_list_edges, cmd_rm_node, cmd_rm_edge, cmd_update_node,
+    cmd_edge_history,
 };
 pub use deleted::{cmd_deleted, cmd_restore};
 pub use intent::cmd_intent;
 pub use messaging::{cmd_send_message, cmd_read_messages, cmd_ack_message};
 pub use tool::cmd_tool;
 pub use events::cmd_events;
+pub use context::cmd_context;

@@ -198,6 +198,7 @@ fn to_api_request(m: PatternMatch, agent_id: &str) -> ResolvedIntent {
                 query: m.query_text.clone(),
                 agent_id: agent_id.to_string(),
                 limit: Some(10),
+                offset: None,
                 require_tags: m.tags.clone(),
                 exclude_tags: vec![],
                 since,
@@ -289,7 +290,7 @@ impl IntentRouter for HeuristicRouter {
             // Compound query → MultiAction
             let intents: Vec<ResolvedIntent> = parts
                 .iter()
-                .map(|part| {
+                .filter_map(|part| {
                     let part = part.trim();
                     if part.is_empty() {
                         return None;
@@ -308,6 +309,7 @@ impl IntentRouter for HeuristicRouter {
                                 query: part.to_string(),
                                 agent_id: agent_id.to_string(),
                                 limit: Some(10),
+                                offset: None,
                                 require_tags: vec![],
                                 exclude_tags: vec![],
                                 since,
@@ -322,7 +324,6 @@ impl IntentRouter for HeuristicRouter {
                         }
                     }
                 })
-                .filter_map(|x| x)
                 .collect();
             if intents.len() == 1 {
                 return Ok(intents);
@@ -349,6 +350,7 @@ impl IntentRouter for HeuristicRouter {
                     query: trimmed.to_string(),
                     agent_id: agent_id.to_string(),
                     limit: Some(10),
+                    offset: None,
                     require_tags: vec![],
                     exclude_tags: vec![],
                     since,

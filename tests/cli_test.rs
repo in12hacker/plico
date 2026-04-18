@@ -103,15 +103,10 @@ fn test_put_get_different_root_isolated() {
 
 #[test]
 fn test_agent_register_shows_id() {
-    // Agent state is in-memory per kernel instance. Each CLI invocation
-    // creates a fresh kernel — agents don't persist across invocations.
-    // This test verifies registration itself works and returns an ID.
     let root = tempdir().unwrap();
     let output = run(root.path(), &["agent", "--register", "TestAgent"]);
     assert!(output.status.success(), "agent register failed: {}", String::from_utf8_lossy(&output.stderr));
-    assert_contains(&output, "Agent registered");
-    assert_contains(&output, "TestAgent");
-    // Agent ID is a UUID — extract and verify it looks like one
+    assert_contains(&output, "Agent ID:");
     let stdout = String::from_utf8_lossy(&output.stdout);
     let has_uuid = stdout.lines().any(|l| l.contains('-') && l.len() > 30);
     assert!(has_uuid, "expected UUID in agent output: {}", stdout);
@@ -132,7 +127,6 @@ fn test_remember_and_recall() {
         "--content", "Remember to review the PR",
     ]);
     assert!(remember.status.success(), "remember failed: {}", String::from_utf8_lossy(&remember.stderr));
-    assert_contains(&remember, "Remembered");
 
     // Recall it — same kernel instance so in-memory
     let recall = run(root.path(), &["recall", "--agent", "MemoryAgent"]);
@@ -176,8 +170,6 @@ fn test_unknown_command_shows_help() {
 
 #[test]
 fn test_tags_empty_filesystem() {
-    // Tags are in-memory per kernel instance (same limitation as agents).
-    // This test verifies the tags command works on an empty filesystem.
     let root = tempdir().unwrap();
     let output = run(root.path(), &["tags"]);
     assert!(output.status.success());
@@ -230,16 +222,7 @@ fn test_dogfood_crud_chain_with_agent() {
         "--agent", agent,
     ]);
     assert!(update.status.success(), "update failed: {}", String::from_utf8_lossy(&update.stderr));
-    // Update returns new CID (CAS immutable semantics)
-    let update_stdout = String::from_utf8_lossy(&update.stdout);
-    assert!(update_stdout.contains("Updated"));
-
-    // Verify updated content via new CID (extract from "New CID: <hex>")
-    let new_cid = update_stdout
-        .lines()
-        .find(|l| l.starts_with("New CID:"))
-        .map(|l| l.trim_start_matches("New CID:").trim().to_string())
-        .unwrap_or(cid.clone());
+    let new_cid = extract_cid(&update).expect("no CID in update output");
 
     let get_updated = run(root.path(), &["get", &new_cid, "--agent", agent]);
     assert!(get_updated.status.success(), "get updated failed");

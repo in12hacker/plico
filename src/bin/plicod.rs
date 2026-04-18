@@ -29,7 +29,8 @@ async fn main() {
     let root = args.iter().position(|a| a == "--root")
         .and_then(|i| args.get(i + 1))
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/var/plico"));
+        .or_else(|| std::env::var("PLICO_ROOT").ok().map(PathBuf::from))
+        .unwrap_or_else(|| PathBuf::from("/tmp/plico"));
 
     println!("Plico AI-Native OS Daemon");
     println!("Storage root: {:?}", root);
@@ -41,6 +42,7 @@ async fn main() {
     let env = std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string());
     tracing_subscriber::fmt()
         .with_env_filter(&env)
+        .with_writer(std::io::stderr)
         .finish()
         .try_init()
         .ok();
@@ -151,7 +153,7 @@ async fn handle_dashboard_http(
     mut stream: tokio::net::TcpStream,
     kernel: &Arc<AIKernel>,
 ) -> std::io::Result<()> {
-    let mut buf = vec![0u8; 8192];
+    let mut buf = vec![0u8; 65536];
     let n = stream.read(&mut buf).await?;
     if n == 0 {
         return Ok(());
@@ -159,7 +161,6 @@ async fn handle_dashboard_http(
 
     let request = String::from_utf8_lossy(&buf[..n]);
 
-    // Simple HTTP routing — parse method + path from the request line
     let first_line = request.lines().next().unwrap_or("");
     let parts: Vec<&str> = first_line.split_whitespace().collect();
     let method = parts.first().unwrap_or(&"");
@@ -174,13 +175,51 @@ async fn handle_dashboard_http(
         ("GET", "/health") => {
             (200, r#"{"ok":true}"#.to_string())
         }
+        ("OPTIONS", "/api") => {
+            let resp = "HTTP/1.1 204 No Content\r\n\
+                 Access-Control-Allow-Origin: *\r\n\
+                 Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n\
+                 Access-Control-Allow-Headers: Content-Type\r\n\
+                 Content-Length: 0\r\n\
+                 Connection: close\r\n\
+                 \r\n";
+            stream.write_all(resp.as_bytes()).await?;
+            stream.flush().await?;
+            return Ok(());
+        }
+        ("POST", "/api") => {
+            let http_body = request.find("\r\n\r\n")
+                .map(|pos| &request[pos + 4..])
+                .unwrap_or("");
+            if http_body.is_empty() {
+                (400, r#"{"ok":false,"error":"empty request body"}"#.to_string())
+            } else {
+                match serde_json::from_str::<ApiRequest>(http_body) {
+                    Ok(api_req) => {
+                        let api_resp = kernel.handle_api_request(api_req);
+                        let json = serde_json::to_string(&api_resp)
+                            .unwrap_or_else(|_| r#"{"ok":false,"error":"serialization failed"}"#.to_string());
+                        (if api_resp.ok { 200 } else { 400 }, json)
+                    }
+                    Err(e) => {
+                        (400, format!(r#"{{"ok":false,"error":"parse error: {}"}}"#, e))
+                    }
+                }
+            }
+        }
         _ => {
             (404, r#"{"error":"not found"}"#.to_string())
         }
     };
 
+    let status_text = match status {
+        200 => "OK",
+        400 => "Bad Request",
+        404 => "Not Found",
+        _ => "OK",
+    };
     let response = format!(
-        "HTTP/1.1 {} OK\r\n\
+        "HTTP/1.1 {} {}\r\n\
          Content-Type: application/json\r\n\
          Content-Length: {}\r\n\
          Connection: close\r\n\
@@ -188,6 +227,7 @@ async fn handle_dashboard_http(
          \r\n\
          {}",
         status,
+        status_text,
         body.len(),
         body
     );

@@ -45,6 +45,8 @@ pub struct SemanticFS {
 impl SemanticFS {
     pub fn root(&self) -> &std::path::Path { &self.root }
 
+    pub fn ctx_loader(&self) -> &ContextLoader { &self.ctx_loader }
+
     pub fn new(
         root_path: std::path::PathBuf,
         embedding: Arc<dyn EmbeddingProvider>,

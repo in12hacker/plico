@@ -144,7 +144,7 @@ impl AIKernel {
         // SAFETY: search_backend is always InMemoryBackend in practice.
         // This downcast is safe because the kernel always constructs it as such.
         let backend: &InMemoryBackend = unsafe {
-            &*(Arc::as_ptr(&self.search_backend) as *const InMemoryBackend)
+            &*Arc::as_ptr(&self.search_backend)
         };
         restore_search_index_into(&self.search_index_path(), backend);
     }

@@ -41,7 +41,7 @@ fn start_of_month(reference: &NaiveDate) -> NaiveDate {
 
 fn start_of_quarter(reference: &NaiveDate) -> NaiveDate {
     let q_month = ((reference.month() - 1) / 3) * 3 + 1;
-    NaiveDate::from_ymd_opt(reference.year(), q_month as u32, 1).unwrap()
+    NaiveDate::from_ymd_opt(reference.year(), q_month, 1).unwrap()
 }
 
 // ─── Rule matching ────────────────────────────────────────────────────────────
@@ -104,14 +104,14 @@ impl TemporalRule {
             "上个月" | "last month" | "上月" => {
                 let (y, m) = (reference.year(), reference.month());
                 let (prev_y, prev_m) = if m == 1 { (y - 1, 12) } else { (y, m - 1) };
-                let since = NaiveDate::from_ymd_opt(prev_y, prev_m as u32, 1).unwrap();
+                let since = NaiveDate::from_ymd_opt(prev_y, prev_m, 1).unwrap();
                 let until = start_of_month(reference) - Duration::days(1);
                 Some((since, until))
             }
             "两个月前" => {
                 let (y, m) = (reference.year(), reference.month());
                 let (prev_y, prev_m) = if m <= 2 { (y - 1, m + 10) } else { (y, m - 2) };
-                let since = NaiveDate::from_ymd_opt(prev_y, prev_m as u32, 1).unwrap();
+                let since = NaiveDate::from_ymd_opt(prev_y, prev_m, 1).unwrap();
                 let until = start_of_month(reference) - Duration::days(1);
                 Some((since, until))
             }
@@ -243,15 +243,16 @@ impl HeuristicTemporalResolver {
 
     /// Resolve a natural-language time expression.
     ///
-    /// Returns `(since_unix_ms, until_unix_ms, confidence)` or `None`
+    /// Returns `(since_unix_ms, until_unix_ms, confidence, granularity)` or `None`
     /// if the expression doesn't match any rule.
-    pub fn resolve(&self, expression: &str) -> Option<(i64, i64, f32)> {
+    pub fn resolve(&self, expression: &str) -> Option<(i64, i64, f32, Granularity)> {
         let reference = chrono::Local::now().date_naive();
-        let (since, until, confidence, _) = resolve_heuristic(expression, &reference)?;
+        let (since, until, confidence, granularity) = resolve_heuristic(expression, &reference)?;
         Some((
             since.and_hms_opt(0, 0, 0)?.and_utc().timestamp_millis(),
             until.and_hms_opt(23, 59, 59)?.and_utc().timestamp_millis(),
             confidence,
+            granularity,
         ))
     }
 }
@@ -264,12 +265,12 @@ impl Default for HeuristicTemporalResolver {
 
 impl super::resolver::TemporalResolver for HeuristicTemporalResolver {
     fn resolve(&self, expression: &str, _reference_ms: Option<i64>) -> Option<TemporalRange> {
-        let (since, until, confidence) = self.resolve(expression)?;
+        let (since, until, confidence, granularity) = self.resolve(expression)?;
         Some(TemporalRange {
             since,
             until,
             confidence,
-            granularity: Granularity::Fuzzy,
+            granularity,
             expression: expression.to_string(),
         })
     }
@@ -286,37 +287,42 @@ pub fn ms_to_ymd(ms: i64) -> (i32, u32, u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::temporal::TemporalResolver;
 
     #[test]
     fn test_heuristic_today() {
         let result = RULE_BASED_RESOLVER.resolve("今天");
         assert!(result.is_some());
-        let (_, _, conf) = result.unwrap();
+        let (_, _, conf, gran) = result.unwrap();
         assert!(conf >= 0.9);
+        assert_eq!(gran, Granularity::ExactDay);
     }
 
     #[test]
     fn test_heuristic_last_week() {
         let result = RULE_BASED_RESOLVER.resolve("上周");
         assert!(result.is_some());
-        let (_, _, conf) = result.unwrap();
+        let (_, _, conf, gran) = result.unwrap();
         assert!(conf >= 0.8);
+        assert_eq!(gran, Granularity::Week);
     }
 
     #[test]
     fn test_heuristic_last_month() {
         let result = RULE_BASED_RESOLVER.resolve("上个月");
         assert!(result.is_some());
-        let (_, _, conf) = result.unwrap();
+        let (_, _, conf, gran) = result.unwrap();
         assert!(conf >= 0.85);
+        assert_eq!(gran, Granularity::Month);
     }
 
     #[test]
     fn test_heuristic_fuzzy_days_ago() {
         let result = RULE_BASED_RESOLVER.resolve("几天前");
         assert!(result.is_some());
-        let (_, _, conf) = result.unwrap();
+        let (_, _, conf, gran) = result.unwrap();
         assert!(conf < 0.7);
+        assert_eq!(gran, Granularity::Fuzzy);
     }
 
     #[test]
@@ -329,11 +335,28 @@ mod tests {
     fn test_yesterday() {
         let result = RULE_BASED_RESOLVER.resolve("昨天");
         assert!(result.is_some());
+        let (_, _, _, gran) = result.unwrap();
+        assert_eq!(gran, Granularity::ExactDay);
     }
 
     #[test]
     fn test_this_year() {
         let result = RULE_BASED_RESOLVER.resolve("今年");
         assert!(result.is_some());
+        let (_, _, _, gran) = result.unwrap();
+        assert_eq!(gran, Granularity::Year);
+    }
+
+    #[test]
+    fn test_granularity_propagated_through_trait() {
+        let resolver: &dyn TemporalResolver = &RULE_BASED_RESOLVER;
+        let range = resolver.resolve("上周", None).expect("should resolve");
+        assert_eq!(range.granularity, Granularity::Week);
+
+        let range = resolver.resolve("昨天", None).expect("should resolve");
+        assert_eq!(range.granularity, Granularity::ExactDay);
+
+        let range = resolver.resolve("最近", None).expect("should resolve");
+        assert_eq!(range.granularity, Granularity::Fuzzy);
     }
 }

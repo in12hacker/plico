@@ -84,7 +84,7 @@ impl AIKernel {
             let search_path = root.join("search_index.jsonl");
             // SAFETY: search_backend is guaranteed to be InMemoryBackend
             let backend_ref: &InMemoryBackend = unsafe {
-                &*(Arc::as_ptr(&search_backend) as *const InMemoryBackend)
+                &*Arc::as_ptr(&search_backend)
             };
             crate::kernel::persistence::restore_search_index_into(&search_path, backend_ref);
         }
@@ -126,12 +126,9 @@ impl AIKernel {
                 .unwrap_or_else(|_| "http://localhost:11434".to_string());
             let intent_model = std::env::var("OLLAMA_INTENT_MODEL")
                 .unwrap_or_else(|_| "llama3.2".to_string());
-            match crate::intent::llm::LlmRouter::new(&ollama_url, &intent_model, Vec::new()) {
-                r => {
-                    tracing::info!("Intent LLM router configured: {} via {}", intent_model, ollama_url);
-                    Some(r)
-                }
-            }
+            let r = crate::intent::llm::LlmRouter::new(&ollama_url, &intent_model, Vec::new());
+            tracing::info!("Intent LLM router configured: {} via {}", intent_model, ollama_url);
+            Some(r)
         };
         let intent_router: Arc<dyn IntentRouter> = Arc::new(ChainRouter::new(llm_router));
 
@@ -169,7 +166,7 @@ impl AIKernel {
 
     fn maybe_persist_search_index(&self) {
         let count = self.search_op_count.fetch_add(1, Ordering::Relaxed) + 1;
-        if count % Self::SEARCH_PERSIST_EVERY_N == 0 {
+        if count.is_multiple_of(Self::SEARCH_PERSIST_EVERY_N) {
             self.persist_search_index();
         }
     }
@@ -207,16 +204,24 @@ impl AIKernel {
                     Err(e) => ApiResponse::error(e.to_string()),
                 }
             }
-            ApiRequest::Search { query, agent_id, limit, require_tags, exclude_tags, since, until } => {
-                let results = self.semantic_search_with_time(
-                    &query, &agent_id, limit.unwrap_or(10),
+            ApiRequest::Search { query, agent_id, limit, offset, require_tags, exclude_tags, since, until } => {
+                let results = match self.semantic_search_with_time(
+                    &query, &agent_id, limit.unwrap_or(10) + offset.unwrap_or(0),
                     require_tags, exclude_tags, since, until,
-                );
-                let dto: Vec<SearchResultDto> = results.into_iter().map(|r| SearchResultDto {
+                ) {
+                    Ok(r) => r,
+                    Err(e) => return ApiResponse::error(e.to_string()),
+                };
+                let total = results.len();
+                let off = offset.unwrap_or(0);
+                let lim = limit.unwrap_or(10);
+                let page: Vec<SearchResultDto> = results.into_iter().skip(off).take(lim).map(|r| SearchResultDto {
                     cid: r.cid, relevance: r.relevance, tags: r.meta.tags,
                 }).collect();
                 let mut r = ApiResponse::ok();
-                r.results = Some(dto);
+                r.total_count = Some(total);
+                r.has_more = Some(off + page.len() < total);
+                r.results = Some(page);
                 r
             }
             ApiRequest::Update { cid, content, content_encoding, new_tags, agent_id } => {
@@ -256,8 +261,10 @@ impl AIKernel {
                 r
             }
             ApiRequest::Remember { agent_id, content } => {
-                self.remember(&agent_id, content);
-                ApiResponse::ok()
+                match self.remember(&agent_id, content) {
+                    Ok(()) => ApiResponse::ok(),
+                    Err(e) => ApiResponse::error(e),
+                }
             }
             ApiRequest::Recall { agent_id } => {
                 let memories: Vec<String> = self.recall(&agent_id).into_iter()
@@ -300,9 +307,16 @@ impl AIKernel {
                     Err(e) => ApiResponse::error(e.to_string()),
                 }
             }
-            ApiRequest::ListEvents { since, until, tags, event_type, agent_id: _ } => {
-                let events = self.list_events(since, until, &tags, event_type);
-                ApiResponse::with_events(events)
+            ApiRequest::ListEvents { since, until, tags, event_type, agent_id: _, limit, offset } => {
+                let all_events = self.list_events(since, until, &tags, event_type);
+                let total = all_events.len();
+                let off = offset.unwrap_or(0);
+                let lim = limit.unwrap_or(total);
+                let page: Vec<_> = all_events.into_iter().skip(off).take(lim).collect();
+                let mut r = ApiResponse::with_events(page.clone());
+                r.total_count = Some(total);
+                r.has_more = Some(off + page.len() < total);
+                r
             }
             ApiRequest::ListEventsText { time_expression, tags, event_type, agent_id: _ } => {
                 match self.list_events_text(&time_expression, &tags, event_type) {
@@ -328,8 +342,29 @@ impl AIKernel {
                     Err(e) => ApiResponse::error(e.to_string()),
                 }
             }
-            ApiRequest::ListNodes { node_type, agent_id } => {
-                let nodes = self.kg_list_nodes(node_type, &agent_id);
+            ApiRequest::ListNodes { node_type, agent_id, limit, offset } => {
+                let nodes = match self.kg_list_nodes(node_type, &agent_id) {
+                    Ok(n) => n,
+                    Err(e) => return ApiResponse::error(e.to_string()),
+                };
+                let total = nodes.len();
+                let off = offset.unwrap_or(0);
+                let lim = limit.unwrap_or(total);
+                let dto: Vec<KGNodeDto> = nodes.into_iter().skip(off).take(lim).map(|n| KGNodeDto {
+                    id: n.id, label: n.label, node_type: n.node_type,
+                    content_cid: n.content_cid, properties: n.properties,
+                    agent_id: n.agent_id, created_at: n.created_at,
+                }).collect();
+                let mut r = ApiResponse::with_nodes(dto.clone());
+                r.total_count = Some(total);
+                r.has_more = Some(off + dto.len() < total);
+                r
+            }
+            ApiRequest::ListNodesAtTime { node_type, agent_id, t } => {
+                let nodes = match self.kg_get_valid_nodes_at(&agent_id, node_type, t) {
+                    Ok(n) => n,
+                    Err(e) => return ApiResponse::error(e.to_string()),
+                };
                 let dto: Vec<KGNodeDto> = nodes.into_iter().map(|n| KGNodeDto {
                     id: n.id, label: n.label, node_type: n.node_type,
                     content_cid: n.content_cid, properties: n.properties,
@@ -370,7 +405,10 @@ impl AIKernel {
                     "medium" => IntentPriority::Medium,
                     _ => IntentPriority::Low,
                 };
-                let id = self.submit_intent(p, description, action, Some(agent_id));
+                let id = match self.submit_intent(p, description, action, Some(agent_id)) {
+                    Ok(id) => id,
+                    Err(e) => return ApiResponse::error(e),
+                };
                 let mut r = ApiResponse::ok();
                 r.intent_id = Some(id);
                 r
@@ -415,10 +453,16 @@ impl AIKernel {
                     Err(e) => ApiResponse::error(e.to_string()),
                 }
             }
-            ApiRequest::ReadMessages { agent_id, unread_only } => {
-                let msgs = self.read_messages(&agent_id, unread_only);
+            ApiRequest::ReadMessages { agent_id, unread_only, limit, offset } => {
+                let all_msgs = self.read_messages(&agent_id, unread_only);
+                let total = all_msgs.len();
+                let off = offset.unwrap_or(0);
+                let lim = limit.unwrap_or(total);
+                let page: Vec<_> = all_msgs.into_iter().skip(off).take(lim).collect();
                 let mut r = ApiResponse::ok();
-                r.messages = Some(msgs);
+                r.messages = Some(page.clone());
+                r.total_count = Some(total);
+                r.has_more = Some(off + page.len() < total);
                 r
             }
             ApiRequest::AckMessage { agent_id, message_id } => {
@@ -466,6 +510,141 @@ impl AIKernel {
             ApiRequest::AgentSetResources { agent_id, memory_quota, cpu_time_quota, allowed_tools, caller_agent_id: _ } => {
                 match self.agent_set_resources(&agent_id, memory_quota, cpu_time_quota, allowed_tools) {
                     Ok(()) => ApiResponse::ok(),
+                    Err(e) => ApiResponse::error(e.to_string()),
+                }
+            }
+            // ── Graph CRUD extensions (v0.7) ─────────────────────────────
+            ApiRequest::GetNode { node_id, agent_id } => {
+                match self.kg_get_node(&node_id, &agent_id) {
+                    Ok(Some(n)) => {
+                        let dto = crate::api::semantic::KGNodeDto {
+                            id: n.id, label: n.label, node_type: n.node_type,
+                            content_cid: n.content_cid, properties: n.properties,
+                            agent_id: n.agent_id, created_at: n.created_at,
+                        };
+                        ApiResponse::with_nodes(vec![dto])
+                    }
+                    Ok(None) => ApiResponse::error(format!("node not found: {}", node_id)),
+                    Err(e) => ApiResponse::error(e.to_string()),
+                }
+            }
+            ApiRequest::ListEdges { agent_id, node_id, limit, offset } => {
+                match self.kg_list_edges(&agent_id, node_id.as_deref()) {
+                    Ok(edges) => {
+                        let total = edges.len();
+                        let off = offset.unwrap_or(0);
+                        let lim = limit.unwrap_or(total);
+                        let dto: Vec<crate::api::semantic::KGEdgeDto> = edges.into_iter().skip(off).take(lim).map(|e| {
+                            crate::api::semantic::KGEdgeDto {
+                                src: e.src, dst: e.dst, edge_type: e.edge_type,
+                                weight: e.weight, created_at: e.created_at,
+                            }
+                        }).collect();
+                        let mut r = ApiResponse::ok();
+                        r.edges = Some(dto.clone());
+                        r.total_count = Some(total);
+                        r.has_more = Some(off + dto.len() < total);
+                        r
+                    }
+                    Err(e) => ApiResponse::error(e.to_string()),
+                }
+            }
+            ApiRequest::RemoveNode { node_id, agent_id } => {
+                match self.kg_remove_node(&node_id, &agent_id) {
+                    Ok(()) => ApiResponse::ok(),
+                    Err(e) => ApiResponse::error(e.to_string()),
+                }
+            }
+            ApiRequest::RemoveEdge { src_id, dst_id, edge_type, agent_id } => {
+                match self.kg_remove_edge(&src_id, &dst_id, edge_type, &agent_id) {
+                    Ok(()) => ApiResponse::ok(),
+                    Err(e) => ApiResponse::error(e.to_string()),
+                }
+            }
+            ApiRequest::UpdateNode { node_id, label, properties, agent_id } => {
+                match self.kg_update_node(&node_id, label.as_deref(), properties, &agent_id) {
+                    Ok(()) => ApiResponse::ok(),
+                    Err(e) => ApiResponse::error(e.to_string()),
+                }
+            }
+            // ── Agent lifecycle extensions (v0.7) ────────────────────────
+            ApiRequest::AgentComplete { agent_id } => {
+                match self.agent_complete(&agent_id) {
+                    Ok(()) => ApiResponse::ok(),
+                    Err(e) => ApiResponse::error(e.to_string()),
+                }
+            }
+            ApiRequest::AgentFail { agent_id, reason } => {
+                match self.agent_fail(&agent_id, &reason) {
+                    Ok(()) => ApiResponse::ok(),
+                    Err(e) => ApiResponse::error(e.to_string()),
+                }
+            }
+            // ── Memory tier management (v0.7) ────────────────────────────
+            ApiRequest::MemoryMove { agent_id, entry_id, target_tier } => {
+                let tier = match target_tier.as_str() {
+                    "ephemeral" => crate::memory::MemoryTier::Ephemeral,
+                    "working" => crate::memory::MemoryTier::Working,
+                    "long_term" => crate::memory::MemoryTier::LongTerm,
+                    "procedural" => crate::memory::MemoryTier::Procedural,
+                    _ => return ApiResponse::error(format!("unknown tier: {}", target_tier)),
+                };
+                if self.memory_move(&agent_id, &entry_id, tier) {
+                    ApiResponse::ok()
+                } else {
+                    ApiResponse::error(format!("memory entry not found: {}", entry_id))
+                }
+            }
+            ApiRequest::MemoryDeleteEntry { agent_id, entry_id } => {
+                if self.memory_delete(&agent_id, &entry_id) {
+                    ApiResponse::ok()
+                } else {
+                    ApiResponse::error(format!("memory entry not found: {}", entry_id))
+                }
+            }
+            ApiRequest::EvictExpired { agent_id } => {
+                let count = self.evict_expired(&agent_id);
+                let mut r = ApiResponse::ok();
+                r.data = Some(format!("{}", count));
+                r
+            }
+
+            ApiRequest::LoadContext { cid, layer, agent_id } => {
+                let ctx_layer = match crate::fs::ContextLayer::parse_layer(&layer) {
+                    Some(l) => l,
+                    None => return ApiResponse::error(format!("Invalid layer '{}'. Use L0, L1, or L2.", layer)),
+                };
+                match self.context_load(&cid, ctx_layer, &agent_id) {
+                    Ok(loaded) => {
+                        let mut r = ApiResponse::ok();
+                        r.context_data = Some(crate::api::semantic::LoadedContextDto {
+                            cid: loaded.cid,
+                            layer: loaded.layer.name().to_string(),
+                            content: loaded.content,
+                            tokens_estimate: loaded.tokens_estimate,
+                        });
+                        r
+                    }
+                    Err(e) => ApiResponse::error(e.to_string()),
+                }
+            }
+
+            ApiRequest::EdgeHistory { src_id, dst_id, edge_type, agent_id } => {
+                match self.kg_edge_history(&src_id, &dst_id, edge_type, &agent_id) {
+                    Ok(edges) => {
+                        let dtos: Vec<crate::api::semantic::KGEdgeDto> = edges.iter().map(|e| {
+                            crate::api::semantic::KGEdgeDto {
+                                src: e.src.clone(),
+                                dst: e.dst.clone(),
+                                edge_type: e.edge_type,
+                                weight: e.weight,
+                                created_at: e.created_at,
+                            }
+                        }).collect();
+                        let mut r = ApiResponse::ok();
+                        r.edges = Some(dtos);
+                        r
+                    }
                     Err(e) => ApiResponse::error(e.to_string()),
                 }
             }

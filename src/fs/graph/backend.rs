@@ -32,7 +32,7 @@ impl Eq for PathState {}
 
 impl PartialOrd for PathState {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cost.partial_cmp(&other.cost).unwrap_or(std::cmp::Ordering::Equal).reverse())
+        Some(self.cmp(other))
     }
 }
 
@@ -165,16 +165,15 @@ impl PetgraphBackend {
                     n.agent_id == agent_id
                         && n.node_type == KGNodeType::Document
                         && n.id != cid
-                        && shared_tag_count(&n.properties, tags) >= 2
+                        && shared_tag_count(&n.properties, tags) >= 1
                 })
-                .map(|n| (n.id.clone(), shared_tag_count(&n.properties, tags)))
+                .map(|n| (n.id.clone(), jaccard_weight(&n.properties, tags)))
                 .collect()
         };
 
         self.add_node(node)?;
 
-        for (other_id, shared) in candidates {
-            let w = (shared as f32).min(1.0);
+        for (other_id, w) in candidates {
             let e1 = KGEdge::new_with_episode(
                 cid.to_string(),
                 other_id.clone(),
@@ -237,12 +236,10 @@ impl PetgraphBackend {
                 .max()
                 .unwrap_or(1)
         };
-        ((degree as f32).ln() / ((max_degree.max(1)) as f32).ln()).clamp(0.0, 1.0)
-    }
-
-    #[allow(dead_code)]
-    fn load_from_disk(_path: &std::path::Path) -> Result<DiskGraph, KGError> {
-        unimplemented!("use PetgraphBackend::open")
+        if max_degree <= 1 {
+            return if degree > 0 { 1.0 } else { 0.0 };
+        }
+        ((degree as f32).ln() / (max_degree as f32).ln()).clamp(0.0, 1.0)
     }
 }
 
@@ -253,6 +250,21 @@ fn shared_tag_count(props: &serde_json::Value, tags: &[String]) -> usize {
         .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
         .unwrap_or_default();
     tags.iter().filter(|t| existing.contains(t.as_str())).count()
+}
+
+fn total_tag_count(props: &serde_json::Value) -> usize {
+    props
+        .get("tags")
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.len())
+        .unwrap_or(0)
+}
+
+fn jaccard_weight(props: &serde_json::Value, tags: &[String]) -> f32 {
+    let shared = shared_tag_count(props, tags) as f32;
+    let total_a = total_tag_count(props).max(1) as f32;
+    let total_b = tags.len().max(1) as f32;
+    shared / total_a.max(total_b)
 }
 
 fn now_ms() -> u64 {
@@ -278,19 +290,7 @@ impl KnowledgeGraph for PetgraphBackend {
     }
 
     fn add_edge(&self, edge: KGEdge) -> Result<(), KGError> {
-        {
-            let out = self.out_edges.read().unwrap();
-            if out
-                .get(&edge.src)
-                .is_some_and(|v| v.iter().any(|(dst, _)| dst == &edge.dst))
-            {
-                return Err(KGError::EdgeExists(
-                    edge.src.clone(),
-                    edge.dst.clone(),
-                    edge.edge_type,
-                ));
-            }
-        }
+        self.invalidate_conflicts(&edge)?;
         self.out_edges
             .write()
             .unwrap()
@@ -322,12 +322,22 @@ impl KnowledgeGraph for PetgraphBackend {
             return Ok(vec![]);
         }
         let out = self.out_edges.read().unwrap();
+        let in_e = self.in_edges.read().unwrap();
         let nodes = self.nodes.read().unwrap();
         let mut result = Vec::new();
         if let Some(edges) = out.get(id) {
             for (dst, edge) in edges {
-                if _edge_type.map_or(true, |et| et == edge.edge_type) {
+                if _edge_type.is_none_or(|et| et == edge.edge_type) {
                     if let Some(node) = nodes.get(dst) {
+                        result.push((node.clone(), edge.clone()));
+                    }
+                }
+            }
+        }
+        if let Some(edges) = in_e.get(id) {
+            for (src, edge) in edges {
+                if _edge_type.is_none_or(|et| et == edge.edge_type) {
+                    if let Some(node) = nodes.get(src) {
                         result.push((node.clone(), edge.clone()));
                     }
                 }
@@ -473,7 +483,7 @@ impl KnowledgeGraph for PetgraphBackend {
             .filter(|n| {
                 n.agent_id == agent_id
                     && n.expired_at.is_none()
-                    && node_type.map_or(true, |mt| mt == n.node_type)
+                    && node_type.is_none_or(|mt| mt == n.node_type)
             })
             .cloned()
             .collect())
@@ -484,7 +494,7 @@ impl KnowledgeGraph for PetgraphBackend {
         let out = self.out_edges.read().unwrap();
         let mut edges = Vec::new();
         for (src, list) in out.iter() {
-            if nodes.get(src).map_or(true, |n| n.agent_id != agent_id) {
+            if nodes.get(src).is_none_or(|n| n.agent_id != agent_id) {
                 continue;
             }
             for (_, edge) in list {
@@ -516,6 +526,50 @@ impl KnowledgeGraph for PetgraphBackend {
                 }
             }
         }
+        drop(out);
+        drop(in_e);
+        self.persist();
+        Ok(())
+    }
+
+    fn remove_edge(&self, src: &str, dst: &str, edge_type: Option<KGEdgeType>) -> Result<(), KGError> {
+        let mut out = self.out_edges.write().unwrap();
+        let mut in_e = self.in_edges.write().unwrap();
+        let removed = if let Some(list) = out.get_mut(src) {
+            let before = list.len();
+            list.retain(|(d, e)| !(d == dst && edge_type.is_none_or(|et| et == e.edge_type)));
+            before - list.len()
+        } else {
+            0
+        };
+        if let Some(list) = in_e.get_mut(dst) {
+            list.retain(|(s, e)| !(s == src && edge_type.is_none_or(|et| et == e.edge_type)));
+        }
+        drop(out);
+        drop(in_e);
+        if removed == 0 {
+            return Err(KGError::NodeNotFound(format!("edge {}→{} not found", src, dst)));
+        }
+        self.persist();
+        Ok(())
+    }
+
+    fn update_node(&self, id: &str, label: Option<&str>, properties: Option<serde_json::Value>) -> Result<(), KGError> {
+        let mut nodes = self.nodes.write().unwrap();
+        let node = nodes.get_mut(id).ok_or_else(|| KGError::NodeNotFound(id.to_string()))?;
+        if let Some(l) = label {
+            node.label = l.to_string();
+        }
+        if let Some(props) = properties {
+            if let (Some(existing), Some(new)) = (node.properties.as_object_mut(), props.as_object()) {
+                for (k, v) in new {
+                    existing.insert(k.clone(), v.clone());
+                }
+            } else {
+                node.properties = props;
+            }
+        }
+        drop(nodes);
         self.persist();
         Ok(())
     }
@@ -571,8 +625,61 @@ impl KnowledgeGraph for PetgraphBackend {
             }))
     }
 
-    fn invalidate_conflicts(&self, _new_edge: &KGEdge) -> Result<usize, KGError> {
-        Ok(0)
+    fn invalidate_conflicts(&self, new_edge: &KGEdge) -> Result<usize, KGError> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        let mut count = 0;
+        {
+            let mut out = self.out_edges.write().unwrap();
+            if let Some(list) = out.get_mut(&new_edge.src) {
+                for (dst, edge) in list.iter_mut() {
+                    if *dst == new_edge.dst
+                        && edge.edge_type == new_edge.edge_type
+                        && edge.invalid_at.is_none()
+                    {
+                        edge.invalid_at = Some(now);
+                        count += 1;
+                    }
+                }
+            }
+        }
+        {
+            let mut inc = self.in_edges.write().unwrap();
+            if let Some(list) = inc.get_mut(&new_edge.dst) {
+                for (src, edge) in list.iter_mut() {
+                    if *src == new_edge.src
+                        && edge.edge_type == new_edge.edge_type
+                        && edge.invalid_at.is_none()
+                    {
+                        edge.invalid_at = Some(now);
+                    }
+                }
+            }
+        }
+        Ok(count)
+    }
+
+    fn edge_history(
+        &self,
+        src: &str,
+        dst: &str,
+        edge_type: Option<KGEdgeType>,
+    ) -> Result<Vec<KGEdge>, KGError> {
+        let out = self.out_edges.read().unwrap();
+        let edges: Vec<KGEdge> = out
+            .get(src)
+            .map(|list| {
+                list.iter()
+                    .filter(|(d, e)| {
+                        d == dst && edge_type.as_ref().is_none_or(|et| *et == e.edge_type)
+                    })
+                    .map(|(_, e)| e.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+        Ok(edges)
     }
 
     fn get_valid_nodes_at(
@@ -587,18 +694,45 @@ impl KnowledgeGraph for PetgraphBackend {
             .filter(|n| {
                 n.agent_id == agent_id
                     && n.is_valid_at(t)
-                    && node_type.map_or(true, |mt| mt == n.node_type)
+                    && node_type.is_none_or(|mt| mt == n.node_type)
             })
             .cloned()
             .collect())
     }
 
-    fn save_to_disk(&self, _path: &std::path::Path) -> Result<(), KGError> {
-        todo!("use persist() with custom path")
+    fn save_to_disk(&self, path: &std::path::Path) -> Result<(), KGError> {
+        std::fs::create_dir_all(path)?;
+        let nodes_path = path.join("kg_nodes.json");
+        let edges_path = path.join("kg_edges.json");
+
+        let nodes = self.nodes.read().unwrap();
+        let json = serde_json::to_string_pretty(&*nodes)?;
+        std::fs::write(&nodes_path, json)?;
+        drop(nodes);
+
+        let out = self.out_edges.read().unwrap();
+        let records: Vec<EdgeRecord> = out
+            .iter()
+            .flat_map(|(src, list)| {
+                list.iter().map(move |(dst, edge)| EdgeRecord {
+                    src: src.clone(),
+                    dst: dst.clone(),
+                    edge: edge.clone(),
+                })
+            })
+            .collect();
+        let json = serde_json::to_string_pretty(&records)?;
+        std::fs::write(&edges_path, json)?;
+        Ok(())
     }
 
-    #[allow(dead_code)]
-    fn load_from_disk(path: &std::path::Path) -> Result<Self, KGError> {
-        Ok(Self::open(path.to_path_buf()))
+    fn load_from_disk(&self, path: &std::path::Path) -> Result<(), KGError> {
+        let nodes_path = path.join("kg_nodes.json");
+        let edges_path = path.join("kg_edges.json");
+        let (new_nodes, new_out, new_in) = Self::load_from_disk_internal(&nodes_path, &edges_path)?;
+        *self.nodes.write().unwrap() = new_nodes;
+        *self.out_edges.write().unwrap() = new_out;
+        *self.in_edges.write().unwrap() = new_in;
+        Ok(())
     }
 }

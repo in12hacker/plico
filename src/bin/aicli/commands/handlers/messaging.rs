@@ -12,7 +12,6 @@ pub fn cmd_send_message(kernel: &AIKernel, args: &[String]) -> ApiResponse {
 
     match kernel.send_message(&from, &to, payload) {
         Ok(msg_id) => {
-            println!("Message sent: {}", msg_id);
             let mut r = ApiResponse::ok();
             r.data = Some(msg_id);
             r
@@ -26,16 +25,6 @@ pub fn cmd_read_messages(kernel: &AIKernel, args: &[String]) -> ApiResponse {
     let unread_only = args.iter().any(|a| a == "--unread");
 
     let msgs = kernel.read_messages(&agent_id, unread_only);
-    if msgs.is_empty() {
-        println!("No messages for agent: {}", agent_id);
-    } else {
-        println!("Messages for {} ({} total):", agent_id, msgs.len());
-        for m in &msgs {
-            let status = if m.read { "read" } else { "unread" };
-            println!("  [{}] from={} id={}", status, m.from, m.id);
-            println!("    payload: {}", serde_json::to_string(&m.payload).unwrap_or_default());
-        }
-    }
     let mut r = ApiResponse::ok();
     r.messages = Some(msgs);
     r
@@ -46,7 +35,6 @@ pub fn cmd_ack_message(kernel: &AIKernel, args: &[String]) -> ApiResponse {
     let message_id = args.get(1).cloned().unwrap_or_default();
 
     if kernel.ack_message(&agent_id, &message_id) {
-        println!("Message acknowledged: {}", message_id);
         ApiResponse::ok()
     } else {
         ApiResponse::error(format!("Message not found: {}", message_id))

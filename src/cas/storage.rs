@@ -184,10 +184,15 @@ impl CASStorage {
             .map(|entries| {
                 entries
                     .filter_map(|e| e.ok())
-                    .filter(|e| e.file_type().map_or(false, |ft| ft.is_dir()))
+                    .filter(|e| e.file_type().is_ok_and(|ft| ft.is_dir()))
                     .count()
             })
             .unwrap_or(0)
+    }
+
+    /// Returns true if no objects are stored.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 
     /// Compute shard directory for a CID.

@@ -18,7 +18,10 @@ pub fn cmd_intent(kernel: &AIKernel, args: &[String]) -> ApiResponse {
             _ => plico::scheduler::IntentPriority::Low,
         };
 
-        let id = kernel.submit_intent(priority, description, action, Some(agent_id));
+        let id = match kernel.submit_intent(priority, description, action, Some(agent_id)) {
+            Ok(id) => id,
+            Err(e) => return ApiResponse::error(e),
+        };
         println!("Intent submitted: {}", id);
         let mut r = ApiResponse::ok();
         r.intent_id = Some(id);

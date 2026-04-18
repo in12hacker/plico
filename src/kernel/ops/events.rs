@@ -6,6 +6,7 @@ use crate::temporal::{TemporalResolver, RULE_BASED_RESOLVER};
 
 impl crate::kernel::AIKernel {
     /// Create an event and register it in the knowledge graph.
+    #[allow(clippy::too_many_arguments)]
     pub fn create_event(
         &self,
         label: &str,
@@ -19,7 +20,7 @@ impl crate::kernel::AIKernel {
         let ctx = PermissionContext::new(agent_id.to_string());
         self.permissions.check(&ctx, PermissionAction::Write)?;
         self.fs.create_event(label, event_type, start_time, end_time, location, tags, agent_id)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
+            .map_err(|e| std::io::Error::other(e.to_string()))
     }
 
     /// List events matching time range, tags, and optional event type.
@@ -42,7 +43,7 @@ impl crate::kernel::AIKernel {
     ) -> std::io::Result<Vec<EventSummary>> {
         let resolver: &dyn TemporalResolver = &RULE_BASED_RESOLVER;
         self.fs.list_events_by_time(time_expression, tags, event_type, resolver)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
+            .map_err(|e| std::io::Error::other(e.to_string()))
     }
 
     /// Attach a target to an event via a typed edge.
@@ -56,6 +57,6 @@ impl crate::kernel::AIKernel {
         let ctx = PermissionContext::new(agent_id.to_string());
         self.permissions.check(&ctx, PermissionAction::Write)?;
         self.fs.event_attach(event_id, target_id, relation, agent_id)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
+            .map_err(|e| std::io::Error::other(e.to_string()))
     }
 }

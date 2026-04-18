@@ -1,7 +1,7 @@
 //! Knowledge graph / KG commands.
 
 use plico::kernel::AIKernel;
-use plico::api::semantic::ApiResponse;
+use plico::api::semantic::{ApiResponse, NeighborDto, KGNodeDto, KGEdgeDto};
 use plico::fs::{KGNodeType, KGEdgeType};
 use super::extract_arg;
 
@@ -15,15 +15,12 @@ pub fn cmd_explore(kernel: &AIKernel, args: &[String]) -> ApiResponse {
 
     let neighbors = kernel.graph_explore_raw(&cid, edge_type.as_deref(), depth);
 
-    if neighbors.is_empty() {
-        println!("No graph neighbors for: {}", cid);
-    } else {
-        println!("Graph neighbors of {} (depth {}):", cid, depth);
-        for (i, (node_id, label, node_type, edge_str, auth)) in neighbors.iter().enumerate() {
-            println!("{}. [auth={:.3}] {} ({}) {} \"{}\"", i + 1, auth, node_id, node_type, edge_str, label);
-        }
-    }
-    ApiResponse::ok()
+    let dto: Vec<NeighborDto> = neighbors.into_iter().map(|(node_id, label, node_type, edge_str, auth)| {
+        NeighborDto { node_id, label, node_type, edge_type: edge_str, authority_score: auth }
+    }).collect();
+    let mut r = ApiResponse::ok();
+    r.neighbors = Some(dto);
+    r
 }
 
 pub fn cmd_add_node(kernel: &AIKernel, args: &[String]) -> ApiResponse {
@@ -35,10 +32,7 @@ pub fn cmd_add_node(kernel: &AIKernel, args: &[String]) -> ApiResponse {
     let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
 
     match kernel.kg_add_node(&label, node_type, props, &agent_id) {
-        Ok(id) => {
-            println!("Node created: {} (type={}, label=\"{}\")", id, node_type, label);
-            ApiResponse::with_node_id(id)
-        }
+        Ok(id) => ApiResponse::with_node_id(id),
         Err(e) => ApiResponse::error(e.to_string()),
     }
 }
@@ -51,10 +45,7 @@ pub fn cmd_add_edge(kernel: &AIKernel, args: &[String]) -> ApiResponse {
     let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
 
     match kernel.kg_add_edge(&src, &dst, edge_type, weight, &agent_id) {
-        Ok(()) => {
-            println!("Edge created: {} --[{}]--> {}", src, edge_type, dst);
-            ApiResponse::ok()
-        }
+        Ok(()) => ApiResponse::ok(),
         Err(e) => ApiResponse::error(e.to_string()),
     }
 }
@@ -63,16 +54,24 @@ pub fn cmd_list_nodes(kernel: &AIKernel, args: &[String]) -> ApiResponse {
     let node_type = extract_arg(args, "--type").map(|s| parse_node_type(&s));
     let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
 
-    let nodes = kernel.kg_list_nodes(node_type, &agent_id);
-    if nodes.is_empty() {
-        println!("No KG nodes found.");
-    } else {
-        println!("KG nodes ({} total):", nodes.len());
-        for n in &nodes {
-            println!("  {} [{}] \"{}\"", n.id, n.node_type, n.label);
+    let nodes = if let Some(at_str) = extract_arg(args, "--at-time") {
+        let t: u64 = at_str.parse().unwrap_or(0);
+        match kernel.kg_get_valid_nodes_at(&agent_id, node_type, t) {
+            Ok(n) => n,
+            Err(e) => return ApiResponse::error(e.to_string()),
         }
-    }
-    ApiResponse::ok()
+    } else {
+        match kernel.kg_list_nodes(node_type, &agent_id) {
+            Ok(n) => n,
+            Err(e) => return ApiResponse::error(e.to_string()),
+        }
+    };
+    let dto: Vec<KGNodeDto> = nodes.into_iter().map(|n| KGNodeDto {
+        id: n.id, label: n.label, node_type: n.node_type,
+        content_cid: n.content_cid, properties: n.properties,
+        agent_id: n.agent_id, created_at: n.created_at,
+    }).collect();
+    ApiResponse::with_nodes(dto)
 }
 
 pub fn cmd_find_paths(kernel: &AIKernel, args: &[String]) -> ApiResponse {
@@ -85,30 +84,99 @@ pub fn cmd_find_paths(kernel: &AIKernel, args: &[String]) -> ApiResponse {
     let weighted = args.iter().any(|a| a == "--weighted");
 
     if weighted {
-        // Find highest-weight path
         match kernel.kg_find_weighted_path(&src, &dst, depth) {
             Some(path) => {
-                let labels: Vec<&str> = path.iter().map(|n| n.label.as_str()).collect();
-                println!("Best path (weighted): {}", labels.join(" → "));
+                let dto: Vec<KGNodeDto> = path.into_iter().map(|n| KGNodeDto {
+                    id: n.id, label: n.label, node_type: n.node_type,
+                    content_cid: n.content_cid, properties: n.properties,
+                    agent_id: n.agent_id, created_at: n.created_at,
+                }).collect();
+                ApiResponse::with_paths(vec![dto])
             }
-            None => {
-                println!("No path from {} to {} (depth {}, weighted)", src, dst, depth);
-            }
+            None => ApiResponse::with_paths(vec![]),
         }
     } else {
-        // Find all paths
         let paths = kernel.kg_find_paths(&src, &dst, depth);
-        if paths.is_empty() {
-            println!("No paths from {} to {} (depth {})", src, dst, depth);
-        } else {
-            println!("Paths from {} to {} ({} found):", src, dst, paths.len());
-            for (i, path) in paths.iter().enumerate() {
-                let labels: Vec<&str> = path.iter().map(|n| n.label.as_str()).collect();
-                println!("  {}: {}", i + 1, labels.join(" → "));
-            }
-        }
+        let dto: Vec<Vec<KGNodeDto>> = paths.into_iter().map(|path| {
+            path.into_iter().map(|n| KGNodeDto {
+                id: n.id, label: n.label, node_type: n.node_type,
+                content_cid: n.content_cid, properties: n.properties,
+                agent_id: n.agent_id, created_at: n.created_at,
+            }).collect()
+        }).collect();
+        ApiResponse::with_paths(dto)
     }
-    ApiResponse::ok()
+}
+
+pub fn cmd_get_node(kernel: &AIKernel, args: &[String]) -> ApiResponse {
+    let node_id = extract_arg(args, "--id").unwrap_or_default();
+    let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
+
+    match kernel.kg_get_node(&node_id, &agent_id) {
+        Ok(Some(n)) => {
+            let dto = KGNodeDto {
+                id: n.id, label: n.label, node_type: n.node_type,
+                content_cid: n.content_cid, properties: n.properties,
+                agent_id: n.agent_id, created_at: n.created_at,
+            };
+            ApiResponse::with_nodes(vec![dto])
+        }
+        Ok(None) => ApiResponse::error(format!("node not found: {}", node_id)),
+        Err(e) => ApiResponse::error(e.to_string()),
+    }
+}
+
+pub fn cmd_list_edges(kernel: &AIKernel, args: &[String]) -> ApiResponse {
+    let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
+    let node_id = extract_arg(args, "--node");
+
+    match kernel.kg_list_edges(&agent_id, node_id.as_deref()) {
+        Ok(edges) => {
+            let dto: Vec<KGEdgeDto> = edges.into_iter().map(|e| KGEdgeDto {
+                src: e.src, dst: e.dst, edge_type: e.edge_type,
+                weight: e.weight, created_at: e.created_at,
+            }).collect();
+            let mut r = ApiResponse::ok();
+            r.edges = Some(dto);
+            r
+        }
+        Err(e) => ApiResponse::error(e.to_string()),
+    }
+}
+
+pub fn cmd_rm_node(kernel: &AIKernel, args: &[String]) -> ApiResponse {
+    let node_id = extract_arg(args, "--id").unwrap_or_default();
+    let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
+
+    match kernel.kg_remove_node(&node_id, &agent_id) {
+        Ok(()) => ApiResponse::ok(),
+        Err(e) => ApiResponse::error(e.to_string()),
+    }
+}
+
+pub fn cmd_rm_edge(kernel: &AIKernel, args: &[String]) -> ApiResponse {
+    let src = extract_arg(args, "--src").unwrap_or_default();
+    let dst = extract_arg(args, "--dst").unwrap_or_default();
+    let edge_type = extract_arg(args, "--type").map(|s| parse_edge_type(&s));
+    let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
+
+    match kernel.kg_remove_edge(&src, &dst, edge_type, &agent_id) {
+        Ok(()) => ApiResponse::ok(),
+        Err(e) => ApiResponse::error(e.to_string()),
+    }
+}
+
+pub fn cmd_update_node(kernel: &AIKernel, args: &[String]) -> ApiResponse {
+    let node_id = extract_arg(args, "--id").unwrap_or_default();
+    let label = extract_arg(args, "--label");
+    let properties = extract_arg(args, "--props")
+        .and_then(|s| serde_json::from_str(&s).ok());
+    let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
+
+    match kernel.kg_update_node(&node_id, label.as_deref(), properties, &agent_id) {
+        Ok(()) => ApiResponse::ok(),
+        Err(e) => ApiResponse::error(e.to_string()),
+    }
 }
 
 pub fn parse_node_type(s: &str) -> KGNodeType {
@@ -132,13 +200,40 @@ pub fn parse_edge_type(s: &str) -> KGEdgeType {
         "part_of" => KGEdgeType::PartOf,
         "similar_to" => KGEdgeType::SimilarTo,
         "related_to" => KGEdgeType::RelatedTo,
-        "has_attendee" => KGEdgeType::HasAttendee,
-        "has_document" => KGEdgeType::HasDocument,
-        "has_media" => KGEdgeType::HasMedia,
-        "has_decision" => KGEdgeType::HasDecision,
-        "has_preference" => KGEdgeType::HasPreference,
-        "suggests_action" => KGEdgeType::SuggestsAction,
-        "motivated_by" => KGEdgeType::MotivatedBy,
+        "has_participant" => KGEdgeType::HasParticipant,
+        "has_artifact" => KGEdgeType::HasArtifact,
+        "has_recording" => KGEdgeType::HasRecording,
+        "has_resolution" => KGEdgeType::HasResolution,
+        "has_fact" => KGEdgeType::HasFact,
         _ => KGEdgeType::RelatedTo,
+    }
+}
+
+pub fn cmd_edge_history(kernel: &AIKernel, args: &[String]) -> ApiResponse {
+    let src = extract_arg(args, "--src").unwrap_or_default();
+    let dst = extract_arg(args, "--dst").unwrap_or_default();
+    let edge_type = extract_arg(args, "--edge-type").map(|s| parse_edge_type(&s));
+    let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
+
+    if src.is_empty() || dst.is_empty() {
+        return ApiResponse::error("Missing --src or --dst argument");
+    }
+
+    match kernel.kg_edge_history(&src, &dst, edge_type, &agent_id) {
+        Ok(edges) => {
+            let dtos: Vec<KGEdgeDto> = edges.iter().map(|e| {
+                KGEdgeDto {
+                    src: e.src.clone(),
+                    dst: e.dst.clone(),
+                    edge_type: e.edge_type,
+                    weight: e.weight,
+                    created_at: e.created_at,
+                }
+            }).collect();
+            let mut r = ApiResponse::ok();
+            r.edges = Some(dtos);
+            r
+        }
+        Err(e) => ApiResponse::error(e.to_string()),
     }
 }

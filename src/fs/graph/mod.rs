@@ -33,12 +33,12 @@ pub trait KnowledgeGraph: Send + Sync {
         depth: u8,
     ) -> Result<Vec<(KGNode, KGEdge)>, KGError>;
     fn find_paths(&self, src: &str, dst: &str, max_depth: u8) -> Result<Vec<Vec<KGNode>>, KGError>;
-    /// Find the highest-weighted path from src to dst using Dijkstra's algorithm.
-    /// Returns `None` if no path exists within max_depth hops.
     fn find_weighted_path(&self, src: &str, dst: &str, max_depth: u8) -> Result<Option<Vec<KGNode>>, KGError>;
     fn list_nodes(&self, agent_id: &str, node_type: Option<KGNodeType>) -> Result<Vec<KGNode>, KGError>;
     fn list_edges(&self, agent_id: &str) -> Result<Vec<KGEdge>, KGError>;
     fn remove_node(&self, id: &str) -> Result<(), KGError>;
+    fn remove_edge(&self, src: &str, dst: &str, edge_type: Option<KGEdgeType>) -> Result<(), KGError>;
+    fn update_node(&self, id: &str, label: Option<&str>, properties: Option<serde_json::Value>) -> Result<(), KGError>;
     fn all_node_ids(&self) -> Vec<String>;
     fn upsert_document(&self, cid: &str, tags: &[String], agent_id: &str) -> Result<(), KGError>;
     fn authority_score(&self, node_id: &str) -> Result<f32, KGError>;
@@ -53,6 +53,12 @@ pub trait KnowledgeGraph: Send + Sync {
         t: u64,
     ) -> Result<Option<KGEdge>, KGError>;
     fn invalidate_conflicts(&self, new_edge: &KGEdge) -> Result<usize, KGError>;
+    fn edge_history(
+        &self,
+        src: &str,
+        dst: &str,
+        edge_type: Option<KGEdgeType>,
+    ) -> Result<Vec<KGEdge>, KGError>;
     fn get_valid_nodes_at(
         &self,
         agent_id: &str,
@@ -60,7 +66,5 @@ pub trait KnowledgeGraph: Send + Sync {
         t: u64,
     ) -> Result<Vec<KGNode>, KGError>;
     fn save_to_disk(&self, path: &std::path::Path) -> Result<(), KGError>;
-    fn load_from_disk(path: &std::path::Path) -> Result<Self, KGError>
-    where
-        Self: Sized;
+    fn load_from_disk(&self, path: &std::path::Path) -> Result<(), KGError>;
 }

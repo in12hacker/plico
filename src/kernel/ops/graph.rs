@@ -67,7 +67,7 @@ impl crate::kernel::AIKernel {
         let ctx = crate::api::permission::PermissionContext::new(agent_id.to_string());
         self.permissions.check(&ctx, crate::api::permission::PermissionAction::Write)?;
         let Some(ref kg) = self.knowledge_graph else {
-            return Err(std::io::Error::new(std::io::ErrorKind::Other, "knowledge graph not available"));
+            return Err(std::io::Error::other("knowledge graph not available"));
         };
         let id = uuid::Uuid::new_v4().to_string();
         let now = chrono::Utc::now().timestamp_millis() as u64;
@@ -84,7 +84,7 @@ impl crate::kernel::AIKernel {
             expired_at: None,
         };
         kg.add_node(node)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+            .map_err(|e| std::io::Error::other(e.to_string()))?;
         Ok(id)
     }
 
@@ -100,7 +100,7 @@ impl crate::kernel::AIKernel {
         let ctx = crate::api::permission::PermissionContext::new(agent_id.to_string());
         self.permissions.check(&ctx, crate::api::permission::PermissionAction::Write)?;
         let Some(ref kg) = self.knowledge_graph else {
-            return Err(std::io::Error::new(std::io::ErrorKind::Other, "knowledge graph not available"));
+            return Err(std::io::Error::other("knowledge graph not available"));
         };
         let now = chrono::Utc::now().timestamp_millis() as u64;
         let edge = KGEdge {
@@ -116,7 +116,7 @@ impl crate::kernel::AIKernel {
             episode: None,
         };
         kg.add_edge(edge)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
+            .map_err(|e| std::io::Error::other(e.to_string()))
     }
 
     /// List KG nodes, optionally filtered by type.
@@ -124,13 +124,14 @@ impl crate::kernel::AIKernel {
         &self,
         node_type: Option<KGNodeType>,
         agent_id: &str,
-    ) -> Vec<KGNode> {
+    ) -> std::io::Result<Vec<KGNode>> {
         let ctx = crate::api::permission::PermissionContext::new(agent_id.to_string());
-        let _ = self.permissions.check(&ctx, crate::api::permission::PermissionAction::Read);
+        self.permissions.check(&ctx, crate::api::permission::PermissionAction::Read)?;
         let Some(ref kg) = self.knowledge_graph else {
-            return Vec::new();
+            return Ok(Vec::new());
         };
-        kg.list_nodes(agent_id, node_type).unwrap_or_default()
+        kg.list_nodes(agent_id, node_type)
+            .map_err(|e| std::io::Error::other(e.to_string()))
     }
 
     /// Find all paths between two KG nodes up to a given depth.
@@ -154,9 +155,116 @@ impl crate::kernel::AIKernel {
         dst: &str,
         max_depth: u8,
     ) -> Option<Vec<KGNode>> {
-        let Some(ref kg) = self.knowledge_graph else {
-            return None;
-        };
+        let kg = self.knowledge_graph.as_ref()?;
         kg.find_weighted_path(src, dst, max_depth).unwrap_or_default()
+    }
+
+    /// Query nodes valid at a specific point in time.
+    ///
+    /// Returns nodes where:
+    /// - `valid_at <= t`
+    /// - `invalid_at.is_none() || invalid_at > t`
+    /// - `expired_at.is_none()` (soft-deleted nodes excluded)
+    pub fn kg_get_valid_nodes_at(
+        &self,
+        agent_id: &str,
+        node_type: Option<KGNodeType>,
+        t: u64,
+    ) -> std::io::Result<Vec<KGNode>> {
+        let ctx = crate::api::permission::PermissionContext::new(agent_id.to_string());
+        self.permissions.check(&ctx, crate::api::permission::PermissionAction::Read)?;
+        let Some(ref kg) = self.knowledge_graph else {
+            return Ok(Vec::new());
+        };
+        kg.get_valid_nodes_at(agent_id, node_type, t)
+            .map_err(|e| std::io::Error::other(e.to_string()))
+    }
+
+    /// Get a single KG node by ID.
+    pub fn kg_get_node(&self, node_id: &str, agent_id: &str) -> std::io::Result<Option<KGNode>> {
+        let ctx = crate::api::permission::PermissionContext::new(agent_id.to_string());
+        self.permissions.check(&ctx, crate::api::permission::PermissionAction::Read)?;
+        let Some(ref kg) = self.knowledge_graph else {
+            return Ok(None);
+        };
+        kg.get_node(node_id).map_err(|e| std::io::Error::other(e.to_string()))
+    }
+
+    /// List edges, optionally filtered by a node they touch.
+    pub fn kg_list_edges(&self, agent_id: &str, node_id: Option<&str>) -> std::io::Result<Vec<KGEdge>> {
+        let ctx = crate::api::permission::PermissionContext::new(agent_id.to_string());
+        self.permissions.check(&ctx, crate::api::permission::PermissionAction::Read)?;
+        let Some(ref kg) = self.knowledge_graph else {
+            return Ok(Vec::new());
+        };
+        let edges = kg.list_edges(agent_id)
+            .map_err(|e| std::io::Error::other(e.to_string()))?;
+        if let Some(nid) = node_id {
+            Ok(edges.into_iter().filter(|e| e.src == nid || e.dst == nid).collect())
+        } else {
+            Ok(edges)
+        }
+    }
+
+    /// Remove an edge between two KG nodes.
+    pub fn kg_remove_edge(
+        &self,
+        src: &str,
+        dst: &str,
+        edge_type: Option<KGEdgeType>,
+        agent_id: &str,
+    ) -> std::io::Result<()> {
+        let ctx = crate::api::permission::PermissionContext::new(agent_id.to_string());
+        self.permissions.check(&ctx, crate::api::permission::PermissionAction::Delete)?;
+        let Some(ref kg) = self.knowledge_graph else {
+            return Err(std::io::Error::other("knowledge graph not available"));
+        };
+        kg.remove_edge(src, dst, edge_type)
+            .map_err(|e| std::io::Error::other(e.to_string()))
+    }
+
+    /// Update an existing KG node's label and/or properties.
+    pub fn kg_update_node(
+        &self,
+        node_id: &str,
+        label: Option<&str>,
+        properties: Option<serde_json::Value>,
+        agent_id: &str,
+    ) -> std::io::Result<()> {
+        let ctx = crate::api::permission::PermissionContext::new(agent_id.to_string());
+        self.permissions.check(&ctx, crate::api::permission::PermissionAction::Write)?;
+        let Some(ref kg) = self.knowledge_graph else {
+            return Err(std::io::Error::other("knowledge graph not available"));
+        };
+        kg.update_node(node_id, label, properties)
+            .map_err(|e| std::io::Error::other(e.to_string()))
+    }
+
+    /// Remove a KG node and all its edges.
+    pub fn kg_remove_node(&self, node_id: &str, agent_id: &str) -> std::io::Result<()> {
+        let ctx = crate::api::permission::PermissionContext::new(agent_id.to_string());
+        self.permissions.check(&ctx, crate::api::permission::PermissionAction::Delete)?;
+        let Some(ref kg) = self.knowledge_graph else {
+            return Err(std::io::Error::other("knowledge graph not available"));
+        };
+        kg.remove_node(node_id)
+            .map_err(|e| std::io::Error::other(e.to_string()))
+    }
+
+    /// Get full edge history (including invalidated edges) between two nodes.
+    pub fn kg_edge_history(
+        &self,
+        src: &str,
+        dst: &str,
+        edge_type: Option<KGEdgeType>,
+        agent_id: &str,
+    ) -> std::io::Result<Vec<KGEdge>> {
+        let ctx = crate::api::permission::PermissionContext::new(agent_id.to_string());
+        self.permissions.check(&ctx, crate::api::permission::PermissionAction::Read)?;
+        let Some(ref kg) = self.knowledge_graph else {
+            return Ok(Vec::new());
+        };
+        kg.edge_history(src, dst, edge_type)
+            .map_err(|e| std::io::Error::other(e.to_string()))
     }
 }

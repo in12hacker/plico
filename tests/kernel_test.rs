@@ -184,7 +184,7 @@ fn test_kernel_agent_registration() {
 fn test_kernel_remember_and_recall() {
     let (kernel, _dir) = make_kernel();
 
-    kernel.remember("agent1", "Remember to check the logs".to_string());
+    kernel.remember("agent1", "Remember to check the logs".to_string()).unwrap();
     let memories = kernel.recall("agent1");
 
     assert!(!memories.is_empty());
@@ -195,7 +195,7 @@ fn test_kernel_remember_and_recall() {
 fn test_kernel_forget_ephemeral() {
     let (kernel, _dir) = make_kernel();
 
-    kernel.remember("agent1", "Temporary note".to_string());
+    kernel.remember("agent1", "Temporary note".to_string()).unwrap();
     assert!(!kernel.recall("agent1").is_empty());
 
     kernel.forget_ephemeral("agent1");
@@ -281,9 +281,13 @@ fn test_kernel_agent_lifecycle() {
         "test task".to_string(),
         None,
         Some(id.clone()),
-    );
+    ).unwrap();
     let (_, _, pending) = kernel.agent_status(&id).expect("status");
     assert_eq!(pending, 1);
+
+    // submit_intent transitions Created→Waiting via assign_intent
+    let (_, state, _) = kernel.agent_status(&id).expect("status");
+    assert_eq!(state, "Waiting");
 
     kernel.agent_suspend(&id).expect("suspend");
     let (_, state, _) = kernel.agent_status(&id).expect("status");
@@ -348,7 +352,7 @@ fn test_kernel_intent_persists_across_restart() {
             "test persistent intent".to_string(),
             Some(action),
             Some("test-agent".to_string()),
-        );
+        ).unwrap();
     }
 
     {
@@ -486,7 +490,7 @@ async fn test_dispatch_loop_with_kernel_executor() {
         "dispatch test".to_string(),
         Some(action),
         Some("dispatch-agent".to_string()),
-    );
+    ).unwrap();
 
     tokio::time::sleep(tokio::time::Duration::from_millis(1500)).await;
 
@@ -554,7 +558,7 @@ fn test_e2e_agent_autonomy_cycle() {
             "Create test object".to_string(),
             Some(action),
             Some(agent_id.clone()),
-        );
+        ).unwrap();
         assert!(!intent_id.is_empty());
 
         rt.block_on(async {
@@ -581,7 +585,7 @@ fn test_e2e_agent_autonomy_cycle() {
             &agent_id,
             "E2E test completed successfully".to_string(),
             vec!["e2e".to_string()],
-        );
+        ).unwrap();
 
         kernel.agent_suspend(&agent_id).expect("suspend");
         let (_, state, _) = kernel.agent_status(&agent_id).expect("status after suspend");
@@ -672,7 +676,7 @@ fn test_e2e_tool_cognitive_memory_cycle() {
 
     // 7. Store ephemeral memories and access them for promotion
     for _ in 0..4 {
-        kernel.remember(&agent_id, "frequently accessed memory".to_string());
+        kernel.remember(&agent_id, "frequently accessed memory".to_string()).unwrap();
     }
     // Use recall() which just reads; then use recall_relevant to trigger tracking
     for _ in 0..4 {
@@ -692,7 +696,15 @@ fn test_e2e_tool_cognitive_memory_cycle() {
     let relevant = kernel.recall_relevant(&agent_id, 1000);
     assert!(!relevant.is_empty(), "recall_relevant should return memories");
 
-    // 9. Suspend agent → verify context snapshot
+    // 9. Transition agent to Waiting (required for suspend)
+    kernel.submit_intent(
+        plico::scheduler::IntentPriority::Low,
+        "placeholder".to_string(),
+        None,
+        Some(agent_id.clone()),
+    ).unwrap();
+
+    // 9b. Suspend agent → verify context snapshot
     kernel.agent_suspend(&agent_id).expect("suspend failed");
     let all_after_suspend = kernel.recall(&agent_id);
     let has_snapshot = all_after_suspend.iter().any(|m| {
@@ -844,7 +856,7 @@ fn test_e2e_intent_resources_messaging() {
     // Test quota enforcement on agent_b with memory_quota=3 via tool API
     kernel.agent_set_resources(&agent_b, Some(3), None, None).expect("set b resources");
     for i in 0..3 {
-        kernel.remember(&agent_b, format!("memory-{}", i));
+        kernel.remember(&agent_b, format!("memory-{}", i)).unwrap();
     }
     // 4th store should be rejected by quota (via tool call)
     let overflow_result = kernel.execute_tool(
@@ -908,4 +920,447 @@ fn test_messaging_permission_denied() {
     let result = kernel.send_message(&agent_a, &agent_b, serde_json::json!("hello"));
     assert!(result.is_err(), "should be permission denied");
     assert!(result.unwrap_err().to_string().contains("permission"));
+}
+
+// ── v0.7 Tests: Graph CRUD, Scheduler Enforcement ──────────────────────
+
+#[test]
+fn test_kg_remove_edge_via_kernel() {
+    let (kernel, _dir) = make_kernel();
+    let agent = "kernel";
+    let n1 = kernel.kg_add_node("Alice", plico::fs::KGNodeType::Entity, serde_json::Value::Null, agent).unwrap();
+    let n2 = kernel.kg_add_node("Bob", plico::fs::KGNodeType::Entity, serde_json::Value::Null, agent).unwrap();
+    kernel.kg_add_edge(&n1, &n2, plico::fs::KGEdgeType::RelatedTo, None, agent).unwrap();
+
+    let edges = kernel.kg_list_edges(agent, Some(&n1)).unwrap();
+    assert_eq!(edges.len(), 1);
+
+    kernel.kg_remove_edge(&n1, &n2, Some(plico::fs::KGEdgeType::RelatedTo), agent).unwrap();
+    let edges_after = kernel.kg_list_edges(agent, Some(&n1)).unwrap();
+    assert_eq!(edges_after.len(), 0);
+}
+
+#[test]
+fn test_kg_update_node_via_kernel() {
+    let (kernel, _dir) = make_kernel();
+    let agent = "kernel";
+    let nid = kernel.kg_add_node("OldLabel", plico::fs::KGNodeType::Entity, serde_json::json!({"key":"v1"}), agent).unwrap();
+
+    kernel.kg_update_node(&nid, Some("NewLabel"), Some(serde_json::json!({"key":"v2","extra":true})), agent).unwrap();
+
+    let node = kernel.kg_get_node(&nid, agent).unwrap().unwrap();
+    assert_eq!(node.label, "NewLabel");
+    assert_eq!(node.properties["key"], "v2");
+    assert_eq!(node.properties["extra"], true);
+}
+
+#[test]
+fn test_kg_remove_node_cascades_edges() {
+    let (kernel, _dir) = make_kernel();
+    let agent = "kernel";
+    let n1 = kernel.kg_add_node("Center", plico::fs::KGNodeType::Entity, serde_json::Value::Null, agent).unwrap();
+    let n2 = kernel.kg_add_node("Leaf", plico::fs::KGNodeType::Entity, serde_json::Value::Null, agent).unwrap();
+    kernel.kg_add_edge(&n1, &n2, plico::fs::KGEdgeType::Mentions, None, agent).unwrap();
+
+    kernel.kg_remove_node(&n1, agent).unwrap();
+
+    let node = kernel.kg_get_node(&n1, agent).unwrap();
+    assert!(node.is_none());
+    let edges = kernel.kg_list_edges(agent, Some(&n1)).unwrap();
+    assert_eq!(edges.len(), 0);
+}
+
+#[test]
+fn test_agent_complete_sets_state() {
+    let (kernel, _dir) = make_kernel();
+    let id = kernel.register_agent("CompletableAgent".to_string());
+
+    // Transition Created→Waiting via intent submission
+    kernel.submit_intent(
+        plico::scheduler::IntentPriority::Low,
+        "setup".to_string(),
+        None,
+        Some(id.clone()),
+    ).unwrap();
+
+    kernel.agent_complete(&id).unwrap();
+    let (_, state, _) = kernel.agent_status(&id).unwrap();
+    assert_eq!(state, "Completed");
+}
+
+#[test]
+fn test_completed_agent_rejects_intents() {
+    let (kernel, _dir) = make_kernel();
+    let id = kernel.register_agent("DoneAgent".to_string());
+
+    // Transition Created→Waiting→Completed
+    kernel.submit_intent(
+        plico::scheduler::IntentPriority::Low,
+        "setup".to_string(),
+        None,
+        Some(id.clone()),
+    ).unwrap();
+    kernel.agent_complete(&id).unwrap();
+
+    let result = kernel.submit_intent(
+        plico::scheduler::IntentPriority::High,
+        "should fail".to_string(),
+        None,
+        Some(id.clone()),
+    );
+    assert!(result.is_err());
+    assert!(result.unwrap_err().contains("terminal state"));
+}
+
+#[test]
+fn test_terminated_agent_rejects_intents() {
+    let (kernel, _dir) = make_kernel();
+    let id = kernel.register_agent("KilledAgent".to_string());
+    kernel.agent_terminate(&id).unwrap();
+
+    let result = kernel.submit_intent(
+        plico::scheduler::IntentPriority::High,
+        "should fail".to_string(),
+        None,
+        Some(id.clone()),
+    );
+    assert!(result.is_err());
+    assert!(result.unwrap_err().contains("terminal state"));
+}
+
+#[test]
+fn test_remember_respects_memory_quota() {
+    let (kernel, _dir) = make_kernel();
+    let id = kernel.register_agent("QuotaAgent".to_string());
+    kernel.agent_set_resources(&id, Some(2), None, None).unwrap();
+
+    kernel.remember(&id, "first".to_string()).unwrap();
+    kernel.remember(&id, "second".to_string()).unwrap();
+    let result = kernel.remember(&id, "third".to_string());
+    assert!(result.is_err());
+    let err_msg = result.unwrap_err();
+    assert!(err_msg.contains("quota") || err_msg.contains("Quota"));
+}
+
+#[test]
+fn test_memory_tier_api_via_handle_request() {
+    use plico::api::semantic::ApiRequest;
+    let (kernel, _dir) = make_kernel();
+    let id = kernel.register_agent("MemTierAgent".to_string());
+    kernel.remember(&id, "test entry".to_string()).unwrap();
+
+    let memories = kernel.recall(&id);
+    let entry_id = memories[0].id.clone();
+
+    let resp = kernel.handle_api_request(ApiRequest::MemoryMove {
+        agent_id: id.clone(),
+        entry_id: entry_id.clone(),
+        target_tier: "working".to_string(),
+    });
+    assert!(resp.ok);
+
+    let resp = kernel.handle_api_request(ApiRequest::MemoryDeleteEntry {
+        agent_id: id.clone(),
+        entry_id,
+    });
+    assert!(resp.ok);
+
+    let resp = kernel.handle_api_request(ApiRequest::EvictExpired {
+        agent_id: id.clone(),
+    });
+    assert!(resp.ok);
+}
+
+#[test]
+fn test_v07_graph_scheduler_e2e_roundtrip() {
+    let (kernel, _dir) = make_kernel();
+
+    // 1. Register agent with memory_quota=5
+    let agent_id = kernel.register_agent("v07-e2e-agent".to_string());
+    kernel.agent_set_resources(&agent_id, Some(5), None, None).unwrap();
+
+    // Use "kernel" (trusted) for operations requiring Delete permission
+    let admin = "kernel";
+
+    // 2. Add nodes + edges
+    let n1 = kernel.kg_add_node("Project-X", plico::fs::KGNodeType::Entity, serde_json::json!({"status":"active"}), &agent_id).unwrap();
+    let n2 = kernel.kg_add_node("Meeting-2026-04-18", plico::fs::KGNodeType::Entity, serde_json::Value::Null, &agent_id).unwrap();
+    let n3 = kernel.kg_add_node("Decision-A", plico::fs::KGNodeType::Fact, serde_json::Value::Null, &agent_id).unwrap();
+    kernel.kg_add_edge(&n1, &n2, plico::fs::KGEdgeType::RelatedTo, Some(0.9), &agent_id).unwrap();
+    kernel.kg_add_edge(&n2, &n3, plico::fs::KGEdgeType::HasFact, Some(0.8), &agent_id).unwrap();
+
+    // 3. Update node
+    kernel.kg_update_node(&n1, Some("Project-X-Updated"), Some(serde_json::json!({"status":"active","priority":"high"})), &agent_id).unwrap();
+    let updated = kernel.kg_get_node(&n1, &agent_id).unwrap().unwrap();
+    assert_eq!(updated.label, "Project-X-Updated");
+    assert_eq!(updated.properties["priority"], "high");
+
+    // 4. Verify edges (use agent_id who owns the nodes)
+    let edges = kernel.kg_list_edges(&agent_id, Some(&n1)).unwrap();
+    assert_eq!(edges.len(), 1);
+
+    // 5. Remove edge → verify (use admin for Delete permission)
+    kernel.kg_remove_edge(&n1, &n2, Some(plico::fs::KGEdgeType::RelatedTo), admin).unwrap();
+    let edges_after = kernel.kg_list_edges(&agent_id, Some(&n1)).unwrap();
+    assert_eq!(edges_after.len(), 0);
+
+    // 6. Remove node → verify cascade (use admin for Delete)
+    kernel.kg_remove_node(&n2, admin).unwrap();
+    assert!(kernel.kg_get_node(&n2, &agent_id).unwrap().is_none());
+
+    // 7. Store memories up to quota → verify 6th rejected
+    for i in 0..5 {
+        kernel.remember(&agent_id, format!("memory-{}", i)).unwrap();
+    }
+    let overflow = kernel.remember(&agent_id, "overflow".to_string());
+    assert!(overflow.is_err(), "6th memory should exceed quota=5");
+
+    // 8. Complete agent → verify no more intents accepted
+    // Need to transition Created→Waiting first (submit an intent)
+    kernel.submit_intent(
+        plico::scheduler::IntentPriority::Low,
+        "setup for completion".to_string(),
+        None,
+        Some(agent_id.clone()),
+    ).unwrap();
+    kernel.agent_complete(&agent_id).unwrap();
+    let (_, state, _) = kernel.agent_status(&agent_id).unwrap();
+    assert_eq!(state, "Completed");
+
+    let intent_result = kernel.submit_intent(
+        plico::scheduler::IntentPriority::High,
+        "post-completion intent".to_string(),
+        None,
+        Some(agent_id.clone()),
+    );
+    assert!(intent_result.is_err(), "completed agent should reject intents");
+}
+
+// ── v0.8 Pagination Tests ─────────────────────────────────────────────────────
+
+#[test]
+fn test_list_nodes_pagination() {
+    use plico::api::semantic::ApiRequest;
+    let (kernel, _dir) = make_kernel();
+    let agent_id = kernel.register_agent("paginator".to_string());
+
+    for i in 0..10 {
+        kernel.kg_add_node(&format!("n{}", i), plico::fs::KGNodeType::Entity, serde_json::Value::Null, &agent_id);
+    }
+
+    let resp = kernel.handle_api_request(ApiRequest::ListNodes {
+        node_type: None, agent_id: agent_id.clone(), limit: Some(3), offset: Some(2),
+    });
+    assert!(resp.ok);
+    assert_eq!(resp.nodes.as_ref().unwrap().len(), 3);
+    assert_eq!(resp.total_count, Some(10));
+    assert_eq!(resp.has_more, Some(true));
+
+    let resp2 = kernel.handle_api_request(ApiRequest::ListNodes {
+        node_type: None, agent_id: agent_id.clone(), limit: Some(3), offset: Some(9),
+    });
+    assert_eq!(resp2.nodes.as_ref().unwrap().len(), 1);
+    assert_eq!(resp2.has_more, Some(false));
+}
+
+#[test]
+fn test_list_edges_pagination() {
+    use plico::api::semantic::ApiRequest;
+    let (kernel, _dir) = make_kernel();
+    let agent_id = kernel.register_agent("edge-pager".to_string());
+
+    let mut src_ids = Vec::new();
+    let mut dst_ids = Vec::new();
+    for i in 0..5 {
+        let sid = kernel.kg_add_node(&format!("s{}", i), plico::fs::KGNodeType::Entity, serde_json::Value::Null, &agent_id).unwrap();
+        let did = kernel.kg_add_node(&format!("d{}", i), plico::fs::KGNodeType::Entity, serde_json::Value::Null, &agent_id).unwrap();
+        kernel.kg_add_edge(&sid, &did, plico::fs::KGEdgeType::RelatedTo, Some(1.0), &agent_id).unwrap();
+        src_ids.push(sid);
+        dst_ids.push(did);
+    }
+
+    let resp = kernel.handle_api_request(ApiRequest::ListEdges {
+        agent_id: agent_id.clone(), node_id: None, limit: Some(2), offset: Some(1),
+    });
+    assert!(resp.ok);
+    assert_eq!(resp.edges.as_ref().unwrap().len(), 2);
+    assert_eq!(resp.total_count, Some(5));
+    assert_eq!(resp.has_more, Some(true));
+}
+
+#[test]
+fn test_pagination_beyond_total() {
+    use plico::api::semantic::ApiRequest;
+    let (kernel, _dir) = make_kernel();
+    let agent_id = kernel.register_agent("beyond".to_string());
+
+    for i in 0..3 {
+        kernel.kg_add_node(&format!("x{}", i), plico::fs::KGNodeType::Entity, serde_json::Value::Null, &agent_id);
+    }
+
+    let resp = kernel.handle_api_request(ApiRequest::ListNodes {
+        node_type: None, agent_id: agent_id.clone(), limit: Some(10), offset: Some(100),
+    });
+    assert!(resp.ok);
+    assert_eq!(resp.nodes.as_ref().unwrap().len(), 0);
+    assert_eq!(resp.total_count, Some(3));
+    assert_eq!(resp.has_more, Some(false));
+}
+
+// ── v0.8 Agent Lifecycle Tests ────────────────────────────────────────────────
+
+#[test]
+fn test_agent_fail_sets_state() {
+    use plico::api::semantic::ApiRequest;
+    let (kernel, _dir) = make_kernel();
+    let agent_id = kernel.register_agent("fail-test".to_string());
+
+    // Transition Created→Waiting before failing
+    kernel.submit_intent(
+        plico::scheduler::IntentPriority::Low,
+        "setup".to_string(),
+        None,
+        Some(agent_id.clone()),
+    ).unwrap();
+
+    kernel.agent_fail(&agent_id, "something went wrong").unwrap();
+
+    let resp = kernel.handle_api_request(ApiRequest::AgentStatus { agent_id: agent_id.clone() });
+    assert!(resp.ok);
+    assert_eq!(resp.agent_state.as_deref(), Some("Failed"));
+}
+
+#[test]
+fn test_agent_fail_via_api() {
+    use plico::api::semantic::ApiRequest;
+    let (kernel, _dir) = make_kernel();
+    let agent_id = kernel.register_agent("api-fail-test".to_string());
+
+    // Transition Created→Waiting before failing via API
+    kernel.submit_intent(
+        plico::scheduler::IntentPriority::Low,
+        "setup".to_string(),
+        None,
+        Some(agent_id.clone()),
+    ).unwrap();
+
+    let resp = kernel.handle_api_request(ApiRequest::AgentFail {
+        agent_id: agent_id.clone(),
+        reason: "resource exhaustion".to_string(),
+    });
+    assert!(resp.ok);
+
+    let status = kernel.handle_api_request(ApiRequest::AgentStatus { agent_id: agent_id.clone() });
+    assert_eq!(status.agent_state.as_deref(), Some("Failed"));
+}
+
+#[test]
+fn test_agent_fail_already_terminal_rejected() {
+    let (kernel, _dir) = make_kernel();
+    let agent_id = kernel.register_agent("double-fail".to_string());
+
+    // Transition Created→Waiting before first fail
+    kernel.submit_intent(
+        plico::scheduler::IntentPriority::Low,
+        "setup".to_string(),
+        None,
+        Some(agent_id.clone()),
+    ).unwrap();
+
+    kernel.agent_fail(&agent_id, "first failure").unwrap();
+    let result = kernel.agent_fail(&agent_id, "second failure");
+    assert!(result.is_err());
+}
+
+// ── v0.9 Context Loading Tests ───────────────────────────────────────────────
+
+#[test]
+fn test_context_load_l0() {
+    let (kernel, _dir) = make_kernel();
+    let agent_id = kernel.register_agent("ctx-test".to_string());
+    let cid = kernel.semantic_create(
+        b"This is a test document with enough content to produce a meaningful L0 summary for testing purposes".to_vec(),
+        vec!["test".to_string()],
+        &agent_id,
+        None,
+    ).unwrap();
+
+    let loaded = kernel.context_load(&cid, plico::fs::ContextLayer::L0, &agent_id).unwrap();
+    assert_eq!(loaded.cid, cid);
+    assert_eq!(loaded.layer, plico::fs::ContextLayer::L0);
+    assert!(loaded.tokens_estimate < 200, "L0 should be compact, got {} tokens", loaded.tokens_estimate);
+}
+
+#[test]
+fn test_context_load_l2() {
+    let (kernel, _dir) = make_kernel();
+    let agent_id = kernel.register_agent("ctx-l2-test".to_string());
+    let content = "Full content for L2 test. This should be returned in its entirety.";
+    let cid = kernel.semantic_create(
+        content.as_bytes().to_vec(),
+        vec!["test".to_string()],
+        &agent_id,
+        None,
+    ).unwrap();
+
+    let loaded = kernel.context_load(&cid, plico::fs::ContextLayer::L2, &agent_id).unwrap();
+    assert_eq!(loaded.content, content);
+    assert_eq!(loaded.layer, plico::fs::ContextLayer::L2);
+}
+
+#[test]
+fn test_context_load_invalid_layer() {
+    use plico::api::semantic::ApiRequest;
+    let (kernel, _dir) = make_kernel();
+    let resp = kernel.handle_api_request(ApiRequest::LoadContext {
+        cid: "nonexistent".to_string(),
+        layer: "L3".to_string(),
+        agent_id: "cli".to_string(),
+    });
+    assert!(!resp.ok);
+    assert!(resp.error.unwrap().contains("Invalid layer"));
+}
+
+#[test]
+fn test_context_load_via_api() {
+    use plico::api::semantic::ApiRequest;
+    let (kernel, _dir) = make_kernel();
+    let agent_id = kernel.register_agent("ctx-api-test".to_string());
+    let cid = kernel.semantic_create(
+        b"API context loading roundtrip test content".to_vec(),
+        vec!["test".to_string()],
+        &agent_id,
+        None,
+    ).unwrap();
+
+    let resp = kernel.handle_api_request(ApiRequest::LoadContext {
+        cid: cid.clone(),
+        layer: "L2".to_string(),
+        agent_id: agent_id.clone(),
+    });
+    assert!(resp.ok);
+    let ctx = resp.context_data.unwrap();
+    assert_eq!(ctx.cid, cid);
+    assert_eq!(ctx.layer, "L2");
+    assert!(ctx.content.contains("roundtrip test"));
+}
+
+#[test]
+fn test_context_load_tool() {
+    let (kernel, _dir) = make_kernel();
+    let agent_id = kernel.register_agent("ctx-tool-test".to_string());
+    let cid = kernel.semantic_create(
+        b"Tool-based context loading test".to_vec(),
+        vec!["test".to_string()],
+        &agent_id,
+        None,
+    ).unwrap();
+
+    let result = kernel.execute_tool(
+        "context.load",
+        &serde_json::json!({"cid": cid, "layer": "L0"}),
+        &agent_id,
+    );
+    assert!(result.success, "context.load tool failed: {:?}", result.error);
+    assert!(result.output["layer"].as_str() == Some("L0"));
 }

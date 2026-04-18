@@ -52,21 +52,17 @@ pub enum KGEdgeType {
     SimilarTo,
     RelatedTo,
     // ── Event-specific relations ──────────────────────────────────────────
-    /// Event → Person (attendee of the event).
-    HasAttendee,
-    /// Event → Document (content associated with the event).
-    HasDocument,
-    /// Event → Media (photo, recording, etc. from the event).
-    HasMedia,
-    /// Event → ActionItem (decision, task, or resolution from the event).
-    HasDecision,
-    // ── Reasoning / Action Suggestion edges ───────────────────────────────
-    /// Person → Fact (generic knowledge graph fact).
-    HasPreference,
-    /// Preference node → suggested action (cross-event inference).
-    SuggestsAction,
-    /// Action suggestion → event that triggered it.
-    MotivatedBy,
+    /// Event → Participant (agent or user involved in the event).
+    HasParticipant,
+    /// Event → Artifact (AI-generated content from the event).
+    HasArtifact,
+    /// Event → Recording (log, data output from the event).
+    HasRecording,
+    /// Event → Resolution (decision, conclusion from the event).
+    HasResolution,
+    // ── Reasoning edges (AI-native) ─────────────────────────────────────
+    /// Agent → Fact (knowledge graph assertion).
+    HasFact,
 }
 
 impl std::fmt::Display for KGEdgeType {
@@ -80,13 +76,11 @@ impl std::fmt::Display for KGEdgeType {
             KGEdgeType::PartOf => write!(f, "part_of"),
             KGEdgeType::SimilarTo => write!(f, "similar_to"),
             KGEdgeType::RelatedTo => write!(f, "related_to"),
-            KGEdgeType::HasAttendee => write!(f, "has_attendee"),
-            KGEdgeType::HasDocument => write!(f, "has_document"),
-            KGEdgeType::HasMedia => write!(f, "has_media"),
-            KGEdgeType::HasDecision => write!(f, "has_decision"),
-            KGEdgeType::SuggestsAction => write!(f, "suggests_action"),
-            KGEdgeType::MotivatedBy => write!(f, "motivated_by"),
-            KGEdgeType::HasPreference => write!(f, "has_preference"),
+            KGEdgeType::HasParticipant => write!(f, "has_participant"),
+            KGEdgeType::HasArtifact => write!(f, "has_artifact"),
+            KGEdgeType::HasRecording => write!(f, "has_recording"),
+            KGEdgeType::HasResolution => write!(f, "has_resolution"),
+            KGEdgeType::HasFact => write!(f, "has_fact"),
         }
     }
 }
@@ -201,9 +195,9 @@ impl KGNode {
     /// - `invalid_at.is_none() || invalid_at > T`, and
     /// - `expired_at.is_none()` (soft-deleted nodes are excluded)
     pub fn is_valid_at(&self, t: u64) -> bool {
-        self.valid_at.map_or(true, |v| v <= t)
-            && self.invalid_at.map_or(true, |i| i > t)
-            && self.expired_at.map_or(true, |e| e > t)
+        self.valid_at.is_none_or(|v| v <= t)
+            && self.invalid_at.is_none_or(|i| i > t)
+            && self.expired_at.is_none_or(|e| e > t)
     }
 }
 
@@ -296,9 +290,9 @@ impl KGEdge {
     /// - `invalid_at.is_none() || invalid_at > T`, and
     /// - `expired_at.is_none()` (soft-deleted edges are excluded)
     pub fn is_valid_at(&self, t: u64) -> bool {
-        self.valid_at.map_or(true, |v| v <= t)
-            && self.invalid_at.map_or(true, |i| i > t)
-            && self.expired_at.map_or(true, |e| e > t)
+        self.valid_at.is_none_or(|v| v <= t)
+            && self.invalid_at.is_none_or(|i| i > t)
+            && self.expired_at.is_none_or(|e| e > t)
     }
 }
 
@@ -313,7 +307,7 @@ pub type DiskGraph = (
 
 // ── Time utility ──────────────────────────────────────────────────────────────
 
-fn now_ms() -> u64 {
+pub(crate) fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)

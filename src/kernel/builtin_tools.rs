@@ -76,6 +76,41 @@ impl AIKernel {
             schema: json!({"type":"object","properties":{"src":{"type":"string"},"dst":{"type":"string"},"depth":{"type":"integer"}},"required":["src","dst"]}),
         });
         reg.register(ToolDescriptor {
+            name: "kg.get_node".into(),
+            description: "Get a single knowledge graph node by ID".into(),
+            schema: json!({"type":"object","properties":{"node_id":{"type":"string"}},"required":["node_id"]}),
+        });
+        reg.register(ToolDescriptor {
+            name: "kg.list_edges".into(),
+            description: "List knowledge graph edges, optionally filtered by node".into(),
+            schema: json!({"type":"object","properties":{"node_id":{"type":"string"}}}),
+        });
+        reg.register(ToolDescriptor {
+            name: "kg.remove_node".into(),
+            description: "Remove a knowledge graph node and all its edges".into(),
+            schema: json!({"type":"object","properties":{"node_id":{"type":"string"}},"required":["node_id"]}),
+        });
+        reg.register(ToolDescriptor {
+            name: "kg.remove_edge".into(),
+            description: "Remove an edge between two knowledge graph nodes".into(),
+            schema: json!({"type":"object","properties":{"src":{"type":"string"},"dst":{"type":"string"},"type":{"type":"string"}},"required":["src","dst"]}),
+        });
+        reg.register(ToolDescriptor {
+            name: "kg.update_node".into(),
+            description: "Update a knowledge graph node's label and/or properties".into(),
+            schema: json!({"type":"object","properties":{"node_id":{"type":"string"},"label":{"type":"string"},"properties":{"type":"object"}},"required":["node_id"]}),
+        });
+        reg.register(ToolDescriptor {
+            name: "agent.complete".into(),
+            description: "Mark an agent as completed (terminal state)".into(),
+            schema: json!({"type":"object","properties":{"agent_id":{"type":"string"}},"required":["agent_id"]}),
+        });
+        reg.register(ToolDescriptor {
+            name: "agent.fail".into(),
+            description: "Mark an agent as failed with a reason (terminal state)".into(),
+            schema: json!({"type":"object","properties":{"agent_id":{"type":"string"},"reason":{"type":"string"}},"required":["agent_id","reason"]}),
+        });
+        reg.register(ToolDescriptor {
             name: "agent.register".into(),
             description: "Register a new AI agent".into(),
             schema: json!({"type":"object","properties":{"name":{"type":"string"}},"required":["name"]}),
@@ -135,6 +170,11 @@ impl AIKernel {
             description: "Acknowledge a message (mark as read)".into(),
             schema: json!({"type":"object","properties":{"message_id":{"type":"string"}},"required":["message_id"]}),
         });
+        reg.register(ToolDescriptor {
+            name: "context.load".into(),
+            description: "Load context at L0 (summary), L1 (key sections), or L2 (full content) for a CID".into(),
+            schema: json!({"type":"object","properties":{"cid":{"type":"string"},"layer":{"type":"string","enum":["L0","L1","L2"]}},"required":["cid","layer"]}),
+        });
     }
 
     /// Execute a tool by name with JSON parameters.
@@ -154,6 +194,10 @@ impl AIKernel {
                     name, resources.allowed_tools
                 ));
             }
+        }
+
+        if let Some(handler) = self.tool_registry.get_handler(name) {
+            return handler.execute(params, agent_id);
         }
 
         match name {
@@ -194,9 +238,12 @@ impl AIKernel {
                     .unwrap_or_default();
                 let since = params.get("since").and_then(|v| v.as_i64());
                 let until = params.get("until").and_then(|v| v.as_i64());
-                let results = self.semantic_search_with_time(
+                let results = match self.semantic_search_with_time(
                     query, agent_id, limit, require_tags, exclude_tags, since, until,
-                );
+                ) {
+                    Ok(r) => r,
+                    Err(e) => return ToolResult::error(e.to_string()),
+                };
                 let dto: Vec<serde_json::Value> = results.into_iter().map(|r| json!({
                     "cid": r.cid, "relevance": r.relevance, "tags": r.meta.tags,
                 })).collect();
@@ -339,6 +386,78 @@ impl AIKernel {
                     .collect();
                 ToolResult::ok(json!({"paths": dto}))
             }
+            "kg.get_node" => {
+                let node_id = params.get("node_id").and_then(|v| v.as_str()).unwrap_or("");
+                match self.kg_get_node(node_id, agent_id) {
+                    Ok(Some(n)) => ToolResult::ok(json!({
+                        "id": n.id, "label": n.label, "node_type": format!("{:?}", n.node_type),
+                        "properties": n.properties, "agent_id": n.agent_id, "created_at": n.created_at,
+                    })),
+                    Ok(None) => ToolResult::error(format!("node not found: {}", node_id)),
+                    Err(e) => ToolResult::error(e.to_string()),
+                }
+            }
+            "kg.list_edges" => {
+                let node_id = params.get("node_id").and_then(|v| v.as_str());
+                match self.kg_list_edges(agent_id, node_id) {
+                    Ok(edges) => {
+                        let dto: Vec<serde_json::Value> = edges.into_iter().map(|e| json!({
+                            "src": e.src, "dst": e.dst, "edge_type": format!("{:?}", e.edge_type),
+                            "weight": e.weight, "created_at": e.created_at,
+                        })).collect();
+                        ToolResult::ok(json!({"edges": dto}))
+                    }
+                    Err(e) => ToolResult::error(e.to_string()),
+                }
+            }
+            "kg.remove_node" => {
+                let node_id = params.get("node_id").and_then(|v| v.as_str()).unwrap_or("");
+                match self.kg_remove_node(node_id, agent_id) {
+                    Ok(()) => ToolResult::ok(json!({"removed": node_id})),
+                    Err(e) => ToolResult::error(e.to_string()),
+                }
+            }
+            "kg.remove_edge" => {
+                let src = params.get("src").and_then(|v| v.as_str()).unwrap_or("");
+                let dst = params.get("dst").and_then(|v| v.as_str()).unwrap_or("");
+                let edge_type = params.get("type").and_then(|v| v.as_str()).map(|s| match s {
+                    "associates_with" => KGEdgeType::AssociatesWith,
+                    "mentions" => KGEdgeType::Mentions,
+                    "follows" => KGEdgeType::Follows,
+                    "causes" => KGEdgeType::Causes,
+                    "part_of" => KGEdgeType::PartOf,
+                    "similar_to" => KGEdgeType::SimilarTo,
+                    _ => KGEdgeType::RelatedTo,
+                });
+                match self.kg_remove_edge(src, dst, edge_type, agent_id) {
+                    Ok(()) => ToolResult::ok(json!({"removed": true})),
+                    Err(e) => ToolResult::error(e.to_string()),
+                }
+            }
+            "kg.update_node" => {
+                let node_id = params.get("node_id").and_then(|v| v.as_str()).unwrap_or("");
+                let label = params.get("label").and_then(|v| v.as_str());
+                let properties = params.get("properties").cloned();
+                match self.kg_update_node(node_id, label, properties, agent_id) {
+                    Ok(()) => ToolResult::ok(json!({"updated": node_id})),
+                    Err(e) => ToolResult::error(e.to_string()),
+                }
+            }
+            "agent.complete" => {
+                let target = params.get("agent_id").and_then(|v| v.as_str()).unwrap_or(agent_id);
+                match self.agent_complete(target) {
+                    Ok(()) => ToolResult::ok(json!({"completed": target})),
+                    Err(e) => ToolResult::error(e.to_string()),
+                }
+            }
+            "agent.fail" => {
+                let target = params.get("agent_id").and_then(|v| v.as_str()).unwrap_or(agent_id);
+                let reason = params.get("reason").and_then(|v| v.as_str()).unwrap_or("unspecified");
+                match self.agent_fail(target, reason) {
+                    Ok(()) => ToolResult::ok(json!({"failed": target, "reason": reason})),
+                    Err(e) => ToolResult::error(e.to_string()),
+                }
+            }
             "agent.register" => {
                 let name = params.get("name").and_then(|v| v.as_str()).unwrap_or("unnamed");
                 let id = self.register_agent(name.to_string());
@@ -421,6 +540,23 @@ impl AIKernel {
                     ToolResult::ok(json!({"acked": msg_id}))
                 } else {
                     ToolResult::error(format!("message not found: {}", msg_id))
+                }
+            }
+            "context.load" => {
+                let cid = params.get("cid").and_then(|v| v.as_str()).unwrap_or("");
+                let layer_str = params.get("layer").and_then(|v| v.as_str()).unwrap_or("L2");
+                let layer = match crate::fs::ContextLayer::parse_layer(layer_str) {
+                    Some(l) => l,
+                    None => return ToolResult::error(format!("Invalid layer '{}'. Use L0, L1, or L2.", layer_str)),
+                };
+                match self.context_load(cid, layer, agent_id) {
+                    Ok(loaded) => ToolResult::ok(json!({
+                        "cid": loaded.cid,
+                        "layer": loaded.layer.name(),
+                        "content": loaded.content,
+                        "tokens_estimate": loaded.tokens_estimate,
+                    })),
+                    Err(e) => ToolResult::error(e.to_string()),
                 }
             }
             _ => ToolResult::error(format!("unknown tool: {}", name)),

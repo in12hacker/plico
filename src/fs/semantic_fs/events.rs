@@ -11,15 +11,16 @@ use super::{now_ms, SemanticFS};
 /// Convert EventRelation to KGEdgeType (needed by event_attach).
 fn relation_to_edge_type(rel: EventRelation) -> KGEdgeType {
     match rel {
-        EventRelation::Attendee => KGEdgeType::HasAttendee,
-        EventRelation::Document => KGEdgeType::HasDocument,
-        EventRelation::Media => KGEdgeType::HasMedia,
-        EventRelation::Decision => KGEdgeType::HasDecision,
+        EventRelation::Participant => KGEdgeType::HasParticipant,
+        EventRelation::Artifact => KGEdgeType::HasArtifact,
+        EventRelation::Recording => KGEdgeType::HasRecording,
+        EventRelation::Resolution => KGEdgeType::HasResolution,
     }
 }
 
 impl SemanticFS {
     /// Create an event container — stored as a KG node with EventMeta.
+    #[allow(clippy::too_many_arguments)]
     pub fn create_event(
         &self,
         label: &str,
@@ -30,7 +31,7 @@ impl SemanticFS {
         tags: Vec<String>,
         agent_id: &str,
     ) -> Result<String, FSError> {
-        let node_id = format!("evt:{}", uuid::Uuid::new_v4().to_string());
+        let node_id = format!("evt:{}", uuid::Uuid::new_v4());
 
         if let Some(ref kg) = self.knowledge_graph {
             let meta = EventMeta {
@@ -39,7 +40,7 @@ impl SemanticFS {
                 start_time,
                 end_time,
                 location: location.map(String::from),
-                attendee_ids: Vec::new(),
+                participant_ids: Vec::new(),
                 related_cids: Vec::new(),
             };
             let node = KGNode {
@@ -56,7 +57,7 @@ impl SemanticFS {
                 expired_at: None,
             };
             kg.add_node(node)
-                .map_err(|e| FSError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
+                .map_err(|e| FSError::Io(std::io::Error::other(e.to_string())))?;
         }
 
         {
@@ -66,7 +67,7 @@ impl SemanticFS {
             }
             drop(tag_index);
             self.persist_tag_index()
-                .map_err(|e| FSError::Io(e))?;
+                .map_err(FSError::Io)?;
         }
 
         Ok(node_id)
@@ -123,7 +124,7 @@ impl SemanticFS {
                 label: meta.label,
                 event_type: meta.event_type,
                 start_time: meta.start_time,
-                attendee_count: meta.attendee_ids.len(),
+                attendee_count: meta.participant_ids.len(),
                 related_count: meta.related_cids.len(),
             });
         }
@@ -161,7 +162,7 @@ impl SemanticFS {
         _agent_id: &str,
     ) -> Result<(), FSError> {
         let kg = self.knowledge_graph.as_ref()
-            .ok_or_else(|| FSError::Io(std::io::Error::new(std::io::ErrorKind::Other, "knowledge graph not initialized")))?;
+            .ok_or_else(|| FSError::Io(std::io::Error::other("knowledge graph not initialized")))?;
 
         let edge = KGEdge::new_with_episode(
             event_id.to_string(),
@@ -171,21 +172,21 @@ impl SemanticFS {
             event_id,
         );
         kg.add_edge(edge)
-            .map_err(|e| FSError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
+            .map_err(|e| FSError::Io(std::io::Error::other(e.to_string())))?;
 
         let mut node = kg.get_node(event_id)
-            .map_err(|e| FSError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?
+            .map_err(|e| FSError::Io(std::io::Error::other(e.to_string())))?
             .ok_or_else(|| FSError::Io(std::io::Error::new(std::io::ErrorKind::NotFound, "event not found")))?;
         let mut meta: EventMeta = serde_json::from_value(node.properties.clone())
             .map_err(|e| FSError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())))?;
 
         match relation {
-            EventRelation::Attendee => {
-                if !meta.attendee_ids.contains(&target_id.to_string()) {
-                    meta.attendee_ids.push(target_id.to_string());
+            EventRelation::Participant => {
+                if !meta.participant_ids.contains(&target_id.to_string()) {
+                    meta.participant_ids.push(target_id.to_string());
                 }
             }
-            EventRelation::Document | EventRelation::Media | EventRelation::Decision => {
+            EventRelation::Artifact | EventRelation::Recording | EventRelation::Resolution => {
                 if !meta.related_cids.contains(&target_id.to_string()) {
                     meta.related_cids.push(target_id.to_string());
                 }
@@ -195,7 +196,7 @@ impl SemanticFS {
         node.properties = serde_json::to_value(&meta)
             .map_err(|e| FSError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())))?;
         kg.add_node(node)
-            .map_err(|e| FSError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
+            .map_err(|e| FSError::Io(std::io::Error::other(e.to_string())))?;
 
         Ok(())
     }

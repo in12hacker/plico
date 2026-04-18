@@ -1,7 +1,7 @@
 //! Object CRUD commands.
 
 use plico::kernel::AIKernel;
-use plico::api::semantic::ApiResponse;
+use plico::api::semantic::{ApiResponse, SearchResultDto};
 use super::{extract_arg, extract_tags, extract_tags_opt};
 
 pub fn cmd_create(kernel: &AIKernel, args: &[String]) -> ApiResponse {
@@ -21,15 +21,17 @@ pub fn cmd_read(kernel: &AIKernel, args: &[String]) -> ApiResponse {
     let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
     match kernel.get_object(&cid, &agent_id) {
         Ok(obj) => {
-            println!("CID: {}", obj.cid);
-            println!("Tags: {:?}", obj.meta.tags);
-            println!("Type: {}", obj.meta.content_type);
-            if let Some(intent) = obj.meta.intent {
-                println!("Intent: {}", intent);
+            let mut r = ApiResponse::with_cid(obj.cid);
+            r.tags = Some(obj.meta.tags);
+            let mut text = String::new();
+            text.push_str(&format!("Type: {}\n", obj.meta.content_type));
+            if let Some(intent) = &obj.meta.intent {
+                text.push_str(&format!("Intent: {}\n", intent));
             }
-            println!("---");
-            println!("{}", String::from_utf8_lossy(&obj.data));
-            ApiResponse::ok()
+            text.push_str("---\n");
+            text.push_str(&String::from_utf8_lossy(&obj.data));
+            r.data = Some(text);
+            r
         }
         Err(e) => ApiResponse::error(e.to_string()),
     }
@@ -55,22 +57,19 @@ pub fn cmd_search(kernel: &AIKernel, args: &[String]) -> ApiResponse {
         return ApiResponse::error("empty query");
     }
 
-    let results = kernel.semantic_search_with_time(
+    let results = match kernel.semantic_search_with_time(
         &query, &agent_id, limit, require_tags, exclude_tags, since, until,
-    );
+    ) {
+        Ok(r) => r,
+        Err(e) => return ApiResponse::error(e.to_string()),
+    };
 
-    if results.is_empty() {
-        println!("No results for: {}", query);
-    } else {
-        for (i, r) in results.iter().enumerate() {
-            println!("{}. [relevance={:.2}] {}", i + 1, r.relevance, r.cid);
-            println!("   Tags: {:?}", r.meta.tags);
-            if let Some(intent) = &r.meta.intent {
-                println!("   Intent: {}", intent);
-            }
-        }
-    }
-    ApiResponse::ok()
+    let dto: Vec<SearchResultDto> = results.into_iter().map(|r| SearchResultDto {
+        cid: r.cid, relevance: r.relevance, tags: r.meta.tags,
+    }).collect();
+    let mut r = ApiResponse::ok();
+    r.results = Some(dto);
+    r
 }
 
 pub fn cmd_update(kernel: &AIKernel, args: &[String]) -> ApiResponse {
@@ -80,11 +79,7 @@ pub fn cmd_update(kernel: &AIKernel, args: &[String]) -> ApiResponse {
     let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
 
     match kernel.semantic_update(&cid, content.into_bytes(), new_tags, &agent_id) {
-        Ok(new_cid) => {
-            println!("Updated. Old CID: {}", cid);
-            println!("New CID: {}", new_cid);
-            ApiResponse::with_cid(new_cid)
-        }
+        Ok(new_cid) => ApiResponse::with_cid(new_cid),
         Err(e) => ApiResponse::error(e.to_string()),
     }
 }
@@ -94,10 +89,7 @@ pub fn cmd_delete(kernel: &AIKernel, args: &[String]) -> ApiResponse {
     let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
 
     match kernel.semantic_delete(&cid, &agent_id) {
-        Ok(()) => {
-            println!("Deleted (logical): {}", cid);
-            ApiResponse::ok()
-        }
+        Ok(()) => ApiResponse::ok(),
         Err(e) => ApiResponse::error(e.to_string()),
     }
 }
