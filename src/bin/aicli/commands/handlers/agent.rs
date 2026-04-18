@@ -139,3 +139,30 @@ pub fn cmd_discover(kernel: &AIKernel, args: &[String]) -> ApiResponse {
     r.agent_cards = Some(cards);
     r
 }
+
+pub fn cmd_delegate(kernel: &AIKernel, args: &[String]) -> ApiResponse {
+    let from = extract_arg(args, "--from").unwrap_or_else(|| "cli".to_string());
+    let to = match extract_arg(args, "--to") {
+        Some(t) => t,
+        None => return ApiResponse::error("--to required"),
+    };
+    let desc = extract_arg(args, "--desc").unwrap_or_else(|| "delegated task".to_string());
+    let action = extract_arg(args, "--action");
+    let priority_str = extract_arg(args, "--priority").unwrap_or_else(|| "medium".to_string());
+    let priority = match priority_str.to_lowercase().as_str() {
+        "critical" => plico::scheduler::IntentPriority::Critical,
+        "high" => plico::scheduler::IntentPriority::High,
+        "medium" => plico::scheduler::IntentPriority::Medium,
+        _ => plico::scheduler::IntentPriority::Low,
+    };
+    match kernel.delegate_task(&from, &to, desc, action, priority) {
+        Ok((intent_id, msg_id)) => {
+            let mut r = ApiResponse::ok();
+            r.delegation = Some(plico::api::semantic::DelegationResultDto {
+                intent_id, message_id: msg_id, from, to,
+            });
+            r
+        }
+        Err(e) => ApiResponse::error(e),
+    }
+}

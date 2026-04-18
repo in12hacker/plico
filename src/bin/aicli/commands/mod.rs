@@ -61,6 +61,7 @@ pub fn execute_local(kernel: &AIKernel, args: &[String]) -> ApiResponse {
         Some("skills") => cmd_skills(kernel, args),
         Some("quota") => cmd_quota(kernel, args),
         Some("discover") => cmd_discover(kernel, args),
+        Some("delegate") => cmd_delegate(kernel, args),
         Some("system-status") => {
             let status = kernel.system_status();
             let mut r = ApiResponse::ok();
@@ -315,6 +316,11 @@ pub fn print_result(response: &ApiResponse) {
                     c.name, c.agent_id, c.state, c.tools.len(), c.memory_entries, c.tool_call_count);
             }
         }
+    }
+    if let Some(d) = &response.delegation {
+        println!("Delegated: {} → {}", d.from, d.to);
+        println!("  Intent: {}", d.intent_id);
+        println!("  Message: {}", d.message_id);
     }
     if !response.ok {
         if let Some(e) = &response.error {

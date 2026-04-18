@@ -882,6 +882,28 @@ impl AIKernel {
                 r.agent_cards = Some(cards);
                 r
             }
+
+            ApiRequest::DelegateTask { from, to, description, action, priority } => {
+                let p = match priority.to_lowercase().as_str() {
+                    "critical" => IntentPriority::Critical,
+                    "high" => IntentPriority::High,
+                    "medium" => IntentPriority::Medium,
+                    _ => IntentPriority::Low,
+                };
+                match self.delegate_task(&from, &to, description, action, p) {
+                    Ok((intent_id, msg_id)) => {
+                        let mut r = ApiResponse::ok();
+                        r.delegation = Some(crate::api::semantic::DelegationResultDto {
+                            intent_id,
+                            message_id: msg_id,
+                            from,
+                            to,
+                        });
+                        r
+                    }
+                    Err(e) => ApiResponse::error(e),
+                }
+            }
         }
     }
 }

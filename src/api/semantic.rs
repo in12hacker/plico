@@ -73,6 +73,7 @@ pub fn decode_content(content: &str, encoding: &ContentEncoding) -> Result<Vec<u
 
 fn default_importance() -> u8 { 50 }
 fn default_k() -> usize { 10 }
+fn default_priority() -> String { "medium".to_string() }
 
 /// DTO for procedure steps in API requests.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -549,6 +550,19 @@ pub enum ApiRequest {
         tool_filter: Option<String>,
         agent_id: String,
     },
+
+    // ── Agent Delegation (v6.3) ─────────────────────────────────
+
+    #[serde(rename = "delegate_task")]
+    DelegateTask {
+        from: String,
+        to: String,
+        description: String,
+        #[serde(default)]
+        action: Option<String>,
+        #[serde(default = "default_priority")]
+        priority: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -623,6 +637,8 @@ pub struct ApiResponse {
     pub agent_usage: Option<AgentUsageDto>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent_cards: Option<Vec<AgentCardDto>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delegation: Option<DelegationResultDto>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -726,6 +742,15 @@ pub struct AgentCardDto {
     pub last_active_ms: u64,
 }
 
+/// Result of a delegation operation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DelegationResultDto {
+    pub intent_id: String,
+    pub message_id: String,
+    pub from: String,
+    pub to: String,
+}
+
 impl ApiResponse {
     pub fn ok() -> Self {
         Self {
@@ -741,6 +766,7 @@ impl ApiResponse {
             context_assembly: None,
             agent_usage: None,
             agent_cards: None,
+            delegation: None,
         }
     }
 
@@ -795,6 +821,7 @@ impl ApiResponse {
             context_assembly: None,
             agent_usage: None,
             agent_cards: None,
+            delegation: None,
         }
     }
 }

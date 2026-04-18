@@ -2826,3 +2826,83 @@ fn test_agent_card_includes_usage() {
     assert_eq!(card.memory_entries, 1);
     assert_eq!(card.tool_call_count, 1);
 }
+
+// ── v6.3: Agent Delegation tests ────────────────────────────────────
+
+#[test]
+fn test_delegate_task_creates_intent_and_message() {
+    let (kernel, _dir) = make_kernel();
+    let alice = kernel.register_agent("alice".into());
+    let bob = kernel.register_agent("bob".into());
+
+    let (intent_id, msg_id) = kernel.delegate_task(
+        &alice, &bob,
+        "analyze PR #42".into(),
+        None,
+        plico::scheduler::IntentPriority::High,
+    ).unwrap();
+
+    assert!(!intent_id.is_empty());
+    assert!(!msg_id.is_empty());
+
+    let msgs = kernel.read_messages(&bob, true);
+    assert_eq!(msgs.len(), 1);
+    let payload = &msgs[0].payload;
+    assert_eq!(payload["type"], "delegation");
+    assert_eq!(payload["from"], alice);
+    assert_eq!(payload["intent_id"], intent_id);
+    assert_eq!(msgs[0].from, "kernel");
+}
+
+#[test]
+fn test_delegate_task_rejects_terminal_agent() {
+    let (kernel, _dir) = make_kernel();
+    let alice = kernel.register_agent("alice".into());
+    let bob = kernel.register_agent("bob".into());
+    kernel.agent_terminate(&bob).unwrap();
+
+    let result = kernel.delegate_task(
+        &alice, &bob,
+        "should fail".into(),
+        None,
+        plico::scheduler::IntentPriority::Medium,
+    );
+    assert!(result.is_err());
+    assert!(result.unwrap_err().contains("terminal"));
+}
+
+#[test]
+fn test_delegate_task_rejects_unknown_agent() {
+    let (kernel, _dir) = make_kernel();
+    let alice = kernel.register_agent("alice".into());
+
+    let result = kernel.delegate_task(
+        &alice, "ghost",
+        "should fail".into(),
+        None,
+        plico::scheduler::IntentPriority::Medium,
+    );
+    assert!(result.is_err());
+    assert!(result.unwrap_err().contains("not found"));
+}
+
+#[test]
+fn test_delegate_task_via_api() {
+    let (kernel, _dir) = make_kernel();
+    let alice = kernel.register_agent("alice".into());
+    let bob = kernel.register_agent("bob".into());
+
+    let resp = kernel.handle_api_request(plico::api::semantic::ApiRequest::DelegateTask {
+        from: alice.clone(),
+        to: bob.clone(),
+        description: "review code".into(),
+        action: None,
+        priority: "high".into(),
+    });
+    assert!(resp.ok);
+    let d = resp.delegation.unwrap();
+    assert_eq!(d.from, alice);
+    assert_eq!(d.to, bob);
+    assert!(!d.intent_id.is_empty());
+    assert!(!d.message_id.is_empty());
+}
