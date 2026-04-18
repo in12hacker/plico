@@ -83,6 +83,9 @@ impl crate::kernel::AIKernel {
     /// Unlike `intent_execute` which submits to the scheduler queue,
     /// this executes the resolved action inline via `handle_api_request`
     /// and returns the result immediately. Captures outcomes in memory.
+    ///
+    /// For MultiAction intents (conjunctive NL like "create X and then search Y"),
+    /// all resolved actions are executed in sequence.
     pub fn intent_execute_sync(
         &self,
         text: &str,
@@ -90,31 +93,39 @@ impl crate::kernel::AIKernel {
         confidence_threshold: f32,
         learn: bool,
     ) -> Result<IntentExecutionResult, String> {
-        // Check procedural memory for previously learned mappings (reuse loop).
-        if let Some((action, explanation)) = self.recall_learned_action(agent_id, text) {
-            let resolved = vec![ResolvedIntent {
-                routing_action: crate::intent::RoutingAction::SingleAction,
+        // Check procedural memory for previously learned workflows (reuse loop).
+        if let Some((actions, explanation)) = self.recall_learned_workflow(agent_id, text) {
+            let resolved: Vec<ResolvedIntent> = actions.iter().map(|action| ResolvedIntent {
+                routing_action: if actions.len() > 1 {
+                    crate::intent::RoutingAction::MultiAction
+                } else {
+                    crate::intent::RoutingAction::SingleAction
+                },
                 confidence: 0.95,
                 action: action.clone(),
                 explanation: format!("[reused] {}", explanation),
-            }];
+            }).collect();
 
-            let resp = self.handle_api_request(action);
-            let output = serde_json::to_string(&resp).unwrap_or_default();
+            let (all_ok, outputs) = self.execute_actions_sequence(&actions);
 
-            let tags = if resp.ok {
+            let tags = if all_ok {
                 vec!["execution-success".to_string(), "sync".to_string(), "reused".to_string()]
             } else {
                 vec!["execution-failure".to_string(), "sync".to_string(), "reused".to_string()]
             };
-            let summary = format!("Reused learned action for '{}' → {}", &text.chars().take(40).collect::<String>(), if resp.ok { "success" } else { "failed" });
+            let summary = format!(
+                "Reused learned workflow ({} steps) for '{}' → {}",
+                actions.len(),
+                &text.chars().take(40).collect::<String>(),
+                if all_ok { "success" } else { "failed" }
+            );
             let _ = self.remember_working(agent_id, summary, tags);
 
             return Ok(IntentExecutionResult {
                 resolved,
                 executed: true,
-                success: resp.ok,
-                output,
+                success: all_ok,
+                output: outputs,
             });
         }
 
@@ -138,39 +149,60 @@ impl crate::kernel::AIKernel {
             });
         }
 
-        let action_req = best.action.clone();
+        let is_multi = resolved.len() > 1
+            && best.routing_action == crate::intent::RoutingAction::MultiAction;
 
-        let resp = self.handle_api_request(action_req);
-        let output = serde_json::to_string(&resp).unwrap_or_default();
-
-        let result_summary = if resp.ok {
-            let preview: String = text.chars().take(60).collect();
-            format!("Sync executed: '{}' → success", preview)
+        let (all_ok, output) = if is_multi {
+            let actions: Vec<_> = resolved.iter().map(|r| r.action.clone()).collect();
+            self.execute_actions_sequence(&actions)
         } else {
-            let err = resp.error.as_deref().unwrap_or("unknown error");
-            format!("Sync executed: '{}' → failed: {}", &text.chars().take(40).collect::<String>(), err)
+            let resp = self.handle_api_request(best.action.clone());
+            let out = serde_json::to_string(&resp).unwrap_or_default();
+            (resp.ok, out)
         };
 
-        let tags = if resp.ok {
+        let step_count = if is_multi { resolved.len() } else { 1 };
+        let result_summary = if all_ok {
+            let preview: String = text.chars().take(60).collect();
+            format!("Sync executed ({} steps): '{}' → success", step_count, preview)
+        } else {
+            format!(
+                "Sync executed ({} steps): '{}' → failed",
+                step_count,
+                &text.chars().take(40).collect::<String>()
+            )
+        };
+
+        let tags = if all_ok {
             vec!["execution-success".to_string(), "sync".to_string()]
         } else {
             vec!["execution-failure".to_string(), "sync".to_string()]
         };
         let _ = self.remember_working(agent_id, result_summary, tags);
 
-        if learn && resp.ok {
-            let step = crate::memory::layered::ProcedureStep {
-                step_number: 1,
-                description: best.explanation.clone(),
-                action: serde_json::to_string(&best.action).unwrap_or_default(),
-                expected_outcome: "success (verified by execution)".to_string(),
+        if learn && all_ok {
+            let steps: Vec<crate::memory::layered::ProcedureStep> = if is_multi {
+                resolved.iter().enumerate().map(|(i, ri)| crate::memory::layered::ProcedureStep {
+                    step_number: (i + 1) as u32,
+                    description: ri.explanation.clone(),
+                    action: serde_json::to_string(&ri.action).unwrap_or_default(),
+                    expected_outcome: "success (verified by execution)".to_string(),
+                }).collect()
+            } else {
+                vec![crate::memory::layered::ProcedureStep {
+                    step_number: 1,
+                    description: best.explanation.clone(),
+                    action: serde_json::to_string(&best.action).unwrap_or_default(),
+                    expected_outcome: "success (verified by execution)".to_string(),
+                }]
             };
+
             let name = format!("auto:{}", &text.chars().take(40).collect::<String>());
             let _ = self.remember_procedural(
                 agent_id,
                 name,
-                format!("Verified: when asked '{}', this action succeeds", text),
-                vec![step],
+                format!("Verified: when asked '{}', execute {} step(s)", text, steps.len()),
+                steps,
                 "auto-learned from successful sync execution".to_string(),
                 vec!["auto-learned".to_string(), "verified".to_string()],
             );
@@ -179,20 +211,37 @@ impl crate::kernel::AIKernel {
         Ok(IntentExecutionResult {
             resolved: resolved.clone(),
             executed: true,
-            success: resp.ok,
+            success: all_ok,
             output,
         })
     }
 
-    /// Check procedural memory for a previously learned action matching the input text.
-    ///
-    /// Auto-learned procedures are named "auto:<text prefix>". If found with a
-    /// "verified" tag, the stored action is deserialized and returned for reuse.
-    fn recall_learned_action(
+    fn execute_actions_sequence(
+        &self,
+        actions: &[crate::api::semantic::ApiRequest],
+    ) -> (bool, String) {
+        let mut all_ok = true;
+        let mut outputs = Vec::new();
+        for action in actions {
+            let resp = self.handle_api_request(action.clone());
+            if !resp.ok {
+                all_ok = false;
+            }
+            outputs.push(serde_json::to_string(&resp).unwrap_or_default());
+        }
+        let combined = if outputs.len() == 1 {
+            outputs.into_iter().next().unwrap_or_default()
+        } else {
+            format!("[{}]", outputs.join(","))
+        };
+        (all_ok, combined)
+    }
+
+    fn recall_learned_workflow(
         &self,
         agent_id: &str,
         text: &str,
-    ) -> Option<(crate::api::semantic::ApiRequest, String)> {
+    ) -> Option<(Vec<crate::api::semantic::ApiRequest>, String)> {
         let name_prefix = format!("auto:{}", &text.chars().take(40).collect::<String>());
         let procedures = self.recall_procedural(agent_id, Some(&name_prefix));
 
@@ -201,10 +250,11 @@ impl crate::kernel::AIKernel {
                 continue;
             }
             if let crate::memory::MemoryContent::Procedure(ref proc) = entry.content {
-                if let Some(step) = proc.steps.first() {
-                    if let Ok(action) = serde_json::from_str::<crate::api::semantic::ApiRequest>(&step.action) {
-                        return Some((action, proc.description.clone()));
-                    }
+                let actions: Vec<crate::api::semantic::ApiRequest> = proc.steps.iter()
+                    .filter_map(|step| serde_json::from_str(&step.action).ok())
+                    .collect();
+                if !actions.is_empty() {
+                    return Some((actions, proc.description.clone()));
                 }
             }
         }

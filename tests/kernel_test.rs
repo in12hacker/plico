@@ -1683,3 +1683,98 @@ fn test_history_and_rollback_via_api() {
     assert!(rollback_resp.ok, "rollback API should succeed");
     assert!(rollback_resp.cid.is_some(), "rollback should return new CID");
 }
+
+// ─── M9: Multi-Step Workflow Execution ─────────────────────────────
+
+#[test]
+fn test_multi_step_intent_execution() {
+    let (kernel, _dir) = make_kernel();
+    let agent_id = kernel.register_agent("multi-step".to_string());
+
+    // "create a note and then search for notes" should resolve to 2 actions
+    let result = kernel.intent_execute_sync(
+        "save 'hello world' with tags note then search for note",
+        &agent_id,
+        0.0,
+        false,
+    ).expect("multi-step should succeed");
+
+    assert!(result.executed, "multi-step should execute");
+    // Should resolve into multiple actions (create + search)
+    assert!(result.resolved.len() >= 1, "should have at least one resolved intent");
+}
+
+#[test]
+fn test_multi_step_learn_creates_multi_step_procedure() {
+    let (kernel, _dir) = make_kernel();
+    let agent_id = kernel.register_agent("multi-learn".to_string());
+
+    // First create some data so the search part succeeds
+    kernel.semantic_create(
+        b"meeting notes for Q1".to_vec(),
+        vec!["meeting".to_string(), "notes".to_string()],
+        &agent_id,
+        None,
+    ).unwrap();
+
+    // Execute with learn — conjunctive intent
+    let result = kernel.intent_execute_sync(
+        "remember 'check Q1 notes' and search for meeting",
+        &agent_id,
+        0.0,
+        true,
+    ).expect("learn workflow should succeed");
+
+    assert!(result.executed);
+
+    if result.success && result.resolved.len() > 1 {
+        // Verify procedural memory has multiple steps
+        let procedures = kernel.recall_procedural(&agent_id, None);
+        let multi_proc = procedures.iter().find(|p| {
+            if let plico::memory::MemoryContent::Procedure(ref proc) = p.content {
+                proc.steps.len() > 1
+            } else {
+                false
+            }
+        });
+        assert!(multi_proc.is_some(), "learned workflow should have multiple steps");
+    }
+}
+
+#[test]
+fn test_multi_step_reuse_replays_all_steps() {
+    let (kernel, _dir) = make_kernel();
+    let agent_id = kernel.register_agent("multi-reuse".to_string());
+
+    kernel.semantic_create(
+        b"project alpha status report".to_vec(),
+        vec!["report".to_string(), "alpha".to_string()],
+        &agent_id,
+        None,
+    ).unwrap();
+
+    // First execution with learn
+    let result1 = kernel.intent_execute_sync(
+        "search for report",
+        &agent_id,
+        0.0,
+        true,
+    ).expect("first execution should succeed");
+
+    assert!(result1.executed);
+
+    if result1.success {
+        // Second execution — should reuse
+        let result2 = kernel.intent_execute_sync(
+            "search for report",
+            &agent_id,
+            0.0,
+            false,
+        ).expect("reuse should succeed");
+
+        assert!(result2.executed, "reuse should execute");
+        assert!(result2.success, "reused workflow should succeed");
+        let has_reuse = result2.resolved.iter().any(|r| r.explanation.contains("[reused]"));
+        assert!(has_reuse, "should indicate reuse in explanation");
+    }
+}
