@@ -1481,3 +1481,76 @@ async fn test_result_consumer_captures_dispatch_outcomes() {
     });
     assert!(has_dispatch_tag, "result consumer should store dispatch outcomes in memory. Found {} memories", memories.len());
 }
+
+// ─── M7: End-to-End Autonomous Loop ───────────────────────────────────────
+
+#[test]
+fn test_e2e_autonomous_loop_resolve_execute_learn_reuse() {
+    let (kernel, _dir) = make_kernel();
+    let agent_id = kernel.register_agent("e2e-loop".to_string());
+
+    kernel.semantic_create(
+        b"quarterly sales report Q1 2026".to_vec(),
+        vec!["report".to_string(), "sales".to_string()],
+        &agent_id,
+        None,
+    ).unwrap();
+
+    // Step 1: Execute with learn=true → stores procedural memory
+    let result = kernel.intent_execute_sync(
+        "search for report",
+        &agent_id,
+        0.0,
+        true,
+    ).expect("sync execution should succeed");
+
+    assert!(!result.resolved.is_empty(), "should resolve at least one intent");
+    assert!(result.executed, "should execute the action");
+
+    // Step 2: Verify execution result stored in working memory
+    let memories = kernel.recall(&agent_id);
+    let has_exec_result = memories.iter().any(|m| {
+        m.tags.iter().any(|t| t.contains("execution"))
+    });
+    assert!(has_exec_result, "execution outcome should be in memory");
+
+    // Step 3: Verify procedural memory was learned
+    let proc_memories = kernel.recall_procedural(&agent_id, None);
+    let auto_learned = proc_memories.iter().find(|m| {
+        m.tags.iter().any(|t| t == "auto-learned")
+    });
+
+    if result.success {
+        assert!(auto_learned.is_some(), "successful execution with learn=true should create procedural memory");
+
+        // Verify it has the "verified" tag (indicating execution-verified learning)
+        let verified = proc_memories.iter().any(|m| {
+            m.tags.iter().any(|t| t == "verified")
+        });
+        assert!(verified, "auto-learned procedure should have 'verified' tag");
+
+        // Step 4: Execute same intent again → should REUSE learned action
+        let result2 = kernel.intent_execute_sync(
+            "search for report",
+            &agent_id,
+            0.0,
+            false,
+        ).expect("second execution should succeed");
+
+        assert!(result2.executed, "reuse should execute");
+        assert!(result2.success, "reused action should succeed");
+
+        let has_reuse = result2.resolved.iter().any(|r| {
+            r.explanation.contains("[reused]")
+        });
+        assert!(has_reuse, "second execution should reuse learned action, got: {:?}",
+            result2.resolved.iter().map(|r| &r.explanation).collect::<Vec<_>>());
+
+        // Step 5: Verify reuse is tracked in memory
+        let memories_after = kernel.recall(&agent_id);
+        let has_reused_tag = memories_after.iter().any(|m| {
+            m.tags.iter().any(|t| t == "reused")
+        });
+        assert!(has_reused_tag, "reused execution should be tagged in memory");
+    }
+}

@@ -90,6 +90,34 @@ impl crate::kernel::AIKernel {
         confidence_threshold: f32,
         learn: bool,
     ) -> Result<IntentExecutionResult, String> {
+        // Check procedural memory for previously learned mappings (reuse loop).
+        if let Some((action, explanation)) = self.recall_learned_action(agent_id, text) {
+            let resolved = vec![ResolvedIntent {
+                routing_action: crate::intent::RoutingAction::SingleAction,
+                confidence: 0.95,
+                action: action.clone(),
+                explanation: format!("[reused] {}", explanation),
+            }];
+
+            let resp = self.handle_api_request(action);
+            let output = serde_json::to_string(&resp).unwrap_or_default();
+
+            let tags = if resp.ok {
+                vec!["execution-success".to_string(), "sync".to_string(), "reused".to_string()]
+            } else {
+                vec!["execution-failure".to_string(), "sync".to_string(), "reused".to_string()]
+            };
+            let summary = format!("Reused learned action for '{}' → {}", &text.chars().take(40).collect::<String>(), if resp.ok { "success" } else { "failed" });
+            let _ = self.remember_working(agent_id, summary, tags);
+
+            return Ok(IntentExecutionResult {
+                resolved,
+                executed: true,
+                success: resp.ok,
+                output,
+            });
+        }
+
         let resolved = match self.intent_router.resolve(text, agent_id) {
             Ok(r) if !r.is_empty() => r,
             Ok(_) => return Ok(IntentExecutionResult {
@@ -154,5 +182,32 @@ impl crate::kernel::AIKernel {
             success: resp.ok,
             output,
         })
+    }
+
+    /// Check procedural memory for a previously learned action matching the input text.
+    ///
+    /// Auto-learned procedures are named "auto:<text prefix>". If found with a
+    /// "verified" tag, the stored action is deserialized and returned for reuse.
+    fn recall_learned_action(
+        &self,
+        agent_id: &str,
+        text: &str,
+    ) -> Option<(crate::api::semantic::ApiRequest, String)> {
+        let name_prefix = format!("auto:{}", &text.chars().take(40).collect::<String>());
+        let procedures = self.recall_procedural(agent_id, Some(&name_prefix));
+
+        for entry in procedures {
+            if !entry.tags.iter().any(|t| t == "verified") {
+                continue;
+            }
+            if let crate::memory::MemoryContent::Procedure(ref proc) = entry.content {
+                if let Some(step) = proc.steps.first() {
+                    if let Ok(action) = serde_json::from_str::<crate::api::semantic::ApiRequest>(&step.action) {
+                        return Some((action, proc.description.clone()));
+                    }
+                }
+            }
+        }
+        None
     }
 }
