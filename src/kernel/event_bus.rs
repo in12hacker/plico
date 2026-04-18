@@ -42,11 +42,67 @@ pub enum KernelEvent {
     },
 }
 
+impl KernelEvent {
+    pub fn event_type_name(&self) -> &'static str {
+        match self {
+            KernelEvent::AgentStateChanged { .. } => "AgentStateChanged",
+            KernelEvent::ObjectStored { .. } => "ObjectStored",
+            KernelEvent::MemoryStored { .. } => "MemoryStored",
+            KernelEvent::IntentSubmitted { .. } => "IntentSubmitted",
+            KernelEvent::IntentCompleted { .. } => "IntentCompleted",
+            KernelEvent::EventCreated { .. } => "EventCreated",
+        }
+    }
+
+    pub fn agent_id(&self) -> Option<&str> {
+        match self {
+            KernelEvent::AgentStateChanged { agent_id, .. } => Some(agent_id),
+            KernelEvent::ObjectStored { agent_id, .. } => Some(agent_id),
+            KernelEvent::MemoryStored { agent_id, .. } => Some(agent_id),
+            KernelEvent::IntentSubmitted { agent_id, .. } => agent_id.as_deref(),
+            KernelEvent::IntentCompleted { .. } => None,
+            KernelEvent::EventCreated { agent_id, .. } => Some(agent_id),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct EventFilter {
+    pub event_types: Option<Vec<String>>,
+    pub agent_ids: Option<Vec<String>>,
+}
+
+impl EventFilter {
+    pub fn matches(&self, event: &KernelEvent) -> bool {
+        if let Some(ref types) = self.event_types {
+            if !types.iter().any(|t| t == event.event_type_name()) {
+                return false;
+            }
+        }
+        if let Some(ref agents) = self.agent_ids {
+            match event.agent_id() {
+                Some(aid) => {
+                    if !agents.iter().any(|a| a == aid) {
+                        return false;
+                    }
+                }
+                None => return false,
+            }
+        }
+        true
+    }
+}
+
 const DEFAULT_CAPACITY: usize = 256;
+
+struct Subscription {
+    receiver: Mutex<broadcast::Receiver<KernelEvent>>,
+    filter: Option<EventFilter>,
+}
 
 pub struct EventBus {
     sender: broadcast::Sender<KernelEvent>,
-    subscriptions: RwLock<HashMap<String, Mutex<broadcast::Receiver<KernelEvent>>>>,
+    subscriptions: RwLock<HashMap<String, Subscription>>,
     next_sub_id: AtomicU64,
 }
 
@@ -65,23 +121,34 @@ impl EventBus {
     }
 
     pub fn subscribe(&self) -> String {
+        self.subscribe_filtered(None)
+    }
+
+    pub fn subscribe_filtered(&self, filter: Option<EventFilter>) -> String {
         let id = format!("sub-{}", self.next_sub_id.fetch_add(1, Ordering::Relaxed));
         let rx = self.sender.subscribe();
         self.subscriptions
             .write()
             .unwrap()
-            .insert(id.clone(), Mutex::new(rx));
+            .insert(id.clone(), Subscription {
+                receiver: Mutex::new(rx),
+                filter,
+            });
         id
     }
 
     pub fn poll(&self, subscription_id: &str) -> Option<Vec<KernelEvent>> {
         let subs = self.subscriptions.read().unwrap();
-        let rx_mutex = subs.get(subscription_id)?;
-        let mut rx = rx_mutex.lock().unwrap();
+        let sub = subs.get(subscription_id)?;
+        let mut rx = sub.receiver.lock().unwrap();
         let mut events = Vec::new();
         loop {
             match rx.try_recv() {
-                Ok(event) => events.push(event),
+                Ok(event) => {
+                    if sub.filter.as_ref().map_or(true, |f| f.matches(&event)) {
+                        events.push(event);
+                    }
+                }
                 Err(broadcast::error::TryRecvError::Empty) => break,
                 Err(broadcast::error::TryRecvError::Lagged(n)) => {
                     tracing::warn!(
@@ -242,5 +309,200 @@ mod tests {
         };
         let cloned = event.clone();
         assert_eq!(event, cloned);
+    }
+
+    #[test]
+    fn test_filter_by_event_type() {
+        let bus = EventBus::new();
+        let filter = EventFilter {
+            event_types: Some(vec!["ObjectStored".into()]),
+            agent_ids: None,
+        };
+        let sub = bus.subscribe_filtered(Some(filter));
+
+        bus.emit(KernelEvent::AgentStateChanged {
+            agent_id: "a1".into(),
+            old_state: "Created".into(),
+            new_state: "Waiting".into(),
+        });
+        bus.emit(KernelEvent::ObjectStored {
+            cid: "c1".into(),
+            agent_id: "a1".into(),
+            tags: vec!["t1".into()],
+        });
+        bus.emit(KernelEvent::MemoryStored {
+            agent_id: "a1".into(),
+            tier: "working".into(),
+        });
+
+        let events = bus.poll(&sub).unwrap();
+        assert_eq!(events.len(), 1);
+        assert!(matches!(&events[0], KernelEvent::ObjectStored { cid, .. } if cid == "c1"));
+    }
+
+    #[test]
+    fn test_filter_by_agent_id() {
+        let bus = EventBus::new();
+        let filter = EventFilter {
+            event_types: None,
+            agent_ids: Some(vec!["agent-b".into()]),
+        };
+        let sub = bus.subscribe_filtered(Some(filter));
+
+        bus.emit(KernelEvent::ObjectStored {
+            cid: "c1".into(),
+            agent_id: "agent-a".into(),
+            tags: vec![],
+        });
+        bus.emit(KernelEvent::ObjectStored {
+            cid: "c2".into(),
+            agent_id: "agent-b".into(),
+            tags: vec![],
+        });
+        bus.emit(KernelEvent::MemoryStored {
+            agent_id: "agent-a".into(),
+            tier: "long_term".into(),
+        });
+
+        let events = bus.poll(&sub).unwrap();
+        assert_eq!(events.len(), 1);
+        assert!(matches!(&events[0], KernelEvent::ObjectStored { cid, .. } if cid == "c2"));
+    }
+
+    #[test]
+    fn test_filter_combined_and_semantics() {
+        let bus = EventBus::new();
+        let filter = EventFilter {
+            event_types: Some(vec!["ObjectStored".into()]),
+            agent_ids: Some(vec!["agent-x".into()]),
+        };
+        let sub = bus.subscribe_filtered(Some(filter));
+
+        // Matches type but not agent
+        bus.emit(KernelEvent::ObjectStored {
+            cid: "c1".into(),
+            agent_id: "agent-y".into(),
+            tags: vec![],
+        });
+        // Matches agent but not type
+        bus.emit(KernelEvent::MemoryStored {
+            agent_id: "agent-x".into(),
+            tier: "working".into(),
+        });
+        // Matches both
+        bus.emit(KernelEvent::ObjectStored {
+            cid: "c2".into(),
+            agent_id: "agent-x".into(),
+            tags: vec![],
+        });
+
+        let events = bus.poll(&sub).unwrap();
+        assert_eq!(events.len(), 1);
+        assert!(matches!(&events[0], KernelEvent::ObjectStored { cid, .. } if cid == "c2"));
+    }
+
+    #[test]
+    fn test_filter_none_receives_all() {
+        let bus = EventBus::new();
+        let sub = bus.subscribe_filtered(None);
+
+        bus.emit(KernelEvent::AgentStateChanged {
+            agent_id: "a1".into(),
+            old_state: "Created".into(),
+            new_state: "Running".into(),
+        });
+        bus.emit(KernelEvent::ObjectStored {
+            cid: "c1".into(),
+            agent_id: "a1".into(),
+            tags: vec![],
+        });
+
+        let events = bus.poll(&sub).unwrap();
+        assert_eq!(events.len(), 2);
+    }
+
+    #[test]
+    fn test_filter_multiple_event_types() {
+        let bus = EventBus::new();
+        let filter = EventFilter {
+            event_types: Some(vec!["ObjectStored".into(), "MemoryStored".into()]),
+            agent_ids: None,
+        };
+        let sub = bus.subscribe_filtered(Some(filter));
+
+        bus.emit(KernelEvent::AgentStateChanged {
+            agent_id: "a1".into(),
+            old_state: "Created".into(),
+            new_state: "Running".into(),
+        });
+        bus.emit(KernelEvent::ObjectStored {
+            cid: "c1".into(),
+            agent_id: "a1".into(),
+            tags: vec![],
+        });
+        bus.emit(KernelEvent::MemoryStored {
+            agent_id: "a1".into(),
+            tier: "working".into(),
+        });
+        bus.emit(KernelEvent::IntentCompleted {
+            intent_id: "i1".into(),
+            success: true,
+        });
+
+        let events = bus.poll(&sub).unwrap();
+        assert_eq!(events.len(), 2);
+        assert!(matches!(&events[0], KernelEvent::ObjectStored { .. }));
+        assert!(matches!(&events[1], KernelEvent::MemoryStored { .. }));
+    }
+
+    #[test]
+    fn test_filter_excludes_events_without_agent_id() {
+        let bus = EventBus::new();
+        let filter = EventFilter {
+            event_types: None,
+            agent_ids: Some(vec!["a1".into()]),
+        };
+        let sub = bus.subscribe_filtered(Some(filter));
+
+        // IntentCompleted has no agent_id field → filtered out
+        bus.emit(KernelEvent::IntentCompleted {
+            intent_id: "i1".into(),
+            success: true,
+        });
+        bus.emit(KernelEvent::ObjectStored {
+            cid: "c1".into(),
+            agent_id: "a1".into(),
+            tags: vec![],
+        });
+
+        let events = bus.poll(&sub).unwrap();
+        assert_eq!(events.len(), 1);
+        assert!(matches!(&events[0], KernelEvent::ObjectStored { .. }));
+    }
+
+    #[test]
+    fn test_event_type_name() {
+        assert_eq!(KernelEvent::AgentStateChanged {
+            agent_id: "a".into(), old_state: "x".into(), new_state: "y".into(),
+        }.event_type_name(), "AgentStateChanged");
+        assert_eq!(KernelEvent::ObjectStored {
+            cid: "c".into(), agent_id: "a".into(), tags: vec![],
+        }.event_type_name(), "ObjectStored");
+        assert_eq!(KernelEvent::IntentCompleted {
+            intent_id: "i".into(), success: true,
+        }.event_type_name(), "IntentCompleted");
+    }
+
+    #[test]
+    fn test_event_agent_id_extraction() {
+        assert_eq!(KernelEvent::AgentStateChanged {
+            agent_id: "a1".into(), old_state: "x".into(), new_state: "y".into(),
+        }.agent_id(), Some("a1"));
+        assert_eq!(KernelEvent::IntentSubmitted {
+            intent_id: "i".into(), agent_id: None, priority: "Low".into(),
+        }.agent_id(), None);
+        assert_eq!(KernelEvent::IntentCompleted {
+            intent_id: "i".into(), success: true,
+        }.agent_id(), None);
     }
 }

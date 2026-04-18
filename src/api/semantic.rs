@@ -506,7 +506,13 @@ pub enum ApiRequest {
     // ── Event Bus (v5.0) ───────────────────────────────────────────
 
     #[serde(rename = "event_subscribe")]
-    EventSubscribe { agent_id: String },
+    EventSubscribe {
+        agent_id: String,
+        #[serde(default)]
+        event_types: Option<Vec<String>>,
+        #[serde(default)]
+        agent_ids: Option<Vec<String>>,
+    },
 
     #[serde(rename = "event_poll")]
     EventPoll { subscription_id: String },

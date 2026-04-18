@@ -2494,7 +2494,7 @@ fn test_event_bus_via_api() {
     let (kernel, _dir) = make_kernel();
     let agent = kernel.register_agent("api-user".into());
 
-    let resp = kernel.handle_api_request(ApiRequest::EventSubscribe { agent_id: agent.clone() });
+    let resp = kernel.handle_api_request(ApiRequest::EventSubscribe { agent_id: agent.clone(), event_types: None, agent_ids: None });
     assert!(resp.ok);
     let sub_id = resp.subscription_id.unwrap();
 
@@ -2528,4 +2528,75 @@ fn test_event_bus_intent_submitted_notification() {
         matches!(e, plico::kernel::event_bus::KernelEvent::IntentSubmitted { .. })
     });
     assert!(has_intent, "should receive IntentSubmitted event");
+}
+
+#[test]
+fn test_event_bus_filtered_subscribe_by_type() {
+    let (kernel, _dir) = make_kernel();
+    let agent = kernel.register_agent("filter-test".into());
+
+    let filter = plico::kernel::event_bus::EventFilter {
+        event_types: Some(vec!["ObjectStored".into()]),
+        agent_ids: None,
+    };
+    let sub_id = kernel.event_subscribe_filtered(Some(filter));
+
+    let _ = kernel.remember_working_scoped(&agent, "filter-noise".into(), vec![], plico::memory::MemoryScope::Private);
+    kernel.semantic_create(b"filtered data".to_vec(), vec!["ft".into()], &agent, None).unwrap();
+
+    let events = kernel.event_poll(&sub_id).unwrap();
+    assert_eq!(events.len(), 1, "should only receive ObjectStored, not MemoryStored");
+    assert!(matches!(&events[0], plico::kernel::event_bus::KernelEvent::ObjectStored { .. }));
+}
+
+#[test]
+fn test_event_bus_filtered_subscribe_by_agent() {
+    let (kernel, _dir) = make_kernel();
+    let agent_a = kernel.register_agent("producer-a".into());
+    let agent_b = kernel.register_agent("producer-b".into());
+
+    let filter = plico::kernel::event_bus::EventFilter {
+        event_types: None,
+        agent_ids: Some(vec![agent_b.clone()]),
+    };
+    let sub_id = kernel.event_subscribe_filtered(Some(filter));
+
+    kernel.semantic_create(b"from A".to_vec(), vec![], &agent_a, None).unwrap();
+    kernel.semantic_create(b"from B".to_vec(), vec![], &agent_b, None).unwrap();
+
+    let events = kernel.event_poll(&sub_id).unwrap();
+    assert_eq!(events.len(), 1, "should only see events from agent_b");
+    match &events[0] {
+        plico::kernel::event_bus::KernelEvent::ObjectStored { agent_id, .. } => {
+            assert_eq!(agent_id, &agent_b);
+        }
+        other => panic!("unexpected event: {:?}", other),
+    }
+}
+
+#[test]
+fn test_event_bus_filtered_subscribe_via_api() {
+    use plico::api::semantic::ApiRequest;
+
+    let (kernel, _dir) = make_kernel();
+    let agent = kernel.register_agent("api-filter".into());
+
+    let resp = kernel.handle_api_request(ApiRequest::EventSubscribe {
+        agent_id: agent.clone(),
+        event_types: Some(vec!["MemoryStored".into()]),
+        agent_ids: None,
+    });
+    assert!(resp.ok);
+    let sub_id = resp.subscription_id.unwrap();
+
+    kernel.semantic_create(b"noise".to_vec(), vec![], &agent, None).unwrap();
+    let _ = kernel.remember_working_scoped(&agent, "signal".into(), vec![], plico::memory::MemoryScope::Private);
+
+    let resp = kernel.handle_api_request(ApiRequest::EventPoll { subscription_id: sub_id.clone() });
+    assert!(resp.ok);
+    let events = resp.kernel_events.unwrap();
+    assert_eq!(events.len(), 1);
+    assert!(matches!(&events[0], plico::kernel::event_bus::KernelEvent::MemoryStored { .. }));
+
+    kernel.handle_api_request(ApiRequest::EventUnsubscribe { subscription_id: sub_id });
 }

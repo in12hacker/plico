@@ -165,6 +165,10 @@ impl AIKernel {
         self.event_bus.subscribe()
     }
 
+    pub fn event_subscribe_filtered(&self, filter: Option<event_bus::EventFilter>) -> String {
+        self.event_bus.subscribe_filtered(filter)
+    }
+
     pub fn event_poll(&self, subscription_id: &str) -> Option<Vec<event_bus::KernelEvent>> {
         self.event_bus.poll(subscription_id)
     }
@@ -806,8 +810,13 @@ impl AIKernel {
 
             // ── Event Bus (v5.0) ───────────────────────────────────────
 
-            ApiRequest::EventSubscribe { agent_id: _ } => {
-                let sub_id = self.event_subscribe();
+            ApiRequest::EventSubscribe { agent_id: _, event_types, agent_ids } => {
+                let filter = if event_types.is_some() || agent_ids.is_some() {
+                    Some(event_bus::EventFilter { event_types, agent_ids })
+                } else {
+                    None
+                };
+                let sub_id = self.event_subscribe_filtered(filter);
                 let mut r = ApiResponse::ok();
                 r.subscription_id = Some(sub_id);
                 r

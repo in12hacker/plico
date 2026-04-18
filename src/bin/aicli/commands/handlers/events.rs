@@ -33,7 +33,16 @@ pub fn cmd_events(kernel: &AIKernel, args: &[String]) -> ApiResponse {
             }
         }
         Some("subscribe") => {
-            let sub_id = kernel.event_subscribe();
+            let event_types = extract_arg(args, "--types")
+                .map(|s| s.split(',').map(|t| t.trim().to_string()).collect::<Vec<_>>());
+            let agent_ids = extract_arg(args, "--agents")
+                .map(|s| s.split(',').map(|a| a.trim().to_string()).collect::<Vec<_>>());
+            let filter = if event_types.is_some() || agent_ids.is_some() {
+                Some(plico::kernel::event_bus::EventFilter { event_types, agent_ids })
+            } else {
+                None
+            };
+            let sub_id = kernel.event_subscribe_filtered(filter);
             let mut r = ApiResponse::ok();
             r.subscription_id = Some(sub_id);
             r
