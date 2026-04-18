@@ -2615,3 +2615,62 @@ fn test_system_status_via_api() {
     assert!(status.agent_count >= 1);
     assert!(status.timestamp_ms > 0);
 }
+
+#[test]
+fn test_context_assemble_within_budget() {
+    let (kernel, _dir) = make_kernel();
+    let agent = kernel.register_agent("ctx-test".into());
+
+    let cid1 = kernel.semantic_create(b"First document about Rust.".to_vec(), vec!["rust".into()], &agent, None).unwrap();
+    let cid2 = kernel.semantic_create(b"Second document about Python.".to_vec(), vec!["python".into()], &agent, None).unwrap();
+
+    let candidates = vec![
+        plico::fs::context_budget::ContextCandidate { cid: cid1, relevance: 0.9 },
+        plico::fs::context_budget::ContextCandidate { cid: cid2, relevance: 0.7 },
+    ];
+
+    let allocation = kernel.context_assemble(&candidates, 10000, &agent).unwrap();
+    assert_eq!(allocation.candidates_included, 2);
+    assert!(allocation.total_tokens <= allocation.budget);
+    assert_eq!(allocation.candidates_considered, 2);
+}
+
+#[test]
+fn test_context_assemble_via_api() {
+    use plico::api::semantic::{ApiRequest, ContextAssembleCandidate};
+
+    let (kernel, _dir) = make_kernel();
+    let agent = kernel.register_agent("ctx-api".into());
+
+    let cid = kernel.semantic_create(b"API test document.".to_vec(), vec![], &agent, None).unwrap();
+
+    let resp = kernel.handle_api_request(ApiRequest::ContextAssemble {
+        agent_id: agent.clone(),
+        cids: vec![ContextAssembleCandidate { cid, relevance: 1.0 }],
+        budget_tokens: 5000,
+    });
+    assert!(resp.ok);
+    let assembly = resp.context_assembly.unwrap();
+    assert_eq!(assembly.candidates_included, 1);
+    assert!(assembly.total_tokens <= 5000);
+}
+
+#[test]
+fn test_context_assemble_tight_budget_downgrades() {
+    let (kernel, _dir) = make_kernel();
+    let agent = kernel.register_agent("ctx-tight".into());
+
+    let big_content = "word ".repeat(2000);
+    let cid = kernel.semantic_create(big_content.as_bytes().to_vec(), vec![], &agent, None).unwrap();
+
+    let candidates = vec![
+        plico::fs::context_budget::ContextCandidate { cid, relevance: 1.0 },
+    ];
+
+    // Budget too small for L2, should downgrade
+    let allocation = kernel.context_assemble(&candidates, 50, &agent).unwrap();
+    if allocation.candidates_included == 1 {
+        assert_eq!(allocation.items[0].layer, plico::fs::ContextLayer::L0);
+    }
+    assert!(allocation.total_tokens <= 50);
+}

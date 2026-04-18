@@ -524,6 +524,21 @@ pub enum ApiRequest {
 
     #[serde(rename = "system_status")]
     SystemStatus,
+
+    // ── Context Budget (v6.0) ────────────────────────────────────
+
+    #[serde(rename = "context_assemble")]
+    ContextAssemble {
+        agent_id: String,
+        cids: Vec<ContextAssembleCandidate>,
+        budget_tokens: usize,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContextAssembleCandidate {
+    pub cid: String,
+    pub relevance: f32,
 }
 
 /// A JSON API response.
@@ -586,6 +601,8 @@ pub struct ApiResponse {
     pub kernel_events: Option<Vec<crate::kernel::event_bus::KernelEvent>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub system_status: Option<SystemStatus>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_assembly: Option<crate::fs::context_budget::BudgetAllocation>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -676,6 +693,7 @@ impl ApiResponse {
             error: None, total_count: None, has_more: None,
             subscription_id: None, kernel_events: None,
             system_status: None,
+            context_assembly: None,
         }
     }
 
@@ -727,6 +745,7 @@ impl ApiResponse {
             total_count: None, has_more: None,
             subscription_id: None, kernel_events: None,
             system_status: None,
+            context_assembly: None,
         }
     }
 }

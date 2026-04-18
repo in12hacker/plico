@@ -844,6 +844,23 @@ impl AIKernel {
                 r.system_status = Some(status);
                 r
             }
+            ApiRequest::ContextAssemble { agent_id, cids, budget_tokens } => {
+                let candidates: Vec<crate::fs::context_budget::ContextCandidate> = cids
+                    .into_iter()
+                    .map(|c| crate::fs::context_budget::ContextCandidate {
+                        cid: c.cid,
+                        relevance: c.relevance,
+                    })
+                    .collect();
+                match self.context_assemble(&candidates, budget_tokens, &agent_id) {
+                    Ok(allocation) => {
+                        let mut r = ApiResponse::ok();
+                        r.context_assembly = Some(allocation);
+                        r
+                    }
+                    Err(e) => ApiResponse::error(e.to_string()),
+                }
+            }
         }
     }
 }

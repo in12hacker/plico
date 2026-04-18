@@ -27,6 +27,7 @@
 
 pub mod semantic_fs;
 pub mod context_loader;
+pub mod context_budget;
 pub mod embedding;
 pub mod search;
 pub mod summarizer;

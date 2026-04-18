@@ -175,6 +175,25 @@ impl crate::kernel::AIKernel {
         self.fs.ctx_loader().load(cid, layer)
     }
 
+    /// Assemble context from multiple CIDs within a token budget.
+    ///
+    /// The Context Budget Engine greedily assigns L0/L1/L2 layers to each CID
+    /// based on relevance and remaining budget. Like virtual memory paging for AI.
+    pub fn context_assemble(
+        &self,
+        candidates: &[crate::fs::context_budget::ContextCandidate],
+        budget_tokens: usize,
+        agent_id: &str,
+    ) -> std::io::Result<crate::fs::context_budget::BudgetAllocation> {
+        let ctx = PermissionContext::new(agent_id.to_string());
+        self.permissions.check(&ctx, PermissionAction::Read)?;
+        Ok(crate::fs::context_budget::assemble(
+            self.fs.ctx_loader(),
+            candidates,
+            budget_tokens,
+        ))
+    }
+
     /// Get the version history of a CID by following Supersedes edges backwards.
     ///
     /// Returns a chain from newest to oldest: [current, previous, ...]

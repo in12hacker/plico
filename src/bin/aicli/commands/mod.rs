@@ -279,6 +279,14 @@ pub fn print_result(response: &ApiResponse) {
         println!("  KG nodes:    {}", status.kg_node_count);
         println!("  KG edges:    {}", status.kg_edge_count);
     }
+    if let Some(assembly) = &response.context_assembly {
+        println!("Context Assembly ({}/{} tokens, {}/{} items):",
+            assembly.total_tokens, assembly.budget,
+            assembly.candidates_included, assembly.candidates_considered);
+        for item in &assembly.items {
+            println!("  [{}] {} (~{} tokens)", item.layer.name(), &item.cid[..16.min(item.cid.len())], item.tokens_estimate);
+        }
+    }
     if !response.ok {
         if let Some(e) = &response.error {
             eprintln!("Error: {}", e);
