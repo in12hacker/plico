@@ -19,7 +19,7 @@ pub mod persist;
 pub mod relevance;
 pub mod context_snapshot;
 
-pub use layered::{LayeredMemory, MemoryTier, MemoryEntry, MemoryContent, MemoryError};
+pub use layered::{LayeredMemory, MemoryTier, MemoryEntry, MemoryContent, MemoryError, MemoryScope};
 pub use persist::{MemoryPersister, CASPersister, MemoryLoader, PersistError, PersistenceIndex, PersistedTier};
 
 use serde::{Deserialize, Serialize};

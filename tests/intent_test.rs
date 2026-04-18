@@ -110,6 +110,7 @@ fn test_procedural_memory_roundtrip() {
         tags: vec!["search".to_string()],
         embedding: None,
         ttl_ms: None,
+        scope: plico::memory::MemoryScope::Private,
     };
 
     memory.store(entry);

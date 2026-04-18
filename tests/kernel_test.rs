@@ -1822,6 +1822,7 @@ fn test_recall_procedural_api_returns_full_structure() {
         ],
         learned_from: Some("manual".to_string()),
         tags: vec!["deploy".to_string()],
+        scope: None,
     };
     let resp = kernel.handle_api_request(store_req);
     assert!(resp.ok, "store should succeed: {:?}", resp.error);
@@ -1847,4 +1848,157 @@ fn test_recall_procedural_api_returns_full_structure() {
     assert_eq!(steps[0]["expected_outcome"], "All tests pass");
     assert_eq!(steps[1]["step_number"], 2);
     assert_eq!(steps[1]["action"], "cargo build --release");
+}
+
+// ─── MemoryScope E2E Tests ──────────────────────────────────────────
+
+#[test]
+fn test_memory_scope_private_isolation() {
+    let (kernel, _dir) = make_kernel();
+    let agent_a = kernel.register_agent("agent-a".to_string());
+    let agent_b = kernel.register_agent("agent-b".to_string());
+
+    use plico::api::permission::PermissionAction;
+    kernel.permission_grant(&agent_a, PermissionAction::Write, None, None);
+    kernel.permission_grant(&agent_a, PermissionAction::Read, None, None);
+    kernel.permission_grant(&agent_b, PermissionAction::Read, None, None);
+
+    kernel.remember_working(&agent_a, "secret data".to_string(), vec!["private".into()]).unwrap();
+
+    let a_memories = kernel.recall(&agent_a);
+    assert_eq!(a_memories.len(), 1, "agent-a sees own private memory");
+
+    let b_memories = kernel.recall(&agent_b);
+    assert_eq!(b_memories.len(), 0, "agent-b does NOT see agent-a's private memory");
+}
+
+#[test]
+fn test_memory_scope_shared_cross_agent() {
+    let (kernel, _dir) = make_kernel();
+    let agent_a = kernel.register_agent("agent-a".to_string());
+    let agent_b = kernel.register_agent("agent-b".to_string());
+
+    use plico::api::permission::PermissionAction;
+    use plico::memory::MemoryScope;
+    kernel.permission_grant(&agent_a, PermissionAction::Write, None, None);
+    kernel.permission_grant(&agent_a, PermissionAction::Read, None, None);
+    kernel.permission_grant(&agent_b, PermissionAction::Read, None, None);
+
+    kernel.remember_long_term_scoped(
+        &agent_a,
+        "shared company knowledge".to_string(),
+        vec!["company".into()],
+        80,
+        MemoryScope::Shared,
+    ).unwrap();
+
+    kernel.remember_long_term(
+        &agent_a,
+        "agent-a private note".to_string(),
+        vec!["private".into()],
+        50,
+    ).unwrap();
+
+    let visible_a = kernel.recall_visible(&agent_a, &[]);
+    let visible_b = kernel.recall_visible(&agent_b, &[]);
+
+    assert_eq!(visible_a.len(), 2, "agent-a sees both private + shared");
+    assert_eq!(visible_b.len(), 1, "agent-b only sees shared");
+    assert!(visible_b[0].content.display().contains("shared company knowledge"));
+}
+
+#[test]
+fn test_memory_scope_group_visibility() {
+    let (kernel, _dir) = make_kernel();
+    let agent_a = kernel.register_agent("agent-a".to_string());
+    let agent_b = kernel.register_agent("agent-b".to_string());
+    let agent_c = kernel.register_agent("agent-c".to_string());
+
+    use plico::api::permission::PermissionAction;
+    use plico::memory::MemoryScope;
+    kernel.permission_grant(&agent_a, PermissionAction::Write, None, None);
+    kernel.permission_grant(&agent_a, PermissionAction::Read, None, None);
+    kernel.permission_grant(&agent_b, PermissionAction::Read, None, None);
+    kernel.permission_grant(&agent_c, PermissionAction::Read, None, None);
+
+    kernel.remember_working_scoped(
+        &agent_a,
+        "engineering standup notes".to_string(),
+        vec!["standup".into()],
+        MemoryScope::Group("engineering".into()),
+    ).unwrap();
+
+    let visible_a = kernel.recall_visible(&agent_a, &[]);
+    let visible_b = kernel.recall_visible(&agent_b, &["engineering".into()]);
+    let visible_c = kernel.recall_visible(&agent_c, &["marketing".into()]);
+
+    assert_eq!(visible_a.len(), 1, "owner sees own group memory");
+    assert_eq!(visible_b.len(), 1, "engineering member sees group memory");
+    assert_eq!(visible_c.len(), 0, "marketing member does NOT see engineering group memory");
+}
+
+#[test]
+fn test_shared_procedural_memory_cross_agent() {
+    let (kernel, _dir) = make_kernel();
+    let agent_a = kernel.register_agent("agent-a".to_string());
+    let agent_b = kernel.register_agent("agent-b".to_string());
+
+    use plico::api::permission::PermissionAction;
+    use plico::memory::MemoryScope;
+    kernel.permission_grant(&agent_a, PermissionAction::Write, None, None);
+    kernel.permission_grant(&agent_a, PermissionAction::Read, None, None);
+    kernel.permission_grant(&agent_b, PermissionAction::Read, None, None);
+
+    kernel.remember_procedural_scoped(
+        &agent_a,
+        "deploy-workflow".to_string(),
+        "Standard deploy procedure".to_string(),
+        vec![plico::memory::layered::ProcedureStep {
+            step_number: 1,
+            description: "Run tests".to_string(),
+            action: "cargo test".to_string(),
+            expected_outcome: "pass".to_string(),
+        }],
+        "learned from experience".to_string(),
+        vec!["deploy".into(), "verified".into()],
+        MemoryScope::Shared,
+    ).unwrap();
+
+    let a_procs = kernel.recall_procedural(&agent_a, None);
+    assert_eq!(a_procs.len(), 1, "agent-a sees own procedural");
+
+    let shared = kernel.recall_shared_procedural(None);
+    assert_eq!(shared.len(), 1, "shared procedural is discoverable");
+    assert!(shared[0].content.display().contains("deploy"));
+
+    let b_visible = kernel.recall_visible(&agent_b, &[]);
+    assert_eq!(b_visible.len(), 1, "agent-b sees shared procedural via recall_visible");
+}
+
+#[test]
+fn test_memory_scope_api_round_trip() {
+    let (kernel, _dir) = make_kernel();
+    let agent_id = kernel.register_agent("scope-api-test".to_string());
+
+    use plico::api::permission::PermissionAction;
+    kernel.permission_grant(&agent_id, PermissionAction::Write, None, None);
+    kernel.permission_grant(&agent_id, PermissionAction::Read, None, None);
+
+    let resp = kernel.handle_api_request(plico::api::semantic::ApiRequest::RememberLongTerm {
+        agent_id: agent_id.clone(),
+        content: "shared via API".to_string(),
+        tags: vec!["api-test".into()],
+        importance: 70,
+        scope: Some("shared".to_string()),
+    });
+    assert!(resp.ok, "shared remember should succeed");
+
+    let resp = kernel.handle_api_request(plico::api::semantic::ApiRequest::RecallVisible {
+        agent_id: "some-other-agent".to_string(),
+        groups: vec![],
+    });
+    assert!(resp.ok);
+    let memories = resp.memory.unwrap();
+    assert_eq!(memories.len(), 1, "other agent sees shared memory via API");
+    assert!(memories[0].contains("shared via API"));
 }

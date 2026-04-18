@@ -210,4 +210,43 @@ fn test_file_qa_agent_full_lifecycle() {
     kernel.ack_message(&agent_b, &msgs[0].id);
     let unread = kernel.read_messages(&agent_b, true);
     assert!(unread.is_empty(), "after ack, no unread messages");
+
+    // ── Phase 14: Memory scope — shared knowledge between agents ──
+    use plico::memory::MemoryScope;
+    kernel.permission_grant(&agent_b, PermissionAction::Read, None, None);
+    kernel.permission_grant(&agent_b, PermissionAction::Write, None, None);
+
+    kernel.remember_long_term_scoped(
+        &agent_id,
+        "Company fiscal year starts January".to_string(),
+        vec!["policy".into(), "finance".into()],
+        90,
+        MemoryScope::Shared,
+    ).unwrap();
+
+    kernel.remember_working_scoped(
+        &agent_id,
+        "Q1 analysis in progress".to_string(),
+        vec!["status".into()],
+        MemoryScope::Group("finance-team".into()),
+    ).unwrap();
+
+    let visible_analyst = kernel.recall_visible(&agent_b, &["finance-team".into()]);
+    assert!(visible_analyst.len() >= 2, "analyst-bot sees shared + group(finance-team) memories");
+    let has_shared = visible_analyst.iter().any(|e| e.content.display().contains("fiscal year"));
+    let has_group = visible_analyst.iter().any(|e| e.content.display().contains("Q1 analysis"));
+    assert!(has_shared, "analyst should see shared fiscal year memory");
+    assert!(has_group, "analyst in finance-team should see group memory");
+
+    let outsider = kernel.register_agent("outsider-bot".to_string());
+    kernel.permission_grant(&outsider, PermissionAction::Read, None, None);
+    let visible_outsider = kernel.recall_visible(&outsider, &[]);
+    assert!(
+        visible_outsider.iter().all(|e| !e.content.display().contains("Q1 analysis")),
+        "outsider should NOT see finance-team group memory"
+    );
+    assert!(
+        visible_outsider.iter().any(|e| e.content.display().contains("fiscal year")),
+        "outsider SHOULD see shared memory"
+    );
 }

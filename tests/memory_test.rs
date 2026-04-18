@@ -22,6 +22,7 @@ fn make_entry(agent: &str, tier: MemoryTier, importance: u8, text: &str) -> Memo
         tags: Vec::new(),
         embedding: None,
         ttl_ms: None,
+        scope: plico::memory::MemoryScope::Private,
     }
 }
 

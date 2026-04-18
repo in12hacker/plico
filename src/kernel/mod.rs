@@ -20,7 +20,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, atomic::{AtomicU64, Ordering}};
 
 use crate::cas::CASStorage;
-use crate::memory::{LayeredMemory, CASPersister, MemoryPersister};
+use crate::memory::{LayeredMemory, MemoryScope, CASPersister, MemoryPersister};
 use crate::scheduler::{AgentScheduler, IntentPriority};
 use crate::scheduler::messaging::MessageBus;
 use crate::fs::{SemanticFS, InMemoryBackend, HnswBackend, EmbeddingProvider, SemanticSearch, LlmSummarizer, Summarizer, KnowledgeGraph, PetgraphBackend, StubEmbeddingProvider};
@@ -261,8 +261,9 @@ impl AIKernel {
                 r.memory = Some(memories);
                 r
             }
-            ApiRequest::RememberLongTerm { agent_id, content, tags, importance } => {
-                match self.remember_long_term(&agent_id, content, tags, importance) {
+            ApiRequest::RememberLongTerm { agent_id, content, tags, importance, scope } => {
+                let scope = parse_scope(scope);
+                match self.remember_long_term_scoped(&agent_id, content, tags, importance, scope) {
                     Ok(()) => ApiResponse::ok(),
                     Err(e) => ApiResponse::error(e),
                 }
@@ -558,7 +559,7 @@ impl AIKernel {
                     None => ApiResponse::error(format!("tool not found: {}", tool)),
                 }
             }
-            ApiRequest::RememberProcedural { agent_id, name, description, steps, learned_from, tags } => {
+            ApiRequest::RememberProcedural { agent_id, name, description, steps, learned_from, tags, scope } => {
                 let proc_steps: Vec<crate::memory::layered::ProcedureStep> = steps.into_iter().enumerate().map(|(i, s)| {
                     crate::memory::layered::ProcedureStep {
                         step_number: (i + 1) as u32,
@@ -567,7 +568,8 @@ impl AIKernel {
                         expected_outcome: s.expected_outcome.unwrap_or_default(),
                     }
                 }).collect();
-                match self.remember_procedural(&agent_id, name, description, proc_steps, learned_from.unwrap_or_default(), tags) {
+                let scope = parse_scope(scope);
+                match self.remember_procedural_scoped(&agent_id, name, description, proc_steps, learned_from.unwrap_or_default(), tags, scope) {
                     Ok(entry_id) => {
                         let mut r = ApiResponse::ok();
                         r.data = Some(serde_json::json!({"entry_id": entry_id}).to_string());
@@ -596,6 +598,7 @@ impl AIKernel {
                                 "learned_from": p.learned_from,
                                 "tags": e.tags,
                                 "importance": e.importance,
+                                "scope": format!("{:?}", e.scope),
                             })
                         }
                         _ => serde_json::json!({
@@ -604,10 +607,20 @@ impl AIKernel {
                             "content": e.content.display(),
                             "tags": e.tags,
                             "importance": e.importance,
+                            "scope": format!("{:?}", e.scope),
                         })
                     }
                 }).collect();
                 r.data = Some(serde_json::to_string(&data).unwrap_or_default());
+                r
+            }
+            ApiRequest::RecallVisible { agent_id, groups } => {
+                let entries = self.recall_visible(&agent_id, &groups);
+                let memories: Vec<String> = entries.into_iter()
+                    .map(|m| format!("[{}:{:?}] {}", m.tier.name(), m.scope, m.content.display()))
+                    .collect();
+                let mut r = ApiResponse::ok();
+                r.memory = Some(memories);
                 r
             }
             // Agent resource management
@@ -753,5 +766,14 @@ impl AIKernel {
                 }
             }
         }
+    }
+}
+
+fn parse_scope(scope: Option<String>) -> MemoryScope {
+    match scope.as_deref() {
+        None | Some("private") => MemoryScope::Private,
+        Some("shared") => MemoryScope::Shared,
+        Some(g) if g.starts_with("group:") => MemoryScope::Group(g[6..].to_string()),
+        Some(_) => MemoryScope::Private,
     }
 }

@@ -156,6 +156,8 @@ pub enum ApiRequest {
         tags: Vec<String>,
         #[serde(default = "default_importance")]
         importance: u8,
+        #[serde(default)]
+        scope: Option<String>,
     },
 
     #[serde(rename = "recall_semantic")]
@@ -349,6 +351,8 @@ pub enum ApiRequest {
         learned_from: Option<String>,
         #[serde(default)]
         tags: Vec<String>,
+        #[serde(default)]
+        scope: Option<String>,
     },
 
     #[serde(rename = "recall_procedural")]
@@ -356,6 +360,13 @@ pub enum ApiRequest {
         agent_id: String,
         #[serde(default)]
         name: Option<String>,
+    },
+
+    #[serde(rename = "recall_visible")]
+    RecallVisible {
+        agent_id: String,
+        #[serde(default)]
+        groups: Vec<String>,
     },
 
     // ── Agent Resource Management ─────────────────────────────────────

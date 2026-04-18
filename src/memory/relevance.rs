@@ -227,6 +227,7 @@ mod tests {
             tags: Vec::new(),
             embedding: None,
             ttl_ms: None,
+            scope: crate::memory::layered::MemoryScope::Private,
         }
     }
 

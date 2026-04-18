@@ -8,7 +8,25 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
+#[cfg(test)]
 pub mod tests;
+
+/// Memory visibility scope — controls cross-agent access.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MemoryScope {
+    /// Only the owning agent can read/write.
+    Private,
+    /// Any agent can read; only the owner can write.
+    Shared,
+    /// Agents in the named group can read; only the owner can write.
+    Group(String),
+}
+
+impl Default for MemoryScope {
+    fn default() -> Self {
+        MemoryScope::Private
+    }
+}
 
 /// Memory tier classification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -87,6 +105,10 @@ pub struct MemoryEntry {
     /// `created_at + ttl_ms` and is evicted during the next cleanup pass.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ttl_ms: Option<u64>,
+
+    /// Visibility scope — Private (default), Shared, or Group.
+    #[serde(default)]
+    pub scope: MemoryScope,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -168,6 +190,7 @@ impl MemoryEntry {
             tags: Vec::new(),
             embedding: None,
             ttl_ms: None,
+            scope: MemoryScope::Private,
         }
     }
 
@@ -190,6 +213,7 @@ impl MemoryEntry {
             tags,
             embedding: None,
             ttl_ms: None,
+            scope: MemoryScope::Private,
         }
     }
 
@@ -513,7 +537,67 @@ impl LayeredMemory {
             .collect()
     }
 
-    // ─── Cognitive Memory Behavior ──────────────────────────────────
+    // ─── Cross-Agent Memory (Scope-Based) ──────────────────────────
+
+    /// Retrieve all Shared-scope entries across all agents from a given tier.
+    pub fn get_shared(&self, tier: MemoryTier) -> Vec<MemoryEntry> {
+        let map = match tier {
+            MemoryTier::Ephemeral => self.ephemeral.read().unwrap(),
+            MemoryTier::Working => self.working.read().unwrap(),
+            MemoryTier::LongTerm => self.long_term.read().unwrap(),
+            MemoryTier::Procedural => self.procedural.read().unwrap(),
+        };
+        map.values()
+            .flat_map(|entries| entries.iter())
+            .filter(|e| e.scope == MemoryScope::Shared)
+            .cloned()
+            .collect()
+    }
+
+    /// Retrieve Group-scope entries visible to agents in the named group.
+    pub fn get_by_group(&self, group: &str, tier: MemoryTier) -> Vec<MemoryEntry> {
+        let map = match tier {
+            MemoryTier::Ephemeral => self.ephemeral.read().unwrap(),
+            MemoryTier::Working => self.working.read().unwrap(),
+            MemoryTier::LongTerm => self.long_term.read().unwrap(),
+            MemoryTier::Procedural => self.procedural.read().unwrap(),
+        };
+        map.values()
+            .flat_map(|entries| entries.iter())
+            .filter(|e| matches!(&e.scope, MemoryScope::Group(g) if g == group))
+            .cloned()
+            .collect()
+    }
+
+    /// Retrieve all memories visible to an agent: own private + all shared + matching groups.
+    pub fn recall_visible(
+        &self,
+        agent_id: &str,
+        groups: &[String],
+    ) -> Vec<MemoryEntry> {
+        let mut visible = Vec::new();
+        for tier in [MemoryTier::Ephemeral, MemoryTier::Working, MemoryTier::LongTerm, MemoryTier::Procedural] {
+            let map = match tier {
+                MemoryTier::Ephemeral => self.ephemeral.read().unwrap(),
+                MemoryTier::Working => self.working.read().unwrap(),
+                MemoryTier::LongTerm => self.long_term.read().unwrap(),
+                MemoryTier::Procedural => self.procedural.read().unwrap(),
+            };
+            for entries in map.values() {
+                for entry in entries {
+                    let is_visible = match &entry.scope {
+                        MemoryScope::Private => entry.agent_id == agent_id,
+                        MemoryScope::Shared => true,
+                        MemoryScope::Group(g) => entry.agent_id == agent_id || groups.contains(g),
+                    };
+                    if is_visible {
+                        visible.push(entry.clone());
+                    }
+                }
+            }
+        }
+        visible
+    }
 
     /// Retrieve all memories with access tracking.
     ///

@@ -1,7 +1,7 @@
 //! Memory tier operations — ephemeral, working, long-term.
 
 use crate::api::permission::{PermissionAction, PermissionContext};
-use crate::memory::{MemoryEntry, MemoryContent, MemoryTier};
+use crate::memory::{MemoryEntry, MemoryContent, MemoryTier, MemoryScope};
 use crate::scheduler::AgentId;
 
 impl crate::kernel::AIKernel {
@@ -24,6 +24,17 @@ impl crate::kernel::AIKernel {
 
     /// Store a memory entry in the agent's working (L1) tier.
     pub fn remember_working(&self, agent_id: &str, content: String, tags: Vec<String>) -> Result<(), String> {
+        self.remember_working_scoped(agent_id, content, tags, MemoryScope::Private)
+    }
+
+    /// Store a working memory entry with explicit scope.
+    pub fn remember_working_scoped(
+        &self,
+        agent_id: &str,
+        content: String,
+        tags: Vec<String>,
+        scope: MemoryScope,
+    ) -> Result<(), String> {
         let ctx = PermissionContext::new(agent_id.to_string());
         self.permissions.check(&ctx, PermissionAction::Write).map_err(|e| e.to_string())?;
         let entry = MemoryEntry {
@@ -38,6 +49,7 @@ impl crate::kernel::AIKernel {
             tags,
             embedding: None,
             ttl_ms: None,
+            scope,
         };
         let quota = self.agent_memory_quota(agent_id);
         self.memory.store_checked(entry, quota)
@@ -53,6 +65,15 @@ impl crate::kernel::AIKernel {
             return Vec::new();
         }
         self.memory.get_all(agent_id)
+    }
+
+    /// Retrieve all entries visible to an agent (own + shared + group).
+    pub fn recall_visible(&self, agent_id: &str, groups: &[String]) -> Vec<MemoryEntry> {
+        let ctx = PermissionContext::new(agent_id.to_string());
+        if self.permissions.check(&ctx, PermissionAction::Read).is_err() {
+            return Vec::new();
+        }
+        self.memory.recall_visible(agent_id, groups)
     }
 
     /// Clear ephemeral (L0) memory only.
@@ -76,9 +97,6 @@ impl crate::kernel::AIKernel {
     }
 
     /// Move a memory entry to a different tier.
-    ///
-    /// Allows an agent to explicitly promote or demote a memory entry
-    /// to a different tier. Returns `true` if the entry was found and moved.
     pub fn memory_move(&self, agent_id: &str, entry_id: &str, target_tier: MemoryTier) -> bool {
         let moved = self.memory.move_entry(agent_id, entry_id, target_tier);
         if moved { self.persist_memories(); }
@@ -86,8 +104,6 @@ impl crate::kernel::AIKernel {
     }
 
     /// Delete a specific memory entry by ID across all tiers.
-    ///
-    /// Returns `true` if the entry was found and deleted.
     pub fn memory_delete(&self, agent_id: &str, entry_id: &str) -> bool {
         let deleted = self.memory.delete_entry(agent_id, entry_id);
         if deleted { self.persist_memories(); }
@@ -101,6 +117,18 @@ impl crate::kernel::AIKernel {
         content: String,
         tags: Vec<String>,
         importance: u8,
+    ) -> Result<(), String> {
+        self.remember_long_term_scoped(agent_id, content, tags, importance, MemoryScope::Private)
+    }
+
+    /// Store a long-term memory entry with explicit scope.
+    pub fn remember_long_term_scoped(
+        &self,
+        agent_id: &str,
+        content: String,
+        tags: Vec<String>,
+        importance: u8,
+        scope: MemoryScope,
     ) -> Result<(), String> {
         let ctx = PermissionContext::new(agent_id.to_string());
         self.permissions.check(&ctx, PermissionAction::Write).map_err(|e| e.to_string())?;
@@ -117,6 +145,7 @@ impl crate::kernel::AIKernel {
             tags,
             embedding,
             ttl_ms: None,
+            scope,
         };
         let quota = self.agent_memory_quota(agent_id);
         self.memory.store_checked(entry, quota)
@@ -166,6 +195,20 @@ impl crate::kernel::AIKernel {
         learned_from: String,
         tags: Vec<String>,
     ) -> Result<String, String> {
+        self.remember_procedural_scoped(agent_id, name, description, steps, learned_from, tags, MemoryScope::Private)
+    }
+
+    /// Store a procedural memory entry with explicit scope.
+    pub fn remember_procedural_scoped(
+        &self,
+        agent_id: &str,
+        name: String,
+        description: String,
+        steps: Vec<crate::memory::layered::ProcedureStep>,
+        learned_from: String,
+        tags: Vec<String>,
+        scope: MemoryScope,
+    ) -> Result<String, String> {
         let ctx = PermissionContext::new(agent_id.to_string());
         self.permissions.check(&ctx, PermissionAction::Write).map_err(|e| e.to_string())?;
         let procedure = crate::memory::layered::Procedure {
@@ -187,6 +230,7 @@ impl crate::kernel::AIKernel {
             tags,
             embedding: None,
             ttl_ms: None,
+            scope,
         };
         let quota = self.agent_memory_quota(agent_id);
         self.memory.store_checked(entry, quota).map_err(|e| e.to_string())?;
@@ -201,6 +245,17 @@ impl crate::kernel::AIKernel {
             return Vec::new();
         }
         let entries = self.memory.get_tier(agent_id, MemoryTier::Procedural);
+        match name_filter {
+            None => entries,
+            Some(name) => entries.into_iter().filter(|e| {
+                matches!(&e.content, MemoryContent::Procedure(p) if p.name == name)
+            }).collect(),
+        }
+    }
+
+    /// Recall shared procedural memories from all agents.
+    pub fn recall_shared_procedural(&self, name_filter: Option<&str>) -> Vec<MemoryEntry> {
+        let entries = self.memory.get_shared(MemoryTier::Procedural);
         match name_filter {
             None => entries,
             Some(name) => entries.into_iter().filter(|e| {

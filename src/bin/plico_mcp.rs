@@ -533,6 +533,7 @@ mod tests {
             ],
             learned_from: Some("v2.0 development experience".to_string()),
             tags: vec!["plico:type:skill".to_string()],
+            scope: None,
         };
         let resp = kernel.handle_api_request(req);
         assert!(resp.ok, "store_test_skill failed: {:?}", resp.error);
