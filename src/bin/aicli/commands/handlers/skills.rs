@@ -9,8 +9,10 @@ pub fn cmd_skills(kernel: &AIKernel, args: &[String]) -> ApiResponse {
     match args.get(1).map(|s| s.as_str()) {
         Some("list") => cmd_skills_list(kernel, args),
         Some("describe") => cmd_skills_describe(kernel, args),
+        Some("register") => cmd_skills_register(kernel, args),
+        Some("discover") => cmd_skills_discover(kernel, args),
         _ => {
-            eprintln!("Usage: skills <list|describe> [--agent ID] [NAME]");
+            eprintln!("Usage: skills <list|describe|register|discover> [--agent ID] [NAME]");
             ApiResponse::error("unknown skills subcommand")
         }
     }
@@ -74,4 +76,40 @@ fn cmd_skills_describe(kernel: &AIKernel, args: &[String]) -> ApiResponse {
     }
     r.data = Some(output);
     r
+}
+
+fn cmd_skills_register(kernel: &AIKernel, args: &[String]) -> ApiResponse {
+    let agent_id = match extract_arg(args, "--agent") {
+        Some(a) => a,
+        None => return ApiResponse::error("--agent required for skills register"),
+    };
+    let name = match extract_arg(args, "--name") {
+        Some(n) => n,
+        None => return ApiResponse::error("--name required for skills register"),
+    };
+    let description = extract_arg(args, "--description").unwrap_or_default();
+    let tags: Vec<String> = extract_arg(args, "--tags")
+        .map(|s| s.split(',').map(String::from).collect())
+        .unwrap_or_default();
+
+    let req = plico::api::semantic::ApiRequest::RegisterSkill {
+        agent_id,
+        name,
+        description,
+        tags,
+    };
+    kernel.handle_api_request(req)
+}
+
+fn cmd_skills_discover(kernel: &AIKernel, args: &[String]) -> ApiResponse {
+    let query = extract_arg(args, "--query");
+    let agent_id_filter = extract_arg(args, "--agent");
+    let tag_filter = extract_arg(args, "--tag");
+
+    let req = plico::api::semantic::ApiRequest::DiscoverSkills {
+        query,
+        agent_id_filter,
+        tag_filter,
+    };
+    kernel.handle_api_request(req)
 }

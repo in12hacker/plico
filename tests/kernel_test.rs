@@ -3189,3 +3189,149 @@ fn test_event_log_explicit_persist() {
     let events: Vec<plico::kernel::event_bus::SequencedEvent> = serde_json::from_str(&json).unwrap();
     assert!(!events.is_empty());
 }
+
+// ─── v8.0: Agent Skill Registry ─────────────────────────────────────
+
+#[test]
+fn test_register_skill_creates_kg_node() {
+    let (kernel, _dir) = make_kernel();
+    let aid = kernel.register_agent("skill-agent".into());
+
+    let resp = kernel.handle_api_request(plico::api::semantic::ApiRequest::RegisterSkill {
+        agent_id: aid.clone(),
+        name: "summarize".into(),
+        description: "Summarize documents into concise bullet points".into(),
+        tags: vec!["nlp".into(), "summarization".into()],
+    });
+    assert!(resp.ok);
+    assert!(resp.node_id.is_some());
+}
+
+#[test]
+fn test_register_skill_rejects_unknown_agent() {
+    let (kernel, _dir) = make_kernel();
+
+    let resp = kernel.handle_api_request(plico::api::semantic::ApiRequest::RegisterSkill {
+        agent_id: "nonexistent".into(),
+        name: "skill".into(),
+        description: "test".into(),
+        tags: vec![],
+    });
+    assert!(!resp.ok);
+}
+
+#[test]
+fn test_discover_skills_returns_registered() {
+    let (kernel, _dir) = make_kernel();
+    let aid = kernel.register_agent("discoverable".into());
+
+    kernel.handle_api_request(plico::api::semantic::ApiRequest::RegisterSkill {
+        agent_id: aid.clone(),
+        name: "translate".into(),
+        description: "Translate text between languages".into(),
+        tags: vec!["nlp".into(), "translation".into()],
+    });
+    kernel.handle_api_request(plico::api::semantic::ApiRequest::RegisterSkill {
+        agent_id: aid.clone(),
+        name: "summarize".into(),
+        description: "Summarize documents".into(),
+        tags: vec!["nlp".into()],
+    });
+
+    let resp = kernel.handle_api_request(plico::api::semantic::ApiRequest::DiscoverSkills {
+        query: None,
+        agent_id_filter: Some(aid.clone()),
+        tag_filter: None,
+    });
+    assert!(resp.ok);
+    let skills = resp.discovered_skills.unwrap();
+    assert_eq!(skills.len(), 2);
+    assert!(skills.iter().any(|s| s.name == "translate"));
+    assert!(skills.iter().any(|s| s.name == "summarize"));
+}
+
+#[test]
+fn test_discover_skills_by_query() {
+    let (kernel, _dir) = make_kernel();
+    let aid = kernel.register_agent("query-agent".into());
+
+    kernel.handle_api_request(plico::api::semantic::ApiRequest::RegisterSkill {
+        agent_id: aid.clone(),
+        name: "code-review".into(),
+        description: "Review code for bugs and style issues".into(),
+        tags: vec!["engineering".into()],
+    });
+    kernel.handle_api_request(plico::api::semantic::ApiRequest::RegisterSkill {
+        agent_id: aid.clone(),
+        name: "summarize".into(),
+        description: "Summarize documents".into(),
+        tags: vec!["nlp".into()],
+    });
+
+    let resp = kernel.handle_api_request(plico::api::semantic::ApiRequest::DiscoverSkills {
+        query: Some("code".into()),
+        agent_id_filter: None,
+        tag_filter: None,
+    });
+    let skills = resp.discovered_skills.unwrap();
+    assert_eq!(skills.len(), 1);
+    assert_eq!(skills[0].name, "code-review");
+}
+
+#[test]
+fn test_discover_skills_by_tag() {
+    let (kernel, _dir) = make_kernel();
+    let aid = kernel.register_agent("tag-agent".into());
+
+    kernel.handle_api_request(plico::api::semantic::ApiRequest::RegisterSkill {
+        agent_id: aid.clone(),
+        name: "translate".into(),
+        description: "Translate text".into(),
+        tags: vec!["nlp".into()],
+    });
+    kernel.handle_api_request(plico::api::semantic::ApiRequest::RegisterSkill {
+        agent_id: aid.clone(),
+        name: "deploy".into(),
+        description: "Deploy services".into(),
+        tags: vec!["devops".into()],
+    });
+
+    let resp = kernel.handle_api_request(plico::api::semantic::ApiRequest::DiscoverSkills {
+        query: None,
+        agent_id_filter: None,
+        tag_filter: Some("devops".into()),
+    });
+    let skills = resp.discovered_skills.unwrap();
+    assert_eq!(skills.len(), 1);
+    assert_eq!(skills[0].name, "deploy");
+}
+
+#[test]
+fn test_discover_skills_cross_agent() {
+    let (kernel, _dir) = make_kernel();
+    let a1 = kernel.register_agent("agent-alpha".into());
+    let a2 = kernel.register_agent("agent-beta".into());
+
+    kernel.handle_api_request(plico::api::semantic::ApiRequest::RegisterSkill {
+        agent_id: a1.clone(),
+        name: "alpha-skill".into(),
+        description: "Alpha capability".into(),
+        tags: vec![],
+    });
+    kernel.handle_api_request(plico::api::semantic::ApiRequest::RegisterSkill {
+        agent_id: a2.clone(),
+        name: "beta-skill".into(),
+        description: "Beta capability".into(),
+        tags: vec![],
+    });
+
+    let resp = kernel.handle_api_request(plico::api::semantic::ApiRequest::DiscoverSkills {
+        query: None,
+        agent_id_filter: None,
+        tag_filter: None,
+    });
+    let skills = resp.discovered_skills.unwrap();
+    assert!(skills.len() >= 2);
+    assert!(skills.iter().any(|s| s.name == "alpha-skill"));
+    assert!(skills.iter().any(|s| s.name == "beta-skill"));
+}

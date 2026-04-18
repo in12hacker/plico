@@ -2,7 +2,7 @@
 
 use crate::scheduler::{Agent, AgentHandle, AgentId, AgentState, AgentResources, Intent, IntentPriority, TransitionError};
 use crate::kernel::event_bus::KernelEvent;
-use crate::api::semantic::{AgentUsageDto, AgentCardDto};
+use crate::api::semantic::{AgentUsageDto, AgentCardDto, SkillDto};
 
 fn transition_err(e: TransitionError) -> std::io::Error {
     std::io::Error::new(std::io::ErrorKind::InvalidInput, e.to_string())
@@ -370,6 +370,102 @@ impl crate::kernel::AIKernel {
                     tool_call_count: usage.tool_call_count,
                     last_active_ms: usage.last_active_ms,
                 })
+            })
+            .collect()
+    }
+
+    pub fn register_skill(
+        &self,
+        agent_id: &str,
+        name: &str,
+        description: &str,
+        tags: Vec<String>,
+    ) -> Result<String, String> {
+        use crate::fs::{KGNodeType, KGEdgeType};
+
+        let aid = AgentId(agent_id.to_string());
+        self.scheduler.get(&aid)
+            .ok_or_else(|| format!("Agent not found: {}", agent_id))?;
+
+        let mut props = serde_json::json!({
+            "kind": "skill",
+            "description": description,
+        });
+        if !tags.is_empty() {
+            props["tags"] = serde_json::json!(tags);
+        }
+
+        let node_id = self.kg_add_node(name, KGNodeType::Fact, props, agent_id)
+            .map_err(|e| e.to_string())?;
+
+        let agent_nodes = self.kg_list_nodes(Some(KGNodeType::Entity), agent_id)
+            .unwrap_or_default();
+        let agent_entity = agent_nodes.iter().find(|n| n.label == agent_id);
+        if let Some(entity) = agent_entity {
+            let _ = self.kg_add_edge(&entity.id, &node_id, KGEdgeType::HasFact, None, agent_id);
+        }
+
+        Ok(node_id)
+    }
+
+    pub fn discover_skills(
+        &self,
+        query: Option<&str>,
+        agent_id_filter: Option<&str>,
+        tag_filter: Option<&str>,
+    ) -> Vec<SkillDto> {
+        use crate::fs::KGNodeType;
+
+        let agent_ids: Vec<String> = if let Some(aid) = agent_id_filter {
+            vec![aid.to_string()]
+        } else {
+            self.scheduler.list_agents().into_iter().map(|h| h.id).collect()
+        };
+        let all_facts: Vec<_> = agent_ids.iter()
+            .flat_map(|aid| self.kg_list_nodes(Some(KGNodeType::Fact), aid).unwrap_or_default())
+            .collect();
+        all_facts.into_iter()
+            .filter(|n| {
+                n.properties.get("kind").and_then(|v| v.as_str()) == Some("skill")
+            })
+            .filter(|n| {
+                if let Some(q) = query {
+                    let q_lower = q.to_lowercase();
+                    n.label.to_lowercase().contains(&q_lower)
+                        || n.properties.get("description")
+                            .and_then(|v| v.as_str())
+                            .map(|d| d.to_lowercase().contains(&q_lower))
+                            .unwrap_or(false)
+                } else {
+                    true
+                }
+            })
+            .filter(|n| {
+                if let Some(tf) = tag_filter {
+                    n.properties.get("tags")
+                        .and_then(|v| v.as_array())
+                        .map(|arr| arr.iter().any(|t| t.as_str() == Some(tf)))
+                        .unwrap_or(false)
+                } else {
+                    true
+                }
+            })
+            .map(|n| {
+                let tags = n.properties.get("tags")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| arr.iter().filter_map(|t| t.as_str().map(String::from)).collect())
+                    .unwrap_or_default();
+                let description = n.properties.get("description")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                SkillDto {
+                    node_id: n.id.clone(),
+                    name: n.label.clone(),
+                    description,
+                    agent_id: n.agent_id.clone(),
+                    tags,
+                }
             })
             .collect()
     }

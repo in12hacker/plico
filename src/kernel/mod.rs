@@ -935,6 +935,28 @@ impl AIKernel {
                 r.event_history = Some(limited);
                 r
             }
+
+            ApiRequest::RegisterSkill { agent_id, name, description, tags } => {
+                match self.register_skill(&agent_id, &name, &description, tags) {
+                    Ok(node_id) => {
+                        let mut r = ApiResponse::ok();
+                        r.node_id = Some(node_id);
+                        r
+                    }
+                    Err(e) => ApiResponse::error(e),
+                }
+            }
+
+            ApiRequest::DiscoverSkills { query, agent_id_filter, tag_filter } => {
+                let skills = self.discover_skills(
+                    query.as_deref(),
+                    agent_id_filter.as_deref(),
+                    tag_filter.as_deref(),
+                );
+                let mut r = ApiResponse::ok();
+                r.discovered_skills = Some(skills);
+                r
+            }
         };
         self.maybe_persist_event_log();
         response

@@ -332,6 +332,20 @@ pub fn print_result(response: &ApiResponse) {
             }
         }
     }
+    if let Some(skills) = &response.discovered_skills {
+        if skills.is_empty() {
+            println!("No skills discovered.");
+        } else {
+            println!("Discovered skills ({} total):", skills.len());
+            for s in skills {
+                println!("  {} [{}] — {} (agent: {})",
+                    s.name, s.node_id, s.description, s.agent_id);
+                if !s.tags.is_empty() {
+                    println!("    tags: {:?}", s.tags);
+                }
+            }
+        }
+    }
     if !response.ok {
         if let Some(e) = &response.error {
             eprintln!("Error: {}", e);

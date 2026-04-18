@@ -575,6 +575,27 @@ pub enum ApiRequest {
         #[serde(default)]
         limit: Option<usize>,
     },
+
+    // ── Agent Skill Registry (v8.0) ───────────────────────────
+
+    #[serde(rename = "register_skill")]
+    RegisterSkill {
+        agent_id: String,
+        name: String,
+        description: String,
+        #[serde(default)]
+        tags: Vec<String>,
+    },
+
+    #[serde(rename = "discover_skills")]
+    DiscoverSkills {
+        #[serde(default)]
+        query: Option<String>,
+        #[serde(default)]
+        agent_id_filter: Option<String>,
+        #[serde(default)]
+        tag_filter: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -653,6 +674,8 @@ pub struct ApiResponse {
     pub delegation: Option<DelegationResultDto>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub event_history: Option<Vec<crate::kernel::event_bus::SequencedEvent>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub discovered_skills: Option<Vec<SkillDto>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -712,6 +735,15 @@ pub struct LoadedContextDto {
     pub layer: String,
     pub content: String,
     pub tokens_estimate: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillDto {
+    pub node_id: String,
+    pub name: String,
+    pub description: String,
+    pub agent_id: String,
+    pub tags: Vec<String>,
 }
 
 // ── Project Self-Management (Dogfooding Plico) ─────────────────────────────────
@@ -782,6 +814,7 @@ impl ApiResponse {
             agent_cards: None,
             delegation: None,
             event_history: None,
+            discovered_skills: None,
         }
     }
 
@@ -838,6 +871,7 @@ impl ApiResponse {
             agent_cards: None,
             delegation: None,
             event_history: None,
+            discovered_skills: None,
         }
     }
 }
