@@ -8,7 +8,16 @@ use super::extract_arg;
 pub fn cmd_remember(kernel: &AIKernel, args: &[String]) -> ApiResponse {
     let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
     let content = extract_arg(args, "--content").unwrap_or_default();
-    match kernel.remember(&agent_id, content) {
+    let tier_str = extract_arg(args, "--tier").unwrap_or_default();
+    let tags: Vec<String> = extract_arg(args, "--tags")
+        .map(|t| t.split(',').map(|s| s.trim().to_string()).collect())
+        .unwrap_or_default();
+    let result = match parse_memory_tier(&tier_str) {
+        MemoryTier::Working => kernel.remember_working(&agent_id, content, tags),
+        MemoryTier::LongTerm => kernel.remember_long_term(&agent_id, content, tags, 50),
+        _ => kernel.remember(&agent_id, content),
+    };
+    match result {
         Ok(()) => ApiResponse::ok(),
         Err(e) => ApiResponse::error(e),
     }
