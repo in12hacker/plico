@@ -7,4 +7,4 @@ pub mod semantic;
 pub mod permission;
 
 pub use permission::{PermissionGuard, PermissionContext, PermissionAction, PermissionGrant};
-pub use semantic::DashboardStatus;
+pub use semantic::SystemStatus;

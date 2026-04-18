@@ -519,6 +519,11 @@ pub enum ApiRequest {
 
     #[serde(rename = "event_unsubscribe")]
     EventUnsubscribe { subscription_id: String },
+
+    // ── System Status (v5.3 — replaces HTTP dashboard) ───────────
+
+    #[serde(rename = "system_status")]
+    SystemStatus,
 }
 
 /// A JSON API response.
@@ -579,6 +584,8 @@ pub struct ApiResponse {
     pub subscription_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub kernel_events: Option<Vec<crate::kernel::event_bus::KernelEvent>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub system_status: Option<SystemStatus>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -645,13 +652,10 @@ pub struct LoadedContextDto {
 
 // ── Dashboard / Project Status Types ───────────────────────────────────────────
 
-/// Full dashboard status — served over HTTP on a separate port.
-/// Runtime kernel metrics — reports live system state, not development plans.
-///
-/// Follows the health-check + metrics separation pattern:
-/// all fields are computed from actual kernel state at query time.
+/// Runtime kernel metrics — live system state at query time.
+/// Queried via `ApiRequest::SystemStatus`, not via HTTP dashboard.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DashboardStatus {
+pub struct SystemStatus {
     pub timestamp_ms: i64,
     pub cas_object_count: usize,
     pub agent_count: usize,
@@ -671,6 +675,7 @@ impl ApiResponse {
             resolved_intents: None, messages: None, context_data: None,
             error: None, total_count: None, has_more: None,
             subscription_id: None, kernel_events: None,
+            system_status: None,
         }
     }
 
@@ -721,6 +726,7 @@ impl ApiResponse {
             error: Some(msg.into()),
             total_count: None, has_more: None,
             subscription_id: None, kernel_events: None,
+            system_status: None,
         }
     }
 }

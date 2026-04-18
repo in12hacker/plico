@@ -838,6 +838,12 @@ impl AIKernel {
                     ApiResponse::error(format!("Unknown subscription: {}", subscription_id))
                 }
             }
+            ApiRequest::SystemStatus => {
+                let status = self.system_status();
+                let mut r = ApiResponse::ok();
+                r.system_status = Some(status);
+                r
+            }
         }
     }
 }

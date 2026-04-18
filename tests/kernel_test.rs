@@ -2600,3 +2600,18 @@ fn test_event_bus_filtered_subscribe_via_api() {
 
     kernel.handle_api_request(ApiRequest::EventUnsubscribe { subscription_id: sub_id });
 }
+
+#[test]
+fn test_system_status_via_api() {
+    use plico::api::semantic::ApiRequest;
+
+    let (kernel, _dir) = make_kernel();
+    let agent = kernel.register_agent("status-tester".into());
+    kernel.semantic_create(b"status-data".to_vec(), vec!["test".into()], &agent, None).unwrap();
+
+    let resp = kernel.handle_api_request(ApiRequest::SystemStatus);
+    assert!(resp.ok);
+    let status = resp.system_status.unwrap();
+    assert!(status.agent_count >= 1);
+    assert!(status.timestamp_ms > 0);
+}

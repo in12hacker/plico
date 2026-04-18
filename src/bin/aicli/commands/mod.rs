@@ -59,6 +59,12 @@ pub fn execute_local(kernel: &AIKernel, args: &[String]) -> ApiResponse {
         Some("history") => cmd_history(kernel, args),
         Some("rollback") => cmd_rollback(kernel, args),
         Some("skills") => cmd_skills(kernel, args),
+        Some("system-status") => {
+            let status = kernel.system_status();
+            let mut r = ApiResponse::ok();
+            r.system_status = Some(status);
+            r
+        }
         _ => ApiResponse::error("Unknown command. Run: aicli --help"),
     }
 }
@@ -264,6 +270,14 @@ pub fn print_result(response: &ApiResponse) {
                 println!("  {:?}", e);
             }
         }
+    }
+    if let Some(status) = &response.system_status {
+        println!("System Status (at {}ms):", status.timestamp_ms);
+        println!("  CAS objects: {}", status.cas_object_count);
+        println!("  Agents:      {}", status.agent_count);
+        println!("  Tags:        {}", status.tag_count);
+        println!("  KG nodes:    {}", status.kg_node_count);
+        println!("  KG edges:    {}", status.kg_edge_count);
     }
     if !response.ok {
         if let Some(e) = &response.error {
