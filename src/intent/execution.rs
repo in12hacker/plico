@@ -231,8 +231,21 @@ fn recall_learned_workflow(
     text: &str,
 ) -> Option<(Vec<ApiRequest>, String)> {
     let name_prefix = format!("auto:{}", &text.chars().take(40).collect::<String>());
-    let procedures = kernel.recall_procedural(agent_id, Some(&name_prefix));
 
+    // First: check agent's own procedural memory
+    let procedures = kernel.recall_procedural(agent_id, Some(&name_prefix));
+    if let Some(result) = extract_verified_workflow(&procedures) {
+        return Some(result);
+    }
+
+    // Second: check shared procedural memory from other agents
+    let shared = kernel.recall_shared_procedural(Some(&name_prefix));
+    extract_verified_workflow(&shared)
+}
+
+fn extract_verified_workflow(
+    procedures: &[crate::memory::MemoryEntry],
+) -> Option<(Vec<ApiRequest>, String)> {
     for entry in procedures {
         if !entry.tags.iter().any(|t| t == "verified") {
             continue;

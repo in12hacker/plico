@@ -2001,3 +2001,83 @@ fn test_memory_scope_api_round_trip() {
     assert_eq!(memories.len(), 1, "other agent sees shared memory via API");
     assert!(memories[0].contains("shared via API"));
 }
+
+// ─── v3.0-M4: Multi-Agent Knowledge Sharing ──────────────────────────
+
+#[test]
+fn test_cross_agent_workflow_reuse_via_shared_scope() {
+    let (kernel, _dir) = make_kernel();
+    let router = ChainRouter::new(None);
+
+    let agent_a = kernel.register_agent("teacher-agent".to_string());
+    let agent_b = kernel.register_agent("student-agent".to_string());
+
+    use plico::api::permission::PermissionAction;
+    use plico::memory::MemoryScope;
+    for agent in [&agent_a, &agent_b] {
+        kernel.permission_grant(agent, PermissionAction::Read, None, None);
+        kernel.permission_grant(agent, PermissionAction::Write, None, None);
+    }
+
+    kernel.semantic_create(
+        b"quarterly financial report for Q1 2026".to_vec(),
+        vec!["report".to_string(), "finance".to_string()],
+        &agent_a,
+        None,
+    ).unwrap();
+
+    // Agent A learns a workflow with learn=true
+    let result = execution::execute_sync(
+        &kernel, &router,
+        "search for report",
+        &agent_a,
+        0.0,
+        true,
+    ).expect("Agent A execute should succeed");
+    assert!(result.executed && result.success, "Agent A should successfully learn");
+
+    // Verify Agent A has the procedural memory (private scope by default)
+    let a_procs = kernel.recall_procedural(&agent_a, None);
+    assert!(!a_procs.is_empty(), "Agent A should have learned procedure");
+
+    // Agent B tries to reuse — should NOT find it (private scope)
+    let result_b_private = execution::execute_sync(
+        &kernel, &router,
+        "search for report",
+        &agent_b,
+        0.0,
+        false,
+    ).expect("Agent B execute should succeed");
+    let has_reuse_private = result_b_private.resolved.iter()
+        .any(|r| r.explanation.contains("[reused]"));
+    assert!(!has_reuse_private, "Agent B should NOT reuse private procedure");
+
+    // Now Agent A shares the procedure
+    let proc_entry = &a_procs[0];
+    if let plico::memory::MemoryContent::Procedure(ref proc) = proc_entry.content {
+        kernel.remember_procedural_scoped(
+            &agent_a,
+            proc.name.clone(),
+            proc.description.clone(),
+            proc.steps.clone(),
+            proc.learned_from.clone(),
+            vec!["auto-learned".to_string(), "verified".to_string()],
+            MemoryScope::Shared,
+        ).unwrap();
+    } else {
+        panic!("Expected Procedure content");
+    }
+
+    // Agent B tries again — should find shared procedure
+    let result_b_shared = execution::execute_sync(
+        &kernel, &router,
+        "search for report",
+        &agent_b,
+        0.0,
+        false,
+    ).expect("Agent B execute should succeed");
+    let has_reuse_shared = result_b_shared.resolved.iter()
+        .any(|r| r.explanation.contains("[reused]"));
+    assert!(has_reuse_shared, "Agent B SHOULD reuse shared procedure from Agent A");
+    assert!(result_b_shared.success, "Reused workflow should execute successfully");
+}
