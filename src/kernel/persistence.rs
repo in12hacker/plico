@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::fs::{OllamaBackend, EmbeddingProvider, LocalEmbeddingBackend, StubEmbeddingProvider, EmbedError, InMemoryBackend};
-use crate::llm::{LlmProvider, LlmError, OllamaProvider, StubProvider};
+use crate::llm::{LlmProvider, LlmError, OllamaProvider, StubProvider, OpenAICompatibleProvider};
 use crate::scheduler::Agent;
 use crate::scheduler::agent::Intent;
 
@@ -253,6 +253,16 @@ pub(crate) fn create_llm_provider(model_env: &str, default_model: &str) -> Resul
         "stub" => {
             tracing::info!("LLM backend: stub");
             Ok(Arc::new(StubProvider::empty()) as Arc<dyn LlmProvider>)
+        }
+        "openai" => {
+            let base_url = std::env::var("OPENAI_API_BASE")
+                .unwrap_or_else(|_| "https://api.openai.com/v1".to_string());
+            let model = std::env::var(model_env)
+                .unwrap_or_else(|_| default_model.to_string());
+            let api_key = std::env::var("OPENAI_API_KEY").ok();
+            let provider = OpenAICompatibleProvider::new(&base_url, &model, api_key)?;
+            tracing::info!("LLM backend: openai-compatible ({} via {})", model, base_url);
+            Ok(Arc::new(provider) as Arc<dyn LlmProvider>)
         }
         other => {
             tracing::warn!("Unknown LLM_BACKEND={other}, falling back to ollama");

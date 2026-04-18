@@ -9,9 +9,11 @@
 //! - `StubProvider` — returns fixed responses for testing
 
 pub mod ollama;
+pub mod openai;
 pub mod stub;
 
 pub use ollama::OllamaProvider;
+pub use openai::OpenAICompatibleProvider;
 pub use stub::StubProvider;
 
 use serde::{Deserialize, Serialize};

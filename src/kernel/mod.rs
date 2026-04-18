@@ -62,7 +62,7 @@ impl AIKernel {
                 Arc::new(StubEmbeddingProvider::new()) as Arc<dyn EmbeddingProvider>
             });
 
-        let summarizer: Option<Arc<dyn Summarizer>> = match persistence::create_llm_provider("OLLAMA_SUMMARIZER_MODEL", "llama3.2") {
+        let summarizer: Option<Arc<dyn Summarizer>> = match persistence::create_llm_provider("PLICO_SUMMARIZER_MODEL", "llama3.2") {
             Ok(provider) => {
                 tracing::info!("LLM summarizer enabled: {}", provider.model_name());
                 Some(Arc::new(LlmSummarizer::new(provider)))
@@ -119,7 +119,7 @@ impl AIKernel {
         let message_bus = Arc::new(MessageBus::new());
 
         let llm_router = {
-            match persistence::create_llm_provider("OLLAMA_INTENT_MODEL", "llama3.2") {
+            match persistence::create_llm_provider("PLICO_INTENT_MODEL", "llama3.2") {
                 Ok(provider) => {
                     tracing::info!("Intent LLM router configured: {}", provider.model_name());
                     Some(crate::intent::llm::LlmRouter::new(provider, Vec::new()))
