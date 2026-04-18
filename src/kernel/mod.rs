@@ -26,7 +26,6 @@ use crate::scheduler::messaging::MessageBus;
 use crate::fs::{SemanticFS, InMemoryBackend, HnswBackend, EmbeddingProvider, SemanticSearch, LlmSummarizer, Summarizer, KnowledgeGraph, PetgraphBackend, StubEmbeddingProvider};
 use crate::api::permission::PermissionGuard;
 use crate::tool::ToolRegistry;
-use crate::intent::{ChainRouter, IntentRouter};
 
 /// The AI Kernel — all subsystems wired together.
 pub struct AIKernel {
@@ -47,7 +46,6 @@ pub struct AIKernel {
     /// the search index snapshot is saved to disk for crash recovery.
     search_op_count: Arc<AtomicU64>,
     pub(crate) tool_registry: Arc<ToolRegistry>,
-    pub(crate) intent_router: Arc<dyn IntentRouter>,
     pub(crate) message_bus: Arc<MessageBus>,
 }
 
@@ -120,20 +118,6 @@ impl AIKernel {
         let tool_registry = Arc::new(ToolRegistry::new());
         let message_bus = Arc::new(MessageBus::new());
 
-        let llm_router = {
-            match persistence::create_llm_provider("PLICO_INTENT_MODEL", "llama3.2") {
-                Ok(provider) => {
-                    tracing::info!("Intent LLM router configured: {}", provider.model_name());
-                    Some(crate::intent::llm::LlmRouter::new(provider, Vec::new()))
-                }
-                Err(e) => {
-                    tracing::warn!("Could not create intent LLM router: {e}. Using heuristic-only routing.");
-                    None
-                }
-            }
-        };
-        let intent_router: Arc<dyn IntentRouter> = Arc::new(ChainRouter::new(llm_router));
-
         let kernel = Self {
             root: root.clone(),
             cas,
@@ -148,13 +132,10 @@ impl AIKernel {
             search_backend,
             search_op_count: Arc::new(AtomicU64::new(0)),
             tool_registry,
-            intent_router,
             message_bus,
         };
 
         kernel.register_builtin_tools();
-        let catalog = kernel.tool_registry.list();
-        kernel.intent_router.set_tool_catalog(catalog);
         kernel.restore_agents();
         kernel.restore_intents();
         kernel.restore_memories();
@@ -575,62 +556,6 @@ impl AIKernel {
                         r
                     }
                     None => ApiResponse::error(format!("tool not found: {}", tool)),
-                }
-            }
-            // Intent resolution
-            ApiRequest::IntentResolve { text, agent_id } => {
-                match self.intent_router.resolve(&text, &agent_id) {
-                    Ok(resolved) => {
-                        let mut r = ApiResponse::ok();
-                        r.resolved_intents = Some(resolved);
-                        r
-                    }
-                    Err(e) => ApiResponse::error(e.to_string()),
-                }
-            }
-            ApiRequest::IntentExecute { text, agent_id, confidence_threshold, priority, learn } => {
-                let threshold = confidence_threshold.unwrap_or(0.7);
-                let prio = priority.as_deref().unwrap_or("medium");
-                let prio = match prio {
-                    "critical" => crate::scheduler::IntentPriority::Critical,
-                    "high" => crate::scheduler::IntentPriority::High,
-                    "low" => crate::scheduler::IntentPriority::Low,
-                    _ => crate::scheduler::IntentPriority::Medium,
-                };
-                match self.intent_execute(&text, &agent_id, threshold, prio, learn.unwrap_or(false)) {
-                    Ok((intent_id, resolved)) => {
-                        let mut r = ApiResponse::ok();
-                        r.resolved_intents = Some(resolved);
-                        if let Some(id) = intent_id {
-                            r.intent_id = Some(id);
-                        }
-                        r
-                    }
-                    Err(e) => ApiResponse::error(e.to_string()),
-                }
-            }
-            ApiRequest::IntentExecuteSync { text, agent_id, confidence_threshold, learn } => {
-                let threshold = confidence_threshold.unwrap_or(0.7);
-                match self.intent_execute_sync(&text, &agent_id, threshold, learn.unwrap_or(false)) {
-                    Ok(result) => {
-                        let mut r = if result.success {
-                            ApiResponse::ok()
-                        } else if result.executed {
-                            let mut r = ApiResponse::ok();
-                            r.ok = false;
-                            r.error = Some("Action execution failed".to_string());
-                            r
-                        } else {
-                            let mut r = ApiResponse::ok();
-                            r.ok = false;
-                            r.error = Some(result.output.clone());
-                            r
-                        };
-                        r.resolved_intents = Some(result.resolved);
-                        r.data = Some(result.output);
-                        r
-                    }
-                    Err(e) => ApiResponse::error(e.to_string()),
                 }
             }
             ApiRequest::RememberProcedural { agent_id, name, description, steps, learned_from, tags } => {

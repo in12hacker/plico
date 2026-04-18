@@ -5,6 +5,8 @@
 //! and KernelExecutor integration.
 
 use plico::kernel::AIKernel;
+use plico::intent::{ChainRouter, IntentRouter};
+use plico::intent::execution;
 use std::sync::Arc;
 use tempfile::tempdir;
 
@@ -868,8 +870,9 @@ fn test_e2e_intent_resources_messaging() {
     assert!(overflow_result.error.as_ref().unwrap().contains("quota"),
         "error should mention quota: {:?}", overflow_result.error);
 
-    // 6. Use intent router to resolve NL query
-    let resolved = kernel.intent_resolve("search for agent scheduling documents", &agent_b);
+    // 6. Use intent router to resolve NL query (application-layer)
+    let router = plico::intent::ChainRouter::new(None);
+    let resolved = router.resolve("search for agent scheduling documents", &agent_b).unwrap();
     assert!(!resolved.is_empty(), "should resolve at least one intent");
     assert!(resolved[0].confidence >= 0.7, "confidence should be >= 0.7");
 
@@ -898,8 +901,9 @@ fn test_e2e_intent_resources_messaging() {
 /// v0.5: Intent router resolves temporal phrases correctly.
 #[test]
 fn test_intent_router_temporal() {
-    let (kernel, _dir) = make_kernel();
-    let resolved = kernel.intent_resolve("find reports from last week", "test-agent");
+    let (_kernel, _dir) = make_kernel();
+    let router = ChainRouter::new(None);
+    let resolved = router.resolve("find reports from last week", "test-agent").unwrap();
     assert!(!resolved.is_empty());
     if let plico::api::semantic::ApiRequest::Search { since, until, .. } = &resolved[0].action {
         assert!(since.is_some(), "should have since timestamp");
@@ -1371,6 +1375,7 @@ fn test_context_load_tool() {
 fn test_intent_execute_sync_stores_result_in_memory() {
     let (kernel, _dir) = make_kernel();
     let agent_id = kernel.register_agent("sync-exec-test".to_string());
+    let router = ChainRouter::new(None);
 
     kernel.semantic_create(
         b"test document for intent".to_vec(),
@@ -1379,7 +1384,8 @@ fn test_intent_execute_sync_stores_result_in_memory() {
         None,
     ).unwrap();
 
-    let result = kernel.intent_execute_sync(
+    let result = execution::execute_sync(
+        &kernel, &router,
         "search for test documents",
         &agent_id,
         0.0,
@@ -1407,8 +1413,10 @@ fn test_intent_execute_sync_stores_result_in_memory() {
 fn test_intent_execute_sync_below_threshold_not_executed() {
     let (kernel, _dir) = make_kernel();
     let agent_id = kernel.register_agent("threshold-test".to_string());
+    let router = ChainRouter::new(None);
 
-    let result = kernel.intent_execute_sync(
+    let result = execution::execute_sync(
+        &kernel, &router,
         "do something vague",
         &agent_id,
         0.99,
@@ -1427,6 +1435,7 @@ fn test_intent_execute_sync_below_threshold_not_executed() {
 fn test_intent_execute_sync_learn_creates_procedural_memory() {
     let (kernel, _dir) = make_kernel();
     let agent_id = kernel.register_agent("learn-test".to_string());
+    let router = ChainRouter::new(None);
 
     kernel.semantic_create(
         b"searchable content".to_vec(),
@@ -1435,7 +1444,8 @@ fn test_intent_execute_sync_learn_creates_procedural_memory() {
         None,
     ).unwrap();
 
-    let result = kernel.intent_execute_sync(
+    let result = execution::execute_sync(
+        &kernel, &router,
         "search for data",
         &agent_id,
         0.0,
@@ -1488,6 +1498,7 @@ async fn test_result_consumer_captures_dispatch_outcomes() {
 fn test_e2e_autonomous_loop_resolve_execute_learn_reuse() {
     let (kernel, _dir) = make_kernel();
     let agent_id = kernel.register_agent("e2e-loop".to_string());
+    let router = ChainRouter::new(None);
 
     kernel.semantic_create(
         b"quarterly sales report Q1 2026".to_vec(),
@@ -1497,7 +1508,8 @@ fn test_e2e_autonomous_loop_resolve_execute_learn_reuse() {
     ).unwrap();
 
     // Step 1: Execute with learn=true → stores procedural memory
-    let result = kernel.intent_execute_sync(
+    let result = execution::execute_sync(
+        &kernel, &router,
         "search for report",
         &agent_id,
         0.0,
@@ -1530,7 +1542,8 @@ fn test_e2e_autonomous_loop_resolve_execute_learn_reuse() {
         assert!(verified, "auto-learned procedure should have 'verified' tag");
 
         // Step 4: Execute same intent again → should REUSE learned action
-        let result2 = kernel.intent_execute_sync(
+        let result2 = execution::execute_sync(
+            &kernel, &router,
             "search for report",
             &agent_id,
             0.0,
@@ -1690,9 +1703,11 @@ fn test_history_and_rollback_via_api() {
 fn test_multi_step_intent_execution() {
     let (kernel, _dir) = make_kernel();
     let agent_id = kernel.register_agent("multi-step".to_string());
+    let router = ChainRouter::new(None);
 
     // "create a note and then search for notes" should resolve to 2 actions
-    let result = kernel.intent_execute_sync(
+    let result = execution::execute_sync(
+        &kernel, &router,
         "save 'hello world' with tags note then search for note",
         &agent_id,
         0.0,
@@ -1708,6 +1723,7 @@ fn test_multi_step_intent_execution() {
 fn test_multi_step_learn_creates_multi_step_procedure() {
     let (kernel, _dir) = make_kernel();
     let agent_id = kernel.register_agent("multi-learn".to_string());
+    let router = ChainRouter::new(None);
 
     // First create some data so the search part succeeds
     kernel.semantic_create(
@@ -1718,7 +1734,8 @@ fn test_multi_step_learn_creates_multi_step_procedure() {
     ).unwrap();
 
     // Execute with learn — conjunctive intent
-    let result = kernel.intent_execute_sync(
+    let result = execution::execute_sync(
+        &kernel, &router,
         "remember 'check Q1 notes' and search for meeting",
         &agent_id,
         0.0,
@@ -1745,6 +1762,7 @@ fn test_multi_step_learn_creates_multi_step_procedure() {
 fn test_multi_step_reuse_replays_all_steps() {
     let (kernel, _dir) = make_kernel();
     let agent_id = kernel.register_agent("multi-reuse".to_string());
+    let router = ChainRouter::new(None);
 
     kernel.semantic_create(
         b"project alpha status report".to_vec(),
@@ -1754,7 +1772,8 @@ fn test_multi_step_reuse_replays_all_steps() {
     ).unwrap();
 
     // First execution with learn
-    let result1 = kernel.intent_execute_sync(
+    let result1 = execution::execute_sync(
+        &kernel, &router,
         "search for report",
         &agent_id,
         0.0,
@@ -1765,7 +1784,8 @@ fn test_multi_step_reuse_replays_all_steps() {
 
     if result1.success {
         // Second execution — should reuse
-        let result2 = kernel.intent_execute_sync(
+        let result2 = execution::execute_sync(
+            &kernel, &router,
             "search for report",
             &agent_id,
             0.0,

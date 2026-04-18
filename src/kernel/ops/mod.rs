@@ -9,7 +9,6 @@ pub mod memory;
 pub mod events;
 pub mod graph;
 pub mod dispatch;
-pub mod intent;
 pub mod messaging;
 pub mod dashboard;
 pub mod tools_external;

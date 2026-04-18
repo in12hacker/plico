@@ -5,170 +5,142 @@ description: PROACTIVE skill — the agent MUST automatically store architectura
 
 # Plico Dogfooding (Self-Sustaining)
 
-**CRITICAL BEHAVIOR**: This skill is PROACTIVE. During ANY Plico development session, the agent MUST automatically capture valuable information into Plico without being asked. The agent acts as both developer AND project historian simultaneously.
+This skill captures architectural decisions, progress, and insights into Plico's own CAS + Knowledge Graph during development. Plico manages itself.
 
-## Proactive Trigger Rules
+## When to Record
 
-After EVERY significant action during development, check this list and act:
+Batch at natural pause points (feature complete, session end, milestone). Don't interrupt flow.
 
-| After doing this... | Automatically do this |
+| Event | Record as |
 |---|---|
-| Made a design choice (even implicit, e.g. "use builder pattern for ApiResponse") | → Store ADR |
-| Completed a TODO / feature / refactor | → Store progress snapshot |
-| Fixed a bug or test failure | → Store bug report + resolution |
-| Discovered something non-obvious while debugging | → Store experience |
-| Finished a multi-step task | → Store progress summary |
-| Encountered a pattern worth remembering | → Store experience |
-| Made a trade-off (e.g. "chose X over Y because...") | → Store ADR |
-| Reasoning chain produced a reusable insight | → Store experience |
+| Design choice or trade-off | ADR |
+| Feature/refactor completed | Progress |
+| Bug fixed | Bug report |
+| Non-obvious debugging insight | Experience |
 
-**Do NOT wait for the user to say "记录".** Act immediately after the development action completes.
+## CLI Setup
 
-**Batching**: If multiple events occur in rapid succession (e.g. 3 bug fixes in a row), batch them into a single progress snapshot rather than storing individually.
-
-## Environment Setup
-
-At the start of any Plico development session, ensure dogfood storage is ready:
+Every command uses this wrapper — sets env, suppresses logs, enables JSON for parsing:
 
 ```bash
-export EMBEDDING_BACKEND=stub
-export PLICO_ROOT=/tmp/plico-dogfood
+pcli() {
+  EMBEDDING_BACKEND=stub RUST_LOG=off AICLI_OUTPUT=json \
+    cargo run --quiet --bin aicli -- --root /tmp/plico-dogfood "$@" 2>/dev/null
+}
+pcli_human() {
+  EMBEDDING_BACKEND=stub RUST_LOG=off \
+    cargo run --quiet --bin aicli -- --root /tmp/plico-dogfood "$@" 2>/dev/null
+}
 AGENT="plico-dev"
 ```
 
-Check if bootstrapped — if `nodes --type entity` returns empty, run:
-```bash
-PLICO_ROOT=/tmp/plico-dogfood ./scripts/plico-bootstrap.sh
-```
+### Bootstrap (once per fresh /tmp)
 
-Retrieve module entity IDs once per session and cache them:
+Check if module entities exist, create if empty:
 ```bash
-EMBEDDING_BACKEND=stub cargo run --quiet --bin aicli -- --root $PLICO_ROOT nodes --type entity --agent plico-dev
+EXISTING=$(pcli nodes --type entity --agent $AGENT | python3 -c "import sys,json; print(len(json.load(sys.stdin).get('nodes',[])))")
+if [ "$EXISTING" = "0" ]; then
+  for mod in cas fs kernel api scheduler memory graph temporal cli daemon; do
+    pcli node --label "$mod" --type entity --props "{\"kind\":\"module\",\"path\":\"src/$mod\"}" --agent $AGENT
+  done
+fi
 ```
 
 ## Tag Convention
 
-`plico:<dimension>:<value>` — dimensions:
+`plico:<dimension>:<value>`:
 
 | Dimension | Values |
 |-----------|--------|
 | `plico:type:<T>` | adr, progress, experience, test-result, bug, code-change, doc |
 | `plico:module:<M>` | cas, fs, kernel, api, scheduler, memory, graph, temporal, cli, daemon |
-| `plico:status:<S>` | active, superseded, resolved, wip |
-| `plico:milestone:<V>` | v0.1, v0.2, v0.3, v0.4, v0.5 |
+| `plico:status:<S>` | accepted, active, superseded, resolved, wip |
+| `plico:milestone:<V>` | v0.1 .. v0.6 |
 | `plico:severity:<L>` | critical, high, medium, low (bugs only) |
 
-## Storage Commands
+## Storage Templates
 
-All commands use this base:
-```bash
-CLI="EMBEDDING_BACKEND=stub cargo run --quiet --bin aicli -- --root /tmp/plico-dogfood"
-```
-
-### ADR (Architectural Decision)
-
-Store whenever a design choice is made — even small ones like "use `Option<Arc<dyn Trait>>` for optional subsystems".
+### ADR
 
 ```bash
-$CLI put --content "---
-title: \"<title>\"
-status: accepted
-tags: [plico:type:adr, plico:module:<mod>]
-date: $(date +%Y-%m-%d)
-author: plico-dev
----
-## Context
-<why>
-## Decision
-<what>
-## Consequences
-- Positive: <benefit>
-- Negative: <cost>" \
+CID=$(pcli put --content "## <title>
+Context: <why>
+Decision: <what>
+Consequences: <tradeoffs>" \
   --tags "plico:type:adr,plico:module:<mod>,plico:status:accepted" \
-  --agent plico-dev
+  --agent $AGENT | python3 -c "import sys,json; print(json.load(sys.stdin)['cid'])")
 ```
 
-Then create Fact node + edge to module:
+Optionally link to module entity:
 ```bash
-$CLI node --label "<title>" --type fact \
-  --props "{\"content_cid\":\"<CID>\",\"kind\":\"adr\"}" --agent plico-dev
-$CLI edge --src <fact-id> --dst <module-id> --type related_to --agent plico-dev
+FACT_ID=$(pcli node --label "<title>" --type fact \
+  --props "{\"content_cid\":\"$CID\",\"kind\":\"adr\"}" --agent $AGENT \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['node_id'])")
+MOD_ID=$(pcli nodes --type entity --agent $AGENT \
+  | python3 -c "import sys,json; ns=json.load(sys.stdin)['nodes']; print(next(n['id'] for n in ns if n['label']=='<mod>'))")
+pcli edge --src $FACT_ID --dst $MOD_ID --type related_to --agent $AGENT
 ```
 
-### Progress Snapshot
-
-Store after completing a feature, a batch of TODOs, or at natural pause points.
+### Progress
 
 ```bash
-$CLI put --content "Date: $(date +%Y-%m-%d)
-Completed: <what was done>
-Files changed: <list>
-Tests: <pass/fail count>
-Next: <what comes next>" \
-  --tags "plico:type:progress,plico:milestone:<ver>" --agent plico-dev
+pcli put --content "Date: $(date +%Y-%m-%d)
+Completed: <what>
+Files: <changed files>
+Tests: <pass/fail>
+Next: <upcoming>" \
+  --tags "plico:type:progress,plico:milestone:v0.6" --agent $AGENT
 ```
 
-### Experience / Lesson Learned
-
-Store whenever debugging reveals a non-obvious cause, or when a pattern emerges that future agents should know.
+### Experience
 
 ```bash
-$CLI put --content "## What
-<what happened>
-## Why
-<root cause / insight>
-## Takeaway
-<reusable lesson>" \
-  --tags "plico:type:experience,plico:module:<mod>" --agent plico-dev
+pcli put --content "What: <what happened>
+Why: <root cause>
+Takeaway: <lesson>" \
+  --tags "plico:type:experience,plico:module:<mod>" --agent $AGENT
 ```
 
-### Bug Report
-
-Store when a test fails, compilation breaks unexpectedly, or runtime behavior is wrong.
+### Bug
 
 ```bash
-$CLI put --content "Bug: <title>
-Module: <mod>
-Severity: <level>
-Steps: <reproduction>
+pcli put --content "Bug: <title>
+Module: <mod> | Severity: <level>
+Symptom: <what broke>
+Root cause: <why>
 Fix: <what fixed it>" \
-  --tags "plico:type:bug,plico:module:<mod>,plico:severity:<level>" --agent plico-dev
+  --tags "plico:type:bug,plico:module:<mod>,plico:severity:<level>" --agent $AGENT
 ```
 
-### Test Result
-
-Store after running `cargo test`, especially when results change.
+## Query
 
 ```bash
-$CLI put --content "$(cargo test 2>&1 | tail -5)" \
-  --tags "plico:type:test-result,plico:milestone:<ver>" --agent plico-dev
+# List module entities
+pcli_human nodes --type entity --agent $AGENT
+
+# Find all ADRs
+pcli_human search "adr" -t "plico:type:adr" --agent $AGENT
+
+# Find experiences for a module
+pcli_human search "<module>" -t "plico:type:experience" --agent $AGENT
+
+# All tags
+pcli_human tags
+
+# Graph exploration
+pcli_human explore --cid <node-id> --agent $AGENT
+
+# Paths between nodes
+pcli_human paths --src <id1> --dst <id2> --depth 3
 ```
 
-## Query Commands
+Note: With `EMBEDDING_BACKEND=stub`, search falls back to tag-substring matching.
+The query text must be a substring of a tag name for results to appear.
+Use `--require-tags` / `-t` for precise filtering.
 
-```bash
-$CLI nodes --type entity --agent plico-dev          # list modules
-$CLI nodes --type fact --agent plico-dev             # list decisions/facts
-$CLI paths --src <id1> --dst <id2> --depth 3         # find relationships
-$CLI explore --cid <node-id> --agent plico-dev       # neighborhood
-$CLI tags                                             # all tags
-$CLI search "<query>" --require-tags "plico:type:experience" --agent plico-dev
-```
+## Principles
 
-## Self-Check Protocol
-
-At the END of every development turn (before responding to user), the agent asks itself:
-
-1. Did I make any design decisions? → ADR
-2. Did I complete something? → Progress
-3. Did I learn something non-obvious? → Experience
-4. Did I fix a bug? → Bug report
-5. Did test results change? → Test result
-
-If ANY answer is yes, store it **now** before finishing the response. This is not optional.
-
-## Soul Alignment
-
-- Generic types only (Entity/Fact + `plico:` tags) — never add project-specific KG types
-- All operations via standard `aicli` — no kernel-layer project logic
-- Any AI agent can use the same API — nothing binds to a specific model or agent
+- Generic KG types only (Entity/Fact) — domain semantics live in `plico:` tags
+- All operations via `aicli` — no kernel-layer hacks
+- Model-agnostic — any AI agent can use the same API
+- Batch over interrupt — record at pause points, not mid-flow

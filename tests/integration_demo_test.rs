@@ -8,6 +8,8 @@
 //!   KG explore → version/rollback — all through the Plico kernel.
 
 use plico::kernel::AIKernel;
+use plico::intent::ChainRouter;
+use plico::intent::execution;
 use tempfile::tempdir;
 
 fn make_kernel() -> (AIKernel, tempfile::TempDir) {
@@ -75,7 +77,9 @@ fn test_file_qa_agent_full_lifecycle() {
     assert!(memories.len() >= 2, "should have working + long-term memories");
 
     // ── Phase 4: NL intent → search (single action) ─────────────
-    let result = kernel.intent_execute_sync(
+    let router = ChainRouter::new(None);
+    let result = execution::execute_sync(
+        &kernel, &router,
         "search for report",
         &agent_id,
         0.0,
@@ -87,7 +91,8 @@ fn test_file_qa_agent_full_lifecycle() {
     assert!(!result.resolved.is_empty(), "should resolve at least one intent");
 
     // ── Phase 5: Reuse learned workflow ─────────────────────────
-    let result2 = kernel.intent_execute_sync(
+    let result2 = execution::execute_sync(
+        &kernel, &router,
         "search for report",
         &agent_id,
         0.0,

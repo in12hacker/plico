@@ -1,8 +1,17 @@
-//! Intent resolution commands.
+//! Intent resolution commands — application-layer NL handling.
+//!
+//! The ChainRouter is created here at the interface layer, not in the kernel.
+//! This follows the soul principle: OS provides resources, agents decide how to think.
 
+use plico::intent::{ChainRouter, IntentRouter};
+use plico::intent::execution;
 use plico::kernel::AIKernel;
 use plico::api::semantic::ApiResponse;
 use super::extract_arg;
+
+fn make_router() -> ChainRouter {
+    ChainRouter::new(None)
+}
 
 pub fn cmd_intent(kernel: &AIKernel, args: &[String]) -> ApiResponse {
     if extract_arg(args, "--description").is_some() {
@@ -39,12 +48,14 @@ pub fn cmd_intent(kernel: &AIKernel, args: &[String]) -> ApiResponse {
         return ApiResponse::error("Usage: intent \"<text>\" [--execute] [--learn] [--threshold N]");
     }
 
+    let router = make_router();
+
     if args.iter().any(|a| a == "--execute") {
         let learn = args.iter().any(|a| a == "--learn");
         let threshold = extract_arg(args, "--threshold")
             .and_then(|s| s.parse().ok())
             .unwrap_or(0.7);
-        match kernel.intent_execute_sync(&text, &agent_id, threshold, learn) {
+        match execution::execute_sync(kernel, &router, &text, &agent_id, threshold, learn) {
             Ok(result) => {
                 if result.executed {
                     println!("Executed: {} (success={})", text, result.success);
@@ -59,7 +70,13 @@ pub fn cmd_intent(kernel: &AIKernel, args: &[String]) -> ApiResponse {
             Err(e) => ApiResponse::error(e),
         }
     } else {
-        let results = kernel.intent_resolve(&text, &agent_id);
+        let results = match router.resolve(&text, &agent_id) {
+            Ok(r) => r,
+            Err(e) => {
+                println!("Could not resolve: {}", text);
+                return ApiResponse::error(e.to_string());
+            }
+        };
         if results.is_empty() {
             println!("Could not resolve: {}", text);
             return ApiResponse::error("No intent resolved");

@@ -146,11 +146,6 @@ impl AIKernel {
             schema: json!({"type":"object","properties":{"name":{"type":"string"}},"required":["name"]}),
         });
         reg.register(ToolDescriptor {
-            name: "intent.resolve".into(),
-            description: "Resolve natural language text into structured API actions".into(),
-            schema: json!({"type":"object","properties":{"text":{"type":"string"}},"required":["text"]}),
-        });
-        reg.register(ToolDescriptor {
             name: "agent.set_resources".into(),
             description: "Set an agent's resource limits (memory quota, CPU time, tool allowlist)".into(),
             schema: json!({"type":"object","properties":{"agent_id":{"type":"string"},"memory_quota":{"type":"integer"},"cpu_time_quota":{"type":"integer"},"allowed_tools":{"type":"array","items":{"type":"string"}}},"required":["agent_id"]}),
@@ -194,13 +189,6 @@ impl AIKernel {
             name: "permission.check".into(),
             description: "Check if an agent has permission for a specific action".into(),
             schema: json!({"type":"object","properties":{"agent_id":{"type":"string"},"action":{"type":"string"}},"required":["agent_id","action"]}),
-        });
-
-        // Intent execution
-        self.tool_registry.register(ToolDescriptor {
-            name: "intent.execute".into(),
-            description: "Resolve a natural language intent and execute the best-matching action".into(),
-            schema: json!({"type":"object","properties":{"text":{"type":"string","description":"Natural language intent"},"confidence_threshold":{"type":"number","description":"Minimum confidence to auto-execute (default 0.7)"},"priority":{"type":"string","description":"Intent priority: critical|high|medium|low"},"learn":{"type":"boolean","description":"Capture mapping as procedural memory"}},"required":["text"]}),
         });
 
         // Procedural memory
@@ -550,11 +538,6 @@ impl AIKernel {
                     None => ToolResult::error(format!("tool not found: {}", tool_name)),
                 }
             }
-            "intent.resolve" => {
-                let text = params.get("text").and_then(|v| v.as_str()).unwrap_or("");
-                let results = self.intent_resolve(text, agent_id);
-                ToolResult::ok(serde_json::to_value(&results).unwrap_or_default())
-            }
             "agent.set_resources" => {
                 let target = params.get("agent_id").and_then(|v| v.as_str()).unwrap_or(agent_id);
                 let mq = params.get("memory_quota").and_then(|v| v.as_u64());
@@ -648,31 +631,6 @@ impl AIKernel {
                         ToolResult::ok(json!({"agent_id": target, "action": action_str, "allowed": allowed}))
                     }
                     None => ToolResult::error(format!("Unknown action: {}", action_str)),
-                }
-            }
-            "intent.execute" => {
-                let text = params.get("text").and_then(|v| v.as_str()).unwrap_or("");
-                let threshold = params.get("confidence_threshold").and_then(|v| v.as_f64()).unwrap_or(0.7) as f32;
-                let prio_str = params.get("priority").and_then(|v| v.as_str()).unwrap_or("medium");
-                let prio = match prio_str {
-                    "critical" => crate::scheduler::IntentPriority::Critical,
-                    "high" => crate::scheduler::IntentPriority::High,
-                    "low" => crate::scheduler::IntentPriority::Low,
-                    _ => crate::scheduler::IntentPriority::Medium,
-                };
-                let learn = params.get("learn").and_then(|v| v.as_bool()).unwrap_or(false);
-                match self.intent_execute(text, agent_id, threshold, prio, learn) {
-                    Ok((intent_id, resolved)) => {
-                        let intents: Vec<serde_json::Value> = resolved.iter().map(|ri| {
-                            json!({"confidence": ri.confidence, "explanation": ri.explanation})
-                        }).collect();
-                        ToolResult::ok(json!({
-                            "executed": intent_id.is_some(),
-                            "intent_id": intent_id,
-                            "resolved_intents": intents,
-                        }))
-                    }
-                    Err(e) => ToolResult::error(e),
                 }
             }
             "memory.store_procedure" => {

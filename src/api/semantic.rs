@@ -337,33 +337,6 @@ pub enum ApiRequest {
     #[serde(rename = "tool_describe")]
     ToolDescribe { tool: String, agent_id: String },
 
-    // ── Intent Resolution ─────────────────────────────────────────────
-
-    #[serde(rename = "intent_resolve")]
-    IntentResolve { text: String, agent_id: String },
-
-    #[serde(rename = "intent_execute")]
-    IntentExecute {
-        text: String,
-        agent_id: String,
-        #[serde(default)]
-        confidence_threshold: Option<f32>,
-        #[serde(default)]
-        priority: Option<String>,
-        #[serde(default)]
-        learn: Option<bool>,
-    },
-
-    #[serde(rename = "intent_execute_sync")]
-    IntentExecuteSync {
-        text: String,
-        agent_id: String,
-        #[serde(default)]
-        confidence_threshold: Option<f32>,
-        #[serde(default)]
-        learn: Option<bool>,
-    },
-
     // ── Procedural Memory ────────────────────────────────────────────
 
     #[serde(rename = "remember_procedural")]

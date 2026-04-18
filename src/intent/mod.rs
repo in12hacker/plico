@@ -15,6 +15,7 @@
 
 pub mod heuristic;
 pub mod llm;
+pub mod execution;
 
 use serde::{Deserialize, Serialize};
 use crate::api::semantic::ApiRequest;
