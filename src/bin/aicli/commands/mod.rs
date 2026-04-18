@@ -46,6 +46,8 @@ pub fn execute_local(kernel: &AIKernel, args: &[String]) -> ApiResponse {
         Some("suspend") => cmd_agent_suspend(kernel, args),
         Some("resume") => cmd_agent_resume(kernel, args),
         Some("terminate") => cmd_agent_terminate(kernel, args),
+        Some("checkpoint") => cmd_agent_checkpoint(kernel, args),
+        Some("restore-checkpoint") => cmd_agent_restore(kernel, args),
         Some("tool") => cmd_tool(kernel, args),
         Some("send") => cmd_send_message(kernel, args),
         Some("messages") => cmd_read_messages(kernel, args),

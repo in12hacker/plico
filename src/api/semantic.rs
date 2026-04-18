@@ -384,6 +384,14 @@ pub enum ApiRequest {
         caller_agent_id: String,
     },
 
+    // ── Agent Checkpoint & Restore ───────────────────────────────────
+
+    #[serde(rename = "agent_checkpoint")]
+    AgentCheckpoint { agent_id: String },
+
+    #[serde(rename = "agent_restore")]
+    AgentRestore { agent_id: String, checkpoint_cid: String },
+
     // ── Agent Messaging ───────────────────────────────────────────────
 
     #[serde(rename = "send_message")]

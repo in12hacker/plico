@@ -72,6 +72,9 @@ impl crate::kernel::AIKernel {
             std::io::Error::new(std::io::ErrorKind::NotFound, format!("Agent not found: {}", agent_id))
         })?;
 
+        // Auto-checkpoint to CAS before suspend (best-effort)
+        let checkpoint_cid = self.checkpoint_agent(agent_id).ok();
+
         let state_before = format!("{:?}", agent.state());
         let memories = self.memory.get_all(agent_id);
         let pending = self.scheduler.snapshot_intents()
@@ -91,7 +94,11 @@ impl crate::kernel::AIKernel {
             last_intent_description: last_intent,
         };
 
-        self.memory.store(snapshot.to_memory_entry());
+        let mut entry = snapshot.to_memory_entry();
+        if let Some(cid) = checkpoint_cid {
+            entry.tags.push(format!("checkpoint:{}", cid));
+        }
+        self.memory.store(entry);
 
         self.scheduler.update_state(&aid, AgentState::Suspended).map_err(transition_err)?;
         self.persist_agents();

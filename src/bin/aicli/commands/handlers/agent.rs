@@ -87,3 +87,31 @@ pub fn cmd_agent_fail(kernel: &AIKernel, args: &[String]) -> ApiResponse {
         Err(e) => ApiResponse::error(e.to_string()),
     }
 }
+
+pub fn cmd_agent_checkpoint(kernel: &AIKernel, args: &[String]) -> ApiResponse {
+    let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
+    match kernel.checkpoint_agent(&agent_id) {
+        Ok(cid) => {
+            let mut r = ApiResponse::ok();
+            r.data = Some(cid);
+            r
+        }
+        Err(e) => ApiResponse::error(e),
+    }
+}
+
+pub fn cmd_agent_restore(kernel: &AIKernel, args: &[String]) -> ApiResponse {
+    let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
+    let cid = match extract_arg(args, "--cid") {
+        Some(c) => c,
+        None => return ApiResponse::error("--cid required".to_string()),
+    };
+    match kernel.restore_agent_checkpoint(&agent_id, &cid) {
+        Ok(count) => {
+            let mut r = ApiResponse::ok();
+            r.data = Some(format!("{} entries restored", count));
+            r
+        }
+        Err(e) => ApiResponse::error(e),
+    }
+}

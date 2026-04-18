@@ -630,6 +630,27 @@ impl AIKernel {
                     Err(e) => ApiResponse::error(e.to_string()),
                 }
             }
+            // Agent checkpoint & restore
+            ApiRequest::AgentCheckpoint { agent_id } => {
+                match self.checkpoint_agent(&agent_id) {
+                    Ok(cid) => {
+                        let mut r = ApiResponse::ok();
+                        r.data = Some(cid);
+                        r
+                    }
+                    Err(e) => ApiResponse::error(e),
+                }
+            }
+            ApiRequest::AgentRestore { agent_id, checkpoint_cid } => {
+                match self.restore_agent_checkpoint(&agent_id, &checkpoint_cid) {
+                    Ok(count) => {
+                        let mut r = ApiResponse::ok();
+                        r.data = Some(format!("{} entries restored", count));
+                        r
+                    }
+                    Err(e) => ApiResponse::error(e),
+                }
+            }
             // ── Graph CRUD extensions (v0.7) ─────────────────────────────
             ApiRequest::GetNode { node_id, agent_id } => {
                 match self.kg_get_node(&node_id, &agent_id) {

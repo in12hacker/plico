@@ -2259,3 +2259,60 @@ fn test_restore_unknown_checkpoint_fails() {
     let result = kernel.restore_agent_checkpoint(&agent_id, "nonexistent-cid");
     assert!(result.is_err());
 }
+
+#[test]
+fn test_checkpoint_via_api() {
+    let (kernel, _dir) = make_kernel_arc();
+    let agent_id = kernel.register_agent("api-check".into());
+
+    use plico::api::permission::PermissionAction;
+    kernel.permission_grant(&agent_id, PermissionAction::Read, None, None);
+    kernel.permission_grant(&agent_id, PermissionAction::Write, None, None);
+
+    kernel.remember_working(&agent_id, "api test data".into(), vec!["api".into()]).unwrap();
+
+    let resp = kernel.handle_api_request(plico::api::semantic::ApiRequest::AgentCheckpoint {
+        agent_id: agent_id.clone(),
+    });
+    assert!(resp.ok, "API checkpoint should succeed: {:?}", resp.error);
+    let cid = resp.data.unwrap();
+    assert!(!cid.is_empty());
+
+    // Restore via API
+    let resp2 = kernel.handle_api_request(plico::api::semantic::ApiRequest::AgentRestore {
+        agent_id: agent_id.clone(),
+        checkpoint_cid: cid,
+    });
+    assert!(resp2.ok, "API restore should succeed: {:?}", resp2.error);
+    assert!(resp2.data.unwrap().contains("1 entries restored"));
+}
+
+#[test]
+fn test_suspend_auto_checkpoints() {
+    let (kernel, _dir) = make_kernel_arc();
+    let agent_id = kernel.register_agent("auto-cp".into());
+
+    use plico::api::permission::PermissionAction;
+    kernel.permission_grant(&agent_id, PermissionAction::Read, None, None);
+    kernel.permission_grant(&agent_id, PermissionAction::Write, None, None);
+
+    // Move to Running state so we can suspend
+    kernel.handle_api_request(plico::api::semantic::ApiRequest::SubmitIntent {
+        priority: "normal".into(),
+        description: "test intent".into(),
+        action: None,
+        agent_id: agent_id.clone(),
+    });
+
+    kernel.remember_working(&agent_id, "important data".into(), vec!["pre-suspend".into()]).unwrap();
+
+    // Suspend — should auto-checkpoint
+    kernel.agent_suspend(&agent_id).unwrap();
+
+    // Look for checkpoint tag in the context snapshot
+    let memories = kernel.recall(&agent_id);
+    let has_checkpoint_tag = memories.iter().any(|e| {
+        e.tags.iter().any(|t| t.starts_with("checkpoint:"))
+    });
+    assert!(has_checkpoint_tag, "suspend should create a checkpoint CID tag on the context snapshot");
+}
