@@ -1,4 +1,4 @@
-//! Agent lifecycle operations — register, suspend, resume, terminate.
+//! Agent lifecycle operations — register, suspend, resume, terminate, checkpoint.
 
 use crate::scheduler::{Agent, AgentHandle, AgentId, AgentState, AgentResources, Intent, IntentPriority, TransitionError};
 
@@ -171,5 +171,67 @@ impl crate::kernel::AIKernel {
         } else {
             Err(std::io::Error::new(std::io::ErrorKind::NotFound, "Agent not found"))
         }
+    }
+
+    /// Checkpoint an agent's full memory state to CAS.
+    ///
+    /// Serializes all memory entries (across all tiers) as a JSON array,
+    /// stores the result as a CAS object, and returns the content-addressed ID.
+    /// The checkpoint is immutable and deduplicated by content hash.
+    pub fn checkpoint_agent(&self, agent_id: &str) -> Result<String, String> {
+        let aid = AgentId(agent_id.to_string());
+        self.scheduler.get(&aid).ok_or_else(|| format!("Agent not found: {}", agent_id))?;
+
+        let entries = self.memory.get_all(agent_id);
+        let payload = serde_json::to_vec(&entries)
+            .map_err(|e| format!("Failed to serialize checkpoint: {}", e))?;
+
+        let cid = self.semantic_create(
+            payload,
+            vec![
+                "checkpoint".into(),
+                format!("agent:{}", agent_id),
+            ],
+            agent_id,
+            None,
+        ).map_err(|e| format!("Failed to store checkpoint: {}", e))?;
+
+        tracing::info!(
+            "Checkpoint created for agent {}: CID={} ({} entries)",
+            agent_id, cid, entries.len()
+        );
+
+        Ok(cid)
+    }
+
+    /// Restore an agent's memory state from a CAS checkpoint.
+    ///
+    /// Fetches the checkpoint by CID, deserializes memory entries,
+    /// clears the agent's current memory, and replaces it with the
+    /// checkpoint data. Returns the number of entries restored.
+    pub fn restore_agent_checkpoint(&self, agent_id: &str, checkpoint_cid: &str) -> Result<usize, String> {
+        let aid = AgentId(agent_id.to_string());
+        self.scheduler.get(&aid).ok_or_else(|| format!("Agent not found: {}", agent_id))?;
+
+        let obj = self.get_object(checkpoint_cid, agent_id)
+            .map_err(|e| format!("Failed to fetch checkpoint: {}", e))?;
+
+        let entries: Vec<crate::memory::MemoryEntry> = serde_json::from_slice(&obj.data)
+            .map_err(|e| format!("Failed to deserialize checkpoint: {}", e))?;
+
+        let count = entries.len();
+        self.memory.clear_agent(agent_id);
+
+        for entry in entries {
+            self.memory.store(entry);
+        }
+        self.persist_memories();
+
+        tracing::info!(
+            "Checkpoint restored for agent {}: CID={} ({} entries)",
+            agent_id, checkpoint_cid, count
+        );
+
+        Ok(count)
     }
 }

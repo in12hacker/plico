@@ -756,6 +756,19 @@ impl LayeredMemory {
         false
     }
 
+    /// Remove all memory entries for an agent across all tiers.
+    /// Returns the number of entries removed.
+    pub fn clear_agent(&self, agent_id: &str) -> usize {
+        let mut count = 0;
+        for tier_map in [&self.ephemeral, &self.working, &self.long_term, &self.procedural] {
+            let mut map = tier_map.write().unwrap();
+            if let Some(entries) = map.remove(agent_id) {
+                count += entries.len();
+            }
+        }
+        count
+    }
+
     /// Retrieve long-term memories most semantically similar to a query embedding.
     pub fn recall_semantic(
         &self,

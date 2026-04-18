@@ -2159,3 +2159,103 @@ fn test_shared_procedure_appears_as_tool() {
     });
     assert!(resp.ok, "tool call should succeed: {:?}", resp.error);
 }
+
+// ─── v4.0-M1: Agent Checkpoint & Restore ──────────────────────────
+
+#[test]
+fn test_checkpoint_creates_cas_object() {
+    let (kernel, _dir) = make_kernel_arc();
+    let agent_id = kernel.register_agent("checkpointer".into());
+
+    use plico::api::permission::PermissionAction;
+    kernel.permission_grant(&agent_id, PermissionAction::Read, None, None);
+    kernel.permission_grant(&agent_id, PermissionAction::Write, None, None);
+
+    // Store some memories
+    kernel.remember_working(&agent_id, "task in progress".into(), vec!["wip".into()]).unwrap();
+    kernel.remember_long_term(&agent_id, "important fact".into(), vec!["fact".into()], 80).unwrap();
+
+    // Checkpoint
+    let cid = kernel.checkpoint_agent(&agent_id).expect("checkpoint should succeed");
+    assert!(!cid.is_empty(), "CID should be non-empty");
+
+    // Verify CAS object exists
+    let obj = kernel.get_object(&cid, &agent_id).expect("should fetch checkpoint object");
+    let entries: Vec<plico::memory::MemoryEntry> = serde_json::from_slice(&obj.data).unwrap();
+    assert_eq!(entries.len(), 2, "checkpoint should contain 2 memory entries");
+}
+
+#[test]
+fn test_restore_checkpoint_replaces_memory() {
+    let (kernel, _dir) = make_kernel_arc();
+    let agent_id = kernel.register_agent("restorer".into());
+
+    use plico::api::permission::PermissionAction;
+    kernel.permission_grant(&agent_id, PermissionAction::Read, None, None);
+    kernel.permission_grant(&agent_id, PermissionAction::Write, None, None);
+
+    // Store initial state and checkpoint
+    kernel.remember_working(&agent_id, "original note".into(), vec!["v1".into()]).unwrap();
+    let cid = kernel.checkpoint_agent(&agent_id).unwrap();
+
+    // Modify memory (add more, simulating continued work)
+    kernel.remember_working(&agent_id, "new note after checkpoint".into(), vec!["v2".into()]).unwrap();
+    kernel.remember_long_term(&agent_id, "extra long-term".into(), vec!["v2".into()], 90).unwrap();
+
+    // Verify memory grew
+    let before_restore = kernel.recall(&agent_id);
+    assert!(before_restore.len() >= 3, "should have original + new entries");
+
+    // Restore to checkpoint
+    let restored = kernel.restore_agent_checkpoint(&agent_id, &cid).unwrap();
+    assert_eq!(restored, 1, "should restore 1 entry from checkpoint");
+
+    // Verify memory matches checkpoint state
+    let after_restore = kernel.recall(&agent_id);
+    assert_eq!(after_restore.len(), 1, "should have exactly the checkpointed entries");
+    assert!(
+        after_restore.iter().any(|e| {
+            if let plico::memory::MemoryContent::Text(t) = &e.content {
+                t.contains("original note")
+            } else { false }
+        }),
+        "restored memory should contain the original note"
+    );
+}
+
+#[test]
+fn test_checkpoint_deduplication() {
+    let (kernel, _dir) = make_kernel_arc();
+    let agent_id = kernel.register_agent("dedup-tester".into());
+
+    use plico::api::permission::PermissionAction;
+    kernel.permission_grant(&agent_id, PermissionAction::Read, None, None);
+    kernel.permission_grant(&agent_id, PermissionAction::Write, None, None);
+
+    kernel.remember_working(&agent_id, "stable state".into(), vec!["stable".into()]).unwrap();
+
+    // Two checkpoints of the same state should produce the same CID (CAS dedup)
+    let cid1 = kernel.checkpoint_agent(&agent_id).unwrap();
+    let cid2 = kernel.checkpoint_agent(&agent_id).unwrap();
+    assert_eq!(cid1, cid2, "same memory state should produce same CID (content-addressed)");
+}
+
+#[test]
+fn test_checkpoint_unknown_agent_fails() {
+    let (kernel, _dir) = make_kernel_arc();
+    let result = kernel.checkpoint_agent("nonexistent");
+    assert!(result.is_err());
+    assert!(result.unwrap_err().contains("not found"));
+}
+
+#[test]
+fn test_restore_unknown_checkpoint_fails() {
+    let (kernel, _dir) = make_kernel_arc();
+    let agent_id = kernel.register_agent("orphan".into());
+
+    use plico::api::permission::PermissionAction;
+    kernel.permission_grant(&agent_id, PermissionAction::Read, None, None);
+
+    let result = kernel.restore_agent_checkpoint(&agent_id, "nonexistent-cid");
+    assert!(result.is_err());
+}

@@ -285,3 +285,43 @@ fn test_scope_serialization_roundtrip() {
         assert_eq!(scope, back, "roundtrip failed for {:?}", scope);
     }
 }
+
+// ─── clear_agent Tests ────────────────────────────────────────
+
+#[test]
+fn test_clear_agent_removes_all_tiers() {
+    let mem = LayeredMemory::new();
+    let agent = "agent-x";
+
+    mem.store(MemoryEntry::ephemeral(agent, "ephemeral note"));
+    mem.store(MemoryEntry {
+        id: "w-1".into(), agent_id: agent.into(), tier: MemoryTier::Working,
+        content: MemoryContent::Text("working note".into()),
+        importance: 50, access_count: 0, last_accessed: now_ms(), created_at: now_ms(),
+        tags: vec![], embedding: None, ttl_ms: None, scope: MemoryScope::Private,
+    });
+    mem.store(MemoryEntry {
+        id: "lt-1".into(), agent_id: agent.into(), tier: MemoryTier::LongTerm,
+        content: MemoryContent::Text("long-term note".into()),
+        importance: 80, access_count: 0, last_accessed: now_ms(), created_at: now_ms(),
+        tags: vec![], embedding: None, ttl_ms: None, scope: MemoryScope::Private,
+    });
+
+    assert_eq!(mem.get_all(agent).len(), 3);
+    let removed = mem.clear_agent(agent);
+    assert_eq!(removed, 3);
+    assert_eq!(mem.get_all(agent).len(), 0);
+}
+
+#[test]
+fn test_clear_agent_does_not_affect_other_agents() {
+    let mem = LayeredMemory::new();
+
+    mem.store(MemoryEntry::ephemeral("agent-a", "a's note"));
+    mem.store(MemoryEntry::ephemeral("agent-b", "b's note"));
+
+    let removed = mem.clear_agent("agent-a");
+    assert_eq!(removed, 1);
+    assert_eq!(mem.get_all("agent-a").len(), 0);
+    assert_eq!(mem.get_all("agent-b").len(), 1, "agent-b's memory should be unaffected");
+}
