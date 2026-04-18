@@ -1,63 +1,93 @@
 # Plico — AI-Native Operating System
 
-An operating system designed **entirely from AI perspective** — no human CLI/GUI, no filesystem paths, no traditional OS assumptions.
+**Languages / 语言：** [English](README.md) · [简体中文](README_zh.md)
 
-Every data operation (files, images, audio, video) is performed by AI through semantic APIs. The system is model-agnostic and exposes AI-friendly interfaces for upper-layer AI agents.
+An operating system designed **entirely from an AI perspective** — no human-first CLI/GUI, no path-centric filesystem as the primary abstraction. Upper-layer agents interact through **semantic APIs** (content, tags, intents, graphs). The stack is **model-agnostic**: embeddings and optional LLM routing can use local backends (for example Ollama) or stubs for tests.
 
 ## Status
 
-**Phase 0 — Project Initialization.** The design is documented in `system.md`. Implementation starts with the **Content-Addressed Storage (CAS) layer** as the foundational building block.
+**Active development — core stack is implemented and exercised by integration tests.** Foundations include CAS, semantic filesystem (vectors + knowledge graph), layered memory, agent scheduler with dispatch loop, permission guardrails, natural-language **intent routing** (heuristic + optional LLM), tool registry, temporal helpers, a **TCP daemon**, an **MCP server** (stdio JSON-RPC for editors/agents), and the **`aicli`** semantic CLI.
+
+Design rationale and philosophy remain in `system.md` (Chinese).
 
 ## Architecture
 
 ```
-AI Agents (upper layer)
-        ↓  semantic API / CLI
-┌───────────────────────────────────────┐
-│  AI Kernel                            │
-│  ├─ Agent Scheduler                   │
-│  ├─ Layered Memory Manager            │
-│  ├─ Model & Tool Runtime              │
-│  └─ Permission Guardrails             │
-│                                       │
-│  AI-Native Filesystem                 │
-│  ├─ Content-Addressed Storage (CAS)   │  ← Start here
-│  ├─ Semantic Vector Index             │
-│  ├─ Knowledge Graph                   │
-│  └─ Layered Context Loader (L0/L1/L2) │
-└───────────────────────────────────────┘
+External AI agents / MCP clients
+        ↓  semantic JSON (TCP / CLI / MCP)
+┌─────────────────────────────────────────────┐
+│  AI Kernel                                   │
+│  ├─ Agent scheduler + dispatch loop          │
+│  ├─ Layered memory + persistence hooks       │
+│  ├─ Built-in tool registry & execution       │
+│  └─ Permission guardrails                    │
+│                                              │
+│  Intent layer — NL → ApiRequest (optional)   │
+│                                              │
+│  AI-native “filesystem”                      │
+│  ├─ Content-Addressed Storage (CAS)        │
+│  ├─ Semantic / hybrid search (vectors, BM25)│
+│  ├─ Knowledge graph                          │
+│  └─ Layered context loader (L0/L1/L2)      │
+└─────────────────────────────────────────────┘
 ```
 
-## Quick Start
+`plicod` also serves a small **HTTP dashboard** (default `http://127.0.0.1:7879`, see daemon output) alongside the main **TCP JSON** line protocol (default port **7878**).
+
+## Quick start
 
 ```bash
 # Build
 cargo build --release
 
-# Run AI-friendly CLI
-cargo run --bin aicli -- put --content "hello" --tags "greeting"
-cargo run --bin aicli -- get <CID>
-cargo run --bin aicli -- search --query "greeting"
+# Run tests
+cargo test
 
-# Run daemon
-cargo run --bin plicod
+# AI-friendly CLI (in-process kernel; storage under --root)
+cargo run --bin aicli -- --root /tmp/plico put --content "hello" --tags "greeting"
+cargo run --bin aicli -- --root /tmp/plico get <CID>
+cargo run --bin aicli -- --root /tmp/plico search --query "greeting"
+
+# Same CLI against a running daemon (storage is whatever plicod was started with)
+cargo run --bin aicli -- --tcp 127.0.0.1:7878 search --query "hello"
+
+# Long-running daemon (TCP API + dispatch loop + dashboard)
+cargo run --bin plicod -- --port 7878 --root /tmp/plico
+# or: PLICO_ROOT=/tmp/plico cargo run --bin plicod
+
+# MCP adapter (stdio); point PLICO_ROOT at the same store as the kernel when needed
+PLICO_ROOT=/tmp/plico cargo run --bin plico-mcp
 ```
 
-## Directory Structure
+Use `cargo run --bin aicli -- --help` for the full command list (CRUD, search, agents, memory, graph, tools, events, intents, etc.).
+
+## Crate layout
 
 ```
 src/
-├── cas/          # Content-Addressed Storage (SHA-256, object store)
-├── memory/       # Layered memory management (ephemeral → long-term)
-├── scheduler/    # Agent lifecycle scheduler
-├── fs/           # Semantic filesystem (CRUD, vector index, knowledge graph)
-├── kernel/       # AI Kernel (orchestrates all subsystems)
-├── api/          # AI-friendly semantic API (CLI, TCP, HTTP)
-└── permission/   # Permission & safety guardrails
+├── cas/          # SHA-256 content-addressed object store
+├── memory/       # Tiered memory (ephemeral → long-term) + persistence
+├── intent/       # Natural language → structured ApiRequest
+├── scheduler/    # Agents, priorities, messaging, execution dispatch
+├── fs/           # Semantic store: tags, embeddings, graph, context loader
+├── kernel/       # AIKernel — orchestration, tools, persistence, dispatch
+├── api/          # ApiRequest / ApiResponse protocol + permission layer
+├── tool/         # Tool trait and registry (“everything is a tool”)
+├── temporal/     # NL time ranges (heuristics + optional LLM)
+├── llm/          # Shared LLM client helpers
+├── mcp/          # MCP-oriented helpers used by the plico-mcp binary
+├── bin/
+│   ├── plicod.rs      # Async TCP server + HTTP dashboard
+│   ├── plico_mcp.rs   # MCP stdio server
+│   └── aicli/         # Semantic CLI implementation
+├── lib.rs
+└── main.rs         # Stub — use plicod / aicli / plico-mcp binaries
 
-AGENTS.md         # Project root navigation index (for AI agents)
+tests/              # Integration tests (kernel, CLI, FS, memory, MCP, intent, …)
+AGENTS.md           # Detailed directory map for contributors and agents
+CLAUDE.md           # Maintainer / agent guidance
 ```
 
-## Design Document
+## Design document
 
-See `system.md` for the full AI-native OS design rationale (in Chinese).
+See `system.md` for the full AI-native OS design (in Chinese).
