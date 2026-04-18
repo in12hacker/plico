@@ -198,6 +198,12 @@ pub enum ApiRequest {
     #[serde(rename = "restore")]
     Restore { cid: String, agent_id: String },
 
+    #[serde(rename = "history")]
+    History { cid: String, agent_id: String },
+
+    #[serde(rename = "rollback")]
+    Rollback { cid: String, agent_id: String },
+
     #[serde(rename = "create_event")]
     CreateEvent {
         label: String,

@@ -1554,3 +1554,132 @@ fn test_e2e_autonomous_loop_resolve_execute_learn_reuse() {
         assert!(has_reused_tag, "reused execution should be tagged in memory");
     }
 }
+
+// ─── M8: Version Chain & Rollback ──────────────────────────────────
+
+#[test]
+fn test_version_history_returns_chain() {
+    let (kernel, _dir) = make_kernel();
+
+    let cid1 = kernel.semantic_create(
+        b"version one".to_vec(),
+        vec!["doc".to_string()],
+        "cli",
+        None,
+    ).unwrap();
+
+    let cid2 = kernel.semantic_update(
+        &cid1,
+        b"version two".to_vec(),
+        None,
+        "cli",
+    ).unwrap();
+
+    let cid3 = kernel.semantic_update(
+        &cid2,
+        b"version three".to_vec(),
+        None,
+        "cli",
+    ).unwrap();
+
+    let history = kernel.version_history(&cid3, "cli");
+    assert!(history.len() >= 2, "history should have at least 2 entries, got {}: {:?}", history.len(), history);
+    assert_eq!(history[0], cid3, "first entry should be the current CID");
+}
+
+#[test]
+fn test_version_history_single_version() {
+    let (kernel, _dir) = make_kernel();
+
+    let cid = kernel.semantic_create(
+        b"only version".to_vec(),
+        vec!["solo".to_string()],
+        "cli",
+        None,
+    ).unwrap();
+
+    let history = kernel.version_history(&cid, "cli");
+    assert_eq!(history, vec![cid.clone()], "single version should return just itself");
+}
+
+#[test]
+fn test_rollback_restores_previous_content() {
+    let (kernel, _dir) = make_kernel();
+
+    let cid1 = kernel.semantic_create(
+        b"original content".to_vec(),
+        vec!["doc".to_string(), "important".to_string()],
+        "cli",
+        None,
+    ).unwrap();
+
+    let cid2 = kernel.semantic_update(
+        &cid1,
+        b"modified content".to_vec(),
+        Some(vec!["doc".to_string(), "changed".to_string()]),
+        "cli",
+    ).unwrap();
+
+    let obj_before = kernel.get_object(&cid2, "cli").unwrap();
+    assert_eq!(String::from_utf8_lossy(&obj_before.data), "modified content");
+
+    let restored_cid = kernel.rollback(&cid2, "cli").expect("rollback should succeed");
+
+    let restored_obj = kernel.get_object(&restored_cid, "cli").unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&restored_obj.data),
+        "original content",
+        "rollback should restore previous version's content"
+    );
+}
+
+#[test]
+fn test_rollback_no_previous_version_fails() {
+    let (kernel, _dir) = make_kernel();
+
+    let cid = kernel.semantic_create(
+        b"first and only".to_vec(),
+        vec!["doc".to_string()],
+        "cli",
+        None,
+    ).unwrap();
+
+    let result = kernel.rollback(&cid, "cli");
+    assert!(result.is_err(), "rollback with no previous version should fail");
+    assert!(result.unwrap_err().contains("No previous version"), "error should mention no previous version");
+}
+
+#[test]
+fn test_history_and_rollback_via_api() {
+    let (kernel, _dir) = make_kernel();
+
+    let cid1 = kernel.semantic_create(
+        b"api version one".to_vec(),
+        vec!["api-test".to_string()],
+        "cli",
+        None,
+    ).unwrap();
+
+    let cid2 = kernel.semantic_update(
+        &cid1,
+        b"api version two".to_vec(),
+        None,
+        "cli",
+    ).unwrap();
+
+    // Test History API
+    let history_resp = kernel.handle_api_request(plico::api::semantic::ApiRequest::History {
+        cid: cid2.clone(),
+        agent_id: "cli".to_string(),
+    });
+    assert!(history_resp.ok, "history API should succeed");
+    assert!(history_resp.data.is_some(), "history should return data");
+
+    // Test Rollback API
+    let rollback_resp = kernel.handle_api_request(plico::api::semantic::ApiRequest::Rollback {
+        cid: cid2.clone(),
+        agent_id: "cli".to_string(),
+    });
+    assert!(rollback_resp.ok, "rollback API should succeed");
+    assert!(rollback_resp.cid.is_some(), "rollback should return new CID");
+}

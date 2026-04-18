@@ -205,6 +205,7 @@ pub fn parse_edge_type(s: &str) -> KGEdgeType {
         "has_recording" => KGEdgeType::HasRecording,
         "has_resolution" => KGEdgeType::HasResolution,
         "has_fact" => KGEdgeType::HasFact,
+        "supersedes" => KGEdgeType::Supersedes,
         _ => KGEdgeType::RelatedTo,
     }
 }

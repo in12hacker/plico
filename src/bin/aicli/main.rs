@@ -180,6 +180,16 @@ fn build_request(args: &[String]) -> Option<ApiRequest> {
             let agent_id = commands::extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
             Some(ApiRequest::Restore { cid, agent_id })
         }
+        Some("history") => {
+            let cid = commands::extract_arg(args, "--cid").unwrap_or_else(|| args.get(1).cloned().unwrap_or_default());
+            let agent_id = commands::extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
+            Some(ApiRequest::History { cid, agent_id })
+        }
+        Some("rollback") => {
+            let cid = commands::extract_arg(args, "--cid").unwrap_or_else(|| args.get(1).cloned().unwrap_or_default());
+            let agent_id = commands::extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
+            Some(ApiRequest::Rollback { cid, agent_id })
+        }
         Some("node") => {
             let label = commands::extract_arg(args, "--label").unwrap_or_default();
             let node_type = commands::parse_node_type(&commands::extract_arg(args, "--type").unwrap_or_else(|| "entity".to_string()));

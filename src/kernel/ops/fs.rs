@@ -167,4 +167,76 @@ impl crate::kernel::AIKernel {
         self.permissions.check(&ctx, PermissionAction::Read)?;
         self.fs.ctx_loader().load(cid, layer)
     }
+
+    /// Get the version history of a CID by following Supersedes edges backwards.
+    ///
+    /// Returns a chain from newest to oldest: [current, previous, ...]
+    pub fn version_history(&self, cid: &str, agent_id: &str) -> Vec<String> {
+        let ctx = PermissionContext::new(agent_id.to_string());
+        if self.permissions.check(&ctx, PermissionAction::Read).is_err() {
+            return vec![];
+        }
+
+        let Some(ref kg) = self.knowledge_graph else {
+            return vec![cid.to_string()];
+        };
+
+        let mut chain = vec![cid.to_string()];
+        let mut current = cid.to_string();
+        let max_depth = 50;
+
+        for _ in 0..max_depth {
+            let neighbors = match kg.get_neighbors(&current, Some(crate::fs::KGEdgeType::Supersedes), 1) {
+                Ok(n) => n,
+                Err(_) => break,
+            };
+            let next = neighbors.iter().find(|(_node, edge)| {
+                edge.edge_type == crate::fs::KGEdgeType::Supersedes && edge.src == current
+            });
+            match next {
+                Some((node, _)) => {
+                    chain.push(node.id.clone());
+                    current = node.id.clone();
+                }
+                None => break,
+            }
+        }
+
+        chain
+    }
+
+    /// Rollback a CID to a previous version in its Supersedes chain.
+    ///
+    /// Finds the previous version via Supersedes edges and restores it
+    /// as a new update (preserving the full chain). Returns the restored CID.
+    pub fn rollback(
+        &self,
+        cid: &str,
+        agent_id: &str,
+    ) -> Result<String, String> {
+        let ctx = PermissionContext::new(agent_id.to_string());
+        self.permissions.check(&ctx, PermissionAction::Write).map_err(|e| e.to_string())?;
+
+        let history = self.version_history(cid, agent_id);
+        if history.len() < 2 {
+            return Err("No previous version to rollback to".to_string());
+        }
+
+        let previous_cid = &history[1];
+        let previous_objs = self.fs.read(&Query::ByCid(previous_cid.to_string()))
+            .map_err(|e| format!("Cannot read previous version {}: {}", previous_cid, e))?;
+        let previous_obj = previous_objs.into_iter().next()
+            .ok_or_else(|| format!("Previous version {} not found", previous_cid))?;
+
+        let new_cid = self.semantic_update(
+            cid,
+            previous_obj.data.clone(),
+            Some(previous_obj.meta.tags.clone()),
+            agent_id,
+        ).map_err(|e| format!("Rollback update failed: {}", e))?;
+
+        self.maybe_persist_search_index();
+
+        Ok(new_cid)
+    }
 }

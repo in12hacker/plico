@@ -368,6 +368,21 @@ impl AIKernel {
                     Err(e) => ApiResponse::error(e.to_string()),
                 }
             }
+            ApiRequest::History { cid, agent_id } => {
+                let chain = self.version_history(&cid, &agent_id);
+                let mut r = ApiResponse::ok();
+                r.data = Some(serde_json::to_string(&chain).unwrap_or_default());
+                r
+            }
+            ApiRequest::Rollback { cid, agent_id } => {
+                match self.rollback(&cid, &agent_id) {
+                    Ok(new_cid) => {
+                        self.maybe_persist_search_index();
+                        ApiResponse::with_cid(new_cid)
+                    }
+                    Err(e) => ApiResponse::error(e),
+                }
+            }
             ApiRequest::CreateEvent { label, event_type, start_time, end_time, location, tags, agent_id } => {
                 match self.create_event(&label, event_type, start_time, end_time, location.as_deref(), tags, &agent_id) {
                     Ok(id) => ApiResponse::with_cid(id),

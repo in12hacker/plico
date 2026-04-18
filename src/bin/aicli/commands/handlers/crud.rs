@@ -93,3 +93,23 @@ pub fn cmd_delete(kernel: &AIKernel, args: &[String]) -> ApiResponse {
         Err(e) => ApiResponse::error(e.to_string()),
     }
 }
+
+pub fn cmd_history(kernel: &AIKernel, args: &[String]) -> ApiResponse {
+    let cid = extract_arg(args, "--cid").unwrap_or_else(|| args.get(1).cloned().unwrap_or_default());
+    let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
+
+    let chain = kernel.version_history(&cid, &agent_id);
+    let mut r = ApiResponse::ok();
+    r.data = Some(serde_json::to_string(&chain).unwrap_or_default());
+    r
+}
+
+pub fn cmd_rollback(kernel: &AIKernel, args: &[String]) -> ApiResponse {
+    let cid = extract_arg(args, "--cid").unwrap_or_else(|| args.get(1).cloned().unwrap_or_default());
+    let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
+
+    match kernel.rollback(&cid, &agent_id) {
+        Ok(new_cid) => ApiResponse::with_cid(new_cid),
+        Err(e) => ApiResponse::error(e),
+    }
+}

@@ -323,9 +323,13 @@ impl SemanticFS {
         let embedding = self.upsert_semantic_index(&new_cid, &new_content, &new_meta);
 
         if let Some(ref kg) = self.knowledge_graph {
+            let _ = kg.upsert_document(&new_cid, &final_tags, &old_obj.meta.created_by);
             if let Some(ref emb) = embedding {
                 self.add_similar_to_edges(kg, &new_cid, emb);
             }
+            use crate::fs::graph::types::{KGEdgeType, KGEdge};
+            let edge = KGEdge::new(new_cid.clone(), old_cid.to_string(), KGEdgeType::Supersedes, 1.0);
+            let _ = kg.add_edge(edge);
         }
 
         self.audit_log.write().unwrap().push(AuditEntry {

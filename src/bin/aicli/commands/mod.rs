@@ -54,6 +54,8 @@ pub fn execute_local(kernel: &AIKernel, args: &[String]) -> ApiResponse {
         Some("memdelete") => cmd_memdelete(kernel, args),
         Some("events") => cmd_events(kernel, args),
         Some("context") => cmd_context(kernel, args),
+        Some("history") => cmd_history(kernel, args),
+        Some("rollback") => cmd_rollback(kernel, args),
         _ => ApiResponse::error("Unknown command. Run: aicli --help"),
     }
 }

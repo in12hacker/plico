@@ -20,7 +20,7 @@ pub mod context;
 pub use super::{extract_arg, extract_tags, extract_tags_opt};
 
 // Re-export all public command functions for use by the parent module.
-pub use crud::{cmd_create, cmd_read, cmd_search, cmd_update, cmd_delete};
+pub use crud::{cmd_create, cmd_read, cmd_search, cmd_update, cmd_delete, cmd_history, cmd_rollback};
 pub use agent::{
     cmd_agent, cmd_agents, cmd_agent_status,
     cmd_agent_suspend, cmd_agent_resume, cmd_agent_terminate,
