@@ -35,10 +35,12 @@ mod test {
     fn client_discovers_tools() {
         let client = make_client();
         let tools = client.tools();
-        assert_eq!(tools.len(), 5);
+        assert_eq!(tools.len(), 7);
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains(&"plico_search"));
         assert!(names.contains(&"plico_put"));
+        assert!(names.contains(&"plico_skills_list"));
+        assert!(names.contains(&"plico_skills_run"));
     }
 
     #[test]
@@ -95,7 +97,7 @@ mod test {
         let client = make_client();
         let provider: &dyn ExternalToolProvider = &client;
         let tools = provider.discover_tools();
-        assert_eq!(tools.len(), 5);
+        assert_eq!(tools.len(), 7);
         assert!(tools.iter().any(|t| t.name == "plico_search"));
     }
 
@@ -122,7 +124,7 @@ mod test {
         };
 
         let names = kernel.add_tool_provider(provider, "ext");
-        assert_eq!(names.len(), 5);
+        assert_eq!(names.len(), 7);
         assert!(names.contains(&"ext.plico_search".to_string()));
         assert!(names.contains(&"ext.plico_put".to_string()));
 

@@ -189,6 +189,52 @@ fn dispatch_tool(name: &str, args: &Value, kernel: &AIKernel) -> Result<String, 
             Ok(serde_json::to_string_pretty(&tags).unwrap_or_default())
         }
 
+        "plico_skills_list" => {
+            let entries = kernel.recall_procedural(agent, None);
+            let skills: Vec<Value> = entries.iter().filter_map(|e| {
+                if let plico::memory::MemoryContent::Procedure(p) = &e.content {
+                    Some(serde_json::json!({
+                        "name": p.name,
+                        "description": p.description,
+                        "steps_count": p.steps.len(),
+                        "learned_from": p.learned_from,
+                        "tags": e.tags,
+                    }))
+                } else {
+                    None
+                }
+            }).collect();
+            Ok(serde_json::to_string_pretty(&serde_json::json!({
+                "skills": skills,
+                "count": skills.len(),
+            })).unwrap_or_default())
+        }
+
+        "plico_skills_run" => {
+            let name = args.get("name").and_then(|n| n.as_str())
+                .ok_or("missing required parameter: name")?;
+            let entries = kernel.recall_procedural(agent, Some(name));
+            if entries.is_empty() {
+                return Err(format!("no skill named '{}' found for agent '{}'", name, agent));
+            }
+            let entry = &entries[0];
+            if let plico::memory::MemoryContent::Procedure(p) = &entry.content {
+                Ok(serde_json::to_string_pretty(&serde_json::json!({
+                    "name": p.name,
+                    "description": p.description,
+                    "steps": p.steps.iter().map(|s| serde_json::json!({
+                        "step_number": s.step_number,
+                        "description": s.description,
+                        "action": s.action,
+                        "expected_outcome": s.expected_outcome,
+                    })).collect::<Vec<Value>>(),
+                    "learned_from": p.learned_from,
+                })).unwrap_or_default())
+            } else {
+                Err("entry is not a procedure".to_string())
+            }
+        }
+
         _ => Err(format!("unknown tool: {name}")),
     }
 }
@@ -284,6 +330,28 @@ fn tool_definitions() -> Vec<Value> {
                 }
             }
         }),
+        serde_json::json!({
+            "name": "plico_skills_list",
+            "description": "List all learned procedural skills (workflows) stored in Plico's procedural memory. Skills are learned workflows that agents have discovered and persisted for reuse. Returns skill names, descriptions, step counts, and provenance.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "agent_id": { "type": "string", "description": "Agent ID (default: mcp-agent)" }
+                }
+            }
+        }),
+        serde_json::json!({
+            "name": "plico_skills_run",
+            "description": "Retrieve a learned procedural skill by name and return its full step-by-step workflow. The calling agent can then execute the steps. This enables cognitive reuse — skills learned by one agent session are available to future sessions.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string", "description": "Name of the skill to retrieve" },
+                    "agent_id": { "type": "string", "description": "Agent ID (default: mcp-agent)" }
+                },
+                "required": ["name"]
+            }
+        }),
     ]
 }
 
@@ -306,13 +374,15 @@ mod tests {
     fn tools_list_returns_all_tools() {
         let resp = handle_tools_list(serde_json::json!(2));
         let tools = resp["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 5);
+        assert_eq!(tools.len(), 7);
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
         assert!(names.contains(&"plico_search"));
         assert!(names.contains(&"plico_put"));
         assert!(names.contains(&"plico_read"));
         assert!(names.contains(&"plico_nodes"));
         assert!(names.contains(&"plico_tags"));
+        assert!(names.contains(&"plico_skills_list"));
+        assert!(names.contains(&"plico_skills_run"));
     }
 
     #[test]
@@ -436,5 +506,93 @@ mod tests {
     fn make_test_kernel() -> AIKernel {
         let dir = tempfile::TempDir::new().unwrap();
         AIKernel::new(dir.path().to_path_buf()).unwrap()
+    }
+
+    fn store_test_skill(kernel: &AIKernel) {
+        use plico::api::semantic::{ApiRequest, ProcedureStepDto};
+        let req = ApiRequest::RememberProcedural {
+            agent_id: DEFAULT_AGENT.to_string(),
+            name: "bootstrap-module".to_string(),
+            description: "Standard workflow to bootstrap a new Plico module".to_string(),
+            steps: vec![
+                ProcedureStepDto {
+                    description: "Check existing modules".to_string(),
+                    action: "nodes --type entity".to_string(),
+                    expected_outcome: Some("List of current module entities".to_string()),
+                },
+                ProcedureStepDto {
+                    description: "Create module entity node".to_string(),
+                    action: "node --label <name> --type entity".to_string(),
+                    expected_outcome: Some("New entity node ID".to_string()),
+                },
+                ProcedureStepDto {
+                    description: "Store ADR for the module".to_string(),
+                    action: "put --content <adr> --tags plico:type:adr".to_string(),
+                    expected_outcome: Some("CID of stored ADR".to_string()),
+                },
+            ],
+            learned_from: Some("v2.0 development experience".to_string()),
+            tags: vec!["plico:type:skill".to_string()],
+        };
+        let resp = kernel.handle_api_request(req);
+        assert!(resp.ok, "store_test_skill failed: {:?}", resp.error);
+    }
+
+    #[test]
+    fn dispatch_skills_list_empty() {
+        let kernel = make_test_kernel();
+        let result = dispatch_tool("plico_skills_list", &serde_json::json!({}), &kernel);
+        assert!(result.is_ok());
+        let json: Value = serde_json::from_str(&result.unwrap()).unwrap();
+        assert_eq!(json["count"], 0);
+        assert_eq!(json["skills"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn dispatch_skills_list_finds_stored_skill() {
+        let kernel = make_test_kernel();
+        store_test_skill(&kernel);
+        let result = dispatch_tool("plico_skills_list", &serde_json::json!({}), &kernel);
+        assert!(result.is_ok());
+        let json: Value = serde_json::from_str(&result.unwrap()).unwrap();
+        assert_eq!(json["count"], 1);
+        let skill = &json["skills"][0];
+        assert_eq!(skill["name"], "bootstrap-module");
+        assert_eq!(skill["steps_count"], 3);
+    }
+
+    #[test]
+    fn dispatch_skills_run_returns_full_procedure() {
+        let kernel = make_test_kernel();
+        store_test_skill(&kernel);
+        let result = dispatch_tool("plico_skills_run", &serde_json::json!({
+            "name": "bootstrap-module"
+        }), &kernel);
+        assert!(result.is_ok());
+        let json: Value = serde_json::from_str(&result.unwrap()).unwrap();
+        assert_eq!(json["name"], "bootstrap-module");
+        let steps = json["steps"].as_array().unwrap();
+        assert_eq!(steps.len(), 3);
+        assert_eq!(steps[0]["step_number"], 1);
+        assert_eq!(steps[0]["action"], "nodes --type entity");
+        assert_eq!(steps[2]["action"], "put --content <adr> --tags plico:type:adr");
+    }
+
+    #[test]
+    fn dispatch_skills_run_missing_name_returns_error() {
+        let kernel = make_test_kernel();
+        let result = dispatch_tool("plico_skills_run", &serde_json::json!({}), &kernel);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("name"));
+    }
+
+    #[test]
+    fn dispatch_skills_run_not_found_returns_error() {
+        let kernel = make_test_kernel();
+        let result = dispatch_tool("plico_skills_run", &serde_json::json!({
+            "name": "nonexistent-skill"
+        }), &kernel);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("nonexistent-skill"));
     }
 }

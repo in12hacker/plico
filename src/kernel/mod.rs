@@ -655,13 +655,32 @@ impl AIKernel {
                 let entries = self.recall_procedural(&agent_id, name.as_deref());
                 let mut r = ApiResponse::ok();
                 let data: Vec<serde_json::Value> = entries.iter().map(|e| {
-                    serde_json::json!({
-                        "id": e.id,
-                        "tier": "procedural",
-                        "content": e.content.display(),
-                        "tags": e.tags,
-                        "importance": e.importance,
-                    })
+                    match &e.content {
+                        crate::memory::MemoryContent::Procedure(p) => {
+                            serde_json::json!({
+                                "id": e.id,
+                                "tier": "procedural",
+                                "name": p.name,
+                                "description": p.description,
+                                "steps": p.steps.iter().map(|s| serde_json::json!({
+                                    "step_number": s.step_number,
+                                    "description": s.description,
+                                    "action": s.action,
+                                    "expected_outcome": s.expected_outcome,
+                                })).collect::<Vec<_>>(),
+                                "learned_from": p.learned_from,
+                                "tags": e.tags,
+                                "importance": e.importance,
+                            })
+                        }
+                        _ => serde_json::json!({
+                            "id": e.id,
+                            "tier": "procedural",
+                            "content": e.content.display(),
+                            "tags": e.tags,
+                            "importance": e.importance,
+                        })
+                    }
                 }).collect();
                 r.data = Some(serde_json::to_string(&data).unwrap_or_default());
                 r

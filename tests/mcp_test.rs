@@ -63,7 +63,7 @@ fn mcp_e2e_full_lifecycle() {
     }));
     assert_eq!(resp["id"], 2);
     let tools = resp["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 5);
+    assert_eq!(tools.len(), 7);
 
     // 4. Store content via plico_put
     let resp = send_and_recv(&mut stdin, &mut stdout, &serde_json::json!({

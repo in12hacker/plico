@@ -13,6 +13,7 @@ pub mod messaging;
 pub mod tool;
 pub mod events;
 pub mod context;
+pub mod skills;
 
 // Re-export shared utilities for handler submodules.
 // Re-export shared utilities for handler submodules (defined in parent commands/mod.rs).
@@ -42,3 +43,4 @@ pub use messaging::{cmd_send_message, cmd_read_messages, cmd_ack_message};
 pub use tool::cmd_tool;
 pub use events::cmd_events;
 pub use context::cmd_context;
+pub use skills::cmd_skills;

@@ -1778,3 +1778,53 @@ fn test_multi_step_reuse_replays_all_steps() {
         assert!(has_reuse, "should indicate reuse in explanation");
     }
 }
+
+#[test]
+fn test_recall_procedural_api_returns_full_structure() {
+    let (kernel, _dir) = make_kernel();
+    let agent_id = kernel.register_agent("recall-proc-test".to_string());
+
+    let store_req = plico::api::semantic::ApiRequest::RememberProcedural {
+        agent_id: agent_id.clone(),
+        name: "deploy-module".to_string(),
+        description: "Deploy a module to production".to_string(),
+        steps: vec![
+            plico::api::semantic::ProcedureStepDto {
+                description: "Run tests".to_string(),
+                action: "cargo test".to_string(),
+                expected_outcome: Some("All tests pass".to_string()),
+            },
+            plico::api::semantic::ProcedureStepDto {
+                description: "Build release".to_string(),
+                action: "cargo build --release".to_string(),
+                expected_outcome: Some("Binary produced".to_string()),
+            },
+        ],
+        learned_from: Some("manual".to_string()),
+        tags: vec!["deploy".to_string()],
+    };
+    let resp = kernel.handle_api_request(store_req);
+    assert!(resp.ok, "store should succeed: {:?}", resp.error);
+
+    let recall_req = plico::api::semantic::ApiRequest::RecallProcedural {
+        agent_id: agent_id.clone(),
+        name: Some("deploy-module".to_string()),
+    };
+    let resp = kernel.handle_api_request(recall_req);
+    assert!(resp.ok);
+    let data: Vec<serde_json::Value> = serde_json::from_str(resp.data.as_ref().unwrap()).unwrap();
+    assert_eq!(data.len(), 1);
+
+    let proc = &data[0];
+    assert_eq!(proc["name"], "deploy-module");
+    assert_eq!(proc["description"], "Deploy a module to production");
+    assert_eq!(proc["learned_from"], "manual");
+
+    let steps = proc["steps"].as_array().unwrap();
+    assert_eq!(steps.len(), 2);
+    assert_eq!(steps[0]["step_number"], 1);
+    assert_eq!(steps[0]["action"], "cargo test");
+    assert_eq!(steps[0]["expected_outcome"], "All tests pass");
+    assert_eq!(steps[1]["step_number"], 2);
+    assert_eq!(steps[1]["action"], "cargo build --release");
+}

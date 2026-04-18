@@ -703,7 +703,25 @@ impl AIKernel {
                 let name = params.get("name").and_then(|v| v.as_str());
                 let entries = self.recall_procedural(agent_id, name);
                 let data: Vec<serde_json::Value> = entries.iter().map(|e| {
-                    json!({"id": e.id, "content": e.content.display(), "tags": e.tags, "importance": e.importance})
+                    match &e.content {
+                        crate::memory::MemoryContent::Procedure(p) => {
+                            json!({
+                                "id": e.id,
+                                "name": p.name,
+                                "description": p.description,
+                                "steps": p.steps.iter().map(|s| json!({
+                                    "step_number": s.step_number,
+                                    "description": s.description,
+                                    "action": s.action,
+                                    "expected_outcome": s.expected_outcome,
+                                })).collect::<Vec<_>>(),
+                                "learned_from": p.learned_from,
+                                "tags": e.tags,
+                                "importance": e.importance,
+                            })
+                        }
+                        _ => json!({"id": e.id, "content": e.content.display(), "tags": e.tags, "importance": e.importance})
+                    }
                 }).collect();
                 ToolResult::ok(json!({"procedures": data, "count": data.len()}))
             }
