@@ -563,6 +563,18 @@ pub enum ApiRequest {
         #[serde(default = "default_priority")]
         priority: String,
     },
+
+    // ── Event History (v7.0) ───────────────────────────────────
+
+    #[serde(rename = "event_history")]
+    EventHistory {
+        #[serde(default)]
+        since_seq: Option<u64>,
+        #[serde(default)]
+        agent_id_filter: Option<String>,
+        #[serde(default)]
+        limit: Option<usize>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -639,6 +651,8 @@ pub struct ApiResponse {
     pub agent_cards: Option<Vec<AgentCardDto>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub delegation: Option<DelegationResultDto>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_history: Option<Vec<crate::kernel::event_bus::SequencedEvent>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -767,6 +781,7 @@ impl ApiResponse {
             agent_usage: None,
             agent_cards: None,
             delegation: None,
+            event_history: None,
         }
     }
 
@@ -822,6 +837,7 @@ impl ApiResponse {
             agent_usage: None,
             agent_cards: None,
             delegation: None,
+            event_history: None,
         }
     }
 }

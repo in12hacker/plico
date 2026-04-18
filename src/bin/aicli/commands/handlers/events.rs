@@ -72,8 +72,21 @@ pub fn cmd_events(kernel: &AIKernel, args: &[String]) -> ApiResponse {
                 ApiResponse::error(format!("Unknown subscription: {}", sub_id))
             }
         }
+        Some("history") => {
+            let since_seq = extract_arg(args, "--since")
+                .and_then(|s| s.parse().ok());
+            let agent_id_filter = extract_arg(args, "--agent-filter");
+            let limit = extract_arg(args, "--limit")
+                .and_then(|s| s.parse().ok());
+            let req = plico::api::semantic::ApiRequest::EventHistory {
+                since_seq,
+                agent_id_filter,
+                limit,
+            };
+            kernel.handle_api_request(req)
+        }
         _ => {
-            eprintln!("Usage: events <list|by-time|subscribe|poll|unsubscribe> [options]");
+            eprintln!("Usage: events <list|by-time|subscribe|poll|unsubscribe|history> [options]");
             ApiResponse::error("unknown events subcommand")
         }
     }

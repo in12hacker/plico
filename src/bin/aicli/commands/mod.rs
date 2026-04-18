@@ -322,6 +322,16 @@ pub fn print_result(response: &ApiResponse) {
         println!("  Intent: {}", d.intent_id);
         println!("  Message: {}", d.message_id);
     }
+    if let Some(history) = &response.event_history {
+        if history.is_empty() {
+            println!("No event history.");
+        } else {
+            println!("Event history ({} events):", history.len());
+            for e in history {
+                println!("  seq={} t={}ms {:?}", e.seq, e.timestamp_ms, e.event);
+            }
+        }
+    }
     if !response.ok {
         if let Some(e) = &response.error {
             eprintln!("Error: {}", e);

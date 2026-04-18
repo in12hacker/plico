@@ -13,6 +13,11 @@ impl crate::kernel::AIKernel {
         let agent = Agent::new(name);
         let id = agent.id().to_string();
         self.scheduler.register(agent);
+        self.event_bus.emit(KernelEvent::AgentStateChanged {
+            agent_id: id.clone(),
+            old_state: "None".into(),
+            new_state: "Waiting".into(),
+        });
         self.persist_agents();
         id
     }

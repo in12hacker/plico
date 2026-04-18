@@ -42,6 +42,14 @@ pub enum KernelEvent {
     },
 }
 
+/// A durable event record with sequence number and timestamp.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SequencedEvent {
+    pub seq: u64,
+    pub timestamp_ms: u64,
+    pub event: KernelEvent,
+}
+
 impl KernelEvent {
     pub fn event_type_name(&self) -> &'static str {
         match self {
@@ -104,6 +112,15 @@ pub struct EventBus {
     sender: broadcast::Sender<KernelEvent>,
     subscriptions: RwLock<HashMap<String, Subscription>>,
     next_sub_id: AtomicU64,
+    event_log: RwLock<Vec<SequencedEvent>>,
+    next_seq: AtomicU64,
+}
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
 }
 
 impl EventBus {
@@ -113,11 +130,50 @@ impl EventBus {
             sender,
             subscriptions: RwLock::new(HashMap::new()),
             next_sub_id: AtomicU64::new(1),
+            event_log: RwLock::new(Vec::new()),
+            next_seq: AtomicU64::new(1),
         }
     }
 
     pub fn emit(&self, event: KernelEvent) {
+        let seq = self.next_seq.fetch_add(1, Ordering::Relaxed);
+        let sequenced = SequencedEvent {
+            seq,
+            timestamp_ms: now_ms(),
+            event: event.clone(),
+        };
+        self.event_log.write().unwrap().push(sequenced);
         let _ = self.sender.send(event);
+    }
+
+    pub fn events_since(&self, since_seq: u64) -> Vec<SequencedEvent> {
+        let log = self.event_log.read().unwrap();
+        log.iter()
+            .filter(|e| e.seq > since_seq)
+            .cloned()
+            .collect()
+    }
+
+    pub fn events_by_agent(&self, agent_id: &str) -> Vec<SequencedEvent> {
+        let log = self.event_log.read().unwrap();
+        log.iter()
+            .filter(|e| e.event.agent_id() == Some(agent_id))
+            .cloned()
+            .collect()
+    }
+
+    pub fn event_count(&self) -> usize {
+        self.event_log.read().unwrap().len()
+    }
+
+    pub fn snapshot_events(&self) -> Vec<SequencedEvent> {
+        self.event_log.read().unwrap().clone()
+    }
+
+    pub fn restore_events(&self, events: Vec<SequencedEvent>) {
+        let max_seq = events.iter().map(|e| e.seq).max().unwrap_or(0);
+        *self.event_log.write().unwrap() = events;
+        self.next_seq.store(max_seq + 1, Ordering::Relaxed);
     }
 
     pub fn subscribe(&self) -> String {
@@ -504,5 +560,131 @@ mod tests {
         assert_eq!(KernelEvent::IntentCompleted {
             intent_id: "i".into(), success: true,
         }.agent_id(), None);
+    }
+
+    #[test]
+    fn test_event_log_records_all_emits() {
+        let bus = EventBus::new();
+        assert_eq!(bus.event_count(), 0);
+
+        bus.emit(KernelEvent::ObjectStored {
+            cid: "c1".into(), agent_id: "a1".into(), tags: vec![],
+        });
+        bus.emit(KernelEvent::MemoryStored {
+            agent_id: "a1".into(), tier: "working".into(),
+        });
+
+        assert_eq!(bus.event_count(), 2);
+    }
+
+    #[test]
+    fn test_event_log_sequencing() {
+        let bus = EventBus::new();
+        bus.emit(KernelEvent::ObjectStored {
+            cid: "c1".into(), agent_id: "a1".into(), tags: vec![],
+        });
+        bus.emit(KernelEvent::MemoryStored {
+            agent_id: "a1".into(), tier: "working".into(),
+        });
+        bus.emit(KernelEvent::IntentCompleted {
+            intent_id: "i1".into(), success: true,
+        });
+
+        let log = bus.snapshot_events();
+        assert_eq!(log.len(), 3);
+        assert_eq!(log[0].seq, 1);
+        assert_eq!(log[1].seq, 2);
+        assert_eq!(log[2].seq, 3);
+        assert!(log[0].timestamp_ms <= log[1].timestamp_ms);
+        assert!(log[1].timestamp_ms <= log[2].timestamp_ms);
+    }
+
+    #[test]
+    fn test_events_since() {
+        let bus = EventBus::new();
+        bus.emit(KernelEvent::ObjectStored {
+            cid: "c1".into(), agent_id: "a1".into(), tags: vec![],
+        });
+        bus.emit(KernelEvent::ObjectStored {
+            cid: "c2".into(), agent_id: "a1".into(), tags: vec![],
+        });
+        bus.emit(KernelEvent::ObjectStored {
+            cid: "c3".into(), agent_id: "a1".into(), tags: vec![],
+        });
+
+        let since_0 = bus.events_since(0);
+        assert_eq!(since_0.len(), 3);
+
+        let since_1 = bus.events_since(1);
+        assert_eq!(since_1.len(), 2);
+        assert_eq!(since_1[0].seq, 2);
+
+        let since_3 = bus.events_since(3);
+        assert!(since_3.is_empty());
+    }
+
+    #[test]
+    fn test_events_by_agent() {
+        let bus = EventBus::new();
+        bus.emit(KernelEvent::ObjectStored {
+            cid: "c1".into(), agent_id: "agent-a".into(), tags: vec![],
+        });
+        bus.emit(KernelEvent::ObjectStored {
+            cid: "c2".into(), agent_id: "agent-b".into(), tags: vec![],
+        });
+        bus.emit(KernelEvent::MemoryStored {
+            agent_id: "agent-a".into(), tier: "working".into(),
+        });
+        bus.emit(KernelEvent::IntentCompleted {
+            intent_id: "i1".into(), success: true,
+        });
+
+        let a_events = bus.events_by_agent("agent-a");
+        assert_eq!(a_events.len(), 2);
+
+        let b_events = bus.events_by_agent("agent-b");
+        assert_eq!(b_events.len(), 1);
+
+        let none_events = bus.events_by_agent("nonexistent");
+        assert!(none_events.is_empty());
+    }
+
+    #[test]
+    fn test_snapshot_and_restore() {
+        let bus = EventBus::new();
+        bus.emit(KernelEvent::ObjectStored {
+            cid: "c1".into(), agent_id: "a1".into(), tags: vec![],
+        });
+        bus.emit(KernelEvent::MemoryStored {
+            agent_id: "a1".into(), tier: "long_term".into(),
+        });
+
+        let snapshot = bus.snapshot_events();
+        assert_eq!(snapshot.len(), 2);
+
+        let bus2 = EventBus::new();
+        bus2.restore_events(snapshot);
+        assert_eq!(bus2.event_count(), 2);
+
+        bus2.emit(KernelEvent::IntentCompleted {
+            intent_id: "i1".into(), success: true,
+        });
+        assert_eq!(bus2.event_count(), 3);
+        let log = bus2.snapshot_events();
+        assert_eq!(log[2].seq, 3);
+    }
+
+    #[test]
+    fn test_emit_records_to_both_broadcast_and_log() {
+        let bus = EventBus::new();
+        let sub = bus.subscribe();
+
+        bus.emit(KernelEvent::ObjectStored {
+            cid: "c1".into(), agent_id: "a1".into(), tags: vec![],
+        });
+
+        let polled = bus.poll(&sub).unwrap();
+        assert_eq!(polled.len(), 1);
+        assert_eq!(bus.event_count(), 1);
     }
 }

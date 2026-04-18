@@ -2906,3 +2906,188 @@ fn test_delegate_task_via_api() {
     assert!(!d.intent_id.is_empty());
     assert!(!d.message_id.is_empty());
 }
+
+// ─── v7.0: Durable Event Store ──────────────────────────────────────
+
+#[test]
+fn test_event_history_records_agent_lifecycle() {
+    let (kernel, _dir) = make_kernel();
+    let aid = kernel.register_agent("observer".into());
+
+    let resp = kernel.handle_api_request(plico::api::semantic::ApiRequest::EventHistory {
+        since_seq: None,
+        agent_id_filter: Some(aid.clone()),
+        limit: None,
+    });
+    assert!(resp.ok);
+    let history = resp.event_history.unwrap();
+    assert!(history.iter().any(|e| matches!(&e.event,
+        plico::kernel::event_bus::KernelEvent::AgentStateChanged {
+            agent_id, new_state, ..
+        } if agent_id == &aid && new_state == "Waiting"
+    )));
+    assert!(history[0].seq > 0);
+    assert!(history[0].timestamp_ms > 0);
+}
+
+#[test]
+fn test_event_history_since_seq() {
+    let (kernel, _dir) = make_kernel();
+    let aid = kernel.register_agent("a1".into());
+
+    let baseline = kernel.handle_api_request(plico::api::semantic::ApiRequest::EventHistory {
+        since_seq: None, agent_id_filter: None, limit: None,
+    }).event_history.unwrap().len();
+
+    kernel.handle_api_request(plico::api::semantic::ApiRequest::Create {
+        content: "hello".into(),
+        content_encoding: Default::default(),
+        tags: vec!["test".into()],
+        agent_id: aid.clone(),
+        intent: None,
+    });
+
+    let resp = kernel.handle_api_request(plico::api::semantic::ApiRequest::EventHistory {
+        since_seq: Some(baseline as u64),
+        agent_id_filter: None,
+        limit: None,
+    });
+    let since = resp.event_history.unwrap();
+    assert!(!since.is_empty());
+    assert!(since.iter().any(|e| matches!(&e.event,
+        plico::kernel::event_bus::KernelEvent::ObjectStored { .. }
+    )));
+}
+
+#[test]
+fn test_event_history_by_agent() {
+    let (kernel, _dir) = make_kernel();
+    let a1 = kernel.register_agent("alpha".into());
+    let a2 = kernel.register_agent("beta".into());
+
+    kernel.handle_api_request(plico::api::semantic::ApiRequest::Create {
+        content: "a1-data".into(),
+        content_encoding: Default::default(),
+        tags: vec!["t1".into()],
+        agent_id: a1.clone(),
+        intent: None,
+    });
+    kernel.handle_api_request(plico::api::semantic::ApiRequest::Create {
+        content: "a2-data".into(),
+        content_encoding: Default::default(),
+        tags: vec!["t2".into()],
+        agent_id: a2.clone(),
+        intent: None,
+    });
+
+    let r1 = kernel.handle_api_request(plico::api::semantic::ApiRequest::EventHistory {
+        since_seq: None, agent_id_filter: Some(a1.clone()), limit: None,
+    });
+    let r2 = kernel.handle_api_request(plico::api::semantic::ApiRequest::EventHistory {
+        since_seq: None, agent_id_filter: Some(a2.clone()), limit: None,
+    });
+
+    let h1 = r1.event_history.unwrap();
+    let h2 = r2.event_history.unwrap();
+    assert!(h1.iter().all(|e| e.event.agent_id() == Some(a1.as_str())));
+    assert!(h2.iter().all(|e| e.event.agent_id() == Some(a2.as_str())));
+}
+
+#[test]
+fn test_event_history_via_api_full() {
+    let (kernel, _dir) = make_kernel();
+    let aid = kernel.register_agent("api-agent".into());
+    kernel.handle_api_request(plico::api::semantic::ApiRequest::Create {
+        content: "data".into(),
+        content_encoding: Default::default(),
+        tags: vec!["tag".into()],
+        agent_id: aid.clone(),
+        intent: None,
+    });
+
+    let resp = kernel.handle_api_request(plico::api::semantic::ApiRequest::EventHistory {
+        since_seq: None, agent_id_filter: None, limit: None,
+    });
+    assert!(resp.ok);
+    let history = resp.event_history.unwrap();
+    assert!(!history.is_empty());
+
+    let first_seq = history[0].seq;
+    let resp2 = kernel.handle_api_request(plico::api::semantic::ApiRequest::EventHistory {
+        since_seq: Some(first_seq), agent_id_filter: None, limit: None,
+    });
+    let h2 = resp2.event_history.unwrap();
+    assert!(h2.iter().all(|e| e.seq > first_seq));
+}
+
+#[test]
+fn test_event_history_api_agent_filter() {
+    let (kernel, _dir) = make_kernel();
+    let a1 = kernel.register_agent("filter-a".into());
+    let a2 = kernel.register_agent("filter-b".into());
+
+    kernel.handle_api_request(plico::api::semantic::ApiRequest::Create {
+        content: "d1".into(),
+        content_encoding: Default::default(),
+        tags: vec!["x".into()],
+        agent_id: a1.clone(),
+        intent: None,
+    });
+    kernel.handle_api_request(plico::api::semantic::ApiRequest::Create {
+        content: "d2".into(),
+        content_encoding: Default::default(),
+        tags: vec!["y".into()],
+        agent_id: a2.clone(),
+        intent: None,
+    });
+
+    let resp = kernel.handle_api_request(plico::api::semantic::ApiRequest::EventHistory {
+        since_seq: None, agent_id_filter: Some(a1.clone()), limit: None,
+    });
+    let history = resp.event_history.unwrap();
+    assert!(history.iter().all(|e| e.event.agent_id() == Some(a1.as_str())));
+}
+
+#[test]
+fn test_event_history_api_limit() {
+    let (kernel, _dir) = make_kernel();
+    let aid = kernel.register_agent("limiter".into());
+    for i in 0..5 {
+        kernel.handle_api_request(plico::api::semantic::ApiRequest::Create {
+            content: format!("d{}", i),
+            content_encoding: Default::default(),
+            tags: vec!["t".into()],
+            agent_id: aid.clone(),
+            intent: None,
+        });
+    }
+
+    let resp = kernel.handle_api_request(plico::api::semantic::ApiRequest::EventHistory {
+        since_seq: None, agent_id_filter: None, limit: Some(3),
+    });
+    let history = resp.event_history.unwrap();
+    assert_eq!(history.len(), 3);
+}
+
+#[test]
+fn test_event_history_monotonic_sequence() {
+    let (kernel, _dir) = make_kernel();
+    let aid = kernel.register_agent("mono".into());
+    for i in 0..10 {
+        kernel.handle_api_request(plico::api::semantic::ApiRequest::Create {
+            content: format!("obj{}", i),
+            content_encoding: Default::default(),
+            tags: vec!["t".into()],
+            agent_id: aid.clone(),
+            intent: None,
+        });
+    }
+
+    let all = kernel.handle_api_request(plico::api::semantic::ApiRequest::EventHistory {
+        since_seq: None, agent_id_filter: None, limit: None,
+    }).event_history.unwrap();
+    for window in all.windows(2) {
+        assert!(window[1].seq > window[0].seq);
+        assert!(window[1].timestamp_ms >= window[0].timestamp_ms);
+    }
+}

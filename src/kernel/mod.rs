@@ -904,6 +904,28 @@ impl AIKernel {
                     Err(e) => ApiResponse::error(e),
                 }
             }
+
+            ApiRequest::EventHistory { since_seq, agent_id_filter, limit } => {
+                let events = match (&since_seq, &agent_id_filter) {
+                    (_, Some(aid)) => {
+                        let mut evts = self.event_bus.events_by_agent(aid);
+                        if let Some(seq) = since_seq {
+                            evts.retain(|e| e.seq > seq);
+                        }
+                        evts
+                    }
+                    (Some(seq), None) => self.event_bus.events_since(*seq),
+                    (None, None) => self.event_bus.snapshot_events(),
+                };
+                let limited = if let Some(lim) = limit {
+                    events.into_iter().take(lim).collect()
+                } else {
+                    events
+                };
+                let mut r = ApiResponse::ok();
+                r.event_history = Some(limited);
+                r
+            }
         }
     }
 }
