@@ -502,6 +502,17 @@ pub enum ApiRequest {
         edge_type: Option<KGEdgeType>,
         agent_id: String,
     },
+
+    // ── Event Bus (v5.0) ───────────────────────────────────────────
+
+    #[serde(rename = "event_subscribe")]
+    EventSubscribe { agent_id: String },
+
+    #[serde(rename = "event_poll")]
+    EventPoll { subscription_id: String },
+
+    #[serde(rename = "event_unsubscribe")]
+    EventUnsubscribe { subscription_id: String },
 }
 
 /// A JSON API response.
@@ -558,6 +569,10 @@ pub struct ApiResponse {
     pub total_count: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub has_more: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subscription_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kernel_events: Option<Vec<crate::kernel::event_bus::KernelEvent>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -649,6 +664,7 @@ impl ApiResponse {
             pending_intents: None, tools: None, tool_result: None,
             resolved_intents: None, messages: None, context_data: None,
             error: None, total_count: None, has_more: None,
+            subscription_id: None, kernel_events: None,
         }
     }
 
@@ -698,6 +714,7 @@ impl ApiResponse {
             resolved_intents: None, messages: None, context_data: None,
             error: Some(msg.into()),
             total_count: None, has_more: None,
+            subscription_id: None, kernel_events: None,
         }
     }
 }

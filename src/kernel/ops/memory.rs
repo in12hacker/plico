@@ -3,6 +3,7 @@
 use crate::api::permission::{PermissionAction, PermissionContext};
 use crate::memory::{MemoryEntry, MemoryContent, MemoryTier, MemoryScope};
 use crate::scheduler::AgentId;
+use crate::kernel::event_bus::KernelEvent;
 
 impl crate::kernel::AIKernel {
     fn agent_memory_quota(&self, agent_id: &str) -> u64 {
@@ -54,6 +55,10 @@ impl crate::kernel::AIKernel {
         let quota = self.agent_memory_quota(agent_id);
         self.memory.store_checked(entry, quota)
             .map_err(|e| e.to_string())?;
+        self.event_bus.emit(KernelEvent::MemoryStored {
+            agent_id: agent_id.to_string(),
+            tier: "working".into(),
+        });
         self.persist_memories();
         Ok(())
     }
@@ -150,6 +155,10 @@ impl crate::kernel::AIKernel {
         let quota = self.agent_memory_quota(agent_id);
         self.memory.store_checked(entry, quota)
             .map_err(|e| e.to_string())?;
+        self.event_bus.emit(KernelEvent::MemoryStored {
+            agent_id: agent_id.to_string(),
+            tier: "long_term".into(),
+        });
         self.persist_memories();
         Ok(())
     }
@@ -234,6 +243,10 @@ impl crate::kernel::AIKernel {
         };
         let quota = self.agent_memory_quota(agent_id);
         self.memory.store_checked(entry, quota).map_err(|e| e.to_string())?;
+        self.event_bus.emit(KernelEvent::MemoryStored {
+            agent_id: agent_id.to_string(),
+            tier: "procedural".into(),
+        });
         self.persist_memories();
         Ok(entry_id)
     }

@@ -3,6 +3,7 @@
 use crate::fs::{EventType, EventSummary, EventRelation};
 use crate::api::permission::{PermissionContext, PermissionAction};
 use crate::temporal::{TemporalResolver, RULE_BASED_RESOLVER};
+use crate::kernel::event_bus::KernelEvent;
 
 impl crate::kernel::AIKernel {
     /// Create an event and register it in the knowledge graph.
@@ -19,8 +20,14 @@ impl crate::kernel::AIKernel {
     ) -> std::io::Result<String> {
         let ctx = PermissionContext::new(agent_id.to_string());
         self.permissions.check(&ctx, PermissionAction::Write)?;
-        self.fs.create_event(label, event_type, start_time, end_time, location, tags, agent_id)
-            .map_err(|e| std::io::Error::other(e.to_string()))
+        let event_id = self.fs.create_event(label, event_type, start_time, end_time, location, tags, agent_id)
+            .map_err(|e| std::io::Error::other(e.to_string()))?;
+        self.event_bus.emit(KernelEvent::EventCreated {
+            event_id: event_id.clone(),
+            label: label.to_string(),
+            agent_id: agent_id.to_string(),
+        });
+        Ok(event_id)
     }
 
     /// List events matching time range, tags, and optional event type.

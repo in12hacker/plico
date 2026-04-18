@@ -1,4 +1,5 @@
-//! Event commands — list events by time or natural language expression.
+//! Event commands — list events by time or natural language expression,
+//! plus event bus subscribe/poll/unsubscribe for reactive workflows.
 
 use plico::kernel::AIKernel;
 use plico::api::semantic::ApiResponse;
@@ -31,8 +32,39 @@ pub fn cmd_events(kernel: &AIKernel, args: &[String]) -> ApiResponse {
                 Err(e) => ApiResponse::error(e.to_string()),
             }
         }
+        Some("subscribe") => {
+            let sub_id = kernel.event_subscribe();
+            let mut r = ApiResponse::ok();
+            r.subscription_id = Some(sub_id);
+            r
+        }
+        Some("poll") => {
+            let sub_id = match extract_arg(args, "--sub") {
+                Some(s) => s,
+                None => return ApiResponse::error("--sub required".to_string()),
+            };
+            match kernel.event_poll(&sub_id) {
+                Some(events) => {
+                    let mut r = ApiResponse::ok();
+                    r.kernel_events = Some(events);
+                    r
+                }
+                None => ApiResponse::error(format!("Unknown subscription: {}", sub_id)),
+            }
+        }
+        Some("unsubscribe") => {
+            let sub_id = match extract_arg(args, "--sub") {
+                Some(s) => s,
+                None => return ApiResponse::error("--sub required".to_string()),
+            };
+            if kernel.event_unsubscribe(&sub_id) {
+                ApiResponse::ok()
+            } else {
+                ApiResponse::error(format!("Unknown subscription: {}", sub_id))
+            }
+        }
         _ => {
-            eprintln!("Usage: events <list|by-time> [options]");
+            eprintln!("Usage: events <list|by-time|subscribe|poll|unsubscribe> [options]");
             ApiResponse::error("unknown events subcommand")
         }
     }

@@ -3,6 +3,7 @@
 use crate::fs::Query;
 use crate::api::permission::{PermissionContext, PermissionAction};
 use crate::cas::{AIObject, AIObjectMeta};
+use crate::kernel::event_bus::KernelEvent;
 
 impl crate::kernel::AIKernel {
     // ─── CAS Operations ────────────────────────────────────────────────
@@ -44,7 +45,13 @@ impl crate::kernel::AIKernel {
     ) -> std::io::Result<String> {
         let ctx = PermissionContext::new(agent_id.to_string());
         self.permissions.check(&ctx, PermissionAction::Write)?;
-        self.fs.create(content, tags, agent_id.to_string(), intent)
+        let cid = self.fs.create(content, tags.clone(), agent_id.to_string(), intent)?;
+        self.event_bus.emit(KernelEvent::ObjectStored {
+            cid: cid.clone(),
+            agent_id: agent_id.to_string(),
+            tags,
+        });
+        Ok(cid)
     }
 
     /// Semantic search with optional tag filtering.

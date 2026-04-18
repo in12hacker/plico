@@ -2371,3 +2371,161 @@ fn test_full_suspend_resume_cycle_preserves_memory() {
     assert!(has_fact2, "should restore fact 2 from checkpoint");
     assert!(has_context, "should inject context summary");
 }
+
+// ── v5.0: Kernel Event Bus ─────────────────────────────────────────
+
+#[test]
+fn test_event_subscribe_and_poll_empty() {
+    let (kernel, _dir) = make_kernel();
+    let sub_id = kernel.event_subscribe();
+    assert!(sub_id.starts_with("sub-"));
+    let events = kernel.event_poll(&sub_id).unwrap();
+    assert!(events.is_empty());
+}
+
+#[test]
+fn test_event_bus_object_stored_notification() {
+    let (kernel, _dir) = make_kernel();
+    let agent = kernel.register_agent("watcher".into());
+
+    let sub_id = kernel.event_subscribe();
+
+    kernel.semantic_create(
+        b"test data".to_vec(),
+        vec!["tag-a".into()],
+        &agent,
+        None,
+    ).unwrap();
+
+    let events = kernel.event_poll(&sub_id).unwrap();
+    assert!(!events.is_empty(), "should receive ObjectStored event");
+    let has_obj_stored = events.iter().any(|e| {
+        matches!(e, plico::kernel::event_bus::KernelEvent::ObjectStored { tags, .. }
+            if tags.contains(&"tag-a".to_string()))
+    });
+    assert!(has_obj_stored, "should have ObjectStored with correct tags");
+}
+
+#[test]
+fn test_event_bus_agent_state_change_notification() {
+    let (kernel, _dir) = make_kernel();
+    let agent = kernel.register_agent("lifecycle".into());
+
+    // Move agent to Waiting state first (Created → Suspended is illegal)
+    kernel.submit_intent(
+        plico::scheduler::IntentPriority::Low,
+        "activate".into(),
+        None,
+        Some(agent.clone()),
+    ).unwrap();
+
+    let sub_id = kernel.event_subscribe();
+
+    kernel.agent_suspend(&agent).unwrap();
+    kernel.agent_resume(&agent).unwrap();
+
+    let events = kernel.event_poll(&sub_id).unwrap();
+    let state_changes: Vec<_> = events.iter().filter(|e| {
+        matches!(e, plico::kernel::event_bus::KernelEvent::AgentStateChanged { .. })
+    }).collect();
+    assert!(state_changes.len() >= 2, "should see suspend + resume state changes");
+}
+
+#[test]
+fn test_event_bus_memory_stored_notification() {
+    let (kernel, _dir) = make_kernel();
+    let agent = kernel.register_agent("learner".into());
+
+    let sub_id = kernel.event_subscribe();
+
+    kernel.remember_working(&agent, "test fact".into(), vec!["tag".into()]).unwrap();
+
+    let events = kernel.event_poll(&sub_id).unwrap();
+    let has_mem_stored = events.iter().any(|e| {
+        matches!(e, plico::kernel::event_bus::KernelEvent::MemoryStored { tier, .. }
+            if tier == "working")
+    });
+    assert!(has_mem_stored, "should receive MemoryStored event for working tier");
+}
+
+#[test]
+fn test_event_bus_cross_agent_reactive_workflow() {
+    let (kernel, _dir) = make_kernel();
+    let agent_a = kernel.register_agent("producer".into());
+    let _agent_b = kernel.register_agent("consumer".into());
+
+    let sub_b = kernel.event_subscribe();
+
+    kernel.semantic_create(
+        b"shared knowledge".to_vec(),
+        vec!["shared".into(), "knowledge".into()],
+        &agent_a,
+        None,
+    ).unwrap();
+
+    kernel.remember_working(&agent_a, "learned something".into(), vec![]).unwrap();
+
+    let events = kernel.event_poll(&sub_b).unwrap();
+    assert!(events.len() >= 2, "consumer should see both producer events");
+
+    let has_object = events.iter().any(|e| matches!(e, plico::kernel::event_bus::KernelEvent::ObjectStored { .. }));
+    let has_memory = events.iter().any(|e| matches!(e, plico::kernel::event_bus::KernelEvent::MemoryStored { .. }));
+    assert!(has_object, "consumer should see ObjectStored from producer");
+    assert!(has_memory, "consumer should see MemoryStored from producer");
+}
+
+#[test]
+fn test_event_bus_unsubscribe_stops_events() {
+    let (kernel, _dir) = make_kernel();
+    let agent = kernel.register_agent("temp".into());
+
+    let sub_id = kernel.event_subscribe();
+    assert!(kernel.event_unsubscribe(&sub_id));
+
+    kernel.semantic_create(b"data".to_vec(), vec![], &agent, None).unwrap();
+
+    assert!(kernel.event_poll(&sub_id).is_none(), "unsubscribed should return None");
+}
+
+#[test]
+fn test_event_bus_via_api() {
+    use plico::api::semantic::ApiRequest;
+
+    let (kernel, _dir) = make_kernel();
+    let agent = kernel.register_agent("api-user".into());
+
+    let resp = kernel.handle_api_request(ApiRequest::EventSubscribe { agent_id: agent.clone() });
+    assert!(resp.ok);
+    let sub_id = resp.subscription_id.unwrap();
+
+    kernel.semantic_create(b"api test".to_vec(), vec!["api".into()], &agent, None).unwrap();
+
+    let resp = kernel.handle_api_request(ApiRequest::EventPoll { subscription_id: sub_id.clone() });
+    assert!(resp.ok);
+    let events = resp.kernel_events.unwrap();
+    assert!(!events.is_empty(), "API poll should return pending events");
+
+    let resp = kernel.handle_api_request(ApiRequest::EventUnsubscribe { subscription_id: sub_id });
+    assert!(resp.ok);
+}
+
+#[test]
+fn test_event_bus_intent_submitted_notification() {
+    let (kernel, _dir) = make_kernel();
+    let agent = kernel.register_agent("intender".into());
+
+    let sub_id = kernel.event_subscribe();
+
+    kernel.submit_intent(
+        plico::scheduler::IntentPriority::Medium,
+        "test intent".into(),
+        None,
+        Some(agent.clone()),
+    ).unwrap();
+
+    let events = kernel.event_poll(&sub_id).unwrap();
+    let has_intent = events.iter().any(|e| {
+        matches!(e, plico::kernel::event_bus::KernelEvent::IntentSubmitted { .. })
+    });
+    assert!(has_intent, "should receive IntentSubmitted event");
+}

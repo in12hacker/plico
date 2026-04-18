@@ -1,6 +1,7 @@
 //! Agent lifecycle operations — register, suspend, resume, terminate, checkpoint.
 
 use crate::scheduler::{Agent, AgentHandle, AgentId, AgentState, AgentResources, Intent, IntentPriority, TransitionError};
+use crate::kernel::event_bus::KernelEvent;
 
 fn transition_err(e: TransitionError) -> std::io::Error {
     std::io::Error::new(std::io::ErrorKind::InvalidInput, e.to_string())
@@ -48,11 +49,18 @@ impl crate::kernel::AIKernel {
         if let Some(a) = action {
             intent = intent.with_action(a);
         }
+        let emit_agent_id = agent_id.clone();
         if let Some(aid) = agent_id {
             intent = intent.with_agent(AgentId(aid));
         }
         let id = intent.id.0.clone();
+        let priority_str = format!("{:?}", priority);
         self.scheduler.submit(intent);
+        self.event_bus.emit(KernelEvent::IntentSubmitted {
+            intent_id: id.clone(),
+            agent_id: emit_agent_id,
+            priority: priority_str,
+        });
         self.persist_intents();
         Ok(id)
     }
@@ -88,7 +96,7 @@ impl crate::kernel::AIKernel {
         let snapshot = crate::memory::context_snapshot::ContextSnapshot {
             agent_id: agent_id.to_string(),
             timestamp_ms: crate::memory::layered::now_ms(),
-            state_before_suspend: state_before,
+            state_before_suspend: state_before.clone(),
             pending_intents: pending,
             active_memory_count: memories.len(),
             last_intent_description: last_intent,
@@ -101,6 +109,11 @@ impl crate::kernel::AIKernel {
         self.memory.store(entry);
 
         self.scheduler.update_state(&aid, AgentState::Suspended).map_err(transition_err)?;
+        self.event_bus.emit(KernelEvent::AgentStateChanged {
+            agent_id: agent_id.to_string(),
+            old_state: state_before.clone(),
+            new_state: "Suspended".into(),
+        });
         self.persist_agents();
         Ok(())
     }
@@ -143,37 +156,60 @@ impl crate::kernel::AIKernel {
         }
 
         self.scheduler.update_state(&aid, AgentState::Waiting).map_err(transition_err)?;
+        self.event_bus.emit(KernelEvent::AgentStateChanged {
+            agent_id: agent_id.to_string(),
+            old_state: "Suspended".into(),
+            new_state: "Waiting".into(),
+        });
         self.persist_agents();
         Ok(())
     }
 
     pub fn agent_terminate(&self, agent_id: &str) -> std::io::Result<()> {
         let aid = AgentId(agent_id.to_string());
-        let _agent = self.scheduler.get(&aid).ok_or_else(|| {
+        let agent = self.scheduler.get(&aid).ok_or_else(|| {
             std::io::Error::new(std::io::ErrorKind::NotFound, format!("Agent not found: {}", agent_id))
         })?;
+        let old_state = format!("{:?}", agent.state());
         self.scheduler.update_state(&aid, AgentState::Terminated).map_err(transition_err)?;
+        self.event_bus.emit(KernelEvent::AgentStateChanged {
+            agent_id: agent_id.to_string(),
+            old_state,
+            new_state: "Terminated".into(),
+        });
         self.persist_agents();
         Ok(())
     }
 
     pub fn agent_complete(&self, agent_id: &str) -> std::io::Result<()> {
         let aid = AgentId(agent_id.to_string());
-        let _agent = self.scheduler.get(&aid).ok_or_else(|| {
+        let agent = self.scheduler.get(&aid).ok_or_else(|| {
             std::io::Error::new(std::io::ErrorKind::NotFound, format!("Agent not found: {}", agent_id))
         })?;
+        let old_state = format!("{:?}", agent.state());
         self.scheduler.update_state(&aid, AgentState::Completed).map_err(transition_err)?;
+        self.event_bus.emit(KernelEvent::AgentStateChanged {
+            agent_id: agent_id.to_string(),
+            old_state,
+            new_state: "Completed".into(),
+        });
         self.persist_agents();
         Ok(())
     }
 
     pub fn agent_fail(&self, agent_id: &str, reason: &str) -> std::io::Result<()> {
         let aid = AgentId(agent_id.to_string());
-        let _agent = self.scheduler.get(&aid).ok_or_else(|| {
+        let agent = self.scheduler.get(&aid).ok_or_else(|| {
             std::io::Error::new(std::io::ErrorKind::NotFound, format!("Agent not found: {}", agent_id))
         })?;
+        let old_state = format!("{:?}", agent.state());
         tracing::info!("Agent {} explicitly failed: {}", agent_id, reason);
         self.scheduler.update_state(&aid, AgentState::Failed).map_err(transition_err)?;
+        self.event_bus.emit(KernelEvent::AgentStateChanged {
+            agent_id: agent_id.to_string(),
+            old_state,
+            new_state: "Failed".into(),
+        });
         self.persist_agents();
         Ok(())
     }

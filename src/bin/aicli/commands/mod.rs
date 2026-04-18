@@ -252,6 +252,19 @@ pub fn print_result(response: &ApiResponse) {
             }
         }
     }
+    if let Some(sub_id) = &response.subscription_id {
+        println!("Subscription ID: {}", sub_id);
+    }
+    if let Some(ke) = &response.kernel_events {
+        if ke.is_empty() {
+            println!("No pending kernel events.");
+        } else {
+            println!("Kernel events ({} pending):", ke.len());
+            for e in ke {
+                println!("  {:?}", e);
+            }
+        }
+    }
     if !response.ok {
         if let Some(e) = &response.error {
             eprintln!("Error: {}", e);

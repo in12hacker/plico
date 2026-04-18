@@ -11,6 +11,7 @@
 //! - `ops/` — operation groups (fs, agent, memory, events, graph, dispatch, intent, messaging, dashboard)
 
 mod builtin_tools;
+pub mod event_bus;
 mod persistence;
 pub mod ops;
 
@@ -26,6 +27,7 @@ use crate::scheduler::messaging::MessageBus;
 use crate::fs::{SemanticFS, InMemoryBackend, HnswBackend, EmbeddingProvider, SemanticSearch, LlmSummarizer, Summarizer, KnowledgeGraph, PetgraphBackend, StubEmbeddingProvider};
 use crate::api::permission::PermissionGuard;
 use crate::tool::ToolRegistry;
+use crate::kernel::event_bus::EventBus;
 
 /// The AI Kernel — all subsystems wired together.
 pub struct AIKernel {
@@ -47,6 +49,7 @@ pub struct AIKernel {
     search_op_count: Arc<AtomicU64>,
     pub(crate) tool_registry: Arc<ToolRegistry>,
     pub(crate) message_bus: Arc<MessageBus>,
+    pub(crate) event_bus: Arc<EventBus>,
 }
 
 impl AIKernel {
@@ -117,6 +120,7 @@ impl AIKernel {
 
         let tool_registry = Arc::new(ToolRegistry::new());
         let message_bus = Arc::new(MessageBus::new());
+        let event_bus = Arc::new(EventBus::new());
 
         let kernel = Self {
             root: root.clone(),
@@ -133,6 +137,7 @@ impl AIKernel {
             search_op_count: Arc::new(AtomicU64::new(0)),
             tool_registry,
             message_bus,
+            event_bus,
         };
 
         kernel.register_builtin_tools();
@@ -154,6 +159,18 @@ impl AIKernel {
         if count.is_multiple_of(Self::SEARCH_PERSIST_EVERY_N) {
             self.persist_search_index();
         }
+    }
+
+    pub fn event_subscribe(&self) -> String {
+        self.event_bus.subscribe()
+    }
+
+    pub fn event_poll(&self, subscription_id: &str) -> Option<Vec<event_bus::KernelEvent>> {
+        self.event_bus.poll(subscription_id)
+    }
+
+    pub fn event_unsubscribe(&self, subscription_id: &str) -> bool {
+        self.event_bus.unsubscribe(subscription_id)
     }
 
     // ─── API Request Handler ───────────────────────────────────────────
@@ -784,6 +801,32 @@ impl AIKernel {
                         r
                     }
                     Err(e) => ApiResponse::error(e.to_string()),
+                }
+            }
+
+            // ── Event Bus (v5.0) ───────────────────────────────────────
+
+            ApiRequest::EventSubscribe { agent_id: _ } => {
+                let sub_id = self.event_subscribe();
+                let mut r = ApiResponse::ok();
+                r.subscription_id = Some(sub_id);
+                r
+            }
+            ApiRequest::EventPoll { subscription_id } => {
+                match self.event_poll(&subscription_id) {
+                    Some(events) => {
+                        let mut r = ApiResponse::ok();
+                        r.kernel_events = Some(events);
+                        r
+                    }
+                    None => ApiResponse::error(format!("Unknown subscription: {}", subscription_id)),
+                }
+            }
+            ApiRequest::EventUnsubscribe { subscription_id } => {
+                if self.event_unsubscribe(&subscription_id) {
+                    ApiResponse::ok()
+                } else {
+                    ApiResponse::error(format!("Unknown subscription: {}", subscription_id))
                 }
             }
         }
