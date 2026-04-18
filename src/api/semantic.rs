@@ -71,6 +71,9 @@ pub fn decode_content(content: &str, encoding: &ContentEncoding) -> Result<Vec<u
     }
 }
 
+fn default_importance() -> u8 { 50 }
+fn default_k() -> usize { 10 }
+
 /// A JSON API request.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "method")]
@@ -135,6 +138,24 @@ pub enum ApiRequest {
 
     #[serde(rename = "recall")]
     Recall { agent_id: String },
+
+    #[serde(rename = "remember_long_term")]
+    RememberLongTerm {
+        agent_id: String,
+        content: String,
+        #[serde(default)]
+        tags: Vec<String>,
+        #[serde(default = "default_importance")]
+        importance: u8,
+    },
+
+    #[serde(rename = "recall_semantic")]
+    RecallSemantic {
+        agent_id: String,
+        query: String,
+        #[serde(default = "default_k")]
+        k: usize,
+    },
 
     #[serde(rename = "explore")]
     Explore { cid: String, edge_type: Option<String>, depth: Option<u8>, agent_id: String },

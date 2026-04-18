@@ -9,6 +9,7 @@
 //! token budget, and by promotion logic to decide tier transitions.
 
 use super::layered::{MemoryEntry, MemoryTier};
+use std::collections::HashMap;
 
 /// Weights for the combined relevance formula.
 const W_RECENCY: f32 = 0.4;
@@ -62,6 +63,69 @@ pub fn select_within_budget(
     let mut scored: Vec<(MemoryEntry, RelevanceScore)> = entries.iter()
         .map(|e| {
             let s = score_entry(e, now_ms, max_access);
+            (e.clone(), s)
+        })
+        .collect();
+
+    scored.sort_by(|a, b| b.1.combined.partial_cmp(&a.1.combined).unwrap_or(std::cmp::Ordering::Equal));
+
+    let mut used_tokens = 0usize;
+    let mut result = Vec::new();
+    for (entry, score) in scored {
+        let entry_tokens = estimate_tokens(&entry);
+        if used_tokens + entry_tokens > budget_tokens && !result.is_empty() {
+            break;
+        }
+        used_tokens += entry_tokens;
+        result.push((entry, score));
+    }
+
+    result
+}
+
+/// Weights when semantic score is available (4-factor model).
+const W_RECENCY_SEM: f32 = 0.25;
+const W_FREQUENCY_SEM: f32 = 0.15;
+const W_IMPORTANCE_SEM: f32 = 0.20;
+const W_SEMANTIC: f32 = 0.40;
+
+/// Compute relevance score incorporating an optional semantic similarity score.
+pub fn score_entry_with_semantic(
+    entry: &MemoryEntry,
+    now_ms: u64,
+    max_access: u32,
+    semantic_score: Option<f32>,
+) -> RelevanceScore {
+    let base = score_entry(entry, now_ms, max_access);
+    match semantic_score {
+        Some(sem) => {
+            let combined = W_RECENCY_SEM * base.recency
+                + W_FREQUENCY_SEM * base.frequency
+                + W_IMPORTANCE_SEM * base.importance
+                + W_SEMANTIC * sem;
+            RelevanceScore { combined, ..base }
+        }
+        None => base,
+    }
+}
+
+/// Rank entries by relevance (with semantic scores) and return top entries within budget.
+pub fn select_within_budget_semantic(
+    entries: &[MemoryEntry],
+    budget_tokens: usize,
+    now_ms: u64,
+    semantic_scores: &HashMap<String, f32>,
+) -> Vec<(MemoryEntry, RelevanceScore)> {
+    if entries.is_empty() {
+        return Vec::new();
+    }
+
+    let max_access = entries.iter().map(|e| e.access_count).max().unwrap_or(1);
+
+    let mut scored: Vec<(MemoryEntry, RelevanceScore)> = entries.iter()
+        .map(|e| {
+            let sem = semantic_scores.get(&e.id).copied();
+            let s = score_entry_with_semantic(e, now_ms, max_access, sem);
             (e.clone(), s)
         })
         .collect();
@@ -249,5 +313,25 @@ mod tests {
         assert!(check_promotion(&entry, &thresholds).is_none());
         entry.tier = MemoryTier::Procedural;
         assert!(check_promotion(&entry, &thresholds).is_none());
+    }
+
+    #[test]
+    fn semantic_score_boosts_relevance() {
+        let now = now_ms();
+        let entry = make_entry("x", 1, 50, 1000);
+        let base = score_entry(&entry, now, 1);
+        let with_sem = score_entry_with_semantic(&entry, now, 1, Some(0.9));
+        assert!(with_sem.combined > base.combined,
+            "Semantic score should boost combined relevance: {} vs {}", with_sem.combined, base.combined);
+    }
+
+    #[test]
+    fn semantic_score_none_falls_back_to_base() {
+        let now = now_ms();
+        let entry = make_entry("x", 1, 50, 1000);
+        let base = score_entry(&entry, now, 1);
+        let no_sem = score_entry_with_semantic(&entry, now, 1, None);
+        assert!((no_sem.combined - base.combined).abs() < f32::EPSILON,
+            "Without semantic score, should equal base scoring");
     }
 }

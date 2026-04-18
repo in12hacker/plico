@@ -205,3 +205,47 @@ fn test_memory_tier_priority() {
     assert_eq!(MemoryTier::Ephemeral.priority(), 3);
     assert_eq!(MemoryTier::Procedural.priority(), 0); // Never evicted
 }
+
+#[test]
+fn test_recall_semantic_with_embeddings() {
+    let mem = LayeredMemory::new();
+
+    let mut entry1 = make_entry("a", MemoryTier::LongTerm, 50, "Rust programming");
+    entry1.embedding = Some(vec![1.0, 0.0, 0.0]);
+
+    let mut entry2 = make_entry("a", MemoryTier::LongTerm, 50, "Python scripting");
+    entry2.embedding = Some(vec![0.0, 1.0, 0.0]);
+
+    let mut entry3 = make_entry("a", MemoryTier::LongTerm, 50, "Rust systems");
+    entry3.embedding = Some(vec![0.9, 0.1, 0.0]);
+
+    mem.store(entry1);
+    mem.store(entry2);
+    mem.store(entry3);
+
+    let query = vec![1.0, 0.0, 0.0]; // most similar to "Rust programming"
+    let results = mem.recall_semantic("a", &query, 2);
+
+    assert_eq!(results.len(), 2);
+    assert!(results[0].1 > results[1].1, "Results should be sorted by similarity");
+    assert_eq!(results[0].0.content.display(), "Rust programming");
+}
+
+#[test]
+fn test_recall_semantic_skips_entries_without_embeddings() {
+    let mem = LayeredMemory::new();
+
+    let entry_with = {
+        let mut e = make_entry("a", MemoryTier::LongTerm, 50, "embedded entry");
+        e.embedding = Some(vec![1.0, 0.0]);
+        e
+    };
+    let entry_without = make_entry("a", MemoryTier::LongTerm, 50, "no embedding");
+
+    mem.store(entry_with);
+    mem.store(entry_without);
+
+    let results = mem.recall_semantic("a", &[1.0, 0.0], 10);
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].0.content.display(), "embedded entry");
+}

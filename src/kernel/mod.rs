@@ -277,6 +277,27 @@ impl AIKernel {
                 r.memory = Some(memories);
                 r
             }
+            ApiRequest::RememberLongTerm { agent_id, content, tags, importance } => {
+                match self.remember_long_term(&agent_id, content, tags, importance) {
+                    Ok(()) => ApiResponse::ok(),
+                    Err(e) => ApiResponse::error(e),
+                }
+            }
+            ApiRequest::RecallSemantic { agent_id, query, k } => {
+                match self.recall_semantic(&agent_id, &query, k) {
+                    Ok(entries) => {
+                        let memories: Vec<String> = entries.into_iter()
+                            .filter_map(|m| match m.content {
+                                crate::memory::MemoryContent::Text(t) => Some(t),
+                                _ => None,
+                            }).collect();
+                        let mut r = ApiResponse::ok();
+                        r.memory = Some(memories);
+                        r
+                    }
+                    Err(e) => ApiResponse::error(e),
+                }
+            }
             ApiRequest::Explore { cid, edge_type, depth, agent_id: _ } => {
                 let depth = depth.unwrap_or(1).min(3);
                 let raw = self.graph_explore_raw(&cid, edge_type.as_deref(), depth);

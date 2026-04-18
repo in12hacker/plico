@@ -193,21 +193,41 @@ impl ContextLoader {
         })
     }
 
+    /// Store a pre-computed L1 summary for a CID.
+    pub fn store_l1(&self, cid: &str, content: String) -> std::io::Result<()> {
+        let path = self.l1_path(cid);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(path, content)
+    }
+
     fn load_l1(&self, cid: &str) -> std::io::Result<LoadedContext> {
+        const L1_CHAR_LIMIT: usize = 8_000;
+
         let path = self.l1_path(cid);
         let content = match fs::read_to_string(&path) {
             Ok(s) => s,
             Err(_) => {
-                // No pre-computed L1 — fall back to leading content from CAS
-                // (approximately 2000 tokens ≈ 8000 characters).
-                const L1_CHAR_LIMIT: usize = 8_000;
                 let raw = self.cas.get(cid)
                     .map(|obj| String::from_utf8_lossy(&obj.data).into_owned())
                     .unwrap_or_default();
-                if raw.len() <= L1_CHAR_LIMIT {
-                    raw
+
+                if let Some(ref summarizer) = self.summarizer {
+                    match summarizer.summarize(&raw, SummaryLayer::L1) {
+                        Ok(summary) => {
+                            if let Err(e) = self.store_l1(cid, summary.clone()) {
+                                tracing::warn!("Failed to cache L1 for {}: {}", &cid[..8.min(cid.len())], e);
+                            }
+                            summary
+                        }
+                        Err(e) => {
+                            tracing::warn!("L1 summarization failed for {}: {}. Falling back to prefix.", &cid[..8.min(cid.len())], e);
+                            Self::prefix_truncate(&raw, L1_CHAR_LIMIT)
+                        }
+                    }
                 } else {
-                    raw[..L1_CHAR_LIMIT].to_string()
+                    Self::prefix_truncate(&raw, L1_CHAR_LIMIT)
                 }
             }
         };
@@ -218,6 +238,10 @@ impl ContextLoader {
             content,
             tokens_estimate,
         })
+    }
+
+    fn prefix_truncate(raw: &str, limit: usize) -> String {
+        if raw.len() <= limit { raw.to_string() } else { raw[..limit].to_string() }
     }
 
     fn load_l2(&self, cid: &str) -> std::io::Result<LoadedContext> {

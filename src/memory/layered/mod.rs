@@ -671,12 +671,77 @@ impl LayeredMemory {
         }
         false
     }
+
+    /// Retrieve long-term memories most semantically similar to a query embedding.
+    pub fn recall_semantic(
+        &self,
+        agent_id: &str,
+        query_embedding: &[f32],
+        k: usize,
+    ) -> Vec<(MemoryEntry, f32)> {
+        let lt = self.long_term.read().unwrap();
+        let entries = match lt.get(agent_id) {
+            Some(e) => e,
+            None => return Vec::new(),
+        };
+
+        let mut scored: Vec<(MemoryEntry, f32)> = entries.iter()
+            .filter_map(|e| {
+                e.embedding.as_ref().map(|emb| {
+                    let sim = cosine_similarity(query_embedding, emb);
+                    (e.clone(), sim)
+                })
+            })
+            .collect();
+
+        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        scored.truncate(k);
+        scored
+    }
+
+    /// Retrieve relevant memories combining recency/frequency/importance with semantic similarity.
+    pub fn recall_relevant_semantic(
+        &self,
+        agent_id: &str,
+        query_embedding: &[f32],
+        budget_tokens: usize,
+    ) -> Vec<MemoryEntry> {
+        let now = now_ms();
+        let all = self.recall_with_tracking(agent_id);
+
+        let semantic_scores: std::collections::HashMap<String, f32> = all.iter()
+            .filter_map(|e| {
+                e.embedding.as_ref().map(|emb| {
+                    (e.id.clone(), cosine_similarity(query_embedding, emb))
+                })
+            })
+            .collect();
+
+        let selected = crate::memory::relevance::select_within_budget_semantic(
+            &all, budget_tokens, now, &semantic_scores
+        );
+        selected.into_iter().map(|(entry, _score)| entry).collect()
+    }
 }
 
 impl Default for LayeredMemory {
     fn default() -> Self {
         Self::new()
     }
+}
+
+fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
+    if a.len() != b.len() { return 0.0; }
+    let mut dot = 0.0f32;
+    let mut norm_a = 0.0f32;
+    let mut norm_b = 0.0f32;
+    for i in 0..a.len() {
+        dot += a[i] * b[i];
+        norm_a += a[i] * a[i];
+        norm_b += b[i] * b[i];
+    }
+    let denom = norm_a.sqrt() * norm_b.sqrt();
+    if denom < 1e-10 { 0.0 } else { dot / denom }
 }
 
 pub(crate) fn now_ms() -> u64 {

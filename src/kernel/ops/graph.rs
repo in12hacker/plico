@@ -42,6 +42,9 @@ impl crate::kernel::AIKernel {
             "follows"         => Some(KGEdgeType::Follows),
             "part_of"         => Some(KGEdgeType::PartOf),
             "related_to"      => Some(KGEdgeType::RelatedTo),
+            "similar_to"      => Some(KGEdgeType::SimilarTo),
+            "causes"          => Some(KGEdgeType::Causes),
+            "reminds"         => Some(KGEdgeType::Reminds),
             _ => None,
         });
         self.graph_explore(cid, edge_filter, depth)

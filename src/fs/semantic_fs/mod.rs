@@ -18,6 +18,7 @@ use crate::fs::embedding::EmbeddingProvider;
 use crate::fs::search::{SemanticSearch, SearchFilter, SearchIndexMeta, Bm25Index};
 use crate::fs::summarizer::Summarizer;
 use crate::fs::graph::KnowledgeGraph;
+use crate::fs::graph::{KGEdge, KGEdgeType};
 
 // Re-export types from fs/types (single source of truth)
 pub use crate::fs::types::{
@@ -175,11 +176,14 @@ impl SemanticFS {
         let cid = self.cas.put(&obj)?;
 
         self.update_tag_index(&tags, &cid);
-        self.upsert_semantic_index(&cid, &content, &meta);
+        let embedding = self.upsert_semantic_index(&cid, &content, &meta);
 
         if let Some(ref kg) = self.knowledge_graph {
             if let Err(e) = kg.upsert_document(&cid, &tags, &meta.created_by) {
                 tracing::warn!("Failed to upsert document to knowledge graph: {}", e);
+            }
+            if let Some(ref emb) = embedding {
+                self.add_similar_to_edges(kg, &cid, emb);
             }
         }
 
@@ -316,7 +320,13 @@ impl SemanticFS {
         self.update_tag_index(&final_tags, &new_cid);
 
         self.search_index.delete(old_cid);
-        self.upsert_semantic_index(&new_cid, &new_content, &new_meta);
+        let embedding = self.upsert_semantic_index(&new_cid, &new_content, &new_meta);
+
+        if let Some(ref kg) = self.knowledge_graph {
+            if let Some(ref emb) = embedding {
+                self.add_similar_to_edges(kg, &new_cid, emb);
+            }
+        }
 
         self.audit_log.write().unwrap().push(AuditEntry {
             timestamp: now_ms(),
@@ -373,7 +383,13 @@ impl SemanticFS {
         self.update_tag_index(&entry.original_meta.tags, cid);
 
         if let Ok(obj) = self.cas.get(cid) {
-            self.upsert_semantic_index(cid, &obj.data, &obj.meta);
+            let embedding = self.upsert_semantic_index(cid, &obj.data, &obj.meta);
+
+            if let Some(ref kg) = self.knowledge_graph {
+                if let Some(ref emb) = embedding {
+                    self.add_similar_to_edges(kg, cid, emb);
+                }
+            }
         }
 
         if let Some(ref kg) = self.knowledge_graph {
@@ -496,7 +512,35 @@ impl SemanticFS {
 
     // ─── Internal helpers ────────────────────────────────────────────────
 
-    fn upsert_semantic_index(&self, cid: &str, content: &[u8], meta: &AIObjectMeta) {
+    const SIMILARITY_THRESHOLD: f32 = 0.5;
+
+    fn add_similar_to_edges(&self, kg: &Arc<dyn KnowledgeGraph>, cid: &str, embedding: &[f32]) {
+        let filter = SearchFilter::default();
+        let similar = self.search_index.search(embedding, 10, &filter);
+        for hit in similar {
+            if hit.cid == cid || hit.score < Self::SIMILARITY_THRESHOLD {
+                continue;
+            }
+            let e1 = KGEdge::new_with_episode(
+                cid.to_string(),
+                hit.cid.clone(),
+                KGEdgeType::SimilarTo,
+                hit.score,
+                cid,
+            );
+            let e2 = KGEdge::new_with_episode(
+                hit.cid.clone(),
+                cid.to_string(),
+                KGEdgeType::SimilarTo,
+                hit.score,
+                cid,
+            );
+            let _ = kg.add_edge(e1);
+            let _ = kg.add_edge(e2);
+        }
+    }
+
+    fn upsert_semantic_index(&self, cid: &str, content: &[u8], meta: &AIObjectMeta) -> Option<Vec<f32>> {
         let text = String::from_utf8_lossy(content);
         let snippet = if text.trim().is_empty() {
             String::new()
@@ -506,13 +550,19 @@ impl SemanticFS {
             text.to_string()
         };
 
+        let is_real_embedding;
         let embedding = if text.trim().is_empty() {
+            is_real_embedding = false;
             vec![0.0f32; self.embedding.dimension()]
         } else {
             match self.embedding.embed(&text) {
-                Ok(emb) => emb,
+                Ok(emb) => {
+                    is_real_embedding = true;
+                    emb
+                }
                 Err(e) => {
                     tracing::warn!("Failed to embed CID={}: {e}. Indexing with zero vector.", cid);
+                    is_real_embedding = false;
                     vec![0.0f32; self.embedding.dimension()]
                 }
             }
@@ -529,6 +579,8 @@ impl SemanticFS {
         if !text.trim().is_empty() {
             self.bm25_index.upsert(cid, &text);
         }
+
+        if is_real_embedding { Some(embedding) } else { None }
     }
 
     fn update_tag_index(&self, tags: &[String], cid: &str) {

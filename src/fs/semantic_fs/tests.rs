@@ -4,7 +4,7 @@ use std::sync::Arc;
 use tempfile::TempDir;
 
 use crate::fs::embedding::StubEmbeddingProvider;
-use crate::fs::graph::PetgraphBackend;
+use crate::fs::graph::{PetgraphBackend, KnowledgeGraph};
 use crate::fs::search::InMemoryBackend;
 use crate::fs::semantic_fs::{SemanticFS, Query, EventType, EventRelation};
 use crate::fs::context_loader::ContextLayer;
@@ -364,4 +364,92 @@ fn bm25_search_with_tag_filter_and_stub_embeddings() {
     assert!(!results.is_empty(), "BM25 + tag filter should return results with stub embeddings");
     assert!(results.iter().all(|r| r.meta.tags.contains(&"plico:type:adr".to_string())),
         "All results should have the required tag");
+}
+
+/// Deterministic embedding provider for testing — same text always gets same vector.
+struct DeterministicEmbedding;
+
+impl crate::fs::embedding::EmbeddingProvider for DeterministicEmbedding {
+    fn embed(&self, text: &str) -> Result<Vec<f32>, crate::fs::embedding::EmbedError> {
+        let mut vec = vec![0.0f32; 8];
+        for (i, b) in text.bytes().enumerate() {
+            vec[i % 8] += b as f32 / 255.0;
+        }
+        let norm: f32 = vec.iter().map(|x| x * x).sum::<f32>().sqrt();
+        if norm > 0.0 {
+            for x in &mut vec { *x /= norm; }
+        }
+        Ok(vec)
+    }
+    fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, crate::fs::embedding::EmbedError> {
+        texts.iter().map(|t| self.embed(t)).collect()
+    }
+    fn dimension(&self) -> usize { 8 }
+    fn model_name(&self) -> &str { "deterministic-test" }
+}
+
+fn make_fs_with_real_embeddings(dir: &tempfile::TempDir) -> SemanticFS {
+    SemanticFS::new(
+        dir.path().to_path_buf(),
+        Arc::new(DeterministicEmbedding),
+        Arc::new(InMemoryBackend::new()),
+        None,
+        Some(Arc::new(PetgraphBackend::open(dir.path().to_path_buf()))),
+    ).unwrap()
+}
+
+#[test]
+fn test_similar_to_edges_created_for_similar_docs() {
+    use crate::fs::graph::{KGEdgeType, KGNodeType};
+
+    let dir = tempfile::TempDir::new().unwrap();
+    let fs = make_fs_with_real_embeddings(&dir);
+
+    let cid1 = fs.create(
+        b"Rust programming language guide for systems development".to_vec(),
+        vec!["programming".to_string()],
+        "agent1".to_string(),
+        None,
+    ).unwrap();
+    let cid2 = fs.create(
+        b"Rust programming language tutorial for systems engineering".to_vec(),
+        vec!["tutorial".to_string()],
+        "agent1".to_string(),
+        None,
+    ).unwrap();
+
+    // Verify SimilarTo edges were created
+    let kg = PetgraphBackend::open(dir.path().to_path_buf());
+    let neighbors = kg.get_neighbors(&cid2, Some(KGEdgeType::SimilarTo), 1).unwrap();
+    let neighbor_ids: Vec<_> = neighbors.iter().map(|(n, _)| n.id.as_str()).collect();
+    assert!(neighbor_ids.contains(&cid1.as_str()),
+        "Expected SimilarTo edge between similar documents, got neighbors: {:?}", neighbor_ids);
+}
+
+#[test]
+fn test_no_similar_to_edges_for_dissimilar_docs() {
+    use crate::fs::graph::KGEdgeType;
+
+    let dir = tempfile::TempDir::new().unwrap();
+    let fs = make_fs_with_real_embeddings(&dir);
+
+    // 8 identical chars → uniform vector [1/√8, 1/√8, …]
+    let _cid1 = fs.create(
+        b"AAAAAAAA".to_vec(),
+        vec!["a".to_string()],
+        "agent1".to_string(),
+        None,
+    ).unwrap();
+    // Single char → one-hot vector [1, 0, 0, …]; cosine ≈ 0.354 < 0.5 threshold
+    let cid2 = fs.create(
+        b"B".to_vec(),
+        vec!["z".to_string()],
+        "agent1".to_string(),
+        None,
+    ).unwrap();
+
+    let kg = PetgraphBackend::open(dir.path().to_path_buf());
+    let neighbors = kg.get_neighbors(&cid2, Some(KGEdgeType::SimilarTo), 1).unwrap();
+    assert!(neighbors.is_empty(),
+        "Expected no SimilarTo edges for dissimilar documents, got {} neighbors", neighbors.len());
 }

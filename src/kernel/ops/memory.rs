@@ -78,4 +78,56 @@ impl crate::kernel::AIKernel {
     pub fn memory_delete(&self, agent_id: &str, entry_id: &str) -> bool {
         self.memory.delete_entry(agent_id, entry_id)
     }
+
+    /// Store a memory entry in the agent's long-term tier with semantic embedding.
+    pub fn remember_long_term(
+        &self,
+        agent_id: &str,
+        content: String,
+        tags: Vec<String>,
+        importance: u8,
+    ) -> Result<(), String> {
+        let embedding = self.embedding.embed(&content).ok();
+        let entry = MemoryEntry {
+            id: uuid::Uuid::new_v4().to_string(),
+            agent_id: agent_id.to_string(),
+            tier: MemoryTier::LongTerm,
+            content: MemoryContent::Text(content),
+            importance,
+            access_count: 0,
+            last_accessed: crate::memory::layered::now_ms(),
+            created_at: crate::memory::layered::now_ms(),
+            tags,
+            embedding,
+            ttl_ms: None,
+        };
+        let quota = self.agent_memory_quota(agent_id);
+        self.memory.store_checked(entry, quota)
+            .map_err(|e| e.to_string())
+    }
+
+    /// Retrieve semantically relevant long-term memories for an agent.
+    pub fn recall_semantic(
+        &self,
+        agent_id: &str,
+        query: &str,
+        k: usize,
+    ) -> Result<Vec<MemoryEntry>, String> {
+        let query_emb = self.embedding.embed(query).map_err(|e| e.to_string())?;
+        let results = self.memory.recall_semantic(agent_id, &query_emb, k);
+        Ok(results.into_iter().map(|(entry, _score)| entry).collect())
+    }
+
+    /// Retrieve relevant memories with semantic scoring, within token budget.
+    pub fn recall_relevant_semantic(
+        &self,
+        agent_id: &str,
+        query: &str,
+        budget_tokens: usize,
+    ) -> Vec<MemoryEntry> {
+        match self.embedding.embed(query) {
+            Ok(emb) => self.memory.recall_relevant_semantic(agent_id, &emb, budget_tokens),
+            Err(_) => self.memory.recall_relevant(agent_id, budget_tokens),
+        }
+    }
 }

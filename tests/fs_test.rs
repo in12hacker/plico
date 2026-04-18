@@ -328,6 +328,38 @@ fn test_context_layer_tokens() {
 }
 
 #[test]
+fn test_context_loader_l1_store_and_load() {
+    let dir = tempdir().unwrap();
+    let cas = Arc::new(CASStorage::new(dir.path().join("cas")).unwrap());
+    let loader = ContextLoader::new(dir.path().to_path_buf(), None, cas).unwrap();
+
+    let cid = "abcdef0000000000000000000000000000000000000000000000000000000000";
+    let summary = "This is a pre-computed L1 summary.".to_string();
+    loader.store_l1(cid, summary.clone()).unwrap();
+
+    let ctx = loader.load(cid, ContextLayer::L1).unwrap();
+    assert_eq!(ctx.layer, ContextLayer::L1);
+    assert_eq!(ctx.content, summary);
+}
+
+#[test]
+fn test_context_loader_l1_prefix_truncation_without_summarizer() {
+    use plico::cas::AIObject;
+
+    let dir = tempdir().unwrap();
+    let cas = Arc::new(CASStorage::new(dir.path().join("cas")).unwrap());
+    let loader = ContextLoader::new(dir.path().to_path_buf(), None, Arc::clone(&cas)).unwrap();
+
+    let content = "x".repeat(10_000);
+    let meta = plico::cas::AIObjectMeta::text(["doc"]);
+    let obj = AIObject::new(content.as_bytes().to_vec(), meta);
+    let cid = cas.put(&obj).unwrap();
+
+    let ctx = loader.load(&cid, ContextLayer::L1).unwrap();
+    assert_eq!(ctx.content.len(), 8_000);
+}
+
+#[test]
 fn test_content_type_from_extension() {
     use plico::cas::ContentType;
 
