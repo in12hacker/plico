@@ -162,6 +162,44 @@ impl AIKernel {
             Err(e) => tracing::warn!("Failed to read permission index: {e}"),
         }
     }
+
+    // ─── Event Log Persistence ──────────────────────────────────────
+
+    fn event_log_path(&self) -> PathBuf {
+        self.root.join("event_log.json")
+    }
+
+    pub fn persist_event_log(&self) {
+        let events = self.event_bus.snapshot_events();
+        match serde_json::to_string(&events) {
+            Ok(json) => {
+                if let Err(e) = std::fs::write(self.event_log_path(), json) {
+                    tracing::warn!("Failed to persist event log: {e}");
+                }
+            }
+            Err(e) => tracing::warn!("Failed to serialize event log: {e}"),
+        }
+    }
+
+    pub(crate) fn restore_event_log(&self) {
+        let path = self.event_log_path();
+        if !path.exists() {
+            return;
+        }
+        match std::fs::read_to_string(&path) {
+            Ok(json) => match serde_json::from_str::<Vec<super::event_bus::SequencedEvent>>(&json) {
+                Ok(events) => {
+                    let count = events.len();
+                    self.event_bus.restore_events(events);
+                    if count > 0 {
+                        tracing::info!("Restored {count} events from persistent event log");
+                    }
+                }
+                Err(e) => tracing::warn!("Failed to parse event log: {e}"),
+            },
+            Err(e) => tracing::warn!("Failed to read event log: {e}"),
+        }
+    }
 }
 
 /// Create the embedding provider based on EMBEDDING_BACKEND env var.

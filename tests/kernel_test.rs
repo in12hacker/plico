@@ -3091,3 +3091,101 @@ fn test_event_history_monotonic_sequence() {
         assert!(window[1].timestamp_ms >= window[0].timestamp_ms);
     }
 }
+
+// ─── v7.0-M2: Event Log Persistence ─────────────────────────────────
+
+#[test]
+fn test_event_log_persists_across_restart() {
+    let dir = tempdir().unwrap();
+    let _ = std::env::set_var("EMBEDDING_BACKEND", "stub");
+
+    let event_count_before;
+    {
+        let kernel = AIKernel::new(dir.path().to_path_buf()).expect("kernel init");
+        let aid = kernel.register_agent("persist-test".into());
+        kernel.handle_api_request(plico::api::semantic::ApiRequest::Create {
+            content: "persist-data".into(),
+            content_encoding: Default::default(),
+            tags: vec!["persist".into()],
+            agent_id: aid.clone(),
+            intent: None,
+        });
+        kernel.persist_event_log();
+
+        let resp = kernel.handle_api_request(plico::api::semantic::ApiRequest::EventHistory {
+            since_seq: None, agent_id_filter: None, limit: None,
+        });
+        event_count_before = resp.event_history.unwrap().len();
+        assert!(event_count_before > 0);
+    }
+
+    {
+        let kernel2 = AIKernel::new(dir.path().to_path_buf()).expect("kernel2 init");
+        let resp = kernel2.handle_api_request(plico::api::semantic::ApiRequest::EventHistory {
+            since_seq: None, agent_id_filter: None, limit: None,
+        });
+        let history = resp.event_history.unwrap();
+        assert!(history.len() >= event_count_before,
+            "restored event log should have at least {} events, got {}", event_count_before, history.len());
+    }
+}
+
+#[test]
+fn test_event_log_sequence_continues_after_restore() {
+    let dir = tempdir().unwrap();
+    let _ = std::env::set_var("EMBEDDING_BACKEND", "stub");
+
+    let max_seq_before;
+    {
+        let kernel = AIKernel::new(dir.path().to_path_buf()).expect("kernel init");
+        kernel.register_agent("seq-test".into());
+        kernel.persist_event_log();
+
+        let resp = kernel.handle_api_request(plico::api::semantic::ApiRequest::EventHistory {
+            since_seq: None, agent_id_filter: None, limit: None,
+        });
+        let history = resp.event_history.unwrap();
+        max_seq_before = history.last().unwrap().seq;
+    }
+
+    {
+        let kernel2 = AIKernel::new(dir.path().to_path_buf()).expect("kernel2 init");
+        let aid = kernel2.register_agent("seq-test-2".into());
+        kernel2.handle_api_request(plico::api::semantic::ApiRequest::Create {
+            content: "new-data".into(),
+            content_encoding: Default::default(),
+            tags: vec!["new".into()],
+            agent_id: aid,
+            intent: None,
+        });
+
+        let resp = kernel2.handle_api_request(plico::api::semantic::ApiRequest::EventHistory {
+            since_seq: None, agent_id_filter: None, limit: None,
+        });
+        let history = resp.event_history.unwrap();
+        let new_max = history.last().unwrap().seq;
+        assert!(new_max > max_seq_before,
+            "new events should have seq > {} but got {}", max_seq_before, new_max);
+    }
+}
+
+#[test]
+fn test_event_log_explicit_persist() {
+    let (kernel, _dir) = make_kernel();
+    let aid = kernel.register_agent("explicit-persist".into());
+    kernel.handle_api_request(plico::api::semantic::ApiRequest::Create {
+        content: "test".into(),
+        content_encoding: Default::default(),
+        tags: vec!["t".into()],
+        agent_id: aid,
+        intent: None,
+    });
+
+    kernel.persist_event_log();
+
+    let path = _dir.path().join("event_log.json");
+    assert!(path.exists(), "event_log.json should exist after persist");
+    let json = std::fs::read_to_string(&path).unwrap();
+    let events: Vec<plico::kernel::event_bus::SequencedEvent> = serde_json::from_str(&json).unwrap();
+    assert!(!events.is_empty());
+}

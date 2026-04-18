@@ -145,6 +145,7 @@ impl AIKernel {
         kernel.restore_intents();
         kernel.restore_memories();
         kernel.restore_permissions();
+        kernel.restore_event_log();
 
         Ok(kernel)
     }
@@ -153,11 +154,19 @@ impl AIKernel {
     /// Persists the search index snapshot every N operations to prevent
     /// loss of real embeddings if the process crashes.
     const SEARCH_PERSIST_EVERY_N: u64 = 50;
+    const EVENT_LOG_PERSIST_EVERY_N: u64 = 100;
 
     fn maybe_persist_search_index(&self) {
         let count = self.search_op_count.fetch_add(1, Ordering::Relaxed) + 1;
         if count.is_multiple_of(Self::SEARCH_PERSIST_EVERY_N) {
             self.persist_search_index();
+        }
+    }
+
+    fn maybe_persist_event_log(&self) {
+        let count = self.event_bus.event_count() as u64;
+        if count > 0 && count.is_multiple_of(Self::EVENT_LOG_PERSIST_EVERY_N) {
+            self.persist_event_log();
         }
     }
 
@@ -190,7 +199,7 @@ impl AIKernel {
             crate::api::semantic::decode_content(content, encoding)
         }
 
-        match req {
+        let response = match req {
             ApiRequest::Create { content, content_encoding, tags, agent_id, intent } => {
                 let bytes = match decode_content(&content, &content_encoding) {
                     Ok(b) => b,
@@ -926,7 +935,9 @@ impl AIKernel {
                 r.event_history = Some(limited);
                 r
             }
-        }
+        };
+        self.maybe_persist_event_log();
+        response
     }
 }
 
