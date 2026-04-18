@@ -317,3 +317,51 @@ fn update_tag_index_reflects_new_cid() {
     assert!(cids.contains(&cid2.as_str()), "new CID must be in tag index after update; got {:?}", cids);
     assert!(!cids.contains(&cid1.as_str()), "old CID must be removed from tag index after update; got {:?}", cids);
 }
+
+#[test]
+fn bm25_search_works_with_stub_embeddings() {
+    let (fs, _dir) = make_fs();
+    fs.create(
+        b"protocol decoupling architecture design".to_vec(),
+        vec!["plico:type:adr".to_string()],
+        "agent1".to_string(),
+        None,
+    ).unwrap();
+    fs.create(
+        b"meeting notes about project timeline".to_vec(),
+        vec!["plico:type:progress".to_string()],
+        "agent1".to_string(),
+        None,
+    ).unwrap();
+
+    let results = fs.search("protocol decoupling", 5);
+    assert!(!results.is_empty(), "BM25 should return results even with stub embeddings");
+    assert!(results[0].meta.tags.contains(&"plico:type:adr".to_string()),
+        "BM25 should rank the ADR document higher for 'protocol decoupling'");
+}
+
+#[test]
+fn bm25_search_with_tag_filter_and_stub_embeddings() {
+    let (fs, _dir) = make_fs();
+    fs.create(
+        b"protocol decoupling v1.1".to_vec(),
+        vec!["plico:type:adr".to_string()],
+        "agent1".to_string(),
+        None,
+    ).unwrap();
+    fs.create(
+        b"protocol progress update".to_vec(),
+        vec!["plico:type:progress".to_string()],
+        "agent1".to_string(),
+        None,
+    ).unwrap();
+
+    let filter = crate::fs::search::SearchFilter {
+        require_tags: vec!["plico:type:adr".to_string()],
+        ..Default::default()
+    };
+    let results = fs.search_with_filter("protocol", 5, filter);
+    assert!(!results.is_empty(), "BM25 + tag filter should return results with stub embeddings");
+    assert!(results.iter().all(|r| r.meta.tags.contains(&"plico:type:adr".to_string())),
+        "All results should have the required tag");
+}

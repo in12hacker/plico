@@ -105,6 +105,7 @@ impl SemanticFS {
         tracing::debug!("rebuild_vector_index: found {} CIDs", cids.len());
         tracing::info!("Rebuilding vector index for {} objects…", cids.len());
         let mut indexed = 0usize;
+        let mut embed_available = true;
 
         for cid in &cids {
             let obj = match self.cas.get(cid) {
@@ -118,30 +119,34 @@ impl SemanticFS {
             };
             if text.is_empty() { continue; }
 
-            match self.embedding.embed(&text) {
-                Ok(emb) => {
-                    self.search_index.upsert(cid, &emb, SearchIndexMeta {
-                        cid: cid.clone(),
-                        tags: obj.meta.tags.clone(),
-                        content_type: obj.meta.content_type.to_string(),
-                        snippet: text.chars().take(256).collect(),
-                        created_at: obj.meta.created_at,
-                    });
-                    indexed += 1;
-                }
-                Err(e) => {
-                    tracing::warn!("rebuild_vector_index: embed failed for {}: {e}", &cid[..8]);
-                    break;
-                }
-            }
+            self.bm25_index.upsert(cid, &text);
 
-            if !text.is_empty() {
-                self.bm25_index.upsert(cid, &text);
+            if embed_available {
+                match self.embedding.embed(&text) {
+                    Ok(emb) => {
+                        self.search_index.upsert(cid, &emb, SearchIndexMeta {
+                            cid: cid.clone(),
+                            tags: obj.meta.tags.clone(),
+                            content_type: obj.meta.content_type.to_string(),
+                            snippet: text.chars().take(256).collect(),
+                            created_at: obj.meta.created_at,
+                        });
+                        indexed += 1;
+                    }
+                    Err(e) => {
+                        tracing::warn!("rebuild_vector_index: embed failed for {}: {e}", &cid[..8]);
+                        embed_available = false;
+                    }
+                }
             }
         }
 
+        let bm25_count = self.bm25_index.len();
         if indexed > 0 {
             tracing::info!("Vector index rebuilt: {}/{} objects indexed", indexed, cids.len());
+        }
+        if bm25_count > 0 {
+            tracing::info!("BM25 index rebuilt: {} documents indexed", bm25_count);
         }
     }
 
@@ -392,19 +397,20 @@ impl SemanticFS {
     }
 
     pub fn search_with_filter(&self, query: &str, limit: usize, filter: SearchFilter) -> Vec<SearchResult> {
-        let query_emb = match self.embedding.embed(query) {
-            Ok(emb) => emb,
-            Err(e) => {
-                tracing::warn!("Embedding failed for query '{query}': {e}. Falling back to tag search.");
-                return self.search_by_tags_with_filter(query, &filter);
-            }
+        let query_emb = self.embedding.embed(query).ok();
+
+        let vector_hits: HashMap<String, f32> = match &query_emb {
+            Some(emb) => self
+                .search_index.search(emb, limit * 2, &filter)
+                .into_iter().map(|hit| (hit.cid.clone(), hit.score)).collect(),
+            None => HashMap::new(),
         };
 
-        let vector_hits: HashMap<String, f32> = self
-            .search_index.search(&query_emb, limit * 2, &filter)
-            .into_iter().map(|hit| (hit.cid.clone(), hit.score)).collect();
-
         let bm25_hits: Vec<(String, f32)> = self.bm25_index.search(query, limit * 2);
+
+        if vector_hits.is_empty() && bm25_hits.is_empty() {
+            return self.search_by_tags_with_filter(query, &filter);
+        }
 
         const RRF_K: usize = 60;
         let mut rrf_scores: HashMap<String, f32> = HashMap::new();
