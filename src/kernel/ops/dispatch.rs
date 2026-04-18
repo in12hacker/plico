@@ -12,7 +12,7 @@ impl crate::kernel::AIKernel {
     pub fn start_dispatch_loop(self: &Arc<Self>) -> DispatchHandle {
         let kernel = Arc::clone(self);
         let executor: Arc<dyn AgentExecutor> = Arc::new(KernelExecutor::new(
-            move |action_json: &str, agent_id: Option<&str>| {
+            move |action_json: &str, _agent_id: Option<&str>| {
                 use crate::api::semantic::{ApiRequest, ApiResponse};
                 let req: ApiRequest = match serde_json::from_str(action_json) {
                     Ok(r) => r,
@@ -21,21 +21,6 @@ impl crate::kernel::AIKernel {
                     ).unwrap_or_default(),
                 };
                 let resp = kernel.handle_api_request(req);
-                if resp.ok {
-                    if let Some(aid) = agent_id {
-                        let preview: String = action_json.chars().take(80).collect();
-                        let summary = format!(
-                            "Executed: {} → {}",
-                            preview,
-                            resp.data.as_deref().unwrap_or("ok")
-                        );
-                        let _ = kernel.remember_working(
-                            aid,
-                            summary,
-                            vec!["execution-result".to_string()],
-                        );
-                    }
-                }
                 serde_json::to_string(&resp).unwrap_or_default()
             }
         ));
@@ -50,11 +35,11 @@ impl crate::kernel::AIKernel {
         loop_.spawn()
     }
 
-    /// Start a result consumer that drains execution results from the dispatch
-    /// handle and feeds outcomes into the memory system for autonomous learning.
+    /// Start a result consumer that drains execution results and emits events.
     ///
-    /// On success: stores structured outcome in working memory with "execution-success" tag.
-    /// On failure: stores failure in working memory with "execution-failure" tag.
+    /// Per soul alignment: the kernel records execution outcomes as events
+    /// (mechanism), but does NOT auto-store working memory (policy). Application
+    /// layers decide what to learn from execution results.
     pub fn start_result_consumer(self: &Arc<Self>, handle: &DispatchHandle) -> tokio::task::JoinHandle<()> {
         let kernel = Arc::clone(self);
         let handle = handle.clone();
@@ -66,25 +51,38 @@ impl crate::kernel::AIKernel {
                 let results = handle.drain_results().await;
                 for result in results {
                     let agent_id = result.agent_id.as_ref()
-                        .map(|a| a.0.as_str());
-                    let Some(aid) = agent_id else { continue };
+                        .map(|a| a.0.as_str())
+                        .unwrap_or("system");
 
+                    let output_preview: String = result.output.chars().take(120).collect();
+                    let label = format!(
+                        "dispatch:{}:{}",
+                        if result.success { "ok" } else { "fail" },
+                        result.intent_id.0,
+                    );
                     let tags = if result.success {
                         vec!["execution-success".to_string(), "dispatch".to_string()]
                     } else {
                         vec!["execution-failure".to_string(), "dispatch".to_string()]
                     };
 
-                    let output_preview: String = result.output.chars().take(120).collect();
-                    let summary = format!(
-                        "Dispatch {}: {} ({}ms) → {}",
-                        if result.success { "success" } else { "failure" },
-                        result.intent_id.0,
-                        result.elapsed_ms,
-                        output_preview,
+                    let _ = kernel.create_event(
+                        &label,
+                        crate::fs::EventType::Work,
+                        Some(crate::memory::layered::now_ms().saturating_sub(result.elapsed_ms)),
+                        Some(crate::memory::layered::now_ms()),
+                        None,
+                        tags,
+                        agent_id,
                     );
 
-                    let _ = kernel.remember_working(aid, summary, tags);
+                    tracing::debug!(
+                        intent_id = %result.intent_id.0,
+                        success = result.success,
+                        elapsed_ms = result.elapsed_ms,
+                        output = %output_preview,
+                        "Dispatch result recorded as event",
+                    );
                 }
             }
         })

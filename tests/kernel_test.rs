@@ -1466,10 +1466,12 @@ fn test_intent_execute_sync_learn_creates_procedural_memory() {
 #[tokio::test(flavor = "multi_thread")]
 async fn test_result_consumer_captures_dispatch_outcomes() {
     use plico::scheduler::agent::IntentPriority;
+    use plico::api::permission::PermissionAction;
 
     let (kernel, _dir) = make_kernel_arc();
 
     let agent_id = kernel.register_agent("consumer-test".to_string());
+    kernel.permission_grant(&agent_id, PermissionAction::Write, None, None);
 
     let dispatch = kernel.start_dispatch_loop();
     let _consumer = kernel.start_result_consumer(&dispatch);
@@ -1485,11 +1487,8 @@ async fn test_result_consumer_captures_dispatch_outcomes() {
 
     dispatch.shutdown();
 
-    let memories = kernel.recall(&agent_id);
-    let has_dispatch_tag = memories.iter().any(|m| {
-        m.tags.iter().any(|t| t == "dispatch")
-    });
-    assert!(has_dispatch_tag, "result consumer should store dispatch outcomes in memory. Found {} memories", memories.len());
+    let events = kernel.list_events(None, None, &["dispatch".to_string()], None);
+    assert!(!events.is_empty(), "result consumer should emit dispatch events. Found {} events", events.len());
 }
 
 // ─── M7: End-to-End Autonomous Loop ───────────────────────────────────────
