@@ -18,11 +18,19 @@ impl crate::kernel::AIKernel {
 
     /// Read messages for an agent.
     pub fn read_messages(&self, agent_id: &str, unread_only: bool) -> Vec<crate::scheduler::messaging::AgentMessage> {
+        let ctx = PermissionContext::new(agent_id.to_string());
+        if self.permissions.check(&ctx, PermissionAction::Read).is_err() {
+            return Vec::new();
+        }
         self.message_bus.read(agent_id, unread_only)
     }
 
     /// Acknowledge (mark as read) a message.
     pub fn ack_message(&self, agent_id: &str, message_id: &str) -> bool {
+        let ctx = PermissionContext::new(agent_id.to_string());
+        if self.permissions.check(&ctx, PermissionAction::Read).is_err() {
+            return false;
+        }
         self.message_bus.ack(agent_id, message_id)
     }
 }

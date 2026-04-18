@@ -1,5 +1,6 @@
 //! Memory tier operations — ephemeral, working, long-term.
 
+use crate::api::permission::{PermissionAction, PermissionContext};
 use crate::memory::{MemoryEntry, MemoryContent, MemoryTier};
 use crate::scheduler::AgentId;
 
@@ -13,6 +14,8 @@ impl crate::kernel::AIKernel {
 
     /// Store a memory entry in the agent's ephemeral (L0) tier.
     pub fn remember(&self, agent_id: &str, content: String) -> Result<(), String> {
+        let ctx = PermissionContext::new(agent_id.to_string());
+        self.permissions.check(&ctx, PermissionAction::Write).map_err(|e| e.to_string())?;
         let entry = MemoryEntry::ephemeral(agent_id.to_string(), content);
         let quota = self.agent_memory_quota(agent_id);
         self.memory.store_checked(entry, quota)
@@ -21,6 +24,8 @@ impl crate::kernel::AIKernel {
 
     /// Store a memory entry in the agent's working (L1) tier.
     pub fn remember_working(&self, agent_id: &str, content: String, tags: Vec<String>) -> Result<(), String> {
+        let ctx = PermissionContext::new(agent_id.to_string());
+        self.permissions.check(&ctx, PermissionAction::Write).map_err(|e| e.to_string())?;
         let entry = MemoryEntry {
             id: uuid::Uuid::new_v4().to_string(),
             agent_id: agent_id.to_string(),
@@ -41,6 +46,10 @@ impl crate::kernel::AIKernel {
 
     /// Retrieve all entries from all tiers.
     pub fn recall(&self, agent_id: &str) -> Vec<MemoryEntry> {
+        let ctx = PermissionContext::new(agent_id.to_string());
+        if self.permissions.check(&ctx, PermissionAction::Read).is_err() {
+            return Vec::new();
+        }
         self.memory.get_all(agent_id)
     }
 
@@ -87,6 +96,8 @@ impl crate::kernel::AIKernel {
         tags: Vec<String>,
         importance: u8,
     ) -> Result<(), String> {
+        let ctx = PermissionContext::new(agent_id.to_string());
+        self.permissions.check(&ctx, PermissionAction::Write).map_err(|e| e.to_string())?;
         let embedding = self.embedding.embed(&content).ok();
         let entry = MemoryEntry {
             id: uuid::Uuid::new_v4().to_string(),
@@ -113,6 +124,8 @@ impl crate::kernel::AIKernel {
         query: &str,
         k: usize,
     ) -> Result<Vec<MemoryEntry>, String> {
+        let ctx = PermissionContext::new(agent_id.to_string());
+        self.permissions.check(&ctx, PermissionAction::Read).map_err(|e| e.to_string())?;
         let query_emb = self.embedding.embed(query).map_err(|e| e.to_string())?;
         let results = self.memory.recall_semantic(agent_id, &query_emb, k);
         Ok(results.into_iter().map(|(entry, _score)| entry).collect())
@@ -125,6 +138,10 @@ impl crate::kernel::AIKernel {
         query: &str,
         budget_tokens: usize,
     ) -> Vec<MemoryEntry> {
+        let ctx = PermissionContext::new(agent_id.to_string());
+        if self.permissions.check(&ctx, PermissionAction::Read).is_err() {
+            return Vec::new();
+        }
         match self.embedding.embed(query) {
             Ok(emb) => self.memory.recall_relevant_semantic(agent_id, &emb, budget_tokens),
             Err(_) => self.memory.recall_relevant(agent_id, budget_tokens),

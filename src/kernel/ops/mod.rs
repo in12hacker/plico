@@ -13,3 +13,4 @@ pub mod intent;
 pub mod messaging;
 pub mod dashboard;
 pub mod tools_external;
+pub mod permission;

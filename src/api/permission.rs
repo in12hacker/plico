@@ -27,6 +27,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::RwLock;
 
 /// A permission context — carries agent identity and granted permissions.
 #[derive(Debug, Clone)]
@@ -121,8 +122,8 @@ pub enum PermissionAction {
 pub struct PermissionGuard {
     /// System-level trusted agents — bypass all permission checks.
     trusted_agents: std::collections::HashSet<String>,
-    /// Persistent grants per agent.
-    grants: HashMap<String, Vec<PermissionGrant>>,
+    /// Persistent grants per agent (interior mutability for Arc sharing).
+    grants: RwLock<HashMap<String, Vec<PermissionGrant>>>,
 }
 
 impl PermissionGuard {
@@ -132,7 +133,7 @@ impl PermissionGuard {
         trusted.insert("system".to_string());
         Self {
             trusted_agents: trusted,
-            grants: HashMap::new(),
+            grants: RwLock::new(HashMap::new()),
         }
     }
 
@@ -156,7 +157,7 @@ impl PermissionGuard {
         }
 
         // 3. Check global grants registry
-        if let Some(grants) = self.grants.get(&ctx.agent_id) {
+        if let Some(grants) = self.grants.read().unwrap().get(&ctx.agent_id) {
             if grants.iter().any(|g| g.covers(action)) {
                 return Ok(());
             }
@@ -192,31 +193,44 @@ impl PermissionGuard {
     /// guard.grant("agent1", PermissionGrant::new(PermissionAction::Delete));
     /// guard.grant("agent2", PermissionGrant::new(PermissionAction::Execute).with_scope("tool:web_search"));
     /// ```
-    pub fn grant(&mut self, agent_id: &str, grant: PermissionGrant) {
+    pub fn grant(&self, agent_id: &str, grant: PermissionGrant) {
         self.grants
+            .write()
+            .unwrap()
             .entry(agent_id.to_string())
             .or_default()
             .push(grant);
     }
 
     /// Grant a simple action permission (no scope, no expiry).
-    pub fn grant_action(&mut self, agent_id: &str, action: PermissionAction) {
+    pub fn grant_action(&self, agent_id: &str, action: PermissionAction) {
         self.grant(agent_id, PermissionGrant::new(action));
     }
 
     /// Revoke all grants for an agent.
-    pub fn revoke_all(&mut self, agent_id: &str) {
-        self.grants.remove(agent_id);
+    pub fn revoke_all(&self, agent_id: &str) {
+        self.grants.write().unwrap().remove(agent_id);
+    }
+
+    /// Revoke grants for a specific action from an agent.
+    pub fn revoke(&self, agent_id: &str, action: PermissionAction) {
+        let mut grants = self.grants.write().unwrap();
+        if let Some(agent_grants) = grants.get_mut(agent_id) {
+            agent_grants.retain(|g| g.action != action);
+            if agent_grants.is_empty() {
+                grants.remove(agent_id);
+            }
+        }
     }
 
     /// List all grants for an agent.
     pub fn list_grants(&self, agent_id: &str) -> Vec<PermissionGrant> {
-        self.grants.get(agent_id).cloned().unwrap_or_default()
+        self.grants.read().unwrap().get(agent_id).cloned().unwrap_or_default()
     }
 
     /// Check if an agent has any grants.
     pub fn has_grants(&self, agent_id: &str) -> bool {
-        self.grants.contains_key(agent_id)
+        self.grants.read().unwrap().contains_key(agent_id)
     }
 
     /// Check if agent is trusted (bypasses all checks including isolation).
@@ -229,7 +243,7 @@ impl PermissionGuard {
         if self.trusted_agents.contains(agent_id) {
             return true;
         }
-        if let Some(grants) = self.grants.get(agent_id) {
+        if let Some(grants) = self.grants.read().unwrap().get(agent_id) {
             return grants.iter().any(|g|
                 g.covers(PermissionAction::ReadAny) || g.covers(PermissionAction::All)
             );
@@ -255,7 +269,7 @@ impl PermissionGuard {
             return Ok(());
         }
         let ctx = PermissionContext::new(agent_id.to_string());
-        if let Some(grants) = self.grants.get(agent_id) {
+        if let Some(grants) = self.grants.read().unwrap().get(agent_id) {
             if grants.iter().any(|g| g.covers(PermissionAction::ReadAny) || g.covers(PermissionAction::All)) {
                 return Ok(());
             }
@@ -270,6 +284,33 @@ impl PermissionGuard {
                 agent_id, owner_id
             ),
         ))
+    }
+    /// Snapshot all grants for serialization/persistence.
+    pub fn snapshot(&self) -> HashMap<String, Vec<PermissionGrant>> {
+        self.grants.read().unwrap().clone()
+    }
+
+    /// Restore grants from a persisted snapshot (bulk-load).
+    pub fn restore(&self, grants: HashMap<String, Vec<PermissionGrant>>) {
+        let mut guard = self.grants.write().unwrap();
+        for (agent_id, agent_grants) in grants {
+            guard.entry(agent_id).or_default().extend(agent_grants);
+        }
+    }
+
+    /// Parse a permission action from string.
+    pub fn parse_action(s: &str) -> Option<PermissionAction> {
+        match s.to_lowercase().as_str() {
+            "read" => Some(PermissionAction::Read),
+            "read_any" | "readany" => Some(PermissionAction::ReadAny),
+            "write" => Some(PermissionAction::Write),
+            "delete" => Some(PermissionAction::Delete),
+            "network" => Some(PermissionAction::Network),
+            "execute" => Some(PermissionAction::Execute),
+            "send_message" | "sendmessage" => Some(PermissionAction::SendMessage),
+            "all" => Some(PermissionAction::All),
+            _ => None,
+        }
     }
 }
 

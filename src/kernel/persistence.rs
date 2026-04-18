@@ -120,6 +120,48 @@ impl AIKernel {
             tracing::warn!("Failed to persist search index: {e}");
         }
     }
+
+    // ─── Permission Persistence ──────────────────────────────────────
+
+    fn permission_index_path(&self) -> PathBuf {
+        self.root.join("permission_index.json")
+    }
+
+    pub fn persist_permissions(&self) {
+        let grants = self.permissions.snapshot();
+        if grants.is_empty() {
+            let _ = std::fs::remove_file(self.permission_index_path());
+            return;
+        }
+        match serde_json::to_string_pretty(&grants) {
+            Ok(json) => {
+                if let Err(e) = std::fs::write(self.permission_index_path(), json) {
+                    tracing::warn!("Failed to persist permission index: {e}");
+                }
+            }
+            Err(e) => tracing::warn!("Failed to serialize permissions: {e}"),
+        }
+    }
+
+    pub(crate) fn restore_permissions(&self) {
+        let path = self.permission_index_path();
+        if !path.exists() {
+            return;
+        }
+        match std::fs::read_to_string(&path) {
+            Ok(json) => match serde_json::from_str::<std::collections::HashMap<String, Vec<crate::api::permission::PermissionGrant>>>(&json) {
+                Ok(grants) => {
+                    let count: usize = grants.values().map(|v| v.len()).sum();
+                    self.permissions.restore(grants);
+                    if count > 0 {
+                        tracing::info!("Restored {count} permission grants from persistent storage");
+                    }
+                }
+                Err(e) => tracing::warn!("Failed to parse permission index: {e}"),
+            },
+            Err(e) => tracing::warn!("Failed to read permission index: {e}"),
+        }
+    }
 }
 
 /// Create the embedding provider based on EMBEDDING_BACKEND env var.

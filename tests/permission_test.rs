@@ -68,10 +68,10 @@ fn test_trusted_agents_bypass_all() {
 
 #[test]
 fn test_grant_permission() {
-    let mut guard = PermissionGuard::new();
+    let guard = PermissionGuard::new();
 
     // Before grant: denied
-    check_denied(&mut guard, "agent1", PermissionAction::Delete);
+    check_denied(&guard, "agent1", PermissionAction::Delete);
 
     // Grant Delete to agent1
     guard.grant_action("agent1", PermissionAction::Delete);
@@ -85,7 +85,7 @@ fn test_grant_permission() {
 
 #[test]
 fn test_grant_with_scope() {
-    let mut guard = PermissionGuard::new();
+    let guard = PermissionGuard::new();
 
     // Grant Delete with scope (only for specific CID)
     guard.grant(
@@ -99,7 +99,7 @@ fn test_grant_with_scope() {
 
 #[test]
 fn test_grant_with_expiry() {
-    let mut guard = PermissionGuard::new();
+    let guard = PermissionGuard::new();
 
     // Grant that expired in the past (1 hour ago)
     let past = std::time::SystemTime::now()
@@ -119,7 +119,7 @@ fn test_grant_with_expiry() {
 
 #[test]
 fn test_grant_all_covers_everything() {
-    let mut guard = PermissionGuard::new();
+    let guard = PermissionGuard::new();
 
     // Grant "All" to agent1
     guard.grant_action("agent1", PermissionAction::All);
@@ -138,7 +138,7 @@ fn test_grant_all_covers_everything() {
 
 #[test]
 fn test_revoke_all() {
-    let mut guard = PermissionGuard::new();
+    let guard = PermissionGuard::new();
 
     guard.grant_action("agent1", PermissionAction::Delete);
     guard.grant_action("agent1", PermissionAction::Network);
@@ -157,7 +157,7 @@ fn test_revoke_all() {
 
 #[test]
 fn test_list_grants() {
-    let mut guard = PermissionGuard::new();
+    let guard = PermissionGuard::new();
 
     guard.grant_action("agent1", PermissionAction::Delete);
     guard.grant_action("agent1", PermissionAction::Network);
@@ -173,7 +173,7 @@ fn test_list_grants() {
 
 #[test]
 fn test_has_grants() {
-    let mut guard = PermissionGuard::new();
+    let guard = PermissionGuard::new();
 
     assert!(!guard.has_grants("agent1"));
     guard.grant_action("agent1", PermissionAction::Delete);
@@ -220,7 +220,7 @@ fn test_permission_grant_builder() {
 
 #[test]
 fn test_multiple_agents_isolated() {
-    let mut guard = PermissionGuard::new();
+    let guard = PermissionGuard::new();
 
     guard.grant_action("agent1", PermissionAction::Delete);
     guard.grant_action("agent2", PermissionAction::Execute);
@@ -230,4 +230,69 @@ fn test_multiple_agents_isolated() {
 
     check_ok(&guard, "agent2", PermissionAction::Execute);
     check_denied(&guard, "agent2", PermissionAction::Delete);
+}
+
+#[test]
+fn test_revoke_specific_action() {
+    let guard = PermissionGuard::new();
+
+    guard.grant_action("agent1", PermissionAction::Delete);
+    guard.grant_action("agent1", PermissionAction::Network);
+    guard.grant_action("agent1", PermissionAction::Execute);
+
+    check_ok(&guard, "agent1", PermissionAction::Delete);
+    check_ok(&guard, "agent1", PermissionAction::Network);
+    check_ok(&guard, "agent1", PermissionAction::Execute);
+
+    guard.revoke("agent1", PermissionAction::Network);
+
+    check_ok(&guard, "agent1", PermissionAction::Delete);
+    check_denied(&guard, "agent1", PermissionAction::Network);
+    check_ok(&guard, "agent1", PermissionAction::Execute);
+}
+
+#[test]
+fn test_interior_mutability_through_arc() {
+    use std::sync::Arc;
+
+    let guard = Arc::new(PermissionGuard::new());
+
+    check_denied(&guard, "agent1", PermissionAction::Delete);
+
+    guard.grant_action("agent1", PermissionAction::Delete);
+    check_ok(&guard, "agent1", PermissionAction::Delete);
+
+    guard.revoke("agent1", PermissionAction::Delete);
+    check_denied(&guard, "agent1", PermissionAction::Delete);
+}
+
+#[test]
+fn test_permission_persistence_roundtrip() {
+    let guard = PermissionGuard::new();
+
+    guard.grant_action("agent1", PermissionAction::Delete);
+    guard.grant(
+        "agent2",
+        PermissionGrant::new(PermissionAction::Network).with_scope("tool:web_search"),
+    );
+
+    let snapshot = guard.snapshot();
+    assert_eq!(snapshot.len(), 2);
+
+    let guard2 = PermissionGuard::new();
+    guard2.restore(snapshot);
+
+    check_ok(&guard2, "agent1", PermissionAction::Delete);
+    check_ok(&guard2, "agent2", PermissionAction::Network);
+    check_denied(&guard2, "agent2", PermissionAction::Delete);
+}
+
+#[test]
+fn test_parse_action() {
+    assert_eq!(PermissionGuard::parse_action("read"), Some(PermissionAction::Read));
+    assert_eq!(PermissionGuard::parse_action("Delete"), Some(PermissionAction::Delete));
+    assert_eq!(PermissionGuard::parse_action("EXECUTE"), Some(PermissionAction::Execute));
+    assert_eq!(PermissionGuard::parse_action("send_message"), Some(PermissionAction::SendMessage));
+    assert_eq!(PermissionGuard::parse_action("all"), Some(PermissionAction::All));
+    assert_eq!(PermissionGuard::parse_action("unknown"), None);
 }

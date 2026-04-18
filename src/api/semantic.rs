@@ -160,6 +160,29 @@ pub enum ApiRequest {
     #[serde(rename = "explore")]
     Explore { cid: String, edge_type: Option<String>, depth: Option<u8>, agent_id: String },
 
+    #[serde(rename = "grant_permission")]
+    GrantPermission {
+        agent_id: String,
+        action: String,
+        scope: Option<String>,
+        expires_at: Option<u64>,
+    },
+
+    #[serde(rename = "revoke_permission")]
+    RevokePermission {
+        agent_id: String,
+        action: String,
+    },
+
+    #[serde(rename = "list_permissions")]
+    ListPermissions { agent_id: String },
+
+    #[serde(rename = "check_permission")]
+    CheckPermission {
+        agent_id: String,
+        action: String,
+    },
+
     #[serde(rename = "list_deleted")]
     ListDeleted { agent_id: String },
 

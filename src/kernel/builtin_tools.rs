@@ -175,6 +175,26 @@ impl AIKernel {
             description: "Load context at L0 (summary), L1 (key sections), or L2 (full content) for a CID".into(),
             schema: json!({"type":"object","properties":{"cid":{"type":"string"},"layer":{"type":"string","enum":["L0","L1","L2"]}},"required":["cid","layer"]}),
         });
+        reg.register(ToolDescriptor {
+            name: "permission.grant".into(),
+            description: "Grant a permission action to an agent".into(),
+            schema: json!({"type":"object","properties":{"agent_id":{"type":"string"},"action":{"type":"string","enum":["Read","ReadAny","Write","Delete","Network","Execute","SendMessage","All"]},"scope":{"type":"string"},"expires_at":{"type":"integer"}},"required":["agent_id","action"]}),
+        });
+        reg.register(ToolDescriptor {
+            name: "permission.revoke".into(),
+            description: "Revoke a specific permission from an agent".into(),
+            schema: json!({"type":"object","properties":{"agent_id":{"type":"string"},"action":{"type":"string"}},"required":["agent_id","action"]}),
+        });
+        reg.register(ToolDescriptor {
+            name: "permission.list".into(),
+            description: "List all permission grants for an agent".into(),
+            schema: json!({"type":"object","properties":{"agent_id":{"type":"string"}},"required":["agent_id"]}),
+        });
+        reg.register(ToolDescriptor {
+            name: "permission.check".into(),
+            description: "Check if an agent has permission for a specific action".into(),
+            schema: json!({"type":"object","properties":{"agent_id":{"type":"string"},"action":{"type":"string"}},"required":["agent_id","action"]}),
+        });
     }
 
     /// Execute a tool by name with JSON parameters.
@@ -197,6 +217,12 @@ impl AIKernel {
         }
 
         if let Some(handler) = self.tool_registry.get_handler(name) {
+            let ctx = crate::api::permission::PermissionContext::new(agent_id.to_string());
+            if self.permissions.check(&ctx, crate::api::permission::PermissionAction::Execute).is_err() {
+                return ToolResult::error(format!(
+                    "Agent '{}' lacks Execute permission for external tool '{}'", agent_id, name
+                ));
+            }
             return handler.execute(params, agent_id);
         }
 
@@ -557,6 +583,51 @@ impl AIKernel {
                         "tokens_estimate": loaded.tokens_estimate,
                     })),
                     Err(e) => ToolResult::error(e.to_string()),
+                }
+            }
+            "permission.grant" => {
+                let target = params.get("agent_id").and_then(|v| v.as_str()).unwrap_or("");
+                let action_str = params.get("action").and_then(|v| v.as_str()).unwrap_or("");
+                let scope = params.get("scope").and_then(|v| v.as_str()).map(String::from);
+                let expires_at = params.get("expires_at").and_then(|v| v.as_u64());
+                match crate::api::permission::PermissionGuard::parse_action(action_str) {
+                    Some(action) => {
+                        self.permission_grant(target, action, scope, expires_at);
+                        ToolResult::ok(json!({"granted": true, "agent_id": target, "action": action_str}))
+                    }
+                    None => ToolResult::error(format!("Unknown action: {}", action_str)),
+                }
+            }
+            "permission.revoke" => {
+                let target = params.get("agent_id").and_then(|v| v.as_str()).unwrap_or("");
+                let action_str = params.get("action").and_then(|v| v.as_str()).unwrap_or("");
+                match crate::api::permission::PermissionGuard::parse_action(action_str) {
+                    Some(action) => {
+                        self.permission_revoke(target, action);
+                        ToolResult::ok(json!({"revoked": true, "agent_id": target, "action": action_str}))
+                    }
+                    None => ToolResult::error(format!("Unknown action: {}", action_str)),
+                }
+            }
+            "permission.list" => {
+                let target = params.get("agent_id").and_then(|v| v.as_str()).unwrap_or(agent_id);
+                let grants = self.permission_list(target);
+                let dto: Vec<serde_json::Value> = grants.into_iter().map(|g| json!({
+                    "action": format!("{:?}", g.action),
+                    "scope": g.scope,
+                    "expires_at": g.expires_at,
+                })).collect();
+                ToolResult::ok(json!({"agent_id": target, "grants": dto}))
+            }
+            "permission.check" => {
+                let target = params.get("agent_id").and_then(|v| v.as_str()).unwrap_or(agent_id);
+                let action_str = params.get("action").and_then(|v| v.as_str()).unwrap_or("");
+                match crate::api::permission::PermissionGuard::parse_action(action_str) {
+                    Some(action) => {
+                        let allowed = self.permission_check(target, action).is_ok();
+                        ToolResult::ok(json!({"agent_id": target, "action": action_str, "allowed": allowed}))
+                    }
+                    None => ToolResult::error(format!("Unknown action: {}", action_str)),
                 }
             }
             _ => ToolResult::error(format!("unknown tool: {}", name)),
