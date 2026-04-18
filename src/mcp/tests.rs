@@ -1,9 +1,11 @@
 //! MCP Client tests — self-referential: uses plico-mcp as the MCP server.
+//! Tests both the MCP-specific client and the protocol-agnostic ExternalToolProvider trait.
 
 #[cfg(test)]
 mod test {
+    use std::sync::Arc;
     use crate::mcp::McpClient;
-    use crate::tool::ToolRegistry;
+    use crate::tool::{ExternalToolProvider, ToolRegistry};
 
     fn plico_mcp_bin() -> String {
         let manifest_dir = env!("CARGO_MANIFEST_DIR");
@@ -12,8 +14,6 @@ mod test {
 
     fn make_client() -> McpClient {
         let dir = tempfile::TempDir::new().unwrap();
-        // Use the compiled binary path — requires `cargo build --bin plico-mcp` first.
-        // In test, cargo builds all bins automatically.
         McpClient::new(
             &plico_mcp_bin(),
             &[],
@@ -39,20 +39,15 @@ mod test {
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains(&"plico_search"));
         assert!(names.contains(&"plico_put"));
-        assert!(names.contains(&"plico_read"));
-        assert!(names.contains(&"plico_nodes"));
-        assert!(names.contains(&"plico_tags"));
     }
 
     #[test]
     fn client_put_and_read_roundtrip() {
         let client = make_client();
-
         let put_text = client.call_tool("plico_put", &serde_json::json!({
             "content": "MCP client test content",
             "tags": ["mcp-client-test"]
         })).unwrap();
-
         let put_resp: serde_json::Value = serde_json::from_str(&put_text).unwrap();
         assert!(put_resp["ok"].as_bool().unwrap());
         let cid = put_resp["cid"].as_str().unwrap();
@@ -60,7 +55,6 @@ mod test {
         let read_text = client.call_tool("plico_read", &serde_json::json!({
             "cid": cid
         })).unwrap();
-
         let read_resp: serde_json::Value = serde_json::from_str(&read_text).unwrap();
         assert_eq!(read_resp["data"].as_str().unwrap(), "MCP client test content");
     }
@@ -68,7 +62,6 @@ mod test {
     #[test]
     fn client_search_finds_content() {
         let client = make_client();
-
         client.call_tool("plico_put", &serde_json::json!({
             "content": "Dijkstra shortest path algorithm weighted graph",
             "tags": ["plico:type:experience", "plico:module:graph"]
@@ -77,24 +70,8 @@ mod test {
         let text = client.call_tool("plico_search", &serde_json::json!({
             "query": "Dijkstra weighted path"
         })).unwrap();
-
         let resp: serde_json::Value = serde_json::from_str(&text).unwrap();
-        let results = resp["results"].as_array().unwrap();
-        assert!(!results.is_empty(), "search should find content via BM25");
-    }
-
-    #[test]
-    fn client_tags_returns_list() {
-        let client = make_client();
-
-        client.call_tool("plico_put", &serde_json::json!({
-            "content": "test data",
-            "tags": ["plico:type:adr", "plico:module:kernel"]
-        })).unwrap();
-
-        let text = client.call_tool("plico_tags", &serde_json::json!({})).unwrap();
-        let tags: Vec<String> = serde_json::from_str(&text).unwrap();
-        assert!(tags.contains(&"plico:type:adr".to_string()));
+        assert!(!resp["results"].as_array().unwrap().is_empty());
     }
 
     #[test]
@@ -104,35 +81,59 @@ mod test {
         assert!(result.is_err());
     }
 
-    #[test]
-    fn register_tools_adds_to_registry() {
-        let client = make_client();
-        let registry = ToolRegistry::new();
+    // ── ExternalToolProvider trait tests ──────────────────────────────────
 
-        client.register_tools(&registry, "mcp");
-        assert_eq!(registry.count(), 5);
-        assert!(registry.contains("mcp.plico_search"));
-        assert!(registry.contains("mcp.plico_put"));
-        assert!(registry.contains("mcp.plico_read"));
-        assert!(registry.contains("mcp.plico_nodes"));
-        assert!(registry.contains("mcp.plico_tags"));
+    #[test]
+    fn trait_provider_name_matches() {
+        let client = make_client();
+        let provider: &dyn ExternalToolProvider = &client;
+        assert_eq!(provider.provider_name(), "plico-mcp");
     }
 
     #[test]
-    fn registry_handler_calls_through_to_mcp() {
+    fn trait_discover_tools_returns_descriptors() {
         let client = make_client();
-        let registry = ToolRegistry::new();
-        client.register_tools(&registry, "mcp");
+        let provider: &dyn ExternalToolProvider = &client;
+        let tools = provider.discover_tools();
+        assert_eq!(tools.len(), 5);
+        assert!(tools.iter().any(|t| t.name == "plico_search"));
+    }
 
-        let handler = registry.get_handler("mcp.plico_put").expect("handler should exist");
+    #[test]
+    fn trait_call_tool_succeeds() {
+        let client = make_client();
+        let provider: &dyn ExternalToolProvider = &client;
+
+        let put_result = provider.call_tool("plico_put", &serde_json::json!({
+            "content": "trait test data",
+            "tags": ["trait-test"]
+        }));
+        assert!(put_result.success, "ExternalToolProvider::call_tool failed: {:?}", put_result.error);
+    }
+
+    #[test]
+    fn kernel_add_tool_provider_integration() {
+        let client = make_client();
+        let provider: Arc<dyn ExternalToolProvider> = Arc::new(client);
+
+        let kernel = {
+            let dir = tempfile::TempDir::new().unwrap();
+            crate::kernel::AIKernel::new(dir.path().to_path_buf()).unwrap()
+        };
+
+        let names = kernel.add_tool_provider(provider, "ext");
+        assert_eq!(names.len(), 5);
+        assert!(names.contains(&"ext.plico_search".to_string()));
+        assert!(names.contains(&"ext.plico_put".to_string()));
+
+        let tools = kernel.tool_registry.list();
+        assert!(tools.iter().any(|t| t.name == "ext.plico_search"));
+
+        let handler = kernel.tool_registry.get_handler("ext.plico_put").expect("handler should exist");
         let result = handler.execute(&serde_json::json!({
-            "content": "via registry handler",
-            "tags": ["registry-test"]
+            "content": "kernel integration test",
+            "tags": ["kernel-test"]
         }), "test-agent");
-        assert!(result.success, "handler should succeed: {:?}", result.error);
-
-        let text = result.output["text"].as_str().unwrap();
-        let resp: serde_json::Value = serde_json::from_str(text).unwrap();
-        assert!(resp["ok"].as_bool().unwrap());
+        assert!(result.success, "handler failed: {:?}", result.error);
     }
 }

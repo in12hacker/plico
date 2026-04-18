@@ -12,3 +12,4 @@ pub mod dispatch;
 pub mod intent;
 pub mod messaging;
 pub mod dashboard;
+pub mod tools_external;

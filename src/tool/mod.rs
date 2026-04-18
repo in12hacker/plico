@@ -8,8 +8,10 @@
 //!
 //! ```text
 //! ToolRegistry
-//! ├── Built-in tools  — kernel methods exposed as tools (cas.*, memory.*, kg.*, agent.*)
-//! └── External tools  — dynamically registered via API (future: webhooks, MCP, etc.)
+//! ├── Built-in tools       — kernel methods exposed as tools (cas.*, memory.*, kg.*, agent.*)
+//! └── ExternalToolProvider  — protocol-agnostic adapter (MCP, Agent Skills, A2A, future protocols)
+//!     ├── McpToolProvider   — MCP JSON-RPC over stdio
+//!     └── (future adapters) — Agent Skills, A2A, custom protocols
 //! ```
 //!
 //! # Discovery Flow
@@ -70,6 +72,25 @@ where
     fn execute(&self, params: &serde_json::Value, agent_id: &str) -> ToolResult {
         (self)(params, agent_id)
     }
+}
+
+/// Protocol-agnostic external tool provider.
+///
+/// The kernel's tool system is designed to be protocol-agnostic:
+/// - `LlmProvider` abstracts inference (Ollama, OpenAI, vLLM — any dies, swap the adapter)
+/// - `ExternalToolProvider` abstracts tool protocols (MCP, Agent Skills, A2A — same principle)
+///
+/// When a protocol becomes obsolete, delete the adapter.
+/// When a new one emerges, add one. The kernel never changes.
+pub trait ExternalToolProvider: Send + Sync {
+    /// Human-readable name of this provider instance (e.g., "plico-mcp", "web-search").
+    fn provider_name(&self) -> &str;
+
+    /// Discover available tools from the external source.
+    fn discover_tools(&self) -> Vec<ToolDescriptor>;
+
+    /// Invoke a tool by name. The name is the tool's raw name (without prefix).
+    fn call_tool(&self, name: &str, params: &serde_json::Value) -> ToolResult;
 }
 
 #[cfg(test)]

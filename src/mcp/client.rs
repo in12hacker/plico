@@ -1,12 +1,16 @@
 //! MCP Client implementation — spawns and communicates with MCP servers.
+//!
+//! Implements `ExternalToolProvider` — the kernel never sees MCP protocol
+//! details. If MCP is replaced by a new protocol, delete this file and
+//! add a new one. The kernel's tool dispatch is unchanged.
 
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 
 use serde_json::Value;
 
-use crate::tool::{ToolDescriptor, ToolHandler, ToolRegistry, ToolResult};
+use crate::tool::{ExternalToolProvider, ToolDescriptor, ToolResult};
 
 const PROTOCOL_VERSION: &str = "2024-11-05";
 
@@ -113,9 +117,14 @@ impl McpTransport {
     }
 }
 
+/// MCP Client — connects to one MCP server subprocess.
+///
+/// Implements `ExternalToolProvider` so the kernel treats it identically
+/// to any other external tool source. The MCP JSON-RPC protocol is fully
+/// encapsulated here — nothing leaks to the kernel.
 pub struct McpClient {
     _child: Child,
-    transport: Arc<Mutex<McpTransport>>,
+    transport: Mutex<McpTransport>,
     server_info: ServerInfo,
     tools: Vec<McpToolDef>,
 }
@@ -143,15 +152,10 @@ impl McpClient {
             McpError::Protocol("failed to open stdout".into())
         })?);
 
-        let transport = Arc::new(Mutex::new(McpTransport {
-            stdin,
-            stdout,
-            next_id: 1,
-        }));
+        let mut transport = McpTransport { stdin, stdout, next_id: 1 };
 
         let server_info = {
-            let mut t = transport.lock().unwrap();
-            let resp = t.send_request("initialize", serde_json::json!({
+            let resp = transport.send_request("initialize", serde_json::json!({
                 "protocolVersion": PROTOCOL_VERSION,
                 "capabilities": {},
                 "clientInfo": { "name": "plico-mcp-client", "version": "1.0.0" }
@@ -161,13 +165,12 @@ impl McpClient {
                 name: result["serverInfo"]["name"].as_str().unwrap_or("unknown").to_string(),
                 version: result["serverInfo"]["version"].as_str().unwrap_or("0.0.0").to_string(),
             };
-            t.send_notification("notifications/initialized", serde_json::json!({}))?;
+            transport.send_notification("notifications/initialized", serde_json::json!({}))?;
             info
         };
 
         let tools = {
-            let mut t = transport.lock().unwrap();
-            let resp = t.send_request("tools/list", serde_json::json!({}))?;
+            let resp = transport.send_request("tools/list", serde_json::json!({}))?;
             let tools_arr = resp["result"]["tools"].as_array()
                 .ok_or_else(|| McpError::Protocol("tools/list did not return tools array".into()))?;
             tools_arr.iter().map(|t| McpToolDef {
@@ -179,7 +182,7 @@ impl McpClient {
 
         Ok(Self {
             _child: child,
-            transport,
+            transport: Mutex::new(transport),
             server_info,
             tools,
         })
@@ -196,33 +199,24 @@ impl McpClient {
     pub fn call_tool(&self, name: &str, arguments: &Value) -> Result<String, McpError> {
         self.transport.lock().unwrap().call_tool(name, arguments)
     }
+}
 
-    pub fn register_tools(&self, registry: &ToolRegistry, prefix: &str) {
-        for tool in &self.tools {
-            let qualified_name = format!("{}.{}", prefix, tool.name);
-            let desc = ToolDescriptor {
-                name: qualified_name,
-                description: format!("[MCP:{}] {}", self.server_info.name, tool.description),
-                schema: tool.input_schema.clone(),
-            };
-            let handler = McpToolHandler {
-                transport: Arc::clone(&self.transport),
-                tool_name: tool.name.clone(),
-            };
-            registry.register_with_handler(desc, Arc::new(handler));
-        }
+impl ExternalToolProvider for McpClient {
+    fn provider_name(&self) -> &str {
+        &self.server_info.name
     }
-}
 
-struct McpToolHandler {
-    transport: Arc<Mutex<McpTransport>>,
-    tool_name: String,
-}
+    fn discover_tools(&self) -> Vec<ToolDescriptor> {
+        self.tools.iter().map(|t| ToolDescriptor {
+            name: t.name.clone(),
+            description: t.description.clone(),
+            schema: t.input_schema.clone(),
+        }).collect()
+    }
 
-impl ToolHandler for McpToolHandler {
-    fn execute(&self, params: &serde_json::Value, _agent_id: &str) -> ToolResult {
+    fn call_tool(&self, name: &str, params: &serde_json::Value) -> ToolResult {
         match self.transport.lock() {
-            Ok(mut t) => match t.call_tool(&self.tool_name, params) {
+            Ok(mut t) => match t.call_tool(name, params) {
                 Ok(text) => ToolResult::ok(serde_json::json!({"text": text})),
                 Err(e) => ToolResult::error(e.to_string()),
             },
