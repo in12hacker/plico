@@ -23,7 +23,7 @@ use crate::cas::CASStorage;
 use crate::memory::{LayeredMemory, CASPersister, MemoryPersister};
 use crate::scheduler::{AgentScheduler, IntentPriority};
 use crate::scheduler::messaging::MessageBus;
-use crate::fs::{SemanticFS, InMemoryBackend, EmbeddingProvider, SemanticSearch, LlmSummarizer, Summarizer, KnowledgeGraph, PetgraphBackend, StubEmbeddingProvider};
+use crate::fs::{SemanticFS, InMemoryBackend, HnswBackend, EmbeddingProvider, SemanticSearch, LlmSummarizer, Summarizer, KnowledgeGraph, PetgraphBackend, StubEmbeddingProvider};
 use crate::api::permission::PermissionGuard;
 use crate::tool::ToolRegistry;
 use crate::intent::{ChainRouter, IntentRouter};
@@ -42,7 +42,7 @@ pub struct AIKernel {
     #[allow(dead_code)]
     pub(crate) summarizer: Option<Arc<dyn Summarizer>>,
     pub(crate) knowledge_graph: Option<Arc<dyn KnowledgeGraph>>,
-    pub(crate) search_backend: Arc<InMemoryBackend>,
+    pub(crate) search_backend: Arc<dyn SemanticSearch>,
     /// Counter for search index auto-persist. Every SEARCH_PERSIST_EVERY_N operations,
     /// the search index snapshot is saved to disk for crash recovery.
     search_op_count: Arc<AtomicU64>,
@@ -73,18 +73,20 @@ impl AIKernel {
             }
         };
 
-        let search_backend = Arc::new(InMemoryBackend::new());
-        // Restore search index BEFORE SemanticFS::new() rebuilds from CAS.
-        // This ensures snapshot's real embeddings overwrite any stub/zero embeddings
-        // created during the rebuild-from-CAS step.
+        let search_backend: Arc<dyn SemanticSearch> = match std::env::var("SEARCH_BACKEND")
+            .unwrap_or_else(|_| "memory".into()).as_str()
         {
-            let search_path = root.join("search_index.jsonl");
-            // SAFETY: search_backend is guaranteed to be InMemoryBackend
-            let backend_ref: &InMemoryBackend = unsafe {
-                &*Arc::as_ptr(&search_backend)
-            };
-            crate::kernel::persistence::restore_search_index_into(&search_path, backend_ref);
-        }
+            "hnsw" => {
+                let backend = Arc::new(HnswBackend::new());
+                backend.restore_from(&root).ok();
+                backend as Arc<dyn SemanticSearch>
+            }
+            _ => {
+                let backend = Arc::new(InMemoryBackend::new());
+                backend.restore_from(&root).ok();
+                backend as Arc<dyn SemanticSearch>
+            }
+        };
         let search_index: Arc<dyn SemanticSearch> = search_backend.clone();
         let knowledge_graph: Option<Arc<dyn KnowledgeGraph>> = {
             let kg: Arc<dyn KnowledgeGraph> = Arc::new(PetgraphBackend::open(root.clone()));
@@ -154,7 +156,6 @@ impl AIKernel {
         kernel.restore_agents();
         kernel.restore_intents();
         kernel.restore_memories();
-        kernel.restore_search_index();
 
         Ok(kernel)
     }

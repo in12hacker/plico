@@ -6,7 +6,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::fs::{OllamaBackend, EmbeddingProvider, LocalEmbeddingBackend, StubEmbeddingProvider, EmbedError, InMemoryBackend};
+use crate::fs::{OllamaBackend, EmbeddingProvider, LocalEmbeddingBackend, StubEmbeddingProvider, EmbedError};
 use crate::llm::{LlmProvider, LlmError, OllamaProvider, StubProvider, OpenAICompatibleProvider};
 use crate::scheduler::Agent;
 use crate::scheduler::agent::Intent;
@@ -114,66 +114,11 @@ impl AIKernel {
 
     // ─── Search Index Persistence ─────────────────────────────────────
 
-    fn search_index_path(&self) -> PathBuf {
-        self.root.join("search_index.jsonl")
-    }
-
-    /// Persist the in-memory search index to a JSON Lines file.
+    /// Persist the search index via the backend's trait method.
     pub fn persist_search_index(&self) {
-        let entries = self.search_backend.snapshot();
-        if entries.is_empty() {
-            return;
-        }
-        let mut lines = Vec::new();
-        for entry in &entries {
-            if let Ok(json) = serde_json::to_string(entry) {
-                lines.push(json);
-            }
-        }
-        let data = lines.join("\n");
-        if let Err(e) = std::fs::write(self.search_index_path(), data) {
+        if let Err(e) = self.search_backend.persist_to(&self.root) {
             tracing::warn!("Failed to persist search index: {e}");
-        } else {
-            tracing::info!("Persisted {} search index entries", entries.len());
         }
-    }
-
-    /// Restore the search index from a JSON Lines file.
-    pub(crate) fn restore_search_index(&self) {
-        use std::sync::Arc;
-        use crate::fs::InMemoryBackend;
-        // SAFETY: search_backend is always InMemoryBackend in practice.
-        // This downcast is safe because the kernel always constructs it as such.
-        let backend: &InMemoryBackend = unsafe {
-            &*Arc::as_ptr(&self.search_backend)
-        };
-        restore_search_index_into(&self.search_index_path(), backend);
-    }
-}
-
-/// Restore entries into a search backend from a JSON Lines file at `path`.
-///
-/// Called BEFORE SemanticFS::new() so the restored embeddings are present
-/// before the rebuild-from-CAS step (which uses stub/zero embeddings).
-/// The restored real embeddings will NOT be overwritten by stub/zero embeddings
-/// because InMemoryBackend::upsert skips overwriting non-stub entries.
-pub fn restore_search_index_into(path: &std::path::Path, backend: &InMemoryBackend) {
-    if !path.exists() {
-        return;
-    }
-    match std::fs::read_to_string(path) {
-        Ok(data) => {
-            let entries: Vec<crate::fs::SearchIndexEntry> = data.lines()
-                .filter(|line| !line.trim().is_empty())
-                .filter_map(|line| serde_json::from_str(line).ok())
-                .collect();
-            let count = entries.len();
-            backend.restore(entries);
-            if count > 0 {
-                tracing::info!("Restored {} search index entries", count);
-            }
-        }
-        Err(e) => tracing::warn!("Failed to read search index: {e}"),
     }
 }
 
