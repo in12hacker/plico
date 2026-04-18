@@ -5,7 +5,7 @@
 mod test {
     use std::sync::Arc;
     use crate::mcp::McpClient;
-    use crate::tool::{ExternalToolProvider, ToolRegistry};
+    use crate::tool::ExternalToolProvider;
 
     fn plico_mcp_bin() -> String {
         let manifest_dir = env!("CARGO_MANIFEST_DIR");

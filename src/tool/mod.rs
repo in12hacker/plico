@@ -21,6 +21,7 @@
 //! 3. Agent calls `tool_call <name> <params>` → kernel dispatches and returns result
 
 pub mod registry;
+pub mod procedure_provider;
 
 use serde::{Deserialize, Serialize};
 
@@ -56,6 +57,7 @@ pub struct ToolDescriptor {
 }
 
 pub use registry::ToolRegistry;
+pub use procedure_provider::ProcedureToolProvider;
 
 /// Trait for dynamic tool execution handlers.
 ///

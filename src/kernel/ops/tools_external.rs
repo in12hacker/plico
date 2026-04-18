@@ -8,7 +8,7 @@
 use std::sync::Arc;
 
 use crate::kernel::AIKernel;
-use crate::tool::{ExternalToolProvider, ToolHandler, ToolResult};
+use crate::tool::{ExternalToolProvider, ToolHandler, ToolResult, ProcedureToolProvider};
 
 impl AIKernel {
     /// Register an external tool provider and expose its tools through PWP.
@@ -52,6 +52,20 @@ impl AIKernel {
         }
 
         tool_names
+    }
+
+    /// Refresh the procedure-based tool provider.
+    ///
+    /// Discovers all shared+verified procedures and registers them as tools
+    /// under the "skill" prefix. Call this when shared procedures change.
+    pub fn refresh_procedure_tools(self: &Arc<Self>) -> Vec<String> {
+        let memory = Arc::clone(&self.memory);
+        let kernel = Arc::clone(self);
+        let dispatch = Arc::new(move |req: crate::api::semantic::ApiRequest| {
+            kernel.handle_api_request(req).ok
+        });
+        let provider = Arc::new(ProcedureToolProvider::new(memory, dispatch));
+        self.add_tool_provider(provider, "skill")
     }
 }
 

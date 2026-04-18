@@ -400,7 +400,7 @@ fn make_fs_with_real_embeddings(dir: &tempfile::TempDir) -> SemanticFS {
 
 #[test]
 fn test_similar_to_edges_created_for_similar_docs() {
-    use crate::fs::graph::{KGEdgeType, KGNodeType};
+    use crate::fs::graph::KGEdgeType;
 
     let dir = tempfile::TempDir::new().unwrap();
     let fs = make_fs_with_real_embeddings(&dir);

@@ -1149,7 +1149,7 @@ fn test_list_nodes_pagination() {
     let agent_id = kernel.register_agent("paginator".to_string());
 
     for i in 0..10 {
-        kernel.kg_add_node(&format!("n{}", i), plico::fs::KGNodeType::Entity, serde_json::Value::Null, &agent_id);
+        let _ = kernel.kg_add_node(&format!("n{}", i), plico::fs::KGNodeType::Entity, serde_json::Value::Null, &agent_id);
     }
 
     let resp = kernel.handle_api_request(ApiRequest::ListNodes {
@@ -1199,7 +1199,7 @@ fn test_pagination_beyond_total() {
     let agent_id = kernel.register_agent("beyond".to_string());
 
     for i in 0..3 {
-        kernel.kg_add_node(&format!("x{}", i), plico::fs::KGNodeType::Entity, serde_json::Value::Null, &agent_id);
+        let _ = kernel.kg_add_node(&format!("x{}", i), plico::fs::KGNodeType::Entity, serde_json::Value::Null, &agent_id);
     }
 
     let resp = kernel.handle_api_request(ApiRequest::ListNodes {
@@ -2080,4 +2080,82 @@ fn test_cross_agent_workflow_reuse_via_shared_scope() {
         .any(|r| r.explanation.contains("[reused]"));
     assert!(has_reuse_shared, "Agent B SHOULD reuse shared procedure from Agent A");
     assert!(result_b_shared.success, "Reused workflow should execute successfully");
+}
+
+// ─── v3.1-M1: Procedures as Tools ───────────────────────────────────
+
+#[test]
+fn test_shared_procedure_appears_as_tool() {
+    let (kernel, _dir) = make_kernel_arc();
+    let router = ChainRouter::new(None);
+
+    let agent_a = kernel.register_agent("teacher".to_string());
+    let agent_b = kernel.register_agent("student".to_string());
+
+    use plico::api::permission::PermissionAction;
+    use plico::memory::MemoryScope;
+    kernel.permission_grant(&agent_a, PermissionAction::Read, None, None);
+    kernel.permission_grant(&agent_a, PermissionAction::Write, None, None);
+    kernel.permission_grant(&agent_b, PermissionAction::Read, None, None);
+
+    // Store test data so search has something to find
+    kernel.semantic_create(
+        b"quarterly report data".to_vec(),
+        vec!["report".into()],
+        &agent_a,
+        None,
+    ).unwrap();
+
+    // Agent A learns a workflow and shares it
+    let result = execution::execute_sync(
+        &kernel, &router,
+        "search for report",
+        &agent_a,
+        0.0,
+        true,
+    ).unwrap();
+    assert!(result.success);
+
+    // Share the learned procedure
+    let procs = kernel.recall_procedural(&agent_a, None);
+    assert!(!procs.is_empty());
+    if let plico::memory::MemoryContent::Procedure(ref proc) = procs[0].content {
+        kernel.remember_procedural_scoped(
+            &agent_a,
+            proc.name.clone(),
+            proc.description.clone(),
+            proc.steps.clone(),
+            proc.learned_from.clone(),
+            vec!["auto-learned".into(), "verified".into()],
+            MemoryScope::Shared,
+        ).unwrap();
+    }
+
+    // Refresh procedure tools — shared procedures become tools
+    let tool_names = kernel.refresh_procedure_tools();
+    assert!(!tool_names.is_empty(), "should register at least one skill tool");
+
+    // Agent B can discover the tool via API
+    let list_resp = kernel.handle_api_request(plico::api::semantic::ApiRequest::ToolList {
+        agent_id: agent_b.clone(),
+    });
+    assert!(list_resp.ok);
+    let all_tools = list_resp.tools.unwrap();
+    let skill_tools: Vec<_> = all_tools.iter()
+        .filter(|t| t.name.starts_with("skill."))
+        .collect();
+    assert!(!skill_tools.is_empty(), "tool list should contain skill.* entries");
+    assert!(
+        skill_tools[0].description.contains(&agent_a),
+        "tool description should mention the original agent ID"
+    );
+
+    // Agent B invokes the tool
+    let tool_name = &skill_tools[0].name;
+    let resp = kernel.handle_api_request(plico::api::semantic::ApiRequest::ToolCall {
+        tool: tool_name.clone(),
+        params: serde_json::json!({"agent_id": agent_b.clone()}),
+        agent_id: agent_b.clone(),
+    });
+    assert!(resp.ok, "tool call should succeed: {:?}", resp.error);
 }
