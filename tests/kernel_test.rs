@@ -2755,3 +2755,74 @@ fn test_agent_usage_not_found() {
     assert!(!resp.ok);
     assert!(resp.error.unwrap().contains("not found"));
 }
+
+// ── v6.2: Agent Discovery tests ─────────────────────────────────────
+
+#[test]
+fn test_discover_agents_returns_all() {
+    let (kernel, _dir) = make_kernel();
+    kernel.register_agent("alice".into());
+    kernel.register_agent("bob".into());
+
+    let cards = kernel.discover_agents(None, None);
+    assert_eq!(cards.len(), 2);
+    let names: Vec<&str> = cards.iter().map(|c| c.name.as_str()).collect();
+    assert!(names.contains(&"alice"));
+    assert!(names.contains(&"bob"));
+}
+
+#[test]
+fn test_discover_agents_filter_by_state() {
+    let (kernel, _dir) = make_kernel();
+    let _a = kernel.register_agent("active-agent".into());
+    let b = kernel.register_agent("terminated-agent".into());
+
+    kernel.agent_terminate(&b).unwrap();
+
+    let cards = kernel.discover_agents(Some("Created"), None);
+    assert_eq!(cards.len(), 1);
+    assert_eq!(cards[0].name, "active-agent");
+}
+
+#[test]
+fn test_discover_agents_filter_by_tool() {
+    let (kernel, _dir) = make_kernel();
+    let a = kernel.register_agent("cas-agent".into());
+    kernel.agent_set_resources(&a, None, None, Some(vec!["cas.create".into(), "cas.read".into()])).unwrap();
+
+    let _b = kernel.register_agent("mem-agent".into());
+
+    let cards = kernel.discover_agents(None, Some("cas"));
+    assert!(cards.iter().any(|c| c.name == "cas-agent"));
+    // mem-agent has all tools (empty = all), which includes cas tools
+    // so both should match
+}
+
+#[test]
+fn test_discover_agents_via_api() {
+    let (kernel, _dir) = make_kernel();
+    let caller = kernel.register_agent("caller".into());
+    kernel.register_agent("peer".into());
+
+    let resp = kernel.handle_api_request(plico::api::semantic::ApiRequest::DiscoverAgents {
+        state_filter: None,
+        tool_filter: None,
+        agent_id: caller.clone(),
+    });
+    assert!(resp.ok);
+    let cards = resp.agent_cards.unwrap();
+    assert_eq!(cards.len(), 2);
+}
+
+#[test]
+fn test_agent_card_includes_usage() {
+    let (kernel, _dir) = make_kernel();
+    let a = kernel.register_agent("tracked".into());
+    kernel.remember(&a, "test memory".into()).unwrap();
+    kernel.execute_tool("cas.create", &serde_json::json!({"content": "x", "tags": ["t"]}), &a);
+
+    let cards = kernel.discover_agents(None, None);
+    let card = cards.iter().find(|c| c.name == "tracked").unwrap();
+    assert_eq!(card.memory_entries, 1);
+    assert_eq!(card.tool_call_count, 1);
+}

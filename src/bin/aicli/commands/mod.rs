@@ -60,6 +60,7 @@ pub fn execute_local(kernel: &AIKernel, args: &[String]) -> ApiResponse {
         Some("rollback") => cmd_rollback(kernel, args),
         Some("skills") => cmd_skills(kernel, args),
         Some("quota") => cmd_quota(kernel, args),
+        Some("discover") => cmd_discover(kernel, args),
         Some("system-status") => {
             let status = kernel.system_status();
             let mut r = ApiResponse::ok();
@@ -302,6 +303,17 @@ pub fn print_result(response: &ApiResponse) {
         }
         if usage.last_active_ms > 0 {
             println!("  Last active: {}ms", usage.last_active_ms);
+        }
+    }
+    if let Some(cards) = &response.agent_cards {
+        if cards.is_empty() {
+            println!("No agents discovered.");
+        } else {
+            println!("Discovered agents ({} total):", cards.len());
+            for c in cards {
+                println!("  {} ({}) — state={}, tools={}, mem={}, calls={}",
+                    c.name, c.agent_id, c.state, c.tools.len(), c.memory_entries, c.tool_call_count);
+            }
         }
     }
     if !response.ok {

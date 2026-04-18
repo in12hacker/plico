@@ -127,3 +127,15 @@ pub fn cmd_quota(kernel: &AIKernel, args: &[String]) -> ApiResponse {
         None => ApiResponse::error(format!("Agent not found: {}", agent_id)),
     }
 }
+
+pub fn cmd_discover(kernel: &AIKernel, args: &[String]) -> ApiResponse {
+    let state_filter = extract_arg(args, "--state");
+    let tool_filter = extract_arg(args, "--tool");
+    let cards = kernel.discover_agents(
+        state_filter.as_deref(),
+        tool_filter.as_deref(),
+    );
+    let mut r = ApiResponse::ok();
+    r.agent_cards = Some(cards);
+    r
+}

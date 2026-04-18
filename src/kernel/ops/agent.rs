@@ -2,7 +2,7 @@
 
 use crate::scheduler::{Agent, AgentHandle, AgentId, AgentState, AgentResources, Intent, IntentPriority, TransitionError};
 use crate::kernel::event_bus::KernelEvent;
-use crate::api::semantic::AgentUsageDto;
+use crate::api::semantic::{AgentUsageDto, AgentCardDto};
 
 fn transition_err(e: TransitionError) -> std::io::Error {
     std::io::Error::new(std::io::ErrorKind::InvalidInput, e.to_string())
@@ -317,5 +317,55 @@ impl crate::kernel::AIKernel {
             allowed_tools: resources.allowed_tools,
             last_active_ms: usage.last_active_ms,
         })
+    }
+
+    pub fn discover_agents(
+        &self,
+        state_filter: Option<&str>,
+        tool_filter: Option<&str>,
+    ) -> Vec<AgentCardDto> {
+        let handles = self.scheduler.list_agents();
+        let all_tool_names: Vec<String> = self.tool_registry.list()
+            .iter().map(|t| t.name.clone()).collect();
+
+        handles.into_iter()
+            .filter(|h| {
+                if let Some(sf) = state_filter {
+                    let state_str = format!("{:?}", h.state);
+                    if !state_str.eq_ignore_ascii_case(sf) {
+                        return false;
+                    }
+                }
+                true
+            })
+            .filter_map(|h| {
+                let aid = AgentId(h.id.clone());
+                let resources = self.scheduler.get_resources(&aid).unwrap_or_default();
+                let usage = self.scheduler.get_usage(&aid);
+                let memory_entries = self.memory.count_for_agent(&h.id);
+
+                let tools = if resources.allowed_tools.is_empty() {
+                    all_tool_names.clone()
+                } else {
+                    resources.allowed_tools.clone()
+                };
+
+                if let Some(tf) = tool_filter {
+                    if !tools.iter().any(|t| t.contains(tf)) {
+                        return None;
+                    }
+                }
+
+                Some(AgentCardDto {
+                    agent_id: h.id,
+                    name: h.name,
+                    state: format!("{:?}", h.state),
+                    tools,
+                    memory_entries,
+                    tool_call_count: usage.tool_call_count,
+                    last_active_ms: usage.last_active_ms,
+                })
+            })
+            .collect()
     }
 }

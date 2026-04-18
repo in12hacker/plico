@@ -872,6 +872,16 @@ impl AIKernel {
                     None => ApiResponse::error(format!("Agent not found: {}", agent_id)),
                 }
             }
+
+            ApiRequest::DiscoverAgents { state_filter, tool_filter, agent_id: _ } => {
+                let cards = self.discover_agents(
+                    state_filter.as_deref(),
+                    tool_filter.as_deref(),
+                );
+                let mut r = ApiResponse::ok();
+                r.agent_cards = Some(cards);
+                r
+            }
         }
     }
 }

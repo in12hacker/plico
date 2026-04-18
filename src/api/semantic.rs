@@ -538,6 +538,17 @@ pub enum ApiRequest {
 
     #[serde(rename = "agent_usage")]
     AgentUsage { agent_id: String },
+
+    // ── Agent Discovery (v6.2) ──────────────────────────────────
+
+    #[serde(rename = "discover_agents")]
+    DiscoverAgents {
+        #[serde(default)]
+        state_filter: Option<String>,
+        #[serde(default)]
+        tool_filter: Option<String>,
+        agent_id: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -610,6 +621,8 @@ pub struct ApiResponse {
     pub context_assembly: Option<crate::fs::context_budget::BudgetAllocation>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent_usage: Option<AgentUsageDto>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_cards: Option<Vec<AgentCardDto>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -700,6 +713,19 @@ pub struct AgentUsageDto {
     pub last_active_ms: u64,
 }
 
+/// Agent capability card — what an agent can do and its current state.
+/// Enables peer discovery: agents find collaborators by capability match.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentCardDto {
+    pub agent_id: String,
+    pub name: String,
+    pub state: String,
+    pub tools: Vec<String>,
+    pub memory_entries: usize,
+    pub tool_call_count: u64,
+    pub last_active_ms: u64,
+}
+
 impl ApiResponse {
     pub fn ok() -> Self {
         Self {
@@ -714,6 +740,7 @@ impl ApiResponse {
             system_status: None,
             context_assembly: None,
             agent_usage: None,
+            agent_cards: None,
         }
     }
 
@@ -767,6 +794,7 @@ impl ApiResponse {
             system_status: None,
             context_assembly: None,
             agent_usage: None,
+            agent_cards: None,
         }
     }
 }
