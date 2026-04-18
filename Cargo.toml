@@ -35,6 +35,10 @@ path = "src/bin/plicod.rs"
 name = "aicli"
 path = "src/bin/aicli/main.rs"
 
+[[bin]]
+name = "plico-mcp"
+path = "src/bin/plico_mcp.rs"
+
 [profile.release]
 opt-level = 3
 lto = true
