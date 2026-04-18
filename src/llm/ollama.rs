@@ -1,0 +1,118 @@
+//! Ollama LLM provider — calls local Ollama daemon via `/api/chat`.
+
+use std::sync::Arc;
+use tokio::runtime::Runtime;
+
+use super::{LlmProvider, ChatMessage, ChatOptions, LlmError};
+
+pub struct OllamaProvider {
+    rt: Arc<Runtime>,
+    client: reqwest::Client,
+    url: String,
+    model: String,
+}
+
+impl OllamaProvider {
+    pub fn new(url: &str, model: &str) -> Result<Self, LlmError> {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()?;
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(60))
+            .build()
+            .map_err(LlmError::Http)?;
+        Ok(Self {
+            rt: Arc::new(rt),
+            client,
+            url: url.trim_end_matches('/').to_string(),
+            model: model.to_string(),
+        })
+    }
+
+    async fn chat_async(
+        &self,
+        messages: &[ChatMessage],
+        options: &ChatOptions,
+    ) -> Result<String, LlmError> {
+        let api_messages: Vec<serde_json::Value> = messages
+            .iter()
+            .map(|m| serde_json::json!({"role": m.role, "content": m.content}))
+            .collect();
+
+        let mut body = serde_json::json!({
+            "model": self.model,
+            "messages": api_messages,
+            "stream": false,
+            "options": {
+                "temperature": options.temperature
+            }
+        });
+
+        if let Some(max_tokens) = options.max_tokens {
+            body["options"]["num_predict"] = serde_json::json!(max_tokens);
+        }
+
+        let resp = self
+            .client
+            .post(format!("{}/api/chat", self.url))
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| {
+                if e.is_connect() {
+                    LlmError::Unavailable(format!("cannot connect to Ollama at {}", self.url))
+                } else {
+                    LlmError::Http(e)
+                }
+            })?;
+
+        let status = resp.status();
+        let body_bytes = resp.bytes().await.map_err(LlmError::Http)?;
+
+        if !status.is_success() {
+            let body_str = String::from_utf8_lossy(&body_bytes);
+            return Err(LlmError::Api(format!("status={} body={}", status, body_str)));
+        }
+
+        #[derive(serde::Deserialize)]
+        struct ChatResponse {
+            message: MessageContent,
+        }
+        #[derive(serde::Deserialize)]
+        struct MessageContent {
+            content: String,
+        }
+
+        let parsed: ChatResponse = serde_json::from_slice(&body_bytes)
+            .map_err(|e| LlmError::Parse(format!("response parse error: {e}")))?;
+
+        Ok(parsed.message.content.trim().to_string())
+    }
+}
+
+impl LlmProvider for OllamaProvider {
+    fn chat(&self, messages: &[ChatMessage], options: &ChatOptions) -> Result<String, LlmError> {
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => {
+                tokio::task::block_in_place(|| handle.block_on(self.chat_async(messages, options)))
+            }
+            Err(_) => self.rt.block_on(self.chat_async(messages, options)),
+        }
+    }
+
+    fn model_name(&self) -> &str {
+        &self.model
+    }
+}
+
+impl Clone for OllamaProvider {
+    fn clone(&self) -> Self {
+        Self {
+            rt: Arc::clone(&self.rt),
+            client: self.client.clone(),
+            url: self.url.clone(),
+            model: self.model.clone(),
+        }
+    }
+}

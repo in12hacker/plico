@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::fs::{OllamaBackend, EmbeddingProvider, LocalEmbeddingBackend, StubEmbeddingProvider, EmbedError, InMemoryBackend};
+use crate::llm::{LlmProvider, LlmError, OllamaProvider, StubProvider};
 use crate::scheduler::Agent;
 use crate::scheduler::agent::Intent;
 
@@ -229,5 +230,38 @@ fn try_ollama() -> Result<Arc<dyn EmbeddingProvider>, EmbedError> {
             Ok(Arc::new(b) as Arc<dyn EmbeddingProvider>)
         }
         Err(e) => Err(e),
+    }
+}
+
+/// Create an LLM provider based on `LLM_BACKEND` env var.
+///
+/// Backends: "ollama" (default) | "stub"
+pub(crate) fn create_llm_provider(model_env: &str, default_model: &str) -> Result<Arc<dyn LlmProvider>, LlmError> {
+    let backend = std::env::var("LLM_BACKEND")
+        .unwrap_or_else(|_| "ollama".to_string());
+
+    match backend.as_str() {
+        "ollama" => {
+            let url = std::env::var("OLLAMA_URL")
+                .unwrap_or_else(|_| "http://localhost:11434".to_string());
+            let model = std::env::var(model_env)
+                .unwrap_or_else(|_| default_model.to_string());
+            let provider = OllamaProvider::new(&url, &model)?;
+            tracing::info!("LLM backend: ollama ({} via {})", model, url);
+            Ok(Arc::new(provider) as Arc<dyn LlmProvider>)
+        }
+        "stub" => {
+            tracing::info!("LLM backend: stub");
+            Ok(Arc::new(StubProvider::empty()) as Arc<dyn LlmProvider>)
+        }
+        other => {
+            tracing::warn!("Unknown LLM_BACKEND={other}, falling back to ollama");
+            let url = std::env::var("OLLAMA_URL")
+                .unwrap_or_else(|_| "http://localhost:11434".to_string());
+            let model = std::env::var(model_env)
+                .unwrap_or_else(|_| default_model.to_string());
+            let provider = OllamaProvider::new(&url, &model)?;
+            Ok(Arc::new(provider) as Arc<dyn LlmProvider>)
+        }
     }
 }

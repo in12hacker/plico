@@ -1,26 +1,23 @@
 //! LLM Intent Router — sends NL + tool catalog to an LLM for resolution.
 //!
-//! Optional — requires Ollama. Falls back gracefully when unavailable.
+//! Model-agnostic — uses `LlmProvider` trait. Falls back gracefully when unavailable.
 //! The LLM receives a system prompt with the full tool catalog and
 //! returns structured JSON describing the intended actions.
 
+use std::sync::Arc;
 use super::{IntentRouter, ResolvedIntent, IntentError, RoutingAction};
 use crate::api::semantic::ApiRequest;
 use crate::tool::ToolDescriptor;
+use crate::llm::{LlmProvider, ChatMessage, ChatOptions};
 
 pub struct LlmRouter {
-    ollama_url: String,
-    model: String,
+    provider: Arc<dyn LlmProvider>,
     tool_catalog: Vec<ToolDescriptor>,
 }
 
 impl LlmRouter {
-    pub fn new(ollama_url: &str, model: &str, tool_catalog: Vec<ToolDescriptor>) -> Self {
-        Self {
-            ollama_url: ollama_url.to_string(),
-            model: model.to_string(),
-            tool_catalog,
-        }
+    pub fn new(provider: Arc<dyn LlmProvider>, tool_catalog: Vec<ToolDescriptor>) -> Self {
+        Self { provider, tool_catalog }
     }
 
     fn build_system_prompt(&self) -> String {
@@ -81,59 +78,33 @@ impl IntentRouter for LlmRouter {
     fn resolve(&self, text: &str, agent_id: &str) -> Result<Vec<ResolvedIntent>, IntentError> {
         let system_prompt = self.build_system_prompt();
 
-        let request_body = serde_json::json!({
-            "model": self.model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": text}
-            ],
-            "stream": false,
-            "options": {
-                "temperature": 0.1
-            }
-        });
+        let messages = vec![
+            ChatMessage::system(system_prompt),
+            ChatMessage::user(text),
+        ];
+        let options = ChatOptions { temperature: 0.1, max_tokens: None };
 
-        let url = format!("{}/api/chat", self.ollama_url);
+        let content = self.provider
+            .chat(&messages, &options)
+            .map_err(|e| IntentError::LlmUnavailable(format!("LLM request failed: {}", e)))?;
 
-        let client = match reqwest::blocking::Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
-            .build()
-        {
-            Ok(c) => c,
-            Err(e) => return Err(IntentError::LlmUnavailable(format!("HTTP client error: {}", e))),
-        };
-
-        let response = client.post(&url)
-            .json(&request_body)
-            .send()
-            .map_err(|e| IntentError::LlmUnavailable(format!("Ollama request failed: {}", e)))?;
-
-        if !response.status().is_success() {
-            return Err(IntentError::LlmUnavailable(
-                format!("Ollama returned status {}", response.status()),
-            ));
-        }
-
-        let resp_json: serde_json::Value = response.json()
-            .map_err(|e| IntentError::LlmUnavailable(format!("Response parse error: {}", e)))?;
-
-        let content = resp_json
-            .get("message")
-            .and_then(|m| m.get("content"))
-            .and_then(|c| c.as_str())
-            .unwrap_or("");
-
-        self.parse_llm_response(content, agent_id)
+        self.parse_llm_response(&content, agent_id)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::llm::StubProvider;
+
+    fn make_router(response: &str) -> LlmRouter {
+        let provider = Arc::new(StubProvider::new(response));
+        LlmRouter::new(provider, vec![])
+    }
 
     #[test]
     fn test_parse_llm_response_valid() {
-        let router = LlmRouter::new("http://localhost:11434", "llama3.2", vec![]);
+        let router = make_router("");
         let json = r#"{"tool": "cas.search", "params": {"query": "test"}, "confidence": 0.9, "explanation": "searching"}"#;
         let result = router.parse_llm_response(json, "agent1");
         assert!(result.is_ok());
@@ -144,7 +115,7 @@ mod tests {
 
     #[test]
     fn test_parse_llm_response_none() {
-        let router = LlmRouter::new("http://localhost:11434", "llama3.2", vec![]);
+        let router = make_router("");
         let json = r#"{"tool": "none", "confidence": 0.0, "explanation": "cannot resolve"}"#;
         let result = router.parse_llm_response(json, "agent1");
         assert!(result.is_err());
@@ -152,7 +123,7 @@ mod tests {
 
     #[test]
     fn test_parse_llm_response_with_markdown_wrapper() {
-        let router = LlmRouter::new("http://localhost:11434", "llama3.2", vec![]);
+        let router = make_router("");
         let json = "```json\n{\"tool\": \"memory.store\", \"params\": {\"content\": \"hello\"}, \"confidence\": 0.85, \"explanation\": \"storing\"}\n```";
         let result = router.parse_llm_response(json, "agent1");
         assert!(result.is_ok());
@@ -167,8 +138,18 @@ mod tests {
                 schema: serde_json::Value::Null,
             },
         ];
-        let router = LlmRouter::new("http://localhost:11434", "llama3.2", tools);
+        let provider = Arc::new(StubProvider::new(""));
+        let router = LlmRouter::new(provider, tools);
         let prompt = router.build_system_prompt();
         assert!(prompt.contains("cas.search"));
+    }
+
+    #[test]
+    fn test_resolve_delegates_to_provider() {
+        let response = r#"{"tool": "cas.search", "params": {"query": "hello"}, "confidence": 0.95, "explanation": "search"}"#;
+        let router = make_router(response);
+        let result = router.resolve("find hello", "agent1");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap()[0].confidence, 0.95);
     }
 }

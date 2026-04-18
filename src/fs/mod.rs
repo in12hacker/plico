@@ -38,7 +38,7 @@ pub use context_loader::{ContextLoader, ContextLayer, LoadedContext};
 pub use embedding::{EmbeddingProvider, Embedding, EmbeddingMeta, EmbedError, OllamaBackend, LocalEmbeddingBackend, StubEmbeddingProvider};
 pub use search::{SemanticSearch, SearchHit, SearchIndexMeta, SearchFilter, InMemoryBackend, Bm25Index, SearchIndexEntry};
 pub use crate::temporal::{TemporalResolver, TemporalRange, Granularity};
-pub use summarizer::{Summarizer, OllamaSummarizer, SummaryLayer, SummarError};
+pub use summarizer::{Summarizer, LlmSummarizer, SummaryLayer, SummarError};
 pub use graph::{
     KnowledgeGraph, KGNode, KGEdge, KGNodeType, KGEdgeType, KGSearchHit, KGError,
     PetgraphBackend,

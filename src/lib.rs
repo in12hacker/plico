@@ -22,6 +22,7 @@ pub mod api;
 pub mod temporal;
 pub mod tool;
 pub mod intent;
+pub mod llm;
 
 // Permission re-exports for ergonomic access
 pub use api::permission::{PermissionGuard, PermissionContext, PermissionAction, PermissionGrant};

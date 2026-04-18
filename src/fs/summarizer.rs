@@ -6,7 +6,7 @@
 //!
 //! ```text
 //! Summarizer (trait)
-//! └── OllamaSummarizer  — calls local Ollama daemon (MVP)
+//! └── LlmSummarizer — delegates to any LlmProvider (model-agnostic)
 //! ```
 //!
 //! # Integration
@@ -14,16 +14,9 @@
 //! - `ContextLoader::compute_l0()` calls `Summarizer::summarize()` instead of heuristics
 //! - L0: compress ~500 tokens → ~50 token summary (2-3 sentences)
 //! - L1: compress ~2000 tokens → ~200 token summary (paragraph)
-//!
-//! # Prompt Design
-//!
-//! L0 prompt: concise summary instruction (~100 tokens input)
-//! L1 prompt: detailed summary instruction (~2000 tokens input)
-//!
-//! Uses streaming disabled, JSON mode disabled for simplicity.
 
 use std::sync::Arc;
-use tokio::runtime::Runtime;
+use crate::llm::{LlmProvider, ChatMessage, ChatOptions};
 
 /// Errors from summarization operations.
 #[derive(Debug, thiserror::Error)]
@@ -39,6 +32,9 @@ pub enum SummarError {
 
     #[error("Content too long ({len} chars): max is {max}")]
     ContentTooLong { len: usize, max: usize },
+
+    #[error("LLM error: {0}")]
+    Llm(String),
 }
 
 /// Target summary layer — determines target length and compression ratio.
@@ -82,117 +78,24 @@ impl SummaryLayer {
 
 /// Thread-safe summarizer trait.
 pub trait Summarizer: Send + Sync {
-    /// Generate a summary for the given content at the specified layer.
-    ///
-    /// Returns the summary text, or an error if summarization failed.
-    ///
-    /// If the content exceeds `layer.max_input_chars()`, it is truncated
-    /// before being sent to the model.
     fn summarize(&self, content: &str, layer: SummaryLayer) -> Result<String, SummarError>;
-
-    /// Name of the underlying model.
     fn model_name(&self) -> &str;
 }
 
-// ─── Ollama Backend ───────────────────────────────────────────────────────────
+// ─── LLM-backed Summarizer (model-agnostic) ─────────────────────────────────
 
-/// Ollama daemon summarizer.
-///
-/// Uses `POST /api/chat` with a chatml-style messages array.
-pub struct OllamaSummarizer {
-    rt: Arc<Runtime>,
-    client: reqwest::Client,
-    url: String,
-    model: String,
+/// Summarizer that delegates to any `LlmProvider`.
+pub struct LlmSummarizer {
+    provider: Arc<dyn LlmProvider>,
 }
 
-impl OllamaSummarizer {
-    /// Create a new Ollama summarizer.
-    ///
-    /// `url` — Ollama server URL (e.g. `"http://localhost:11434"`).
-    /// `model` — Model name (e.g. `"llama3.2"` or `"qwen2.5"`).
-    pub fn new(url: &str, model: &str) -> Result<Self, SummarError> {
-        let rt = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(1)
-            .enable_all()
-            .build()?;
-        let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(60))
-            .build()
-            .map_err(SummarError::Http)?;
-        Ok(Self {
-            rt: Arc::new(rt),
-            client,
-            url: url.to_string(),
-            model: model.to_string(),
-        })
-    }
-
-    async fn chat_async(&self, system: &str, user: &str) -> Result<String, SummarError> {
-        #[derive(serde::Serialize)]
-        struct ChatRequest<'a> {
-            model: &'a str,
-            messages: [ChatMessage<'a>; 2],
-            stream: bool,
-        }
-        #[derive(serde::Serialize)]
-        struct ChatMessage<'a> {
-            role: &'a str,
-            content: &'a str,
-        }
-        #[derive(serde::Deserialize)]
-        struct ChatResponse {
-            message: ChatMessageResponse,
-        }
-        #[derive(serde::Deserialize)]
-        struct ChatMessageResponse {
-            content: String,
-        }
-
-        let request = ChatRequest {
-            model: &self.model,
-            messages: [
-                ChatMessage { role: "system", content: system },
-                ChatMessage { role: "user", content: user },
-            ],
-            stream: false,
-        };
-
-        let resp = self
-            .client
-            .post(format!("{}/api/chat", self.url.trim_end_matches('/')))
-            .json(&request)
-            .send()
-            .await
-            .map_err(|e| {
-                if e.is_connect() {
-                    SummarError::Ollama(format!("cannot connect to Ollama at {}", self.url))
-                } else {
-                    SummarError::Http(e)
-                }
-            })?;
-
-        let status = resp.status();
-        let body_bytes = resp.bytes().await.map_err(SummarError::Http)?;
-
-        if !status.is_success() {
-            let body_str = String::from_utf8_lossy(&body_bytes);
-            return Err(SummarError::Ollama(format!(
-                "status={} body={}",
-                status, body_str
-            )));
-        }
-
-        let ChatResponse { message } =
-            serde_json::from_slice(&body_bytes).map_err(|e| {
-                SummarError::Ollama(format!("parse error: {e}"))
-            })?;
-
-        Ok(message.content.trim().to_string())
+impl LlmSummarizer {
+    pub fn new(provider: Arc<dyn LlmProvider>) -> Self {
+        Self { provider }
     }
 }
 
-impl Summarizer for OllamaSummarizer {
+impl Summarizer for LlmSummarizer {
     fn summarize(&self, content: &str, layer: SummaryLayer) -> Result<String, SummarError> {
         let max_chars = layer.max_input_chars();
         let truncated = if content.len() > max_chars {
@@ -202,35 +105,25 @@ impl Summarizer for OllamaSummarizer {
                 layer,
                 max_chars
             );
-            // Truncate to last N chars that fit within limit
             let start = content.len() - max_chars;
             &content[start..]
         } else {
             content
         };
 
-        let system = layer.system_prompt();
-        let user = layer.user_prompt(truncated);
+        let messages = vec![
+            ChatMessage::system(layer.system_prompt()),
+            ChatMessage::user(layer.user_prompt(truncated)),
+        ];
+        let options = ChatOptions { temperature: 0.3, max_tokens: None };
 
-        match tokio::runtime::Handle::try_current() {
-            Ok(handle) => tokio::task::block_in_place(|| handle.block_on(self.chat_async(system, &user))),
-            Err(_) => self.rt.block_on(self.chat_async(system, &user)),
-        }
+        self.provider
+            .chat(&messages, &options)
+            .map_err(|e| SummarError::Llm(e.to_string()))
     }
 
     fn model_name(&self) -> &str {
-        &self.model
-    }
-}
-
-impl Clone for OllamaSummarizer {
-    fn clone(&self) -> Self {
-        Self {
-            rt: Arc::clone(&self.rt),
-            client: self.client.clone(),
-            url: self.url.clone(),
-            model: self.model.clone(),
-        }
+        self.provider.model_name()
     }
 }
 
@@ -238,17 +131,22 @@ impl Clone for OllamaSummarizer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::llm::StubProvider;
 
     #[test]
-    fn test_summarizer_creation_without_server() {
-        // Should create even without Ollama (connection fails at runtime, not init)
-        let s = OllamaSummarizer::new("http://localhost:9999", "llama3.2");
-        match s {
-            Ok(s) => assert_eq!(s.model_name(), "llama3.2"),
-            Err(e) => {
-                assert!(format!("{e}").contains("9999") || format!("{e}").contains("connection"));
-            }
-        }
+    fn test_llm_summarizer_delegates_to_provider() {
+        let provider = Arc::new(StubProvider::new("This is a summary."));
+        let summarizer = LlmSummarizer::new(provider);
+        let result = summarizer.summarize("Some long content here", SummaryLayer::L0);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "This is a summary.");
+    }
+
+    #[test]
+    fn test_llm_summarizer_model_name() {
+        let provider = Arc::new(StubProvider::new("x"));
+        let summarizer = LlmSummarizer::new(provider);
+        assert_eq!(summarizer.model_name(), "stub");
     }
 
     #[test]
@@ -264,20 +162,5 @@ mod tests {
 
         let l1_sys = SummaryLayer::L1.system_prompt();
         assert!(l1_sys.contains("1-2 paragraphs"));
-    }
-
-    /// Calling summarize() from inside a tokio::spawn must not panic.
-    /// The connection will fail (no server at 9999) but must not panic with
-    /// "Cannot start a runtime from within a runtime".
-    #[tokio::test]
-    async fn test_summarize_safe_inside_tokio_spawn() {
-        let s = OllamaSummarizer::new("http://localhost:9999", "test-model").unwrap();
-        let result = tokio::task::spawn_blocking(move || {
-            s.summarize("hello world", SummaryLayer::L0)
-        }).await.unwrap();
-        // Connection refused is expected — what must NOT happen is a panic
-        assert!(result.is_err());
-        let msg = format!("{}", result.unwrap_err());
-        assert!(!msg.contains("Cannot start a runtime from within a runtime"));
     }
 }

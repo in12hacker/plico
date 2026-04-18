@@ -23,7 +23,7 @@ use crate::cas::CASStorage;
 use crate::memory::{LayeredMemory, CASPersister, MemoryPersister};
 use crate::scheduler::{AgentScheduler, IntentPriority};
 use crate::scheduler::messaging::MessageBus;
-use crate::fs::{SemanticFS, InMemoryBackend, EmbeddingProvider, SemanticSearch, OllamaSummarizer, Summarizer, KnowledgeGraph, PetgraphBackend, StubEmbeddingProvider};
+use crate::fs::{SemanticFS, InMemoryBackend, EmbeddingProvider, SemanticSearch, LlmSummarizer, Summarizer, KnowledgeGraph, PetgraphBackend, StubEmbeddingProvider};
 use crate::api::permission::PermissionGuard;
 use crate::tool::ToolRegistry;
 use crate::intent::{ChainRouter, IntentRouter};
@@ -62,13 +62,10 @@ impl AIKernel {
                 Arc::new(StubEmbeddingProvider::new()) as Arc<dyn EmbeddingProvider>
             });
 
-        let ollama_url = std::env::var("OLLAMA_URL").unwrap_or_else(|_| "http://localhost:11434".to_string());
-        let summarizer_model = std::env::var("OLLAMA_SUMMARIZER_MODEL")
-            .unwrap_or_else(|_| "llama3.2".to_string());
-        let summarizer: Option<Arc<dyn Summarizer>> = match OllamaSummarizer::new(&ollama_url, &summarizer_model) {
-            Ok(s) => {
-                tracing::info!("LLM summarizer enabled: {} via {}", summarizer_model, ollama_url);
-                Some(Arc::new(s))
+        let summarizer: Option<Arc<dyn Summarizer>> = match persistence::create_llm_provider("OLLAMA_SUMMARIZER_MODEL", "llama3.2") {
+            Ok(provider) => {
+                tracing::info!("LLM summarizer enabled: {}", provider.model_name());
+                Some(Arc::new(LlmSummarizer::new(provider)))
             }
             Err(e) => {
                 tracing::warn!("Could not create summarizer: {e}. ContextLoader will use heuristic summaries.");
@@ -122,13 +119,16 @@ impl AIKernel {
         let message_bus = Arc::new(MessageBus::new());
 
         let llm_router = {
-            let ollama_url = std::env::var("OLLAMA_URL")
-                .unwrap_or_else(|_| "http://localhost:11434".to_string());
-            let intent_model = std::env::var("OLLAMA_INTENT_MODEL")
-                .unwrap_or_else(|_| "llama3.2".to_string());
-            let r = crate::intent::llm::LlmRouter::new(&ollama_url, &intent_model, Vec::new());
-            tracing::info!("Intent LLM router configured: {} via {}", intent_model, ollama_url);
-            Some(r)
+            match persistence::create_llm_provider("OLLAMA_INTENT_MODEL", "llama3.2") {
+                Ok(provider) => {
+                    tracing::info!("Intent LLM router configured: {}", provider.model_name());
+                    Some(crate::intent::llm::LlmRouter::new(provider, Vec::new()))
+                }
+                Err(e) => {
+                    tracing::warn!("Could not create intent LLM router: {e}. Using heuristic-only routing.");
+                    None
+                }
+            }
         };
         let intent_router: Arc<dyn IntentRouter> = Arc::new(ChainRouter::new(llm_router));
 
