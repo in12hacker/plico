@@ -2,6 +2,7 @@
 
 use crate::scheduler::{Agent, AgentHandle, AgentId, AgentState, AgentResources, Intent, IntentPriority, TransitionError};
 use crate::kernel::event_bus::KernelEvent;
+use crate::api::semantic::AgentUsageDto;
 
 fn transition_err(e: TransitionError) -> std::io::Error {
     std::io::Error::new(std::io::ErrorKind::InvalidInput, e.to_string())
@@ -300,5 +301,21 @@ impl crate::kernel::AIKernel {
         );
 
         Ok(count)
+    }
+
+    pub fn agent_usage(&self, agent_id: &str) -> Option<AgentUsageDto> {
+        let aid = AgentId(agent_id.to_string());
+        let resources = self.scheduler.get_resources(&aid)?;
+        let usage = self.scheduler.get_usage(&aid);
+        let memory_entries = self.memory.count_for_agent(agent_id);
+        Some(AgentUsageDto {
+            agent_id: agent_id.to_string(),
+            memory_entries,
+            memory_quota: resources.memory_quota,
+            tool_call_count: usage.tool_call_count,
+            cpu_time_quota: resources.cpu_time_quota,
+            allowed_tools: resources.allowed_tools,
+            last_active_ms: usage.last_active_ms,
+        })
     }
 }

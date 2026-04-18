@@ -115,3 +115,15 @@ pub fn cmd_agent_restore(kernel: &AIKernel, args: &[String]) -> ApiResponse {
         Err(e) => ApiResponse::error(e),
     }
 }
+
+pub fn cmd_quota(kernel: &AIKernel, args: &[String]) -> ApiResponse {
+    let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
+    match kernel.agent_usage(&agent_id) {
+        Some(usage) => {
+            let mut r = ApiResponse::ok();
+            r.agent_usage = Some(usage);
+            r
+        }
+        None => ApiResponse::error(format!("Agent not found: {}", agent_id)),
+    }
+}

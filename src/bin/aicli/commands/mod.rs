@@ -59,6 +59,7 @@ pub fn execute_local(kernel: &AIKernel, args: &[String]) -> ApiResponse {
         Some("history") => cmd_history(kernel, args),
         Some("rollback") => cmd_rollback(kernel, args),
         Some("skills") => cmd_skills(kernel, args),
+        Some("quota") => cmd_quota(kernel, args),
         Some("system-status") => {
             let status = kernel.system_status();
             let mut r = ApiResponse::ok();
@@ -285,6 +286,22 @@ pub fn print_result(response: &ApiResponse) {
             assembly.candidates_included, assembly.candidates_considered);
         for item in &assembly.items {
             println!("  [{}] {} (~{} tokens)", item.layer.name(), &item.cid[..16.min(item.cid.len())], item.tokens_estimate);
+        }
+    }
+    if let Some(usage) = &response.agent_usage {
+        println!("Agent: {}", usage.agent_id);
+        println!("  Memory: {}/{}", usage.memory_entries,
+            if usage.memory_quota == 0 { "unlimited".to_string() } else { usage.memory_quota.to_string() });
+        println!("  Tool calls: {}", usage.tool_call_count);
+        println!("  CPU quota: {}",
+            if usage.cpu_time_quota == 0 { "unlimited".to_string() } else { format!("{}ms", usage.cpu_time_quota) });
+        if usage.allowed_tools.is_empty() {
+            println!("  Tools: all allowed");
+        } else {
+            println!("  Tools: {:?}", usage.allowed_tools);
+        }
+        if usage.last_active_ms > 0 {
+            println!("  Last active: {}ms", usage.last_active_ms);
         }
     }
     if !response.ok {

@@ -27,6 +27,7 @@ pub use agent::{
     cmd_agent_suspend, cmd_agent_resume, cmd_agent_terminate,
     cmd_agent_complete, cmd_agent_fail,
     cmd_agent_checkpoint, cmd_agent_restore,
+    cmd_quota,
 };
 pub use memory::{
     cmd_remember, cmd_recall, cmd_tags,

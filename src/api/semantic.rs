@@ -533,6 +533,11 @@ pub enum ApiRequest {
         cids: Vec<ContextAssembleCandidate>,
         budget_tokens: usize,
     },
+
+    // ── Resource Visibility (v6.1) ──────────────────────────────
+
+    #[serde(rename = "agent_usage")]
+    AgentUsage { agent_id: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -603,6 +608,8 @@ pub struct ApiResponse {
     pub system_status: Option<SystemStatus>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context_assembly: Option<crate::fs::context_budget::BudgetAllocation>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_usage: Option<AgentUsageDto>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -681,6 +688,18 @@ pub struct SystemStatus {
     pub kg_edge_count: usize,
 }
 
+/// Agent resource usage and quota snapshot.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentUsageDto {
+    pub agent_id: String,
+    pub memory_entries: usize,
+    pub memory_quota: u64,
+    pub tool_call_count: u64,
+    pub cpu_time_quota: u64,
+    pub allowed_tools: Vec<String>,
+    pub last_active_ms: u64,
+}
+
 impl ApiResponse {
     pub fn ok() -> Self {
         Self {
@@ -694,6 +713,7 @@ impl ApiResponse {
             subscription_id: None, kernel_events: None,
             system_status: None,
             context_assembly: None,
+            agent_usage: None,
         }
     }
 
@@ -746,6 +766,7 @@ impl ApiResponse {
             subscription_id: None, kernel_events: None,
             system_status: None,
             context_assembly: None,
+            agent_usage: None,
         }
     }
 }

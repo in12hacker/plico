@@ -22,7 +22,7 @@ pub mod queue;
 pub mod dispatch;
 pub mod messaging;
 
-pub use agent::{Agent, AgentId, AgentState, AgentResources, Intent, IntentPriority, IntentId, TransitionError};
+pub use agent::{Agent, AgentId, AgentState, AgentResources, AgentUsage, Intent, IntentPriority, IntentId, TransitionError};
 pub use queue::{SchedulerQueue, SchedulerError};
 pub use dispatch::{DispatchHandle, AgentExecutor, LocalExecutor, KernelExecutor, TokioDispatchLoop, DispatchError, ExecutionResult};
 
@@ -36,6 +36,9 @@ pub struct AgentScheduler {
 
     /// Pending intents queue (priority-sorted).
     queue: RwLock<SchedulerQueue>,
+
+    /// Per-agent runtime usage counters.
+    usage: RwLock<HashMap<AgentId, AgentUsage>>,
 }
 
 /// Lightweight agent reference for cross-module communication.
@@ -56,6 +59,7 @@ impl AgentHandle {
     }
 }
 
+use agent::now_ms;
 use std::collections::HashMap;
 
 impl AgentScheduler {
@@ -63,6 +67,7 @@ impl AgentScheduler {
         Self {
             agents: RwLock::new(HashMap::new()),
             queue: RwLock::new(SchedulerQueue::new()),
+            usage: RwLock::new(HashMap::new()),
         }
     }
 
@@ -146,6 +151,22 @@ impl AgentScheduler {
         false
     }
 
+    /// Get an agent's runtime usage counters.
+    pub fn get_usage(&self, agent_id: &AgentId) -> AgentUsage {
+        self.usage.read().unwrap()
+            .get(agent_id)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Record a tool call for an agent.
+    pub fn record_tool_call(&self, agent_id: &AgentId) {
+        let mut usage = self.usage.write().unwrap();
+        let entry = usage.entry(agent_id.clone()).or_default();
+        entry.tool_call_count += 1;
+        entry.last_active_ms = now_ms();
+    }
+
     /// Drain all pending intents for persistence snapshot.
     /// Returns a copy of all intents currently in the queue.
     pub fn snapshot_intents(&self) -> Vec<Intent> {
@@ -210,5 +231,51 @@ mod tests {
         assert_eq!(intents[1].description, "high");
         assert_eq!(intents[2].description, "medium");
         assert_eq!(intents[3].description, "low");
+    }
+
+    #[test]
+    fn test_usage_default_is_zero() {
+        let scheduler = AgentScheduler::new();
+        let agent = Agent::new("usage-test".into());
+        let aid = agent.id().clone();
+        scheduler.register(agent);
+
+        let usage = scheduler.get_usage(&aid);
+        assert_eq!(usage.tool_call_count, 0);
+        assert_eq!(usage.last_active_ms, 0);
+    }
+
+    #[test]
+    fn test_record_tool_call_increments() {
+        let scheduler = AgentScheduler::new();
+        let agent = Agent::new("counter-test".into());
+        let aid = agent.id().clone();
+        scheduler.register(agent);
+
+        scheduler.record_tool_call(&aid);
+        scheduler.record_tool_call(&aid);
+        scheduler.record_tool_call(&aid);
+
+        let usage = scheduler.get_usage(&aid);
+        assert_eq!(usage.tool_call_count, 3);
+        assert!(usage.last_active_ms > 0);
+    }
+
+    #[test]
+    fn test_usage_independent_per_agent() {
+        let scheduler = AgentScheduler::new();
+        let a = Agent::new("agent-a".into());
+        let b = Agent::new("agent-b".into());
+        let aid_a = a.id().clone();
+        let aid_b = b.id().clone();
+        scheduler.register(a);
+        scheduler.register(b);
+
+        scheduler.record_tool_call(&aid_a);
+        scheduler.record_tool_call(&aid_a);
+        scheduler.record_tool_call(&aid_b);
+
+        assert_eq!(scheduler.get_usage(&aid_a).tool_call_count, 2);
+        assert_eq!(scheduler.get_usage(&aid_b).tool_call_count, 1);
     }
 }

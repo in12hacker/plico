@@ -2674,3 +2674,84 @@ fn test_context_assemble_tight_budget_downgrades() {
     }
     assert!(allocation.total_tokens <= 50);
 }
+
+// ── v6.1: Resource Visibility tests ─────────────────────────────────
+
+#[test]
+fn test_agent_usage_returns_defaults() {
+    let (kernel, _dir) = make_kernel();
+    let agent = kernel.register_agent("usage-test".into());
+
+    let usage = kernel.agent_usage(&agent).unwrap();
+    assert_eq!(usage.agent_id, agent);
+    assert_eq!(usage.memory_entries, 0);
+    assert_eq!(usage.memory_quota, 0);
+    assert_eq!(usage.tool_call_count, 0);
+    assert_eq!(usage.cpu_time_quota, 0);
+    assert!(usage.allowed_tools.is_empty());
+}
+
+#[test]
+fn test_agent_usage_tracks_memory() {
+    let (kernel, _dir) = make_kernel();
+    let agent = kernel.register_agent("mem-track".into());
+
+    kernel.remember(&agent, "fact one".into()).unwrap();
+    kernel.remember(&agent, "fact two".into()).unwrap();
+
+    let usage = kernel.agent_usage(&agent).unwrap();
+    assert_eq!(usage.memory_entries, 2);
+}
+
+#[test]
+fn test_agent_usage_tracks_tool_calls() {
+    let (kernel, _dir) = make_kernel();
+    let agent = kernel.register_agent("tool-track".into());
+
+    kernel.execute_tool("cas.create", &serde_json::json!({
+        "content": "test", "tags": ["t1"]
+    }), &agent);
+
+    let usage = kernel.agent_usage(&agent).unwrap();
+    assert_eq!(usage.tool_call_count, 1);
+}
+
+#[test]
+fn test_agent_usage_reflects_quotas() {
+    let (kernel, _dir) = make_kernel();
+    let agent = kernel.register_agent("quota-reflect".into());
+
+    kernel.agent_set_resources(&agent, Some(100), Some(5000), Some(vec!["cas.read".into()])).unwrap();
+
+    let usage = kernel.agent_usage(&agent).unwrap();
+    assert_eq!(usage.memory_quota, 100);
+    assert_eq!(usage.cpu_time_quota, 5000);
+    assert_eq!(usage.allowed_tools, vec!["cas.read"]);
+}
+
+#[test]
+fn test_agent_usage_via_api() {
+    let (kernel, _dir) = make_kernel();
+    let agent = kernel.register_agent("api-usage".into());
+
+    kernel.remember(&agent, "data".into()).unwrap();
+
+    let resp = kernel.handle_api_request(plico::api::semantic::ApiRequest::AgentUsage {
+        agent_id: agent.clone(),
+    });
+    assert!(resp.ok);
+    let usage = resp.agent_usage.unwrap();
+    assert_eq!(usage.agent_id, agent);
+    assert_eq!(usage.memory_entries, 1);
+}
+
+#[test]
+fn test_agent_usage_not_found() {
+    let (kernel, _dir) = make_kernel();
+
+    let resp = kernel.handle_api_request(plico::api::semantic::ApiRequest::AgentUsage {
+        agent_id: "nonexistent".into(),
+    });
+    assert!(!resp.ok);
+    assert!(resp.error.unwrap().contains("not found"));
+}

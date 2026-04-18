@@ -108,6 +108,12 @@ pub struct AgentResources {
     pub allowed_tools: Vec<String>,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AgentUsage {
+    pub tool_call_count: u64,
+    pub last_active_ms: u64,
+}
+
 impl Agent {
     pub fn new(name: String) -> Self {
         Self {
@@ -236,7 +242,7 @@ impl std::fmt::Display for IntentId {
     }
 }
 
-fn now_ms() -> u64 {
+pub(crate) fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)

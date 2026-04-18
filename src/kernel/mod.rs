@@ -861,6 +861,17 @@ impl AIKernel {
                     Err(e) => ApiResponse::error(e.to_string()),
                 }
             }
+
+            ApiRequest::AgentUsage { agent_id } => {
+                match self.agent_usage(&agent_id) {
+                    Some(usage) => {
+                        let mut r = ApiResponse::ok();
+                        r.agent_usage = Some(usage);
+                        r
+                    }
+                    None => ApiResponse::error(format!("Agent not found: {}", agent_id)),
+                }
+            }
         }
     }
 }
