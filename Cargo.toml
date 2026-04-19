@@ -24,6 +24,11 @@ lru = "0.1"
 bm25 = "2.3.2"
 hmac = "0.12"
 time = "0.3"
+axum = "0.7"
+tokio-stream = { version = "0.1", features = ["sync"] }
+tower = "0.4"
+tower-http = { version = "0.5", features = ["cors"] }
+futures = "0.3"
 rand = "0.8"
 edgevec = "0.9.0"
 
@@ -42,6 +47,10 @@ path = "src/bin/aicli/main.rs"
 [[bin]]
 name = "plico-mcp"
 path = "src/bin/plico_mcp.rs"
+
+[[bin]]
+name = "plico-sse"
+path = "src/bin/plico_sse.rs"
 
 [profile.release]
 opt-level = 3
