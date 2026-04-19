@@ -2,41 +2,219 @@
 //!
 //! Provides AI-native interfaces: semantic CLI and TCP server.
 //!
-//! # CLI Interface (aicli)
+//! # API Versioning
 //!
-//! AI agents invoke operations via structured commands:
-//! ```bash
-//! aicli create --content "..." --tags "meeting,project-x"
-//! aicli read --cid <CID>
-//! aicli search --query "project-x meeting notes"
-//! aicli update --cid <CID> --content "..."
-//! aicli delete --cid <CID>
-//! ```
-//!
-//! # TCP Server (plicod)
-//!
-//! Long-running daemon exposing a semantic API over TCP for external AI programs.
-//! Protocol: JSON messages over TCP.
-//!
-//! # JSON Protocol
-//!
-//! Request:
+//! The API uses semantic versioning (major.minor.patch). Clients can declare
+//! their API version in requests via the optional `api_version` field:
 //! ```json
-//! {"method": "create", "params": {"content": "...", "tags": ["..."], "agent_id": "agent1"}}
+//! {"method": "create", "api_version": "1.2.0", "params": {...}}
 //! ```
 //!
-//! Response:
-//! ```json
-//! {"ok": true, "cid": "abc123..."}
-//! ```
-//!
-//! Error:
-//! ```json
-//! {"ok": false, "error": "permission denied"}
-//! ```
+//! If no version is declared, the server defaults to the current stable version.
+//! Deprecated endpoints return a deprecation notice in the response.
 
 use base64::Engine;
 use serde::{Deserialize, Serialize};
+// ── Versioning Types (v17.0) ───────────────────────────────────────────
+
+/// API version with semantic versioning (major.minor.patch).
+///
+/// # Examples
+/// ```
+/// let v = ApiVersion::parse("1.2.0").unwrap();
+/// assert!(v.major == 1 && v.minor == 2 && v.patch == 0);
+/// ```
+///
+/// Serializes/deserializes as a string like "1.2.0".
+/// Can be deserialized from either "1.2.0" string or {major, minor, patch} struct.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ApiVersion {
+    pub major: u16,
+    pub minor: u16,
+    pub patch: u16,
+}
+
+impl serde::Serialize for ApiVersion {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(&format!("{}.{}.{}", self.major, self.minor, self.patch))
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for ApiVersion {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct VersionVisitor;
+        impl<'de> serde::de::Visitor<'de> for VersionVisitor {
+            type Value = ApiVersion;
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("a version string like '1.2.0' or an object with major, minor, patch")
+            }
+            fn visit_str<E>(self, s: &str) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                ApiVersion::parse(s).map_err(serde::de::Error::custom)
+            }
+            fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+            where
+                A: serde::de::MapAccess<'de>,
+            {
+                let mut major = None;
+                let mut minor = None;
+                let mut patch = None;
+                while let Some(key) = map.next_key()? {
+                    match key {
+                        "major" => major = Some(map.next_value()?),
+                        "minor" => minor = Some(map.next_value()?),
+                        "patch" => patch = Some(map.next_value()?),
+                        _ => {}
+                    }
+                }
+                Ok(ApiVersion {
+                    major: major.unwrap_or(0),
+                    minor: minor.unwrap_or(0),
+                    patch: patch.unwrap_or(0),
+                })
+            }
+        }
+        deserializer.deserialize_any(VersionVisitor)
+    }
+}
+
+impl ApiVersion {
+    /// Version 1.0.0 — initial stable release.
+    pub const V1: ApiVersion = ApiVersion { major: 1, minor: 0, patch: 0 };
+    /// Current stable version.
+    pub const CURRENT: ApiVersion = ApiVersion { major: 17, minor: 0, patch: 0 };
+    /// Minimum supported version (for compatibility checks).
+    pub const MIN_SUPPORTED: ApiVersion = ApiVersion { major: 1, minor: 0, patch: 0 };
+
+    /// Parse a version string like "1.2.0" into an ApiVersion.
+    pub fn parse(s: &str) -> Result<Self, String> {
+        let parts: Vec<&str> = s.split('.').collect();
+        if parts.len() != 3 {
+            return Err(format!("invalid version format '{}', expected 'major.minor.patch'", s));
+        }
+        let major = parts[0].parse().map_err(|_| format!("invalid major version: {}", parts[0]))?;
+        let minor = parts[1].parse().map_err(|_| format!("invalid minor version: {}", parts[1]))?;
+        let patch = parts[2].parse().map_err(|_| format!("invalid patch version: {}", parts[2]))?;
+        Ok(ApiVersion { major, minor, patch })
+    }
+
+    /// Check if this version supports a given feature.
+    ///
+    /// # Features
+    /// - `"batch_operations"` — batch_create, batch_memory_store, batch_submit_intent, batch_query (v15.0+)
+    /// - `"kg_causal"` — kg_causal_path, kg_impact_analysis, kg_temporal_changes (v16.0+)
+    /// - `"deprecation_notices"` — response includes deprecation field (v17.0+)
+    /// - `"tenant_management"` — create_tenant, list_tenants, tenant_share (v14.0+)
+    pub fn supports(&self, feature: &str) -> bool {
+        match feature {
+            "batch_operations" => *self >= ApiVersion { major: 15, minor: 0, patch: 0 },
+            "kg_causal" => *self >= ApiVersion { major: 16, minor: 0, patch: 0 },
+            "deprecation_notices" => *self >= ApiVersion { major: 17, minor: 0, patch: 0 },
+            "tenant_management" => *self >= ApiVersion { major: 14, minor: 0, patch: 0 },
+            _ => false,
+        }
+    }
+
+    /// Check if this version is backward-compatible with another.
+    /// Two versions are compatible if they have the same major version.
+    pub fn is_compatible(&self, other: ApiVersion) -> bool {
+        self.major == other.major
+    }
+
+    /// Returns true if this version is deprecated.
+    pub fn is_deprecated(&self) -> bool {
+        *self < (ApiVersion { major: 17, minor: 0, patch: 0 })
+    }
+}
+
+impl Default for ApiVersion {
+    fn default() -> Self {
+        ApiVersion::CURRENT
+    }
+}
+
+impl std::fmt::Display for ApiVersion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}.{}.{}", self.major, self.minor, self.patch)
+    }
+}
+
+impl std::str::FromStr for ApiVersion {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        ApiVersion::parse(s)
+    }
+}
+
+/// Deprecation notice included in API responses for deprecated endpoints.
+///
+/// When the server responds to a request using an older API version,
+/// it may include a deprecation notice to inform the client of:
+/// - When the endpoint was first deprecated
+/// - When it will be removed entirely (sunset version)
+/// - A migration message suggesting the replacement
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeprecationNotice {
+    /// The API version when this endpoint/field was first deprecated.
+    pub deprecated_since: ApiVersion,
+    /// The API version when this endpoint will be removed entirely.
+    pub sunset_version: ApiVersion,
+    /// A human-readable migration message.
+    pub message: String,
+}
+
+/// Feature flags for version-specific behavior.
+#[derive(Debug, Clone, Default)]
+pub struct VersionFeatures {
+    /// True if the request supports batch operations (v15.0+).
+    pub batch_operations: bool,
+    /// True if the request supports KG causal reasoning (v16.0+).
+    pub kg_causal: bool,
+    /// True if the response should include deprecation notices (v17.0+).
+    pub deprecation_notices: bool,
+    /// True if the request supports tenant management (v14.0+).
+    pub tenant_management: bool,
+}
+
+impl VersionFeatures {
+    /// Derive feature flags from an API version.
+    pub fn from_version(version: ApiVersion) -> Self {
+        VersionFeatures {
+            batch_operations: version.supports("batch_operations"),
+            kg_causal: version.supports("kg_causal"),
+            deprecation_notices: version.supports("deprecation_notices"),
+            tenant_management: version.supports("tenant_management"),
+        }
+    }
+}
+
+/// Check if a request version supports a given feature.
+/// Returns true for None (defaults to CURRENT, which supports all features).
+pub fn version_supports(version: Option<ApiVersion>, feature: &str) -> bool {
+    version.unwrap_or(ApiVersion::CURRENT).supports(feature)
+}
+
+/// Get a deprecation notice for old API variants.
+/// Returns Some(DeprecationNotice) if the request uses a deprecated version.
+pub fn get_deprecation_notice(_request: &ApiRequest) -> Option<DeprecationNotice> {
+    // Currently all requests default to CURRENT (v17.0), so no deprecation
+    // This function is provided for future use when older versions are deprecated
+    None
+}
+
+// ── Re-exports for use by other modules ───────────────────────────────────────
+
+pub use version_supports as check_version_feature;
+pub use get_deprecation_notice as notice_for_request;
+
 use crate::fs::{EventType, EventRelation, EventSummary, KGNodeType, KGEdgeType};
 
 /// Content encoding field for binary-safe API payloads.
@@ -91,6 +269,9 @@ pub struct ProcedureStepDto {
 pub enum ApiRequest {
     #[serde(rename = "create")]
     Create {
+        /// Declared API version for the request (e.g. "1.0.0"). Defaults to current.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        api_version: Option<ApiVersion>,
         /// Object content. Plain UTF-8 by default; set `content_encoding: "base64"` for binary.
         content: String,
         #[serde(default)]
@@ -889,7 +1070,14 @@ pub struct ContextAssembleCandidate {
 /// A JSON API response.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApiResponse {
+    /// Always true for successful responses.
     pub ok: bool,
+    /// The API version of this response (defaults to current stable version).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<ApiVersion>,
+    /// Deprecation notice if the request used a deprecated API version.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deprecation: Option<DeprecationNotice>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cid: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1192,7 +1380,10 @@ pub struct DelegationResultDto {
 impl ApiResponse {
     pub fn ok() -> Self {
         Self {
-            ok: true, cid: None, node_id: None, data: None, results: None,
+            ok: true,
+            version: Some(ApiVersion::CURRENT),
+            deprecation: None,
+            cid: None, node_id: None, data: None, results: None,
             agent_id: None, agents: None, memory: None, tags: None,
             neighbors: None, deleted: None, events: None, nodes: None,
             paths: None, edges: None, intent_id: None, assembly_id: None,
@@ -1257,9 +1448,17 @@ impl ApiResponse {
         r
     }
 
+    pub fn with_deprecation(mut self, notice: DeprecationNotice) -> Self {
+        self.deprecation = Some(notice);
+        self
+    }
+
     pub fn error(msg: impl Into<String>) -> Self {
         Self {
-            ok: false, cid: None, node_id: None, data: None, results: None,
+            ok: false,
+            version: Some(ApiVersion::CURRENT),
+            deprecation: None,
+            cid: None, node_id: None, data: None, results: None,
             agent_id: None, agents: None, memory: None, tags: None,
             neighbors: None, deleted: None, events: None, nodes: None,
             paths: None, edges: None, intent_id: None, assembly_id: None,
@@ -1330,6 +1529,7 @@ mod tests {
     #[test]
     fn api_request_create_roundtrip_with_base64() {
         let req = ApiRequest::Create {
+            api_version: None,
             content: "AAEC".to_string(), // base64 of [0,1,2]
             content_encoding: ContentEncoding::Base64,
             tags: vec!["image".to_string()],
@@ -1345,5 +1545,183 @@ mod tests {
         } else {
             panic!("wrong variant");
         }
+    }
+
+    // ── API Versioning Tests (v17.0) ─────────────────────────────────────────
+
+    #[test]
+    fn test_api_version_parsing() {
+        let v = ApiVersion::parse("1.2.3").unwrap();
+        assert_eq!(v.major, 1);
+        assert_eq!(v.minor, 2);
+        assert_eq!(v.patch, 3);
+    }
+
+    #[test]
+    fn test_api_version_parse_invalid() {
+        assert!(ApiVersion::parse("invalid").is_err());
+        assert!(ApiVersion::parse("1.2").is_err());
+        assert!(ApiVersion::parse("1.2.3.4").is_err());
+    }
+
+    #[test]
+    fn test_version_constants() {
+        assert_eq!(ApiVersion::V1.major, 1);
+        assert_eq!(ApiVersion::CURRENT.major, 17);
+        assert_eq!(ApiVersion::MIN_SUPPORTED.major, 1);
+    }
+
+    #[test]
+    fn test_version_display() {
+        let v = ApiVersion::parse("1.2.0").unwrap();
+        assert_eq!(format!("{}", v), "1.2.0");
+    }
+
+    #[test]
+    fn test_version_from_str() {
+        let v: ApiVersion = "2.0.0".parse().unwrap();
+        assert_eq!(v.major, 2);
+    }
+
+    #[test]
+    fn test_version_comparison() {
+        let v1 = ApiVersion::parse("1.0.0").unwrap();
+        let v2 = ApiVersion::parse("2.0.0").unwrap();
+        let v3 = ApiVersion::parse("1.1.0").unwrap();
+        assert!(v1 < v2);
+        assert!(v1 < v3);
+        assert!(v3 < v2);
+    }
+
+    #[test]
+    fn test_version_compatibility() {
+        let v1_0 = ApiVersion::parse("1.0.0").unwrap();
+        let v1_5 = ApiVersion::parse("1.5.0").unwrap();
+        let v2_0 = ApiVersion::parse("2.0.0").unwrap();
+        // Same major version = compatible
+        assert!(v1_0.is_compatible(v1_5));
+        assert!(v1_5.is_compatible(v1_0));
+        // Different major version = not compatible
+        assert!(!v1_0.is_compatible(v2_0));
+        assert!(!v2_0.is_compatible(v1_0));
+    }
+
+    #[test]
+    fn test_version_supports_feature() {
+        let v15 = ApiVersion::parse("15.0.0").unwrap();
+        let v16 = ApiVersion::parse("16.0.0").unwrap();
+        let v17 = ApiVersion::parse("17.0.0").unwrap();
+        let v14 = ApiVersion::parse("14.0.0").unwrap();
+
+        // Batch operations introduced in v15
+        assert!(!v14.supports("batch_operations"));
+        assert!(v15.supports("batch_operations"));
+        assert!(v16.supports("batch_operations"));
+
+        // KG causal introduced in v16
+        assert!(!v15.supports("kg_causal"));
+        assert!(v16.supports("kg_causal"));
+        assert!(v17.supports("kg_causal"));
+
+        // Deprecation notices introduced in v17
+        assert!(!v16.supports("deprecation_notices"));
+        assert!(v17.supports("deprecation_notices"));
+
+        // Tenant management introduced in v14
+        assert!(v14.supports("tenant_management"));
+        assert!(!v13_supports_tenant(v14));
+    }
+
+    fn v13_supports_tenant(_v: ApiVersion) -> bool {
+        false
+    }
+
+    #[test]
+    fn test_version_supports_none_defaults_to_current() {
+        // None version should default to CURRENT which supports all features
+        assert!(version_supports(None, "batch_operations"));
+        assert!(version_supports(None, "kg_causal"));
+        assert!(version_supports(None, "deprecation_notices"));
+    }
+
+    #[test]
+    fn test_version_is_deprecated() {
+        assert!(ApiVersion::parse("16.0.0").unwrap().is_deprecated());
+        assert!(!ApiVersion::parse("17.0.0").unwrap().is_deprecated());
+        assert!(ApiVersion::parse("1.0.0").unwrap().is_deprecated());
+    }
+
+    #[test]
+    fn test_deprecation_notice_structure() {
+        let notice = DeprecationNotice {
+            deprecated_since: ApiVersion::parse("17.0.0").unwrap(),
+            sunset_version: ApiVersion::parse("18.0.0").unwrap(),
+            message: "Upgrade to v17.0 or later".to_string(),
+        };
+        let json = serde_json::to_string(&notice).unwrap();
+        let decoded: DeprecationNotice = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.sunset_version.major, 18);
+    }
+
+    #[test]
+    fn test_version_features_from_version() {
+        let features = VersionFeatures::from_version(ApiVersion::parse("17.0.0").unwrap());
+        assert!(features.deprecation_notices);
+        assert!(features.batch_operations);
+        assert!(features.kg_causal);
+        assert!(features.tenant_management);
+    }
+
+    #[test]
+    fn test_api_request_with_version() {
+        let json = r#"{"method":"create","api_version":"1.0.0","content":"test","tags":[],"agent_id":"a1"}"#;
+        let req: ApiRequest = serde_json::from_str(json).unwrap();
+        if let ApiRequest::Create { api_version, .. } = req {
+            assert_eq!(api_version, Some(ApiVersion::parse("1.0.0").unwrap()));
+        } else {
+            panic!("expected Create");
+        }
+    }
+
+    #[test]
+    fn test_api_request_without_version_defaults() {
+        let json = r#"{"method":"create","content":"test","tags":[],"agent_id":"a1"}"#;
+        let req: ApiRequest = serde_json::from_str(json).unwrap();
+        if let ApiRequest::Create { api_version, .. } = req {
+            assert!(api_version.is_none());
+        } else {
+            panic!("expected Create");
+        }
+    }
+
+    #[test]
+    fn test_api_response_includes_version() {
+        let resp = ApiResponse::ok();
+        assert_eq!(resp.version, Some(ApiVersion::CURRENT));
+        assert!(resp.deprecation.is_none());
+    }
+
+    #[test]
+    fn test_api_response_with_deprecation() {
+        let notice = DeprecationNotice {
+            deprecated_since: ApiVersion::parse("17.0.0").unwrap(),
+            sunset_version: ApiVersion::parse("18.0.0").unwrap(),
+            message: "Deprecated".to_string(),
+        };
+        let resp = ApiResponse::ok().with_deprecation(notice);
+        assert!(resp.deprecation.is_some());
+    }
+
+    #[test]
+    fn test_version_ord_trait() {
+        use std::collections::BTreeSet;
+        let mut set = BTreeSet::new();
+        set.insert(ApiVersion::parse("2.0.0").unwrap());
+        set.insert(ApiVersion::parse("1.0.0").unwrap());
+        set.insert(ApiVersion::parse("1.1.0").unwrap());
+        let mut iter = set.into_iter();
+        assert_eq!(iter.next().unwrap().major, 1);
+        assert_eq!(iter.next().unwrap().minor, 1);
+        assert_eq!(iter.next().unwrap().major, 2);
     }
 }

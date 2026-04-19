@@ -641,6 +641,7 @@ fn build_api_request(method: &str, params: Option<&serde_json::Value>) -> Result
                 .unwrap_or_default();
 
             Ok(ApiRequest::Create {
+                api_version: None,
                 content,
                 content_encoding: Default::default(),
                 tags,
@@ -828,6 +829,8 @@ mod tests {
     fn make_test_api_response(ok: bool, error: Option<String>) -> ApiResponse {
         ApiResponse {
             ok,
+            version: None,
+            deprecation: None,
             cid: None,
             node_id: None,
             data: None,

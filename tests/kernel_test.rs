@@ -345,6 +345,7 @@ fn test_kernel_intent_persists_across_restart() {
     {
         let kernel = AIKernel::new(root.clone()).expect("kernel init");
         let action = serde_json::to_string(&ApiRequest::Create {
+            api_version: None,
             content: "persisted intent test".to_string(),
             content_encoding: ContentEncoding::Utf8,
             tags: vec!["intent-persist".to_string()],
@@ -381,6 +382,7 @@ fn test_kernel_handle_api_request_create_and_read() {
 
     let (kernel, _dir) = make_kernel();
     let create_req = ApiRequest::Create {
+        api_version: None,
         content: "Hello from KernelExecutor".to_string(),
         content_encoding: ContentEncoding::Utf8,
         tags: vec!["test".to_string(), "executor".to_string()],
@@ -413,6 +415,7 @@ fn test_kernel_executor_dispatches_intent_action() {
     let (kernel, _dir) = make_kernel_arc();
 
     let action = serde_json::to_string(&ApiRequest::Create {
+        api_version: None,
         content: "Created via intent execution".to_string(),
         content_encoding: ContentEncoding::Utf8,
         tags: vec!["intent-created".to_string()],
@@ -490,6 +493,7 @@ async fn test_dispatch_loop_with_kernel_executor() {
     let dispatch = kernel.start_dispatch_loop();
 
     let action = serde_json::to_string(&ApiRequest::Create {
+        api_version: None,
         content: "Dispatch loop integration test".to_string(),
         content_encoding: ContentEncoding::Utf8,
         tags: vec!["dispatch-test".to_string()],
@@ -560,6 +564,7 @@ fn test_e2e_agent_autonomy_cycle() {
         assert_eq!(state, "Created");
 
         let action = serde_json::to_string(&ApiRequest::Create {
+            api_version: None,
             content: "E2E: agent-created data via intent execution".to_string(),
             content_encoding: ContentEncoding::Utf8,
             tags: vec!["e2e-test".to_string(), "agent-created".to_string()],
@@ -2971,6 +2976,7 @@ fn test_event_history_since_seq() {
     }).event_history.unwrap().len();
 
     kernel.handle_api_request(plico::api::semantic::ApiRequest::Create {
+        api_version: None,
         content: "hello".into(),
         content_encoding: Default::default(),
         tags: vec!["test".into()],
@@ -2999,6 +3005,7 @@ fn test_event_history_by_agent() {
     let a2 = kernel.register_agent("beta".into());
 
     kernel.handle_api_request(plico::api::semantic::ApiRequest::Create {
+        api_version: None,
         content: "a1-data".into(),
         content_encoding: Default::default(),
         tags: vec!["t1".into()],
@@ -3008,6 +3015,7 @@ fn test_event_history_by_agent() {
         intent: None,
     });
     kernel.handle_api_request(plico::api::semantic::ApiRequest::Create {
+        api_version: None,
         content: "a2-data".into(),
         content_encoding: Default::default(),
         tags: vec!["t2".into()],
@@ -3035,6 +3043,7 @@ fn test_event_history_via_api_full() {
     let (kernel, _dir) = make_kernel();
     let aid = kernel.register_agent("api-agent".into());
     kernel.handle_api_request(plico::api::semantic::ApiRequest::Create {
+        api_version: None,
         content: "data".into(),
         content_encoding: Default::default(),
         tags: vec!["tag".into()],
@@ -3066,6 +3075,7 @@ fn test_event_history_api_agent_filter() {
     let a2 = kernel.register_agent("filter-b".into());
 
     kernel.handle_api_request(plico::api::semantic::ApiRequest::Create {
+        api_version: None,
         content: "d1".into(),
         content_encoding: Default::default(),
         tags: vec!["x".into()],
@@ -3075,6 +3085,7 @@ fn test_event_history_api_agent_filter() {
         intent: None,
     });
     kernel.handle_api_request(plico::api::semantic::ApiRequest::Create {
+        api_version: None,
         content: "d2".into(),
         content_encoding: Default::default(),
         tags: vec!["y".into()],
@@ -3097,6 +3108,7 @@ fn test_event_history_api_limit() {
     let aid = kernel.register_agent("limiter".into());
     for i in 0..5 {
         kernel.handle_api_request(plico::api::semantic::ApiRequest::Create {
+            api_version: None,
             content: format!("d{}", i),
             content_encoding: Default::default(),
             tags: vec!["t".into()],
@@ -3120,6 +3132,7 @@ fn test_event_history_monotonic_sequence() {
     let aid = kernel.register_agent("mono".into());
     for i in 0..10 {
         kernel.handle_api_request(plico::api::semantic::ApiRequest::Create {
+            api_version: None,
             content: format!("obj{}", i),
             content_encoding: Default::default(),
             tags: vec!["t".into()],
@@ -3151,6 +3164,7 @@ fn test_event_log_persists_across_restart() {
         let kernel = AIKernel::new(dir.path().to_path_buf()).expect("kernel init");
         let aid = kernel.register_agent("persist-test".into());
         kernel.handle_api_request(plico::api::semantic::ApiRequest::Create {
+            api_version: None,
             content: "persist-data".into(),
             content_encoding: Default::default(),
             tags: vec!["persist".into()],
@@ -3201,6 +3215,7 @@ fn test_event_log_sequence_continues_after_restore() {
         let kernel2 = AIKernel::new(dir.path().to_path_buf()).expect("kernel2 init");
         let aid = kernel2.register_agent("seq-test-2".into());
         kernel2.handle_api_request(plico::api::semantic::ApiRequest::Create {
+            api_version: None,
             content: "new-data".into(),
             content_encoding: Default::default(),
             tags: vec!["new".into()],
@@ -3225,6 +3240,7 @@ fn test_event_log_explicit_persist() {
     let (kernel, _dir) = make_kernel();
     let aid = kernel.register_agent("explicit-persist".into());
     kernel.handle_api_request(plico::api::semantic::ApiRequest::Create {
+        api_version: None,
         content: "test".into(),
         content_encoding: Default::default(),
         tags: vec!["t".into()],

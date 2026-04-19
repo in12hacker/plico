@@ -153,6 +153,7 @@ fn dispatch_tool(name: &str, args: &Value, kernel: &AIKernel) -> Result<String, 
                 .unwrap_or_default();
 
             let req = ApiRequest::Create {
+                api_version: None,
                 content: content.to_string(),
                 content_encoding: Default::default(),
                 tags,

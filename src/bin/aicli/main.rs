@@ -117,7 +117,7 @@ fn build_request(args: &[String]) -> Option<ApiRequest> {
             let content = commands::extract_arg(args, "--content").unwrap_or_default();
             let tags = commands::extract_tags(args, "--tags");
             let agent_id = commands::extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
-            Some(ApiRequest::Create { content, content_encoding: Default::default(), tags, agent_id, tenant_id: None, agent_token: None, intent: commands::extract_arg(args, "--intent") })
+            Some(ApiRequest::Create { api_version: None, content, content_encoding: Default::default(), tags, agent_id, tenant_id: None, agent_token: None, intent: commands::extract_arg(args, "--intent") })
         }
         Some("get") | Some("read") => {
             let cid = args.get(1).cloned().unwrap_or_default();

@@ -215,6 +215,7 @@ fn to_api_request(m: PatternMatch, agent_id: &str) -> ResolvedIntent {
         }
         ActionType::Create => {
             let action = ApiRequest::Create {
+                api_version: None,
                 content: m.query_text.clone(),
                 content_encoding: Default::default(),
                 tags: m.tags.clone(),
