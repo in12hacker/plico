@@ -49,6 +49,21 @@ impl AIKernel {
         self.memory.persist_all()
     }
 
+    /// Persist all kernel subsystem state to disk.
+    ///
+    /// This is the unified persist entry point called on shutdown
+    /// and periodically to ensure all state survives crashes.
+    pub fn persist_all(&self) {
+        self.persist_memories();
+        self.persist_agents();
+        self.persist_intents();
+        self.persist_permissions();
+        self.persist_event_log();
+        self.persist_search_index();
+        self.persist_checkpoints();
+        tracing::info!("All kernel state persisted to disk");
+    }
+
     // ─── Agent Persistence ──────────────────────────────────────────────
 
     pub(crate) fn agent_index_path(&self) -> PathBuf {
@@ -186,6 +201,21 @@ impl AIKernel {
                 Err(e) => tracing::warn!("Failed to parse event log: {e}"),
             },
             Err(e) => tracing::warn!("Failed to read event log: {e}"),
+        }
+    }
+
+    // ─── Checkpoint Persistence (P-2) ────────────────────────────────
+
+    pub fn persist_checkpoints(&self) {
+        self.checkpoint_store.persist(&self.root, &self.cas);
+    }
+
+    pub(crate) fn restore_checkpoints(&self) {
+        // CheckpointStore is already restored in AIKernel::new() via CheckpointStore::restore()
+        // This method exists for consistency with other restore_* methods
+        let count = self.checkpoint_store.list_all().len();
+        if count > 0 {
+            tracing::info!("Checkpoint store ready with {count} checkpoints");
         }
     }
 }

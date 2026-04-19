@@ -15,6 +15,7 @@ pub mod event_bus;
 mod persistence;
 pub mod ops;
 
+use ops::checkpoint::CheckpointStore;
 use ops::prefetch::IntentPrefetcher;
 use ops::model::{HotSwapEmbeddingProvider, HotSwapLlmProvider};
 use ops::observability::{KernelMetrics, OperationTimer, OpType};
@@ -74,6 +75,8 @@ pub struct AIKernel {
     pub(crate) cluster: Arc<ClusterManager>,
     /// Session lifecycle store — manages StartSession/EndSession state and timeout (F-6).
     pub(crate) session_store: Arc<ops::session::SessionStore>,
+    /// Checkpoint store — persists agent checkpoints to CAS (P-2).
+    pub(crate) checkpoint_store: Arc<CheckpointStore>,
 }
 
 impl AIKernel {
@@ -209,6 +212,9 @@ impl AIKernel {
             ops::session::spawn_session_timeout_scanner(timeout_session_store, timeout_memory);
         });
 
+        // Checkpoint store — persists agent checkpoints to CAS (P-2)
+        let checkpoint_store = Arc::new(CheckpointStore::restore(&root, &cas, 10));
+
         let kernel = Self {
             root: root.clone(),
             cas,
@@ -233,6 +239,7 @@ impl AIKernel {
             edge_cache,
             cluster,
             session_store,
+            checkpoint_store,
         };
 
         kernel.register_builtin_tools();
@@ -241,6 +248,7 @@ impl AIKernel {
         kernel.restore_memories();
         kernel.restore_permissions();
         kernel.restore_event_log();
+        kernel.restore_checkpoints();
 
         Ok(kernel)
     }

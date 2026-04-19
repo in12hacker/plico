@@ -6,10 +6,13 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::RwLock;
 
+use crate::cas::{AIObject, AIObjectMeta, CASStorage, ContentType};
 use crate::memory::layered::{MemoryEntry, MemoryTier, MemoryContent, MemoryScope};
 use crate::kernel::ops::distributed::{NodeId, MigrationTicket};
+use crate::kernel::persistence::atomic_write_json;
 
 /// Tag for checkpoint memory entries.
 pub const CHECKPOINT_TAG: &str = "plico:internal:checkpoint";
@@ -305,6 +308,94 @@ impl CheckpointStore {
             .filter(|c| c.agent_id == agent_id)
             .map(|c| c.checkpoint_id.clone())
             .collect()
+    }
+
+    /// List all checkpoints in the store.
+    pub fn list_all(&self) -> Vec<AgentCheckpoint> {
+        self.checkpoints.read().unwrap()
+            .values()
+            .cloned()
+            .collect()
+    }
+
+    /// Path to the checkpoint index file.
+    fn index_path(root: &Path) -> PathBuf {
+        root.join("checkpoint_index.json")
+    }
+
+    /// Persist all checkpoints to CAS and write the index file.
+    ///
+    /// Each checkpoint is serialized as a JSON string and stored as a CAS object.
+    /// The index file maps agent_id → Vec<checkpoint_cid>.
+    pub fn persist(&self, root: &Path, cas: &CASStorage) {
+        let checkpoints = self.checkpoints.read().unwrap();
+        let mut index: HashMap<String, Vec<String>> = HashMap::new();
+
+        for (_id, cp) in checkpoints.iter() {
+            let json = serde_json::to_string(cp).unwrap_or_default();
+            let meta = AIObjectMeta {
+                content_type: ContentType::Structured,
+                tags: vec!["checkpoint".into(), format!("agent:{}", cp.agent_id)],
+                created_by: "plico:checkpoint-store".into(),
+                created_at: cp.created_at_ms,
+                intent: Some("Agent checkpoint".into()),
+                tenant_id: cp.tenant_id.clone(),
+            };
+            let obj = AIObject::new(json.into_bytes(), meta);
+            if let Ok(cid) = cas.put(&obj) {
+                index.entry(cp.agent_id.clone()).or_default().push(cid);
+            }
+        }
+
+        atomic_write_json(&Self::index_path(root), &index);
+    }
+
+    /// Restore checkpoints from CAS and the index file.
+    ///
+    /// Reads the index file, fetches each checkpoint from CAS,
+    /// deserializes it, and populates the in-memory store.
+    pub fn restore(root: &Path, cas: &CASStorage, max_checkpoints_per_agent: usize) -> Self {
+        let path = Self::index_path(root);
+        if !path.exists() {
+            return Self::new(max_checkpoints_per_agent);
+        }
+
+        let index: HashMap<String, Vec<String>> = match std::fs::read_to_string(&path) {
+            Ok(json) => match serde_json::from_str(&json) {
+                Ok(idx) => idx,
+                Err(e) => {
+                    tracing::warn!("Failed to parse checkpoint index: {e}");
+                    return Self::new(max_checkpoints_per_agent);
+                }
+            },
+            Err(e) => {
+                tracing::warn!("Failed to read checkpoint index: {e}");
+                return Self::new(max_checkpoints_per_agent);
+            }
+        };
+
+        let mut store = HashMap::new();
+        for (agent_id, cids) in index {
+            for cid in cids {
+                match cas.get(&cid) {
+                    Ok(obj) => {
+                        if let Ok(cp) = serde_json::from_slice::<AgentCheckpoint>(&obj.data) {
+                            store.insert(cp.checkpoint_id.clone(), cp);
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to restore checkpoint {} for agent {}: {}",
+                            cid, agent_id, e);
+                    }
+                }
+            }
+        }
+
+        tracing::info!("Restored {} checkpoints from persistent storage", store.len());
+        Self {
+            checkpoints: RwLock::new(store),
+            max_checkpoints_per_agent,
+        }
     }
 }
 
