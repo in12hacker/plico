@@ -55,6 +55,38 @@ pub fn change_entry_from_event(event: &SequencedEvent) -> ChangeEntry {
                 agent_id.clone(),
             )
         }
+        KernelEvent::KnowledgeShared { cid, agent_id, tags, scope, .. } => {
+            (
+                cid.clone(),
+                format!("knowledge_shared:{}", scope),
+                tags.clone(),
+                agent_id.clone(),
+            )
+        }
+        KernelEvent::KnowledgeSuperseded { old_cid, new_cid, agent_id } => {
+            (
+                new_cid.clone(),
+                format!("knowledge_superseded:{}", old_cid),
+                vec![],
+                agent_id.clone(),
+            )
+        }
+        KernelEvent::TaskDelegated { task_id, from_agent, to_agent, .. } => {
+            (
+                format!("task:{}", task_id),
+                format!("task_delegated:{}->{}", from_agent, to_agent),
+                vec![],
+                from_agent.clone(),
+            )
+        }
+        KernelEvent::TaskCompleted { task_id, agent_id, result_cids } => {
+            (
+                format!("task:{}", task_id),
+                format!("task_completed:{}results", result_cids.len()),
+                vec![],
+                agent_id.clone(),
+            )
+        }
     };
 
     let summary = if tags.is_empty() {

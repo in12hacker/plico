@@ -40,6 +40,28 @@ pub enum KernelEvent {
         label: String,
         agent_id: String,
     },
+    KnowledgeShared {
+        cid: String,
+        agent_id: String,
+        scope: String, // "shared" | "group:{group_id}"
+        tags: Vec<String>,
+        summary: String, // metadata concatenation, no LLM
+    },
+    KnowledgeSuperseded {
+        old_cid: String,
+        new_cid: String,
+        agent_id: String,
+    },
+    TaskDelegated {
+        task_id: String,
+        from_agent: String,
+        to_agent: String,
+    },
+    TaskCompleted {
+        task_id: String,
+        agent_id: String,
+        result_cids: Vec<String>,
+    },
 }
 
 /// A durable event record with sequence number and timestamp.
@@ -59,6 +81,10 @@ impl KernelEvent {
             KernelEvent::IntentSubmitted { .. } => "IntentSubmitted",
             KernelEvent::IntentCompleted { .. } => "IntentCompleted",
             KernelEvent::EventCreated { .. } => "EventCreated",
+            KernelEvent::KnowledgeShared { .. } => "KnowledgeShared",
+            KernelEvent::KnowledgeSuperseded { .. } => "KnowledgeSuperseded",
+            KernelEvent::TaskDelegated { .. } => "TaskDelegated",
+            KernelEvent::TaskCompleted { .. } => "TaskCompleted",
         }
     }
 
@@ -70,6 +96,10 @@ impl KernelEvent {
             KernelEvent::IntentSubmitted { agent_id, .. } => agent_id.as_deref(),
             KernelEvent::IntentCompleted { .. } => None,
             KernelEvent::EventCreated { agent_id, .. } => Some(agent_id),
+            KernelEvent::KnowledgeShared { agent_id, .. } => Some(agent_id),
+            KernelEvent::KnowledgeSuperseded { agent_id, .. } => Some(agent_id),
+            KernelEvent::TaskDelegated { from_agent, .. } => Some(from_agent),
+            KernelEvent::TaskCompleted { agent_id, .. } => Some(agent_id),
         }
     }
 }

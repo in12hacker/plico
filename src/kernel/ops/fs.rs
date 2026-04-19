@@ -188,6 +188,14 @@ impl crate::kernel::AIKernel {
             }
         }
         let new_cid = self.fs.update(cid, new_content, new_tags, agent_id.to_string())?;
+
+        // Emit KnowledgeSuperseded when Supersedes edge is created
+        self.event_bus.emit(KernelEvent::KnowledgeSuperseded {
+            old_cid: cid.to_string(),
+            new_cid: new_cid.clone(),
+            agent_id: agent_id.to_string(),
+        });
+
         tracing::info!(new_cid = %new_cid, "object updated");
         Ok(new_cid)
     }

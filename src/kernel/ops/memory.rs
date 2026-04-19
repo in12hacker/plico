@@ -224,20 +224,22 @@ impl crate::kernel::AIKernel {
         let ctx = PermissionContext::new(agent_id.to_string(), tenant_id.to_string());
         self.permissions.check(&ctx, PermissionAction::Write).map_err(|e| e.to_string())?;
         let embedding = self.embedding.embed(&content).ok();
+        let entry_id = uuid::Uuid::new_v4().to_string();
+        let created_at = crate::memory::layered::now_ms();
         let entry = MemoryEntry {
-            id: uuid::Uuid::new_v4().to_string(),
+            id: entry_id.clone(),
             agent_id: agent_id.to_string(),
             tenant_id: tenant_id.to_string(),
             tier: MemoryTier::LongTerm,
             content: MemoryContent::Text(content),
             importance,
             access_count: 0,
-            last_accessed: crate::memory::layered::now_ms(),
-            created_at: crate::memory::layered::now_ms(),
+            last_accessed: created_at,
+            created_at,
             tags: tags.clone(),
             embedding,
             ttl_ms: None,
-            scope,
+            scope: scope.clone(),
         };
         let quota = self.agent_memory_quota(agent_id);
         self.memory.store_checked(entry, quota)
@@ -246,6 +248,43 @@ impl crate::kernel::AIKernel {
             agent_id: agent_id.to_string(),
             tier: "long_term".into(),
         });
+
+        // Emit KnowledgeShared for Shared or Group scope memories
+        let tags_for_event = tags.clone();
+        match &scope {
+            MemoryScope::Shared => {
+                let summary = format!(
+                    "tags=[{}] importance={} created_at={}",
+                    tags_for_event.join(","),
+                    importance,
+                    created_at
+                );
+                self.event_bus.emit(KernelEvent::KnowledgeShared {
+                    cid: entry_id,
+                    agent_id: agent_id.to_string(),
+                    scope: "shared".into(),
+                    tags: tags_for_event,
+                    summary,
+                });
+            }
+            MemoryScope::Group(group_id) => {
+                let summary = format!(
+                    "tags=[{}] importance={} created_at={}",
+                    tags_for_event.join(","),
+                    importance,
+                    created_at
+                );
+                self.event_bus.emit(KernelEvent::KnowledgeShared {
+                    cid: entry_id,
+                    agent_id: agent_id.to_string(),
+                    scope: format!("group:{}", group_id),
+                    tags: tags_for_event,
+                    summary,
+                });
+            }
+            MemoryScope::Private => {}
+        }
+
         self.persist_memories();
         tracing::info!(tags = ?tags, importance = importance, "long-term memory stored");
         Ok(())
