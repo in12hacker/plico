@@ -250,7 +250,9 @@ impl IntentPrefetcher {
         }
     }
 
+    #[allow(dead_code)]
     /// Multi-path recall: semantic + KG + procedural + events → fused candidates.
+    /// DEPRECATED: Use multi_path_recall_async for concurrent execution.
     fn multi_path_recall(
         search: &Arc<dyn crate::fs::SemanticSearch>,
         kg: &Option<Arc<dyn KnowledgeGraph>>,

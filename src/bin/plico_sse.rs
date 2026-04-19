@@ -144,6 +144,7 @@ impl SseEvent {
         }
     }
 
+    #[allow(dead_code)]
     /// Create an SSE ping event (heartbeat)
     fn ping() -> Self {
         SseEvent {
