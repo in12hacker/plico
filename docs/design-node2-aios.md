@@ -539,6 +539,9 @@ F-0（前置修正）
 **Phase J（第十轮迭代）**
 - [x] Model Hot-Swap ✅ (v18.0-M1)
 
+**Phase K（第十一轮迭代）**
+- [x] Edge Caching ✅ (v19.0-M1)
+
 ---
 
 ## 9. 验证实验设计
@@ -621,6 +624,10 @@ F-0（前置修正）
 | C | F-2 多路并发优化 | v9.0-M2 | ✅ |
 | C | F-5 plico-sse适配器 | v9.0-M2, v9.0-M4 | ✅ |
 | C | 自动化验证测试 | v9.0-M3 | ✅ |
+| H | KG Causal Reasoning | v16.0-M1 | ✅ |
+| H | API Versioning & Stability | v17.0-M1 | ✅ |
+| J | Model Hot-Swap | v18.0-M1 | ✅ |
+| K | Edge Caching | v19.0-M1 | ✅ |
 
 **验证指标**:
 - Token 节省: 86.7% (目标 ≥50%) ✅

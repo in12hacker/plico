@@ -18,6 +18,7 @@ pub mod ops;
 use ops::prefetch::IntentPrefetcher;
 use ops::model::{HotSwapEmbeddingProvider, HotSwapLlmProvider};
 use ops::observability::{KernelMetrics, OperationTimer, OpType};
+use ops::cache::EdgeCache;
 
 use crate::api::semantic::{ApiRequest, ApiResponse};
 use crate::api::agent_auth::AgentKeyStore;
@@ -66,6 +67,8 @@ pub struct AIKernel {
     pub(crate) tenant_store: Arc<ops::tenant::TenantStore>,
     /// Observability metrics — operation counters and latency histograms (v14.0).
     pub(crate) metrics: Arc<KernelMetrics>,
+    /// Edge caching — L1/L2 cache for embeddings, KG queries, and semantic search (v19.0).
+    pub(crate) edge_cache: Arc<EdgeCache>,
 }
 
 impl AIKernel {
@@ -171,6 +174,9 @@ impl AIKernel {
         // Observability metrics — operation counters and latency histograms (v14.0)
         let metrics = Arc::new(KernelMetrics::new());
 
+        // Edge caching — L1/L2 cache for embeddings, KG queries, and semantic search (v19.0)
+        let edge_cache = Arc::new(EdgeCache::default());
+
         let kernel = Self {
             root: root.clone(),
             cas,
@@ -192,6 +198,7 @@ impl AIKernel {
             key_store,
             tenant_store,
             metrics,
+            edge_cache,
         };
 
         kernel.register_builtin_tools();
@@ -960,6 +967,17 @@ impl AIKernel {
                 let mut r = ApiResponse::ok();
                 r.system_status = Some(status);
                 r
+            }
+            // ── Edge Cache (v19.0) ─────────────────────────────────────
+            ApiRequest::CacheStats => {
+                let stats = self.cache_stats();
+                let mut r = ApiResponse::ok();
+                r.cache_stats = Some(stats);
+                r
+            }
+            ApiRequest::CacheInvalidate => {
+                self.cache_invalidate_all();
+                ApiResponse::ok()
             }
             ApiRequest::ContextAssemble { agent_id, cids, budget_tokens } => {
                 let candidates: Vec<crate::fs::context_budget::ContextCandidate> = cids

@@ -878,6 +878,7 @@ mod tests {
             temporal_changes: None,
             model_switch: None,
             model_health: None,
+            cache_stats: None,
         }
     }
 

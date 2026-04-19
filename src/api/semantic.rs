@@ -799,6 +799,14 @@ pub enum ApiRequest {
     #[serde(rename = "agent_usage")]
     AgentUsage { agent_id: String },
 
+    // ── Edge Cache (v19.0) ─────────────────────────────────────
+
+    #[serde(rename = "cache_stats")]
+    CacheStats,
+
+    #[serde(rename = "cache_invalidate")]
+    CacheInvalidate,
+
     // ── Agent Discovery (v6.2) ──────────────────────────────────
 
     #[serde(rename = "discover_agents")]
@@ -1224,6 +1232,9 @@ pub struct ApiResponse {
     /// Model health check response (v18.0).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model_health: Option<ModelHealthResponse>,
+    /// Cache statistics (v19.0).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_stats: Option<CacheStatsDto>,
 }
 
 /// Response for a successful model switch operation (v18.0).
@@ -1414,6 +1425,19 @@ pub struct SystemStatus {
     pub tag_count: usize,
     pub kg_node_count: usize,
     pub kg_edge_count: usize,
+    /// Edge cache statistics (v19.0)
+    pub cache_stats: Option<CacheStatsDto>,
+}
+
+/// Cache statistics for observability (v19.0).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CacheStatsDto {
+    pub embedding_cache_entries: usize,
+    pub kg_cache_entries: usize,
+    pub search_cache_entries: usize,
+    pub embedding_hit_rate: f64,
+    pub kg_hit_rate: f64,
+    pub search_hit_rate: f64,
 }
 
 /// Agent resource usage and quota snapshot.
@@ -1484,6 +1508,7 @@ impl ApiResponse {
             temporal_changes: None,
             model_switch: None,
             model_health: None,
+            cache_stats: None,
         }
     }
 
@@ -1562,6 +1587,7 @@ impl ApiResponse {
             temporal_changes: None,
             model_switch: None,
             model_health: None,
+            cache_stats: None,
         }
     }
 
