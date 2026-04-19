@@ -18,7 +18,7 @@ use axum::{
     extract::State,
     http::{header, Method, StatusCode},
     response::{sse::{Event, KeepAlive, Sse}, IntoResponse, Response},
-    routing::{get, post},
+    routing::{get, post, delete},
     Router,
 };
 use futures::StreamExt;
@@ -35,6 +35,15 @@ use plico::api::semantic::{ApiRequest, ApiResponse};
 
 // ── Error Types ────────────────────────────────────────────────────────────────
 
+/// Error classification for proper HTTP status code mapping
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ErrorClass {
+    /// Client error (4xx) - bad request, not found, etc.
+    Client,
+    /// Server error (5xx) - plicod unavailable, internal errors
+    Server,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum SseError {
     #[error("plicod connection failed: {0}")]
@@ -48,6 +57,64 @@ pub enum SseError {
 
     #[error("timeout")]
     Timeout,
+
+    /// Client error - malformed request
+    #[error("bad request: {0}")]
+    BadRequest(String),
+
+    /// Client error - resource not found
+    #[error("not found: {0}")]
+    NotFound(String),
+
+    /// Client error - task cancelled
+    #[error("task cancelled: {0}")]
+    TaskCancelled(String),
+
+    /// Server error - plicod unavailable
+    #[error("plicod unavailable: {0}")]
+    PlicodUnavailable(String),
+
+    /// Server error - internal processing failed
+    #[error("internal error: {0}")]
+    Internal(String),
+}
+
+impl SseError {
+    /// Classify the error as client or server error
+    pub fn class(&self) -> ErrorClass {
+        match self {
+            // Client errors
+            SseError::BadRequest(_) | SseError::NotFound(_) | SseError::TaskCancelled(_) => {
+                ErrorClass::Client
+            }
+            // Server errors
+            SseError::ConnectionFailed(_) | SseError::Timeout | SseError::ChannelClosed
+            | SseError::PlicodUnavailable(_) | SseError::Internal(_) => ErrorClass::Server,
+            // JSON errors could be client or server depending on context
+            SseError::JsonError(_) => ErrorClass::Client,
+        }
+    }
+
+    /// Get recommended retry delay in seconds (for server errors)
+    pub fn retry_after_secs(&self) -> Option<u64> {
+        if self.class() == ErrorClass::Server {
+            Some(5) // Default 5 second retry for server errors
+        } else {
+            None
+        }
+    }
+
+    /// Format error as JSON for API response
+    pub fn to_json_response(&self) -> serde_json::Value {
+        serde_json::json!({
+            "error": self.to_string(),
+            "class": match self.class() {
+                ErrorClass::Client => "client",
+                ErrorClass::Server => "server",
+            },
+            "retry_after": self.retry_after_secs(),
+        })
+    }
 }
 
 // ── App State ──────────────────────────────────────────────────────────────────
@@ -56,6 +123,8 @@ pub enum SseError {
 struct AppState {
     plicod_port: u16,
     broadcast_tx: Arc<broadcast::Sender<ServerEvent>>,
+    /// Track if plicod is connected (updated on each request)
+    plicod_connected: Arc<tokio::sync::RwLock<bool>>,
 }
 
 #[derive(Clone, Debug)]
@@ -71,6 +140,10 @@ enum ServerEvent {
         task_id: Option<String>,
         message: String,
     },
+    /// Task was cancelled
+    Cancelled {
+        task_id: String,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -80,6 +153,7 @@ pub enum TaskState {
     Completed,
     Failed,
     InputRequired,
+    Cancelled,
 }
 
 impl TaskState {
@@ -144,9 +218,18 @@ impl SseEvent {
         }
     }
 
+    /// Create an SSE cancelled event
     #[allow(dead_code)]
+    fn cancelled(task_id: &str) -> Self {
+        SseEvent {
+            event_type: "cancelled".to_string(),
+            task_id: Some(task_id.to_string()),
+            data: serde_json::json!({ "message": "Task was cancelled" }),
+        }
+    }
+
     /// Create an SSE ping event (heartbeat)
-    fn ping() -> Self {
+    pub fn ping() -> Self {
         SseEvent {
             event_type: "ping".to_string(),
             task_id: None,
@@ -169,10 +252,28 @@ fn to_sse_event(se: SseEvent) -> Event {
 
 // ── plicod TCP Client ──────────────────────────────────────────────────────────
 
-async fn send_to_plicod(port: u16, request: ApiRequest) -> Result<ApiResponse, SseError> {
+async fn send_to_plicod(
+    port: u16,
+    request: ApiRequest,
+    connected_flag: Option<Arc<tokio::sync::RwLock<bool>>>,
+) -> Result<ApiResponse, SseError> {
     let addr: SocketAddr = format!("127.0.0.1:{}", port).parse().unwrap();
 
-    let mut stream = TcpStream::connect(addr).await?;
+    let mut stream = match TcpStream::connect(addr).await {
+        Ok(s) => {
+            if let Some(ref flag) = connected_flag {
+                *flag.write().await = true;
+            }
+            s
+        }
+        Err(e) => {
+            if let Some(ref flag) = connected_flag {
+                *flag.write().await = false;
+            }
+            return Err(SseError::ConnectionFailed(e));
+        }
+    };
+
     let json = serde_json::to_vec(&request)?;
     stream.write_all(&json).await?;
     stream.write_all(b"\n").await?;
@@ -224,6 +325,66 @@ async fn get_agent_card() -> Response {
     (StatusCode::OK, [(header::CONTENT_TYPE, "application/json")], card.to_string()).into_response()
 }
 
+/// Health check endpoint — returns plicod connection status
+async fn health_check(State(state): State<AppState>) -> Response {
+    let plicod_connected = *state.plicod_connected.read().await;
+
+    let health = serde_json::json!({
+        "status": "ok",
+        "plicod_connected": plicod_connected,
+        "version": "1.0.0",
+    });
+
+    let status_code = if plicod_connected {
+        StatusCode::OK
+    } else {
+        // Still return 200 but indicate plicod is disconnected
+        // Client can check plicod_connected field
+        StatusCode::OK
+    };
+
+    (status_code, [(header::CONTENT_TYPE, "application/json")], health.to_string()).into_response()
+}
+
+/// Handle DELETE /tasks/{task_id} — Cancel a running task
+async fn task_cancel(
+    State(state): State<AppState>,
+    axum::extract::Path(task_id): axum::extract::Path<String>,
+) -> Response {
+    // Broadcast cancellation event
+    let cancel_result = state.broadcast_tx.send(ServerEvent::Cancelled {
+        task_id: task_id.clone(),
+    });
+
+    match cancel_result {
+        Ok(_) => {
+            let response = serde_json::json!({
+                "status": "cancelled",
+                "task_id": task_id,
+                "message": "Task cancellation requested",
+            });
+
+            (StatusCode::OK,
+             [(header::CONTENT_TYPE, "application/json")],
+             response.to_string()
+            ).into_response()
+        }
+        Err(e) => {
+            let sse_err = SseError::Internal(format!("failed to broadcast cancellation: {}", e));
+            let body = sse_err.to_json_response().to_string();
+
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                [
+                    (header::CONTENT_TYPE, "application/json"),
+                    (header::HeaderName::from_static("x-retry-after"), "5"),
+                ],
+                body,
+            ).into_response()
+        }
+    }
+}
+
 /// Handle POST /tasks/sendSubscribe — Submit task and stream results via SSE
 async fn task_send_subscribe(
     State(state): State<AppState>,
@@ -271,6 +432,7 @@ async fn task_send_subscribe(
 
     // Spawn async task to process the request and stream results
     let plicod_port = state.plicod_port;
+    let plicod_connected = state.plicod_connected.clone();
     let task_id_for_processing = task_id.clone();
     tokio::spawn(async move {
         // Forward to plicod and broadcast results
@@ -286,7 +448,7 @@ async fn task_send_subscribe(
                 });
 
                 // Call plicod
-                match send_to_plicod(plicod_port, req).await {
+                match send_to_plicod(plicod_port, req, Some(plicod_connected)).await {
                     Ok(response) => {
                         let final_state = TaskState::from_response(&response);
                         let event_data = if response.ok {
@@ -332,10 +494,13 @@ async fn task_send_subscribe(
         }
     });
 
-    // Add ping keepalive
+    // Add ping keepalive every 30 seconds (as per A2A protocol)
     let ping_stream = tokio_stream::wrappers::IntervalStream::new(
         tokio::time::interval(Duration::from_secs(30))
-    ).map(|_| Ok::<Event, std::io::Error>(Event::default().comment("keepalive")));
+    ).map(|_| {
+        let ping_event = SseEvent::ping();
+        Ok::<Event, std::io::Error>(to_sse_event(ping_event))
+    });
 
     let combined = tokio_stream::StreamExt::merge(event_stream, ping_stream);
 
@@ -351,6 +516,9 @@ fn event_to_sse_event(event: ServerEvent) -> Event {
         }
         ServerEvent::Error { task_id, message } => {
             to_sse_event(SseEvent::error(task_id, &message))
+        }
+        ServerEvent::Cancelled { task_id } => {
+            to_sse_event(SseEvent::cancelled(&task_id))
         }
     }
 }
@@ -471,7 +639,7 @@ use tower_http::cors::{Any, CorsLayer};
 fn cors_layer() -> CorsLayer {
     CorsLayer::new()
         .allow_origin(Any)
-        .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+        .allow_methods([Method::GET, Method::POST, Method::DELETE, Method::OPTIONS])
         .allow_headers(Any)
         .expose_headers(Any)
 }
@@ -501,11 +669,14 @@ async fn main() {
     let state = AppState {
         plicod_port,
         broadcast_tx: Arc::new(broadcast_tx),
+        plicod_connected: Arc::new(tokio::sync::RwLock::new(false)),
     };
 
     let app = Router::new()
         .route("/.well-known/agent.json", get(get_agent_card))
         .route("/tasks/sendSubscribe", post(task_send_subscribe))
+        .route("/tasks/:task_id", delete(task_cancel))
+        .route("/health", get(health_check))
         .layer(cors_layer())
         .with_state(state);
 
@@ -514,7 +685,9 @@ async fn main() {
 
     println!("SSE adapter ready. Endpoints:");
     println!("  GET  /.well-known/agent.json  — Agent Card");
-    println!("  POST /tasks/sendSubscribe     — Task streaming");
+    println!("  POST /tasks/sendSubscribe      — Task streaming");
+    println!("  DELETE /tasks/:task_id         — Task cancellation");
+    println!("  GET  /health                    — Health check");
     println!("Accepting connections...");
 
     axum::serve(listener, app).await.unwrap();
@@ -711,5 +884,63 @@ mod tests {
             assert_eq!(description, "Process the document");
             assert_eq!(priority, "high");
         }
+    }
+
+    #[test]
+    fn sse_event_cancelled_serialization() {
+        let event = SseEvent::cancelled("task-789");
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("cancelled"));
+        assert!(json.contains("task-789"));
+    }
+
+    #[test]
+    fn sse_error_client_classification() {
+        let err = SseError::BadRequest("malformed json".to_string());
+        assert_eq!(err.class(), ErrorClass::Client);
+        assert!(err.retry_after_secs().is_none());
+
+        let err = SseError::NotFound("task not found".to_string());
+        assert_eq!(err.class(), ErrorClass::Client);
+
+        let err = SseError::TaskCancelled("user cancelled".to_string());
+        assert_eq!(err.class(), ErrorClass::Client);
+    }
+
+    #[test]
+    fn sse_error_server_classification() {
+        let err = SseError::ConnectionFailed(std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "refused"));
+        assert_eq!(err.class(), ErrorClass::Server);
+        assert!(err.retry_after_secs().is_some());
+
+        let err = SseError::PlicodUnavailable("unavailable".to_string());
+        assert_eq!(err.class(), ErrorClass::Server);
+
+        let err = SseError::Internal("internal error".to_string());
+        assert_eq!(err.class(), ErrorClass::Server);
+    }
+
+    #[test]
+    fn sse_error_to_json_response() {
+        let err = SseError::BadRequest("test error".to_string());
+        let json = err.to_json_response();
+        assert!(json["error"].as_str().unwrap().contains("test error"));
+        assert_eq!(json["class"], "client");
+        assert!(json["retry_after"].is_null());
+    }
+
+    #[test]
+    fn sse_error_to_json_response_server() {
+        let err = SseError::ConnectionFailed(std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "refused"));
+        let json = err.to_json_response();
+        assert_eq!(json["class"], "server");
+        assert_eq!(json["retry_after"], 5);
+    }
+
+    #[test]
+    fn task_state_cancelled() {
+        let state = TaskState::Cancelled;
+        let json = serde_json::to_string(&state).unwrap();
+        assert!(json.contains("cancelled"));
     }
 }
