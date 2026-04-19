@@ -24,7 +24,7 @@
 //! ```
 
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock, atomic::{AtomicUsize, Ordering}};
+use std::sync::{Arc, RwLock, atomic::{AtomicUsize, AtomicU64, Ordering}};
 use std::time::Duration;
 
 use tokio::time::timeout;
@@ -138,6 +138,8 @@ struct IntentAssemblyCache {
     current_memory_bytes: AtomicUsize,
     similarity_threshold: f32,
     ttl_ms: u64,
+    /// Total number of lookups for hit rate calculation.
+    total_lookups: AtomicU64,
 }
 
 impl IntentAssemblyCache {
@@ -154,12 +156,16 @@ impl IntentAssemblyCache {
             current_memory_bytes: AtomicUsize::new(0),
             similarity_threshold,
             ttl_ms,
+            total_lookups: AtomicU64::new(0),
         }
     }
 
     /// Look up a cached assembly using dual-path matching.
     /// Returns the cached assembly if found and valid.
     fn lookup(&self, intent: &str, embedding: &Option<Vec<f32>>) -> Option<BudgetAllocation> {
+        // Increment total lookups for hit rate calculation
+        self.total_lookups.fetch_add(1, Ordering::Relaxed);
+
         let mut entries = self.entries.write().unwrap();
 
         // Check for exact match first (stub mode Path B)
@@ -328,6 +334,7 @@ impl IntentAssemblyCache {
             entries: entries.len(),
             memory_bytes: self.current_memory_bytes.load(Ordering::Relaxed),
             hits: entries.iter().map(|e| e.hit_count).sum(),
+            total_lookups: self.total_lookups.load(Ordering::Relaxed),
         }
     }
 }
@@ -338,6 +345,8 @@ pub struct IntentCacheStats {
     pub entries: usize,
     pub memory_bytes: usize,
     pub hits: u64,
+    /// Total number of cache lookups (for calculating hit rate).
+    pub total_lookups: u64,
 }
 
 // ── F-10: Agent Profile Store ──────────────────────────────────────────────────

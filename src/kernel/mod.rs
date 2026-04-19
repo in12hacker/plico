@@ -1501,6 +1501,22 @@ impl AIKernel {
                 r.hybrid_result = Some(result);
                 r
             }
+
+            // ── Growth Report (F-13) ─────────────────────────────────────
+
+            ApiRequest::QueryGrowthReport { agent_id, period } => {
+                let report = ops::observability::handle_query_growth_report(
+                    &agent_id,
+                    period,
+                    &self.session_store,
+                    &self.event_bus,
+                    &self.prefetch,
+                    self.knowledge_graph.as_deref(),
+                );
+                let mut r = ApiResponse::ok();
+                r.growth_report = Some(report);
+                r
+            }
         };
         self.maybe_persist_event_log();
         // Token cost transparency (F-8): calculate estimate for every response

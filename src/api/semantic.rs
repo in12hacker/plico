@@ -1134,7 +1134,6 @@ pub enum ApiRequest {
     /// Returns results with provenance showing the causal path from query to result.
     #[serde(rename = "hybrid_retrieve")]
     HybridRetrieve {
-        /// Semantic query text for vector search.
         query_text: String,
         /// Optional: KG seed node tags to start graph traversal from.
         #[serde(default)]
@@ -1155,6 +1154,17 @@ pub enum ApiRequest {
         agent_id: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         tenant_id: Option<String>,
+    },
+
+    // ── Growth Report (F-13) ─────────────────────────────────────────────
+
+    /// Query a growth report for an agent showing learning progress and efficiency.
+    #[serde(rename = "query_growth_report")]
+    QueryGrowthReport {
+        /// Agent to generate report for.
+        agent_id: String,
+        /// Time period for the report.
+        period: GrowthPeriod,
     },
 }
 
@@ -1383,6 +1393,9 @@ pub struct ApiResponse {
     /// Hybrid retrieval result — Graph-RAG combining vector search + KG traversal (F-11).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hybrid_result: Option<HybridResult>,
+    /// Growth report showing agent learning progress and efficiency (F-13).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub growth_report: Option<GrowthReport>,
 }
 
 /// Response for a successful model switch operation (v18.0).
@@ -1755,6 +1768,51 @@ pub struct HybridResult {
     pub paths_found: usize,
 }
 
+// ── Growth Report (F-13) ─────────────────────────────────────────────────────
+
+/// Time period for growth report queries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GrowthPeriod {
+    /// Last 7 days.
+    Last7Days,
+    /// Last 30 days.
+    Last30Days,
+    /// All time — since the agent first registered.
+    AllTime,
+}
+
+/// Growth report showing an agent's learning progress and efficiency metrics.
+///
+/// Read-only statistics — OS presents the data, Agent decides whether to adjust strategy.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GrowthReport {
+    /// Agent this report is for.
+    pub agent_id: String,
+    /// Time period covered by this report.
+    pub period: GrowthPeriod,
+    /// Total number of completed sessions in the period.
+    pub sessions_total: u64,
+    /// Average tokens per session for the first 5 sessions (or all if fewer).
+    pub avg_tokens_per_session_first_5: usize,
+    /// Average tokens per session for the last 5 sessions.
+    pub avg_tokens_per_session_last_5: usize,
+    /// Token efficiency ratio: last_5 / first_5 (lower is better).
+    pub token_efficiency_ratio: f32,
+    /// Intent cache hit rate: hits / total_lookups.
+    pub intent_cache_hit_rate: f32,
+    /// Number of memories stored in the period.
+    pub memories_stored: u64,
+    /// Number of memories shared with other agents.
+    pub memories_shared: u64,
+    /// Number of procedures learned (procedural memories stored).
+    pub procedures_learned: u64,
+    /// Number of KG nodes created in the period.
+    pub kg_nodes_created: u64,
+    /// Number of KG edges created in the period.
+    pub kg_edges_created: u64,
+}
+
 /// Agent resource usage and quota snapshot.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentUsageDto {
@@ -1831,6 +1889,7 @@ impl ApiResponse {
             session_started: None,
             session_ended: None,
             hybrid_result: None,
+            growth_report: None,
         }
     }
 
@@ -1917,6 +1976,7 @@ impl ApiResponse {
             session_started: None,
             session_ended: None,
             hybrid_result: None,
+            growth_report: None,
         }
     }
 

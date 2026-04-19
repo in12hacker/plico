@@ -152,6 +152,8 @@ impl Default for IntentKeyStrategy {
 const DEFAULT_SESSION_TTL_MS: u64 = 30 * 60 * 1000;
 /// Interval between session timeout scans: 60 seconds.
 const SESSION_SCAN_INTERVAL_SECS: u64 = 60;
+/// Maximum completed sessions to retain per agent for growth reporting.
+const MAX_COMPLETED_SESSIONS_PER_AGENT: usize = 100;
 
 /// An active session tracked by SessionStore.
 #[derive(Debug, Clone)]
@@ -185,9 +187,21 @@ impl ActiveSession {
     }
 }
 
+/// A completed session record for growth reporting.
+#[derive(Debug, Clone)]
+pub struct CompletedSession {
+    pub session_id: String,
+    pub agent_id: String,
+    pub created_at_ms: u64,
+    pub ended_at_ms: u64,
+    pub tokens_used: usize,
+}
+
 /// Session store — manages active sessions and timeout scanning.
 pub struct SessionStore {
     sessions: RwLock<HashMap<String, ActiveSession>>,
+    /// Completed sessions for growth reporting, keyed by agent_id.
+    completed_sessions: RwLock<HashMap<String, Vec<CompletedSession>>>,
     ttl_ms: u64,
 }
 
@@ -195,6 +209,7 @@ impl SessionStore {
     pub fn new() -> Self {
         Self {
             sessions: RwLock::new(HashMap::new()),
+            completed_sessions: RwLock::new(HashMap::new()),
             ttl_ms: DEFAULT_SESSION_TTL_MS,
         }
     }
@@ -208,9 +223,60 @@ impl SessionStore {
     }
 
     /// End a session and return it for cleanup.
-    pub fn end_session(&self, session_id: &str) -> Option<ActiveSession> {
-        let mut sessions = self.sessions.write().unwrap();
-        sessions.remove(session_id)
+    /// Optionally record completion with token usage for growth reporting.
+    pub fn end_session(&self, session_id: &str, tokens_used: Option<usize>) -> Option<ActiveSession> {
+        let session = {
+            let mut sessions = self.sessions.write().unwrap();
+            sessions.remove(session_id)
+        };
+
+        // Record completion if session exists and tokens tracking is provided
+        if let Some(ref session) = session {
+            if let Some(tokens) = tokens_used {
+                self.record_completion(session.clone(), tokens);
+            }
+        }
+
+        session
+    }
+
+    /// Record a completed session for an agent.
+    fn record_completion(&self, session: ActiveSession, tokens_used: usize) {
+        let completed = CompletedSession {
+            session_id: session.session_id,
+            agent_id: session.agent_id.clone(),
+            created_at_ms: session.created_at_ms,
+            ended_at_ms: now_ms(),
+            tokens_used,
+        };
+
+        let mut completed_map = self.completed_sessions.write().unwrap();
+        let sessions = completed_map.entry(session.agent_id).or_insert_with(Vec::new);
+        sessions.push(completed);
+
+        // Limit stored completed sessions per agent
+        if sessions.len() > MAX_COMPLETED_SESSIONS_PER_AGENT {
+            sessions.remove(0);
+        }
+    }
+
+    /// Get completed sessions for an agent within a time period.
+    pub fn get_completed_sessions(&self, agent_id: &str, period_ms: Option<u64>) -> Vec<CompletedSession> {
+        let completed_map = self.completed_sessions.read().unwrap();
+        let sessions = completed_map.get(agent_id).cloned().unwrap_or_default();
+
+        if let Some(period) = period_ms {
+            let cutoff = now_ms() - period;
+            sessions.into_iter().filter(|s| s.ended_at_ms >= cutoff).collect()
+        } else {
+            sessions
+        }
+    }
+
+    /// Get the count of completed sessions for an agent.
+    pub fn completed_session_count(&self, agent_id: &str) -> u64 {
+        let completed_map = self.completed_sessions.read().unwrap();
+        completed_map.get(agent_id).map(|s| s.len() as u64).unwrap_or(0)
     }
 
     /// Get a session by ID.
@@ -369,8 +435,8 @@ pub fn end_session_orchestrate(
     // For now, we skip explicit clear since checkpoint preserves what matters.
     let _ = memory.clear_agent(agent_id);
 
-    // 4. Remove session from store
-    session_store.end_session(session_id);
+    // 4. Remove session from store (tokens_used = None for now, will enhance later)
+    session_store.end_session(session_id, None);
 
     // 5. Return last_seq — this is the current event count at EndSession time
     // The client will receive this and pass it back as last_seen_seq in next StartSession
@@ -455,7 +521,7 @@ mod tests {
         let retrieved = store.get(&session_id).unwrap();
         assert_eq!(retrieved.agent_id, agent_id);
 
-        let removed = store.end_session(&session_id).unwrap();
+        let removed = store.end_session(&session_id, None).unwrap();
         assert_eq!(removed.session_id, session_id);
 
         assert!(store.get(&session_id).is_none());

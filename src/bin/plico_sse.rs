@@ -886,6 +886,7 @@ mod tests {
             session_started: None,
             session_ended: None,
             hybrid_result: None,
+            growth_report: None,
         }
     }
 

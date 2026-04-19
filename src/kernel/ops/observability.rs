@@ -561,3 +561,193 @@ mod tests {
         assert_eq!(ctx_with_id.correlation_id, Some(id));
     }
 }
+
+// ── Growth Report (F-13) ───────────────────────────────────────────────────────
+
+use crate::api::semantic::{GrowthPeriod, GrowthReport};
+use crate::kernel::event_bus::{EventBus, KernelEvent};
+use crate::kernel::ops::session::SessionStore;
+use crate::kernel::ops::prefetch::IntentPrefetcher;
+
+/// Handle a query_growth_report request — generates a growth report for an agent.
+///
+/// This is a read-only statistical report showing:
+/// - Session counts and token efficiency
+/// - Intent cache hit rate
+/// - Knowledge accumulation (memories stored/shared)
+/// - KG growth (nodes/edges created)
+///
+/// OS presents the data; Agent decides whether to adjust strategy.
+pub fn handle_query_growth_report(
+    agent_id: &str,
+    period: GrowthPeriod,
+    session_store: &SessionStore,
+    event_bus: &EventBus,
+    prefetch: &IntentPrefetcher,
+    kg: Option<&dyn crate::fs::KnowledgeGraph>,
+) -> GrowthReport {
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+
+    // Calculate period cutoff time
+    let period_ms: Option<u64> = match period {
+        GrowthPeriod::Last7Days => Some(7 * 24 * 60 * 60 * 1000),
+        GrowthPeriod::Last30Days => Some(30 * 24 * 60 * 60 * 1000),
+        GrowthPeriod::AllTime => None,
+    };
+    let cutoff_ms = period_ms.map(|p| now_ms - p);
+
+    // 1. Session statistics
+    let completed_sessions = session_store.get_completed_sessions(agent_id, period_ms);
+    let sessions_total = completed_sessions.len() as u64;
+
+    // Calculate average tokens per session for first 5 and last 5
+    let token_averages = calculate_token_averages(&completed_sessions);
+
+    // 2. Intent cache hit rate
+    let cache_stats = prefetch.intent_cache_stats();
+    let intent_cache_hit_rate = if cache_stats.total_lookups > 0 {
+        cache_stats.hits as f32 / cache_stats.total_lookups as f32
+    } else {
+        0.0
+    };
+
+    // 3. Knowledge accumulation from EventBus
+    let agent_events = event_bus.events_by_agent(agent_id);
+    let relevant_events: Vec<_> = if let Some(cutoff) = cutoff_ms {
+        agent_events.into_iter()
+            .filter(|e| e.timestamp_ms >= cutoff)
+            .collect()
+    } else {
+        agent_events
+    };
+
+    let mut memories_stored = 0u64;
+    let mut memories_shared = 0u64;
+    let mut procedures_learned = 0u64;
+
+    for evt in &relevant_events {
+        match &evt.event {
+            KernelEvent::MemoryStored { agent_id: _, tier } => {
+                memories_stored += 1;
+                if tier == "procedural" {
+                    procedures_learned += 1;
+                }
+            }
+            KernelEvent::KnowledgeShared { .. } => {
+                memories_shared += 1;
+            }
+            _ => {}
+        }
+    }
+
+    // 4. KG growth (nodes/edges created in period)
+    let (kg_nodes_created, kg_edges_created) = if let Some(kgraph) = kg {
+        count_kg_growth(kgraph, agent_id, cutoff_ms)
+    } else {
+        (0, 0)
+    };
+
+    GrowthReport {
+        agent_id: agent_id.to_string(),
+        period,
+        sessions_total,
+        avg_tokens_per_session_first_5: token_averages.first_5_avg,
+        avg_tokens_per_session_last_5: token_averages.last_5_avg,
+        token_efficiency_ratio: token_averages.efficiency_ratio,
+        intent_cache_hit_rate,
+        memories_stored,
+        memories_shared,
+        procedures_learned,
+        kg_nodes_created,
+        kg_edges_created,
+    }
+}
+
+/// Token averages for growth report calculation.
+struct TokenAverages {
+    first_5_avg: usize,
+    last_5_avg: usize,
+    efficiency_ratio: f32,
+}
+
+/// Calculate average tokens per session for first 5 and last 5 sessions.
+fn calculate_token_averages(sessions: &[super::session::CompletedSession]) -> TokenAverages {
+    if sessions.is_empty() {
+        return TokenAverages {
+            first_5_avg: 0,
+            last_5_avg: 0,
+            efficiency_ratio: 0.0,
+        };
+    }
+
+    // Sort by creation time (oldest first)
+    let mut sorted = sessions.to_vec();
+    sorted.sort_by(|a, b| a.created_at_ms.cmp(&b.created_at_ms));
+
+    // Calculate first 5 average
+    let first_5: Vec<usize> = sorted.iter().take(5).map(|s| s.tokens_used).collect();
+    let first_5_avg = if first_5.is_empty() {
+        0
+    } else {
+        first_5.iter().sum::<usize>() / first_5.len()
+    };
+
+    // Calculate last 5 average
+    let last_5: Vec<usize> = sorted.iter().rev().take(5).map(|s| s.tokens_used).collect();
+    let last_5_avg = if last_5.is_empty() {
+        0
+    } else {
+        last_5.iter().sum::<usize>() / last_5.len()
+    };
+
+    // Calculate efficiency ratio (last_5 / first_5, lower is better)
+    // If first_5_avg is 0, we can't compute a meaningful ratio
+    let efficiency_ratio = if first_5_avg > 0 {
+        last_5_avg as f32 / first_5_avg as f32
+    } else {
+        // If first was 0 but last isn't, the ratio is undefined (infinite improvement)
+        // We return 0.0 as a sentinel indicating "no baseline to compare against"
+        // If both are 0, return 1.0 (equal, neither better nor worse)
+        if last_5_avg > 0 { 0.0 } else { 1.0 }
+    };
+
+    TokenAverages {
+        first_5_avg,
+        last_5_avg,
+        efficiency_ratio,
+    }
+}
+
+/// Count KG nodes and edges created by an agent within a time period.
+fn count_kg_growth(
+    kg: &dyn crate::fs::KnowledgeGraph,
+    agent_id: &str,
+    cutoff_ms: Option<u64>,
+) -> (u64, u64) {
+    let nodes = match kg.list_nodes(agent_id, None) {
+        Ok(n) => n,
+        Err(_) => return (0, 0),
+    };
+
+    let nodes_created = if let Some(cutoff) = cutoff_ms {
+        nodes.into_iter().filter(|n| n.created_at >= cutoff).count() as u64
+    } else {
+        nodes.len() as u64
+    };
+
+    let edges = match kg.list_edges(agent_id) {
+        Ok(e) => e,
+        Err(_) => return (nodes_created, 0),
+    };
+
+    let edges_created = if let Some(cutoff) = cutoff_ms {
+        edges.into_iter().filter(|e| e.created_at >= cutoff).count() as u64
+    } else {
+        edges.len() as u64
+    };
+
+    (nodes_created, edges_created)
+}
