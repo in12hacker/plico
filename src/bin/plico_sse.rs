@@ -880,6 +880,8 @@ mod tests {
             model_health: None,
             cache_stats: None,
             cluster_status: None,
+            token_estimate: None,
+            delta_result: None,
         }
     }
 

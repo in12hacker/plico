@@ -1025,6 +1025,20 @@ impl AIKernel {
                     Err(e) => ApiResponse::error(e),
                 }
             }
+
+            // ── Token Usage (F-8) ────────────────────────────────────────
+
+            ApiRequest::QueryTokenUsage { agent_id: _, session_id: _ } => {
+                // Token estimation is informational only in this POC implementation.
+                // Future versions could track per-agent/per-session token consumption.
+                let mut r = ApiResponse::ok();
+                r.data = Some(serde_json::json!({
+                    "message": "Token usage tracking is informational in POC. \
+                                Actual token counts are estimated via token_estimate field in responses."
+                }).to_string());
+                r
+            }
+
             ApiRequest::ContextAssemble { agent_id, cids, budget_tokens } => {
                 let candidates: Vec<crate::fs::context_budget::ContextCandidate> = cids
                     .into_iter()
@@ -1105,6 +1119,21 @@ impl AIKernel {
                 };
                 let mut r = ApiResponse::ok();
                 r.event_history = Some(limited);
+                r
+            }
+
+            // ── Delta感知 (F-7) ───────────────────────────────────────────
+
+            ApiRequest::DeltaSince { agent_id: _, since_seq, watch_cids, watch_tags, limit } => {
+                let result = ops::delta::handle_delta_since(
+                    since_seq,
+                    watch_cids,
+                    watch_tags,
+                    limit,
+                    &self.event_bus,
+                );
+                let mut r = ApiResponse::ok();
+                r.delta_result = Some(result);
                 r
             }
 

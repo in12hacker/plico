@@ -22,3 +22,4 @@ pub mod cache;
 pub mod checkpoint;
 pub mod distributed;
 pub mod model;
+pub mod delta;

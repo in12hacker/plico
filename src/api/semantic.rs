@@ -255,6 +255,18 @@ pub fn decode_content(content: &str, encoding: &ContentEncoding) -> Result<Vec<u
     }
 }
 
+/// Estimate token count for a text string (F-8).
+///
+/// Uses the formula: (ascii + 3) / 4 + (non_ascii + 1) / 2
+/// This is a coarse approximation suitable for POC.
+/// Note: This is an estimate, not precise. For code the result may be high,
+/// for non-ASCII text (e.g., Chinese) the result may be low.
+pub fn estimate_tokens(text: &str) -> usize {
+    let ascii = text.chars().filter(|c| c.is_ascii()).count();
+    let non_ascii = text.chars().filter(|c| !c.is_ascii()).count();
+    (ascii + 3) / 4 + (non_ascii + 1) / 2
+}
+
 fn default_importance() -> u8 { 50 }
 fn default_k() -> usize { 10 }
 fn default_priority() -> String { "medium".to_string() }
@@ -827,6 +839,36 @@ pub enum ApiRequest {
         target_port: u16,
     },
 
+    // ── Token Usage (F-8) ─────────────────────────────────────
+
+    #[serde(rename = "query_token_usage")]
+    QueryTokenUsage {
+        agent_id: String,
+        #[serde(default)]
+        session_id: Option<String>,
+    },
+
+    // ── Delta感知 (F-7) ─────────────────────────────────────
+
+    /// Query changes since a given event sequence number.
+    /// Used by agents to efficiently sync state after a session gap.
+    #[serde(rename = "delta_since")]
+    DeltaSince {
+        agent_id: String,
+        /// Event sequence number to query from (exclusive).
+        /// Agent receives last_seq from EndSession and passes it here.
+        since_seq: u64,
+        /// Only return changes affecting these CIDs (empty = all).
+        #[serde(default)]
+        watch_cids: Vec<String>,
+        /// Only return changes containing any of these tags (empty = all).
+        #[serde(default)]
+        watch_tags: Vec<String>,
+        /// Maximum number of changes to return.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        limit: Option<usize>,
+    },
+
     // ── Agent Discovery (v6.2) ──────────────────────────────────
 
     #[serde(rename = "discover_agents")]
@@ -1258,6 +1300,12 @@ pub struct ApiResponse {
     /// Cluster status (v20.0).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cluster_status: Option<ClusterStatusDto>,
+    /// Token estimate for the response content (F-8).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token_estimate: Option<usize>,
+    /// Delta result for change queries (F-7).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delta_result: Option<DeltaResult>,
 }
 
 /// Response for a successful model switch operation (v18.0).
@@ -1362,6 +1410,39 @@ pub struct TenantDto {
     pub id: String,
     pub admin_agent_id: String,
     pub created_at_ms: u64,
+}
+
+// ── Delta感知 structures (F-7) ─────────────────────────────────────────────────
+
+/// A single change entry returned by DeltaSince.
+/// Lightweight metadata summary — no LLM required.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChangeEntry {
+    /// Content identifier of the changed object.
+    pub cid: String,
+    /// Type of change: "created", "modified", "deleted", "tags_changed", etc.
+    pub change_type: String,
+    /// Human-readable summary: "{event_type} {cid[..8]} by {agent_id} [{tags}]"
+    pub summary: String,
+    /// Unix timestamp (ms) when the change occurred.
+    pub changed_at_ms: u64,
+    /// Agent ID that triggered the change.
+    pub changed_by: String,
+    /// Event sequence number.
+    pub seq: u64,
+}
+
+/// Response for a DeltaSince query.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeltaResult {
+    /// List of changes since the given sequence.
+    pub changes: Vec<ChangeEntry>,
+    /// The sequence number queried from (exclusive).
+    pub from_seq: u64,
+    /// The latest sequence number in this result.
+    pub to_seq: u64,
+    /// Estimated token count for transmitting these changes.
+    pub token_estimate: usize,
 }
 
 // ── Batch Response Structures (v15.0) ──────────────────────────────────────────
@@ -1585,6 +1666,8 @@ impl ApiResponse {
             model_health: None,
             cache_stats: None,
             cluster_status: None,
+            token_estimate: None,
+            delta_result: None,
         }
     }
 
@@ -1665,6 +1748,8 @@ impl ApiResponse {
             model_health: None,
             cache_stats: None,
             cluster_status: None,
+            token_estimate: None,
+            delta_result: None,
         }
     }
 
