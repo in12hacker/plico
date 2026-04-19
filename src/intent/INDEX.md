@@ -2,7 +2,7 @@
 
 Natural language intent router — bridges the NL-first interface goal. Translates free-form text into structured `ApiRequest` actions.
 
-Status: active | Fan-in: 1 | Fan-out: 3
+**Status**: active (在接口层，不在内核) | **Fan-in**: 1 | **Fan-out**: 2
 
 ## Public API
 
@@ -15,16 +15,25 @@ Status: active | Fan-in: 1 | Fan-out: 3
 | `HeuristicRouter` | struct | Keyword/pattern matching (always available) |
 | `LlmRouter` | struct | Ollama-backed NL understanding (optional) |
 
-## Dependencies (Fan-out: 3)
+## Dependencies (Fan-out: 2)
 
 - `src/api/semantic.rs` — `ApiRequest` types
 - `src/temporal/` — `resolve_heuristic` for time phrase resolution
-- `src/tool/` — `ToolDescriptor` (LLM catalog)
 
 ## Dependents (Fan-in: 1)
 
-- `src/kernel/mod.rs` — `AIKernel::intent_resolve()` / `ChainRouter`
-- `src/bin/aicli.rs` — `intent` CLI command
+- `src/bin/aicli.rs` — `intent` CLI command（接口层使用，内核无感知）
+
+## 架构说明（v3.0-M1 Soul Alignment Fix）
+
+**历史**：IntentRouter 最初在内核中（v1-v2），但这违背了"OS 不应理解自然语言"的原则。
+
+**修复**：IntentRouter 已迁至接口层（`src/intent/`），内核只接受结构化 `ApiRequest`，不再理解自然语言。
+
+```
+v1-v2（错误）:  用户 NL → 内核 IntentRouter → ApiRequest
+v3+（正确）:    用户 NL → aicli IntentRouter → ApiRequest → 内核
+```
 
 ## Interface Contract
 
@@ -38,7 +47,7 @@ Status: active | Fan-in: 1 | Fan-out: 3
 |--------|------|
 | Add new pattern to HeuristicRouter | Low — additive |
 | Change ResolvedIntent fields | Medium — affects API response |
-| Change IntentRouter trait | High — kernel + all impls |
+| Change IntentRouter trait | Medium — affects aicli + intent impls |
 
 ## Files
 
@@ -46,4 +55,4 @@ Status: active | Fan-in: 1 | Fan-out: 3
 |------|---------|-------|
 | `mod.rs` | IntentRouter trait, ChainRouter, types | ~130 |
 | `heuristic.rs` | HeuristicRouter keyword matching | ~330 |
-| `llm.rs` | LlmRouter Ollama integration | ~130 |
+| `llm.rs` | LlmRouter Ollama integration | ~130 | |
