@@ -72,6 +72,8 @@ pub struct AIKernel {
     pub(crate) edge_cache: Arc<EdgeCache>,
     /// Distributed cluster manager — node membership, heartbeat, agent migration (v20.0).
     pub(crate) cluster: Arc<ClusterManager>,
+    /// Session lifecycle store — manages StartSession/EndSession state and timeout (F-6).
+    pub(crate) session_store: Arc<ops::session::SessionStore>,
 }
 
 impl AIKernel {
@@ -197,6 +199,16 @@ impl AIKernel {
             cluster_port,
         ));
 
+        // Session lifecycle store — manages StartSession/EndSession state and timeout (F-6)
+        let session_store = Arc::new(ops::session::SessionStore::new());
+
+        // Spawn background timeout scanner for expired sessions
+        let timeout_session_store = Arc::clone(&session_store);
+        let timeout_memory = memory.clone();
+        std::thread::spawn(move || {
+            ops::session::spawn_session_timeout_scanner(timeout_session_store, timeout_memory);
+        });
+
         let kernel = Self {
             root: root.clone(),
             cas,
@@ -220,6 +232,7 @@ impl AIKernel {
             metrics,
             edge_cache,
             cluster,
+            session_store,
         };
 
         kernel.register_builtin_tools();
@@ -1135,6 +1148,63 @@ impl AIKernel {
                 let mut r = ApiResponse::ok();
                 r.delta_result = Some(result);
                 r
+            }
+
+            // ── Session Lifecycle (F-6) ─────────────────────────────────
+
+            ApiRequest::StartSession { agent_id, agent_token, intent_hint, load_tiers, last_seen_seq } => {
+                // Verify token if provided
+                if let Err(e) = self.key_store.verify_agent_token(&agent_id, agent_token.as_deref()) {
+                    return ApiResponse::error(e);
+                }
+
+                match ops::session::start_session_orchestrate(
+                    &agent_id,
+                    intent_hint,
+                    load_tiers,
+                    last_seen_seq,
+                    &self.session_store,
+                    &self.event_bus,
+                    &self.memory,
+                    &self.prefetch,
+                ) {
+                    Ok(result) => {
+                        let mut r = ApiResponse::ok();
+                        r.session_started = Some(crate::api::semantic::SessionStarted {
+                            session_id: result.session_id,
+                            restored_checkpoint: result.restored_checkpoint,
+                            warm_context: result.warm_context,
+                            changes_since_last: result.changes_since_last,
+                            token_estimate: result.token_estimate,
+                        });
+                        r
+                    }
+                    Err(e) => ApiResponse::error(e),
+                }
+            }
+
+            ApiRequest::EndSession { agent_id, session_id, auto_checkpoint } => {
+                // Note: auto_checkpoint=true means we should checkpoint before ending
+                // The actual checkpoint creation is delegated to the client via AgentCheckpoint API
+                // or relies on periodic persist. Here we just end the session.
+
+                match ops::session::end_session_orchestrate(
+                    &agent_id,
+                    &session_id,
+                    auto_checkpoint,
+                    &self.session_store,
+                    &self.memory,
+                ) {
+                    Ok(result) => {
+                        let mut r = ApiResponse::ok();
+                        r.session_ended = Some(crate::api::semantic::SessionEnded {
+                            checkpoint_id: result.checkpoint_id,
+                            last_seq: result.last_seq,
+                        });
+                        r
+                    }
+                    Err(e) => ApiResponse::error(e),
+                }
             }
 
             ApiRequest::RegisterSkill { agent_id, name, description, tags } => {

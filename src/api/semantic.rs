@@ -271,6 +271,7 @@ fn default_importance() -> u8 { 50 }
 fn default_k() -> usize { 10 }
 fn default_priority() -> String { "medium".to_string() }
 fn default_budget_tokens() -> usize { 4096 }
+fn default_auto_checkpoint() -> bool { true }
 
 /// DTO for procedure steps in API requests.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -869,6 +870,36 @@ pub enum ApiRequest {
         limit: Option<usize>,
     },
 
+    // ── Session Lifecycle (F-6) ─────────────────────────────────
+
+    /// Start a new session — orchestrates checkpoint restore + delta + prefetch.
+    #[serde(rename = "start_session")]
+    StartSession {
+        agent_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        agent_token: Option<String>,
+        /// Intent hint — triggers prefetch engine to warm up context.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        intent_hint: Option<String>,
+        /// Memory tiers to restore from checkpoint (empty = all tiers).
+        #[serde(default)]
+        load_tiers: Vec<crate::memory::MemoryTier>,
+        /// Last seen event sequence number from previous session.
+        /// Used for delta calculation. Omit for first session.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        last_seen_seq: Option<u64>,
+    },
+
+    /// End an active session — creates checkpoint and returns last_seq.
+    #[serde(rename = "end_session")]
+    EndSession {
+        agent_id: String,
+        session_id: String,
+        /// Whether to auto-create a checkpoint before ending (default: true).
+        #[serde(default = "default_auto_checkpoint")]
+        auto_checkpoint: bool,
+    },
+
     // ── Agent Discovery (v6.2) ──────────────────────────────────
 
     #[serde(rename = "discover_agents")]
@@ -1306,6 +1337,12 @@ pub struct ApiResponse {
     /// Delta result for change queries (F-7).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub delta_result: Option<DeltaResult>,
+    /// Session started result (F-6).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_started: Option<SessionStarted>,
+    /// Session ended result (F-6).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_ended: Option<SessionEnded>,
 }
 
 /// Response for a successful model switch operation (v18.0).
@@ -1596,6 +1633,35 @@ pub struct CheckpointSummaryDto {
     pub memory_count: usize,
 }
 
+/// Session started response (F-6).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionStarted {
+    pub session_id: String,
+    /// Summary of the checkpoint restored (if any).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub restored_checkpoint: Option<CheckpointSummaryDto>,
+    /// Assembly ID for fetching warm context (if intent_hint was provided).
+    /// Client should call FetchAssembledContext with this ID.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub warm_context: Option<String>,
+    /// Changes since the last session (based on last_seen_seq).
+    #[serde(default)]
+    pub changes_since_last: Vec<ChangeEntry>,
+    /// Estimated token count for the changes.
+    pub token_estimate: usize,
+}
+
+/// Session ended response (F-6).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionEnded {
+    /// Checkpoint ID if auto_checkpoint was true.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub checkpoint_id: Option<String>,
+    /// Current EventBus sequence number.
+    /// Client should save this and pass as last_seen_seq in next StartSession.
+    pub last_seq: u64,
+}
+
 /// Agent resource usage and quota snapshot.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentUsageDto {
@@ -1668,6 +1734,8 @@ impl ApiResponse {
             cluster_status: None,
             token_estimate: None,
             delta_result: None,
+            session_started: None,
+            session_ended: None,
         }
     }
 
@@ -1750,6 +1818,8 @@ impl ApiResponse {
             cluster_status: None,
             token_estimate: None,
             delta_result: None,
+            session_started: None,
+            session_ended: None,
         }
     }
 

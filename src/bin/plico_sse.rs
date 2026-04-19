@@ -882,6 +882,8 @@ mod tests {
             cluster_status: None,
             token_estimate: None,
             delta_result: None,
+            session_started: None,
+            session_ended: None,
         }
     }
 
