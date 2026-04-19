@@ -3,10 +3,12 @@
 //! Handles tenant lifecycle: create, list, and cross-tenant resource sharing.
 
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::RwLock;
 
-/// Tenant metadata — stored in the tenant registry.
-#[derive(Debug, Clone)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Tenant {
     pub id: String,
     pub admin_agent_id: String,
@@ -130,6 +132,56 @@ impl TenantStore {
 
         Ok(())
     }
+
+    // ─── Persistence (P-3) ─────────────────────────────────────────────
+
+    fn index_path(root: &Path) -> PathBuf {
+        root.join("tenant_index.json")
+    }
+
+    /// Persist tenant registry to disk.
+    pub fn persist(&self, root: &Path) {
+        let tenants = self.tenants.read().unwrap();
+        let admins = self.admins.read().unwrap();
+        let data = TenantPersistData {
+            tenants: tenants.clone(),
+            admins: admins.clone(),
+        };
+        crate::kernel::persistence::atomic_write_json(&Self::index_path(root), &data);
+    }
+
+    /// Restore tenant registry from disk.
+    pub fn restore(root: &Path) -> Self {
+        let path = Self::index_path(root);
+        if !path.exists() {
+            return Self::new();
+        }
+        match std::fs::read_to_string(&path) {
+            Ok(json) => match serde_json::from_str::<TenantPersistData>(&json) {
+                Ok(data) => {
+                    let store = Self {
+                        tenants: RwLock::new(data.tenants),
+                        admins: RwLock::new(data.admins),
+                    };
+                    let count = store.tenants.read().unwrap().len();
+                    if count > 0 {
+                        tracing::info!("Restored {count} tenants from persistent storage");
+                    }
+                    return store;
+                }
+                Err(e) => tracing::warn!("Failed to parse tenant index: {e}"),
+            },
+            Err(e) => tracing::warn!("Failed to read tenant index: {e}"),
+        }
+        Self::new()
+    }
+}
+
+/// Serialized tenant registry data for persistence.
+#[derive(Serialize, Deserialize)]
+struct TenantPersistData {
+    tenants: HashMap<String, Tenant>,
+    admins: HashMap<String, Vec<String>>,
 }
 
 impl Default for TenantStore {

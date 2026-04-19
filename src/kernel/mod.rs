@@ -12,7 +12,7 @@
 
 mod builtin_tools;
 pub mod event_bus;
-mod persistence;
+pub mod persistence;
 pub mod ops;
 
 use ops::checkpoint::CheckpointStore;
@@ -174,10 +174,10 @@ impl AIKernel {
         ));
 
         // Agent authentication — cryptographic token store
-        let key_store = Arc::new(AgentKeyStore::new());
+        let key_store = Arc::new(AgentKeyStore::open(&root));
 
         // Tenant registry — manages all tenants in the system
-        let tenant_store = Arc::new(ops::tenant::TenantStore::new());
+        let tenant_store = Arc::new(ops::tenant::TenantStore::restore(&root));
 
         // Observability metrics — operation counters and latency histograms (v14.0)
         let metrics = Arc::new(KernelMetrics::new());

@@ -61,6 +61,8 @@ impl AIKernel {
         self.persist_event_log();
         self.persist_search_index();
         self.persist_checkpoints();
+        self.persist_tenants();
+        self.persist_key_store();
         tracing::info!("All kernel state persisted to disk");
     }
 
@@ -217,6 +219,18 @@ impl AIKernel {
         if count > 0 {
             tracing::info!("Checkpoint store ready with {count} checkpoints");
         }
+    }
+
+    // ─── Tenant Persistence (P-3) ─────────────────────────────────────
+
+    pub fn persist_tenants(&self) {
+        self.tenant_store.persist(&self.root);
+    }
+
+    // ─── AgentKeyStore Persistence (P-4) ─────────────────────────────
+
+    pub fn persist_key_store(&self) {
+        self.key_store.persist(&self.root);
     }
 }
 

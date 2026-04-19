@@ -21,6 +21,7 @@ use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::RwLock;
 use time::OffsetDateTime;
 
@@ -64,7 +65,7 @@ pub struct AgentKeyStore {
 }
 
 impl AgentKeyStore {
-    /// Create a new keystore with a randomly generated secret.
+    /// Create a new keystore with a randomly generated secret (for testing only).
     pub fn new() -> Self {
         let secret = rand::random::<[u8; 32]>();
         Self {
@@ -72,6 +73,86 @@ impl AgentKeyStore {
             tokens: RwLock::new(HashMap::new()),
             mode: AgentAuthMode::Optional,
         }
+    }
+
+    /// Open or create a keystore at the given root.
+    ///
+    /// If `agent_secret.key` exists, reuses it; otherwise generates a new one.
+    /// Tokens are restored from `agent_tokens.json` if present.
+    pub fn open(root: &Path) -> Self {
+        let secret_path = Self::secret_path(root);
+        let secret = if secret_path.exists() {
+            match std::fs::read(&secret_path) {
+                Ok(bytes) if bytes.len() == 32 => {
+                    let mut arr = [0u8; 32];
+                    arr.copy_from_slice(&bytes);
+                    arr
+                }
+                _ => {
+                    tracing::warn!("Invalid secret file, generating new secret");
+                    let s = rand::random::<[u8; 32]>();
+                    let _ = Self::write_secret(&secret_path, &s);
+                    s
+                }
+            }
+        } else {
+            let s = rand::random::<[u8; 32]>();
+            let _ = Self::write_secret(&secret_path, &s);
+            s
+        };
+
+        let tokens = Self::load_tokens(root);
+
+        Self {
+            secret,
+            tokens: RwLock::new(tokens),
+            mode: AgentAuthMode::Optional,
+        }
+    }
+
+    fn secret_path(root: &Path) -> PathBuf {
+        root.join("agent_secret.key")
+    }
+
+    fn tokens_path(root: &Path) -> PathBuf {
+        root.join("agent_tokens.json")
+    }
+
+    fn write_secret(path: &Path, secret: &[u8; 32]) -> std::io::Result<()> {
+        std::fs::write(path, secret)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+        }
+        Ok(())
+    }
+
+    fn load_tokens(root: &Path) -> HashMap<String, AgentToken> {
+        let path = Self::tokens_path(root);
+        if !path.exists() {
+            return HashMap::new();
+        }
+        match std::fs::read_to_string(&path) {
+            Ok(json) => match serde_json::from_str::<HashMap<String, AgentToken>>(&json) {
+                Ok(tokens) => {
+                    let count = tokens.len();
+                    if count > 0 {
+                        tracing::info!("Restored {count} agent tokens from persistent storage");
+                    }
+                    return tokens;
+                }
+                Err(e) => tracing::warn!("Failed to parse agent tokens: {e}"),
+            },
+            Err(e) => tracing::warn!("Failed to read agent tokens: {e}"),
+        }
+        HashMap::new()
+    }
+
+    /// Persist tokens to disk.
+    pub fn persist(&self, root: &Path) {
+        let tokens = self.tokens.read().unwrap();
+        crate::kernel::persistence::atomic_write_json(&Self::tokens_path(root), &*tokens);
     }
 
     /// Set auth mode.
