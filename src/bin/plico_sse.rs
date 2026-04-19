@@ -866,6 +866,10 @@ mod tests {
             token: None,
             tenants: None,
             correlation_id: None,
+            batch_create: None,
+            batch_memory_store: None,
+            batch_submit_intent: None,
+            batch_query: None,
         }
     }
 

@@ -242,6 +242,11 @@ pub enum OpType {
     KgAddEdge = 8,
     KgFindPaths = 9,
     HandleApiRequest = 10,
+    // Batch operations (v15.0)
+    BatchCreate = 11,
+    BatchMemoryStore = 12,
+    BatchSubmitIntent = 13,
+    BatchQuery = 14,
     // Add new types above this line
     Count,
 }
@@ -260,12 +265,16 @@ impl OpType {
             OpType::KgAddEdge => "kg_add_edge",
             OpType::KgFindPaths => "kg_find_paths",
             OpType::HandleApiRequest => "handle_api_request",
+            OpType::BatchCreate => "batch_create",
+            OpType::BatchMemoryStore => "batch_memory_store",
+            OpType::BatchSubmitIntent => "batch_submit_intent",
+            OpType::BatchQuery => "batch_query",
             OpType::Count => "count", // sentinel value, not a real operation
         }
     }
 
     /// Total number of operation types.
-    pub const NUM_OPS: usize = 11;
+    pub const NUM_OPS: usize = 15;
 }
 
 /// Kernel-level metrics collector.

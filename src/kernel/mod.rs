@@ -1156,6 +1156,39 @@ impl AIKernel {
                 }).to_string());
                 r
             }
+
+            // ── Batch Operations (v15.0) ─────────────────────────────────
+
+            ApiRequest::BatchCreate { items, agent_id, tenant_id } => {
+                let tenant = tenant_id.unwrap_or_else(|| "default".to_string());
+                let batch_results = self.handle_batch_create(items, &agent_id, &tenant);
+                let mut r = ApiResponse::ok();
+                r.batch_create = Some(batch_results);
+                r
+            }
+
+            ApiRequest::BatchMemoryStore { entries, agent_id, tenant_id } => {
+                let tenant = tenant_id.unwrap_or_else(|| "default".to_string());
+                let batch_results = self.handle_batch_memory_store(entries, &agent_id, &tenant);
+                let mut r = ApiResponse::ok();
+                r.batch_memory_store = Some(batch_results);
+                r
+            }
+
+            ApiRequest::BatchSubmitIntent { intents, agent_id } => {
+                let batch_results = self.handle_batch_submit_intent(intents, &agent_id);
+                let mut r = ApiResponse::ok();
+                r.batch_submit_intent = Some(batch_results);
+                r
+            }
+
+            ApiRequest::BatchQuery { queries, agent_id, tenant_id } => {
+                let tenant = tenant_id.unwrap_or_else(|| "default".to_string());
+                let batch_results = self.handle_batch_query(queries, &agent_id, &tenant);
+                let mut r = ApiResponse::ok();
+                r.batch_query = Some(batch_results);
+                r
+            }
         };
         self.maybe_persist_event_log();
         response

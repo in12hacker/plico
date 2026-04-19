@@ -728,6 +728,121 @@ pub enum ApiRequest {
         /// The assembly_id returned by DeclareIntent.
         assembly_id: String,
     },
+
+    // ── Batch Operations (v15.0) ─────────────────────────────────
+
+    /// Batch create multiple objects in a single call.
+    /// Each item is processed independently — one failure does not affect others.
+    #[serde(rename = "batch_create")]
+    BatchCreate {
+        items: Vec<BatchCreateItem>,
+        agent_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tenant_id: Option<String>,
+    },
+
+    /// Batch store multiple memory entries in a single call.
+    /// Each entry is stored independently in the working tier.
+    #[serde(rename = "batch_memory_store")]
+    BatchMemoryStore {
+        entries: Vec<BatchMemoryEntry>,
+        agent_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tenant_id: Option<String>,
+    },
+
+    /// Batch submit multiple intents in a single call.
+    #[serde(rename = "batch_submit_intent")]
+    BatchSubmitIntent {
+        intents: Vec<IntentSpec>,
+        agent_id: String,
+    },
+
+    /// Batch query multiple objects/memories in a single call.
+    #[serde(rename = "batch_query")]
+    BatchQuery {
+        queries: Vec<QuerySpec>,
+        agent_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tenant_id: Option<String>,
+    },
+}
+
+/// An item within a BatchCreate request.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BatchCreateItem {
+    /// Object content. Plain UTF-8 by default; set `content_encoding` for binary.
+    pub content: String,
+    /// Content encoding (default: utf8).
+    #[serde(default)]
+    pub content_encoding: ContentEncoding,
+    /// Semantic tags for the object.
+    #[serde(default)]
+    pub tags: Vec<String>,
+    /// Optional intent description associated with this object.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub intent: Option<String>,
+}
+
+/// An entry within a BatchMemoryStore request.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BatchMemoryEntry {
+    /// Memory content (text).
+    pub content: String,
+    /// Memory tier to store in (default: working).
+    #[serde(default)]
+    pub tier: String,
+    /// Importance score 0-100 (default: 50).
+    #[serde(default = "default_importance")]
+    pub importance: u8,
+    /// Semantic tags.
+    #[serde(default)]
+    pub tags: Vec<String>,
+}
+
+/// An intent specification within a BatchSubmitIntent request.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IntentSpec {
+    /// Natural-language intent description.
+    pub description: String,
+    /// Priority: "critical", "high", "medium", or "low" (default: medium).
+    #[serde(default = "default_priority")]
+    pub priority: String,
+    /// Optional JSON-encoded ApiRequest to execute when dispatched.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action: Option<String>,
+}
+
+/// A query specification within a BatchQuery request.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "query_type")]
+pub enum QuerySpec {
+    /// Read an object by CID.
+    #[serde(rename = "read")]
+    Read {
+        cid: String,
+    },
+    /// Search for objects by query string.
+    #[serde(rename = "search")]
+    Search {
+        query: String,
+        #[serde(default)]
+        limit: Option<usize>,
+        #[serde(default)]
+        require_tags: Vec<String>,
+        #[serde(default)]
+        exclude_tags: Vec<String>,
+    },
+    /// Recall ephemeral memories.
+    #[serde(rename = "recall")]
+    Recall,
+    /// Semantic memory recall.
+    #[serde(rename = "recall_semantic")]
+    RecallSemantic {
+        query: String,
+        #[serde(default = "default_k")]
+        k: usize,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -820,6 +935,18 @@ pub struct ApiResponse {
     /// Present in responses when a correlation ID was passed or generated for the request.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub correlation_id: Option<String>,
+    /// Batch create results (v15.0).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub batch_create: Option<BatchCreateResponse>,
+    /// Batch memory store results (v15.0).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub batch_memory_store: Option<BatchMemoryStoreResponse>,
+    /// Batch submit intent results (v15.0).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub batch_submit_intent: Option<BatchSubmitIntentResponse>,
+    /// Batch query results (v15.0).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub batch_query: Option<BatchQueryResponse>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -898,6 +1025,48 @@ pub struct TenantDto {
     pub created_at_ms: u64,
 }
 
+// ── Batch Response Structures (v15.0) ──────────────────────────────────────────
+
+/// Response for a batch create operation.
+/// Each entry in `results` corresponds to a BatchCreateItem.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BatchCreateResponse {
+    /// Results per item: Ok(cid) for success, Err(message) for failure.
+    pub results: Vec<Result<String, String>>,
+    pub successful: usize,
+    pub failed: usize,
+}
+
+/// Response for a batch memory store operation.
+/// Each entry in `results` corresponds to a BatchMemoryEntry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BatchMemoryStoreResponse {
+    /// Results per entry: Ok(entry_id) for success, Err(message) for failure.
+    pub results: Vec<Result<String, String>>,
+    pub successful: usize,
+    pub failed: usize,
+}
+
+/// Response for a batch submit intent operation.
+/// Each entry in `results` corresponds to an IntentSpec.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BatchSubmitIntentResponse {
+    /// Results per intent: Ok(intent_id) for success, Err(message) for failure.
+    pub results: Vec<Result<String, String>>,
+    pub successful: usize,
+    pub failed: usize,
+}
+
+/// Response for a batch query operation.
+/// Each entry in `results` corresponds to a QuerySpec.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BatchQueryResponse {
+    /// Results per query: Ok(json_data) for success, Err(message) for failure.
+    pub results: Vec<Result<serde_json::Value, String>>,
+    pub successful: usize,
+    pub failed: usize,
+}
+
 // ── Project Self-Management (Dogfooding Plico) ─────────────────────────────────
 
 
@@ -971,6 +1140,10 @@ impl ApiResponse {
             token: None,
             tenants: None,
             correlation_id: None,
+            batch_create: None,
+            batch_memory_store: None,
+            batch_submit_intent: None,
+            batch_query: None,
         }
     }
 
@@ -1032,6 +1205,10 @@ impl ApiResponse {
             token: None,
             tenants: None,
             correlation_id: None,
+            batch_create: None,
+            batch_memory_store: None,
+            batch_submit_intent: None,
+            batch_query: None,
         }
     }
 
