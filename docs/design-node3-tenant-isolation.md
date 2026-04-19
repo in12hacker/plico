@@ -351,6 +351,15 @@ impl AIKernel {
 
 ## 3. 实现计划
 
+### 3.0 实施状态
+
+| Phase | 状态 | 提交 |
+|-------|------|------|
+| Phase A: 基础设施 | ✅ 完成 | commit 474fd82 |
+| Phase B: API 路由 | ✅ 完成 | commit 8c384aa |
+| Phase C: 租户管理 API | ✅ 完成 | commit cbc467a |
+| Phase D: 安全强化 | ✅ 完成 | commit 8c384aa (trusted agents cannot bypass tenant isolation) |
+
 ### 3.1 Phase A：基础设施（~1周）
 
 **目标**: 添加 tenant_id 字段到核心数据结构
