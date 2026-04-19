@@ -19,8 +19,10 @@ use plico::api::semantic::{ApiRequest, ApiResponse};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::time;
 use tracing_subscriber::util::SubscriberInitExt;
 
 #[tokio::main]
@@ -55,6 +57,42 @@ async fn main() {
             std::process::exit(1);
         }
     };
+
+    // P-1: Graceful Shutdown Hook — persist all state on SIGTERM/SIGINT
+    #[cfg(unix)]
+    {
+        let kernel_for_shutdown = Arc::clone(&kernel);
+        tokio::spawn(async move {
+            let mut sigterm = tokio::signal::unix::signal(
+                tokio::signal::unix::SignalKind::terminate()
+            ).unwrap();
+            let sigint = tokio::signal::ctrl_c();
+            tokio::select! {
+                _ = sigterm.recv() => {},
+                _ = sigint => {},
+            }
+            tracing::info!("Shutdown signal received, persisting all state...");
+            kernel_for_shutdown.persist_all();
+            std::process::exit(0);
+        });
+    }
+
+    // P-6: Periodic Persistence — persist every 5 minutes via PLICO_PERSIST_INTERVAL_SECS env var
+    {
+        let kernel_for_timer = Arc::clone(&kernel);
+        let interval_secs: u64 = std::env::var("PLICO_PERSIST_INTERVAL_SECS")
+            .unwrap_or_else(|_| "300".to_string())
+            .parse()
+            .unwrap_or(300);
+        tokio::spawn(async move {
+            let mut interval = time::interval(Duration::from_secs(interval_secs));
+            loop {
+                interval.tick().await;
+                kernel_for_timer.persist_all();
+                tracing::debug!("Periodic persist completed");
+            }
+        });
+    }
 
     let dispatch = kernel.start_dispatch_loop();
     let _result_consumer = kernel.start_result_consumer(&dispatch);
