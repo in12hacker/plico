@@ -534,6 +534,7 @@ F-0（前置修正）
 
 **Phase H（第八轮迭代）**
 - [x] KG Causal Reasoning ✅ (v16.0-M1)
+- [x] API Versioning & Stability ✅ (v17.0-M1)
 
 ---
 
