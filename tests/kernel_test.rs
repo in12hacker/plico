@@ -347,6 +347,7 @@ fn test_kernel_intent_persists_across_restart() {
             content_encoding: ContentEncoding::Utf8,
             tags: vec!["intent-persist".to_string()],
             agent_id: "test".to_string(),
+            agent_token: None,
             intent: None,
         }).unwrap();
         kernel.submit_intent(
@@ -381,6 +382,7 @@ fn test_kernel_handle_api_request_create_and_read() {
         content_encoding: ContentEncoding::Utf8,
         tags: vec!["test".to_string(), "executor".to_string()],
         agent_id: "test-agent".to_string(),
+            agent_token: None,
         intent: None,
     };
     let resp = kernel.handle_api_request(create_req);
@@ -390,6 +392,7 @@ fn test_kernel_handle_api_request_create_and_read() {
     let read_req = ApiRequest::Read {
         cid: cid.clone(),
         agent_id: "test-agent".to_string(),
+        agent_token: None,
     };
     let resp = kernel.handle_api_request(read_req);
     assert!(resp.ok);
@@ -409,6 +412,7 @@ fn test_kernel_executor_dispatches_intent_action() {
         content_encoding: ContentEncoding::Utf8,
         tags: vec!["intent-created".to_string()],
         agent_id: "executor-test-agent".to_string(),
+        agent_token: None,
         intent: Some("test intent".to_string()),
     }).unwrap();
 
@@ -484,6 +488,7 @@ async fn test_dispatch_loop_with_kernel_executor() {
         content_encoding: ContentEncoding::Utf8,
         tags: vec!["dispatch-test".to_string()],
         agent_id: "dispatch-agent".to_string(),
+        agent_token: None,
         intent: Some("test dispatch".to_string()),
     }).unwrap();
 
@@ -552,6 +557,7 @@ fn test_e2e_agent_autonomy_cycle() {
             content_encoding: ContentEncoding::Utf8,
             tags: vec!["e2e-test".to_string(), "agent-created".to_string()],
             agent_id: agent_id.clone(),
+            agent_token: None,
             intent: Some("e2e autonomy test".to_string()),
         }).unwrap();
 
@@ -2944,6 +2950,7 @@ fn test_event_history_since_seq() {
         content_encoding: Default::default(),
         tags: vec!["test".into()],
         agent_id: aid.clone(),
+            agent_token: None,
         intent: None,
     });
 
@@ -2970,6 +2977,7 @@ fn test_event_history_by_agent() {
         content_encoding: Default::default(),
         tags: vec!["t1".into()],
         agent_id: a1.clone(),
+            agent_token: None,
         intent: None,
     });
     kernel.handle_api_request(plico::api::semantic::ApiRequest::Create {
@@ -2977,6 +2985,7 @@ fn test_event_history_by_agent() {
         content_encoding: Default::default(),
         tags: vec!["t2".into()],
         agent_id: a2.clone(),
+            agent_token: None,
         intent: None,
     });
 
@@ -3002,6 +3011,7 @@ fn test_event_history_via_api_full() {
         content_encoding: Default::default(),
         tags: vec!["tag".into()],
         agent_id: aid.clone(),
+            agent_token: None,
         intent: None,
     });
 
@@ -3031,6 +3041,7 @@ fn test_event_history_api_agent_filter() {
         content_encoding: Default::default(),
         tags: vec!["x".into()],
         agent_id: a1.clone(),
+            agent_token: None,
         intent: None,
     });
     kernel.handle_api_request(plico::api::semantic::ApiRequest::Create {
@@ -3038,6 +3049,7 @@ fn test_event_history_api_agent_filter() {
         content_encoding: Default::default(),
         tags: vec!["y".into()],
         agent_id: a2.clone(),
+            agent_token: None,
         intent: None,
     });
 
@@ -3058,6 +3070,7 @@ fn test_event_history_api_limit() {
             content_encoding: Default::default(),
             tags: vec!["t".into()],
             agent_id: aid.clone(),
+            agent_token: None,
             intent: None,
         });
     }
@@ -3079,6 +3092,7 @@ fn test_event_history_monotonic_sequence() {
             content_encoding: Default::default(),
             tags: vec!["t".into()],
             agent_id: aid.clone(),
+            agent_token: None,
             intent: None,
         });
     }
@@ -3108,6 +3122,7 @@ fn test_event_log_persists_across_restart() {
             content_encoding: Default::default(),
             tags: vec!["persist".into()],
             agent_id: aid.clone(),
+            agent_token: None,
             intent: None,
         });
         kernel.persist_event_log();
@@ -3156,6 +3171,7 @@ fn test_event_log_sequence_continues_after_restore() {
             content_encoding: Default::default(),
             tags: vec!["new".into()],
             agent_id: aid,
+            agent_token: None,
             intent: None,
         });
 
@@ -3178,6 +3194,7 @@ fn test_event_log_explicit_persist() {
         content_encoding: Default::default(),
         tags: vec!["t".into()],
         agent_id: aid,
+            agent_token: None,
         intent: None,
     });
 

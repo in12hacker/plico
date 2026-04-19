@@ -15,7 +15,10 @@ pub mod event_bus;
 mod persistence;
 pub mod ops;
 
+use ops::prefetch::IntentPrefetcher;
+
 use crate::api::semantic::{ApiRequest, ApiResponse};
+use crate::api::agent_auth::AgentKeyStore;
 
 use std::path::PathBuf;
 use std::sync::{Arc, atomic::{AtomicU64, Ordering}};
@@ -50,6 +53,10 @@ pub struct AIKernel {
     pub(crate) tool_registry: Arc<ToolRegistry>,
     pub(crate) message_bus: Arc<MessageBus>,
     pub(crate) event_bus: Arc<EventBus>,
+    /// Proactive context assembly — semantic prefetch engine.
+    pub(crate) prefetch: Arc<ops::prefetch::IntentPrefetcher>,
+    /// Agent authentication — cryptographic token store.
+    pub(crate) key_store: Arc<AgentKeyStore>,
 }
 
 impl AIKernel {
@@ -122,6 +129,19 @@ impl AIKernel {
         let message_bus = Arc::new(MessageBus::new());
         let event_bus = Arc::new(EventBus::new());
 
+        // Proactive context assembly (semantic prefetch)
+        let prefetch = Arc::new(IntentPrefetcher::new(
+            search_backend.clone(),
+            knowledge_graph.clone(),
+            memory.clone(),
+            event_bus.clone(),
+            embedding.clone(),
+            fs.ctx_loader_arc(),
+        ));
+
+        // Agent authentication — cryptographic token store
+        let key_store = Arc::new(AgentKeyStore::new());
+
         let kernel = Self {
             root: root.clone(),
             cas,
@@ -138,6 +158,8 @@ impl AIKernel {
             tool_registry,
             message_bus,
             event_bus,
+            prefetch,
+            key_store,
         };
 
         kernel.register_builtin_tools();
@@ -200,7 +222,11 @@ impl AIKernel {
         }
 
         let response = match req {
-            ApiRequest::Create { content, content_encoding, tags, agent_id, intent } => {
+            ApiRequest::Create { content, content_encoding, tags, agent_id, agent_token, intent } => {
+                // Verify token (Optional mode: allow no token)
+                if let Err(e) = self.key_store.verify_agent_token(&agent_id, agent_token.as_deref()) {
+                    return ApiResponse::error(e);
+                }
                 let bytes = match decode_content(&content, &content_encoding) {
                     Ok(b) => b,
                     Err(e) => return ApiResponse::error(e),
@@ -213,13 +239,19 @@ impl AIKernel {
                     Err(e) => ApiResponse::error(e.to_string()),
                 }
             }
-            ApiRequest::Read { cid, agent_id } => {
+            ApiRequest::Read { cid, agent_id, agent_token } => {
+                if let Err(e) = self.key_store.verify_agent_token(&agent_id, agent_token.as_deref()) {
+                    return ApiResponse::error(e);
+                }
                 match self.get_object(&cid, &agent_id) {
                     Ok(obj) => ApiResponse::with_data(String::from_utf8_lossy(&obj.data).to_string()),
                     Err(e) => ApiResponse::error(e.to_string()),
                 }
             }
-            ApiRequest::Search { query, agent_id, limit, offset, require_tags, exclude_tags, since, until } => {
+            ApiRequest::Search { query, agent_id, agent_token, limit, offset, require_tags, exclude_tags, since, until } => {
+                if let Err(e) = self.key_store.verify_agent_token(&agent_id, agent_token.as_deref()) {
+                    return ApiResponse::error(e);
+                }
                 let results = match self.semantic_search_with_time(
                     &query, &agent_id, limit.unwrap_or(10) + offset.unwrap_or(0),
                     require_tags, exclude_tags, since, until,
@@ -239,7 +271,10 @@ impl AIKernel {
                 r.results = Some(page);
                 r
             }
-            ApiRequest::Update { cid, content, content_encoding, new_tags, agent_id } => {
+            ApiRequest::Update { cid, content, content_encoding, new_tags, agent_id, agent_token } => {
+                if let Err(e) = self.key_store.verify_agent_token(&agent_id, agent_token.as_deref()) {
+                    return ApiResponse::error(e);
+                }
                 let bytes = match decode_content(&content, &content_encoding) {
                     Ok(b) => b,
                     Err(e) => return ApiResponse::error(e),
@@ -252,7 +287,10 @@ impl AIKernel {
                     Err(e) => ApiResponse::error(e.to_string()),
                 }
             }
-            ApiRequest::Delete { cid, agent_id } => {
+            ApiRequest::Delete { cid, agent_id, agent_token } => {
+                if let Err(e) = self.key_store.verify_agent_token(&agent_id, agent_token.as_deref()) {
+                    return ApiResponse::error(e);
+                }
                 match self.semantic_delete(&cid, &agent_id) {
                     Ok(()) => {
                         self.maybe_persist_search_index();
@@ -263,8 +301,12 @@ impl AIKernel {
             }
             ApiRequest::RegisterAgent { name } => {
                 let id = self.register_agent(name);
+                // Generate cryptographic token for this agent
+                let token = self.key_store.generate_token(&id);
+                self.key_store.store_token(&token);
                 let mut r = ApiResponse::ok();
                 r.agent_id = Some(id);
+                r.token = Some(token.token);
                 r
             }
             ApiRequest::ListAgents => {
@@ -956,6 +998,31 @@ impl AIKernel {
                 let mut r = ApiResponse::ok();
                 r.discovered_skills = Some(skills);
                 r
+            }
+
+            // ── Proactive Context Assembly (F-2) ─────────────────────────
+
+            ApiRequest::DeclareIntent { agent_id, intent, related_cids, budget_tokens } => {
+                match self.declare_intent(&agent_id, &intent, related_cids, budget_tokens) {
+                    Ok(assembly_id) => {
+                        let mut r = ApiResponse::ok();
+                        r.assembly_id = Some(assembly_id);
+                        r
+                    }
+                    Err(e) => ApiResponse::error(e),
+                }
+            }
+
+            ApiRequest::FetchAssembledContext { agent_id, assembly_id } => {
+                match self.fetch_assembled_context(&agent_id, &assembly_id) {
+                    Some(Ok(allocation)) => {
+                        let mut r = ApiResponse::ok();
+                        r.context_assembly = Some(allocation);
+                        r
+                    }
+                    Some(Err(e)) => ApiResponse::error(e),
+                    None => ApiResponse::error(format!("assembly not found: {}", assembly_id)),
+                }
             }
         };
         self.maybe_persist_event_log();

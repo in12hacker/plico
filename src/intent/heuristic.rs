@@ -197,6 +197,7 @@ fn to_api_request(m: PatternMatch, agent_id: &str) -> ResolvedIntent {
             let action = ApiRequest::Search {
                 query: m.query_text.clone(),
                 agent_id: agent_id.to_string(),
+                agent_token: None,
                 limit: Some(10),
                 offset: None,
                 require_tags: m.tags.clone(),
@@ -217,6 +218,7 @@ fn to_api_request(m: PatternMatch, agent_id: &str) -> ResolvedIntent {
                 content_encoding: Default::default(),
                 tags: m.tags.clone(),
                 agent_id: agent_id.to_string(),
+                agent_token: None,
                 intent: None,
             };
             (action, format!("Create object with content '{}'", truncate(&m.query_text, 50)))
@@ -225,6 +227,7 @@ fn to_api_request(m: PatternMatch, agent_id: &str) -> ResolvedIntent {
             (ApiRequest::Delete {
                 cid: m.query_text.clone(),
                 agent_id: agent_id.to_string(),
+                agent_token: None,
             }, format!("Delete object '{}'", m.query_text))
         }
         ActionType::Update => {
@@ -234,6 +237,7 @@ fn to_api_request(m: PatternMatch, agent_id: &str) -> ResolvedIntent {
                 content_encoding: Default::default(),
                 new_tags: None,
                 agent_id: agent_id.to_string(),
+                agent_token: None,
             }, format!("Update object with '{}'", truncate(&m.query_text, 50)))
         }
         ActionType::Remember => {
@@ -308,6 +312,7 @@ impl IntentRouter for HeuristicRouter {
                             let action = ApiRequest::Search {
                                 query: part.to_string(),
                                 agent_id: agent_id.to_string(),
+                                agent_token: None,
                                 limit: Some(10),
                                 offset: None,
                                 require_tags: vec![],
@@ -349,6 +354,7 @@ impl IntentRouter for HeuristicRouter {
                 let action = ApiRequest::Search {
                     query: trimmed.to_string(),
                     agent_id: agent_id.to_string(),
+                    agent_token: None,
                     limit: Some(10),
                     offset: None,
                     require_tags: vec![],

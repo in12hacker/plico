@@ -74,6 +74,7 @@ pub fn decode_content(content: &str, encoding: &ContentEncoding) -> Result<Vec<u
 fn default_importance() -> u8 { 50 }
 fn default_k() -> usize { 10 }
 fn default_priority() -> String { "medium".to_string() }
+fn default_budget_tokens() -> usize { 4096 }
 
 /// DTO for procedure steps in API requests.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -96,16 +97,20 @@ pub enum ApiRequest {
         content_encoding: ContentEncoding,
         tags: Vec<String>,
         agent_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        agent_token: Option<String>,
         intent: Option<String>,
     },
 
     #[serde(rename = "read")]
-    Read { cid: String, agent_id: String },
+    Read { cid: String, agent_id: String, #[serde(default, skip_serializing_if = "Option::is_none")] agent_token: Option<String> },
 
     #[serde(rename = "search")]
     Search {
         query: String,
         agent_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        agent_token: Option<String>,
         limit: Option<usize>,
         #[serde(default)]
         offset: Option<usize>,
@@ -132,10 +137,12 @@ pub enum ApiRequest {
         content_encoding: ContentEncoding,
         new_tags: Option<Vec<String>>,
         agent_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        agent_token: Option<String>,
     },
 
     #[serde(rename = "delete")]
-    Delete { cid: String, agent_id: String },
+    Delete { cid: String, agent_id: String, #[serde(default, skip_serializing_if = "Option::is_none")] agent_token: Option<String> },
 
     #[serde(rename = "register_agent")]
     RegisterAgent { name: String },
@@ -596,6 +603,31 @@ pub enum ApiRequest {
         #[serde(default)]
         tag_filter: Option<String>,
     },
+
+    // ── Proactive Context Assembly (F-2) ───────────────────────────
+
+    /// Declare an intent and trigger asynchronous semantic prefetch.
+    /// Returns an assembly_id for later FetchAssembledContext call.
+    #[serde(rename = "declare_intent")]
+    DeclareIntent {
+        agent_id: String,
+        /// Natural-language intent description (e.g. "修复 auth 模块测试失败").
+        intent: String,
+        /// Optional: known related object CIDs.
+        #[serde(default)]
+        related_cids: Vec<String>,
+        /// Expected context budget in tokens.
+        #[serde(default = "default_budget_tokens")]
+        budget_tokens: usize,
+    },
+
+    /// Fetch the result of a previously declared intent prefetch.
+    #[serde(rename = "fetch_assembled_context")]
+    FetchAssembledContext {
+        agent_id: String,
+        /// The assembly_id returned by DeclareIntent.
+        assembly_id: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -639,6 +671,8 @@ pub struct ApiResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub intent_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub assembly_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub agent_state: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pending_intents: Option<usize>,
@@ -676,6 +710,9 @@ pub struct ApiResponse {
     pub event_history: Option<Vec<crate::kernel::event_bus::SequencedEvent>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub discovered_skills: Option<Vec<SkillDto>>,
+    /// Token issued to an agent on registration (returned in RegisterAgent response).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -803,7 +840,8 @@ impl ApiResponse {
             ok: true, cid: None, node_id: None, data: None, results: None,
             agent_id: None, agents: None, memory: None, tags: None,
             neighbors: None, deleted: None, events: None, nodes: None,
-            paths: None, edges: None, intent_id: None, agent_state: None,
+            paths: None, edges: None, intent_id: None, assembly_id: None,
+            agent_state: None,
             pending_intents: None, tools: None, tool_result: None,
             resolved_intents: None, messages: None, context_data: None,
             error: None, total_count: None, has_more: None,
@@ -815,6 +853,7 @@ impl ApiResponse {
             delegation: None,
             event_history: None,
             discovered_skills: None,
+            token: None,
         }
     }
 
@@ -859,7 +898,8 @@ impl ApiResponse {
             ok: false, cid: None, node_id: None, data: None, results: None,
             agent_id: None, agents: None, memory: None, tags: None,
             neighbors: None, deleted: None, events: None, nodes: None,
-            paths: None, edges: None, intent_id: None, agent_state: None,
+            paths: None, edges: None, intent_id: None, assembly_id: None,
+            agent_state: None,
             pending_intents: None, tools: None, tool_result: None,
             resolved_intents: None, messages: None, context_data: None,
             error: Some(msg.into()),
@@ -872,6 +912,7 @@ impl ApiResponse {
             delegation: None,
             event_history: None,
             discovered_skills: None,
+            token: None,
         }
     }
 }
@@ -914,6 +955,7 @@ mod tests {
             content_encoding: ContentEncoding::Base64,
             tags: vec!["image".to_string()],
             agent_id: "agent1".to_string(),
+            agent_token: None,
             intent: None,
         };
         let json = serde_json::to_string(&req).unwrap();

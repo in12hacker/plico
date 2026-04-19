@@ -117,12 +117,12 @@ fn build_request(args: &[String]) -> Option<ApiRequest> {
             let content = commands::extract_arg(args, "--content").unwrap_or_default();
             let tags = commands::extract_tags(args, "--tags");
             let agent_id = commands::extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
-            Some(ApiRequest::Create { content, content_encoding: Default::default(), tags, agent_id, intent: commands::extract_arg(args, "--intent") })
+            Some(ApiRequest::Create { content, content_encoding: Default::default(), tags, agent_id, agent_token: None, intent: commands::extract_arg(args, "--intent") })
         }
         Some("get") | Some("read") => {
             let cid = args.get(1).cloned().unwrap_or_default();
             let agent_id = commands::extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
-            Some(ApiRequest::Read { cid, agent_id })
+            Some(ApiRequest::Read { cid, agent_id, agent_token: None })
         }
         Some("search") => {
             let query = commands::extract_arg(args, "--query")
@@ -136,19 +136,19 @@ fn build_request(args: &[String]) -> Option<ApiRequest> {
             let since = commands::extract_arg(args, "--since").and_then(|s| s.parse::<i64>().ok());
             let until = commands::extract_arg(args, "--until").and_then(|s| s.parse::<i64>().ok());
             let offset = commands::extract_arg(args, "--offset").and_then(|s| s.parse().ok());
-            Some(ApiRequest::Search { query, agent_id, limit, offset, require_tags, exclude_tags, since, until })
+            Some(ApiRequest::Search { query, agent_id, agent_token: None, limit, offset, require_tags, exclude_tags, since, until })
         }
         Some("update") => {
             let cid = commands::extract_arg(args, "--cid").unwrap_or_default();
             let content = commands::extract_arg(args, "--content").unwrap_or_default();
             let new_tags = commands::extract_tags_opt(args, "--tags");
             let agent_id = commands::extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
-            Some(ApiRequest::Update { cid, content, content_encoding: Default::default(), new_tags, agent_id })
+            Some(ApiRequest::Update { cid, content, content_encoding: Default::default(), new_tags, agent_id, agent_token: None })
         }
         Some("delete") => {
             let cid = commands::extract_arg(args, "--cid").unwrap_or_default();
             let agent_id = commands::extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
-            Some(ApiRequest::Delete { cid, agent_id })
+            Some(ApiRequest::Delete { cid, agent_id, agent_token: None })
         }
         Some("agent") => {
             let name = commands::extract_arg(args, "--register").unwrap_or_else(|| "unnamed".to_string());

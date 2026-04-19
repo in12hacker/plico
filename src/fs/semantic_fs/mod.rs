@@ -48,6 +48,11 @@ impl SemanticFS {
 
     pub fn ctx_loader(&self) -> &ContextLoader { &self.ctx_loader }
 
+    /// Returns a clone of the internal Arc<ContextLoader>.
+    pub fn ctx_loader_arc(&self) -> Arc<ContextLoader> {
+        Arc::clone(&self.ctx_loader)
+    }
+
     pub fn new(
         root_path: std::path::PathBuf,
         embedding: Arc<dyn EmbeddingProvider>,

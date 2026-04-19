@@ -132,6 +132,7 @@ fn dispatch_tool(name: &str, args: &Value, kernel: &AIKernel) -> Result<String, 
             let req = ApiRequest::Search {
                 query: query.to_string(),
                 agent_id: agent.to_string(),
+                agent_token: None,
                 limit,
                 offset: None,
                 require_tags,
@@ -155,6 +156,7 @@ fn dispatch_tool(name: &str, args: &Value, kernel: &AIKernel) -> Result<String, 
                 content_encoding: Default::default(),
                 tags,
                 agent_id: agent.to_string(),
+                agent_token: None,
                 intent: None,
             };
             format_response(kernel.handle_api_request(req))
@@ -166,6 +168,7 @@ fn dispatch_tool(name: &str, args: &Value, kernel: &AIKernel) -> Result<String, 
             let req = ApiRequest::Read {
                 cid: cid.to_string(),
                 agent_id: agent.to_string(),
+                agent_token: None,
             };
             format_response(kernel.handle_api_request(req))
         }
