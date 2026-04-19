@@ -505,18 +505,18 @@ F-0（前置修正）
 ### 8.2 分阶段里程碑
 
 **Phase A（第一轮迭代，目标：~2周）**
-- [ ] F-0：IntentRouter 迁出内核
-- [ ] F-1：MemoryScope + SharedMemory API
-- [ ] F-4：向量索引替换为 edgevec
+- [x] F-0：IntentRouter 迁出内核 ✅ (v3.0-M1)
+- [x] F-1：MemoryScope + SharedMemory API ✅ (v3.0-M2, v3.0-M4)
+- [x] F-4：向量索引替换为 edgevec ✅ (v9.0-M1)
 
 **Phase B（第二轮迭代，目标：~3周）**
-- [ ] F-3：AgentToken 认证（Optional 模式）
-- [ ] F-2：DeclareIntent + 主动预装配 MVP
+- [x] F-3：AgentToken 认证（Optional 模式） ✅ (v9.0-M1)
+- [x] F-2：DeclareIntent + 主动预装配 MVP ✅ (v9.0-M1)
 
 **Phase C（第三轮迭代，目标：~2周）**
-- [x] 验证指标测量（Cursor 对接测试）
-- [x] F-2 优化（多路并发召回） ✅ (2026-04-19)
-- [x] F-5 探索（plico-sse 原型） ✅ (2026-04-19)
+- [ ] 验证指标测量（自动化测试框架） ⏳
+- [x] F-2 优化（多路并发召回） ✅ (v9.0-M2)
+- [x] F-5 探索（plico-sse 原型） ✅ (v9.0-M2)
 
 ---
 
