@@ -4,6 +4,7 @@ use crate::fs::Query;
 use crate::api::permission::{PermissionContext, PermissionAction};
 use crate::cas::{AIObject, AIObjectMeta};
 use crate::kernel::event_bus::KernelEvent;
+use super::observability::{OpType, OperationTimer};
 
 impl crate::kernel::AIKernel {
     // ─── CAS Operations ────────────────────────────────────────────────
@@ -46,6 +47,16 @@ impl crate::kernel::AIKernel {
         agent_id: &str,
         intent: Option<String>,
     ) -> std::io::Result<String> {
+        let _timer = OperationTimer::new(&self.metrics, OpType::SemanticCreate);
+        let span = tracing::info_span!(
+            "semantic_create",
+            operation = "semantic_create",
+            agent_id = %agent_id,
+            tags = ?tags,
+            intent = ?intent,
+        );
+        let _guard = span.enter();
+
         let ctx = PermissionContext::new(agent_id.to_string(), "default".to_string());
         self.permissions.check(&ctx, PermissionAction::Write)?;
         let cid = self.fs.create(content, tags.clone(), agent_id.to_string(), intent)?;
@@ -54,6 +65,7 @@ impl crate::kernel::AIKernel {
             agent_id: agent_id.to_string(),
             tags,
         });
+        tracing::info!(cid = %cid, "object created");
         Ok(cid)
     }
 
@@ -116,11 +128,20 @@ impl crate::kernel::AIKernel {
 
     /// Semantic read with ownership and tenant isolation.
     pub fn semantic_read(&self, query: &Query, agent_id: &str, tenant_id: &str) -> std::io::Result<Vec<AIObject>> {
+        let _timer = OperationTimer::new(&self.metrics, OpType::SemanticRead);
+        let span = tracing::info_span!(
+            "semantic_read",
+            operation = "semantic_read",
+            agent_id = %agent_id,
+            tenant_id = %tenant_id,
+        );
+        let _guard = span.enter();
+
         let ctx = PermissionContext::new(agent_id.to_string(), tenant_id.to_string());
-        self.permissions.check(&ctx, PermissionAction::Read)?;
+        self.permissions.check(&ctx, PermissionAction:: Read)?;
         let results = self.fs.read(query)?;
         let can_read_any = self.permissions.can_read_any(agent_id);
-        Ok(results.into_iter()
+        let objs: Vec<AIObject> = results.into_iter()
             .filter(|obj| {
                 // Tenant isolation: must match tenant_id or have CrossTenant permission
                 if obj.meta.tenant_id != tenant_id {
@@ -133,7 +154,9 @@ impl crate::kernel::AIKernel {
                     obj.meta.created_by == agent_id
                 }
             })
-            .collect())
+            .collect();
+        tracing::info!(count = objs.len(), "objects read");
+        Ok(objs)
     }
 
     /// Semantic update — only owner or trusted can update.
@@ -145,6 +168,16 @@ impl crate::kernel::AIKernel {
         agent_id: &str,
         tenant_id: &str,
     ) -> std::io::Result<String> {
+        let _timer = OperationTimer::new(&self.metrics, OpType::SemanticUpdate);
+        let span = tracing::info_span!(
+            "semantic_update",
+            operation = "semantic_update",
+            cid = %cid,
+            agent_id = %agent_id,
+            tenant_id = %tenant_id,
+        );
+        let _guard = span.enter();
+
         let ctx = PermissionContext::new(agent_id.to_string(), tenant_id.to_string());
         self.permissions.check(&ctx, PermissionAction::Write)?;
         if let Ok(obj) = self.fs.read(&Query::ByCid(cid.to_string())) {
@@ -154,11 +187,23 @@ impl crate::kernel::AIKernel {
                 self.permissions.check_ownership(&ctx, &existing.meta.created_by)?;
             }
         }
-        self.fs.update(cid, new_content, new_tags, agent_id.to_string())
+        let new_cid = self.fs.update(cid, new_content, new_tags, agent_id.to_string())?;
+        tracing::info!(new_cid = %new_cid, "object updated");
+        Ok(new_cid)
     }
 
     /// Semantic delete (soft delete) — only owner or trusted can delete.
     pub fn semantic_delete(&self, cid: &str, agent_id: &str, tenant_id: &str) -> std::io::Result<()> {
+        let _timer = OperationTimer::new(&self.metrics, OpType::SemanticDelete);
+        let span = tracing::info_span!(
+            "semantic_delete",
+            operation = "semantic_delete",
+            cid = %cid,
+            agent_id = %agent_id,
+            tenant_id = %tenant_id,
+        );
+        let _guard = span.enter();
+
         let ctx = PermissionContext::new(agent_id.to_string(), tenant_id.to_string());
         self.permissions.check(&ctx, PermissionAction::Delete)?;
         if let Ok(obj) = self.fs.read(&Query::ByCid(cid.to_string())) {
@@ -168,7 +213,9 @@ impl crate::kernel::AIKernel {
                 self.permissions.check_ownership(&ctx, &existing.meta.created_by)?;
             }
         }
-        self.fs.delete(cid, agent_id.to_string())
+        self.fs.delete(cid, agent_id.to_string())?;
+        tracing::info!(cid = %cid, "object deleted");
+        Ok(())
     }
 
     /// List all tags in the filesystem.

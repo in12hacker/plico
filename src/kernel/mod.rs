@@ -16,6 +16,7 @@ mod persistence;
 pub mod ops;
 
 use ops::prefetch::IntentPrefetcher;
+use ops::observability::{KernelMetrics, OperationTimer, OpType};
 
 use crate::api::semantic::{ApiRequest, ApiResponse};
 use crate::api::agent_auth::AgentKeyStore;
@@ -59,6 +60,8 @@ pub struct AIKernel {
     pub(crate) key_store: Arc<AgentKeyStore>,
     /// Tenant registry — manages all tenants in the system.
     pub(crate) tenant_store: Arc<ops::tenant::TenantStore>,
+    /// Observability metrics — operation counters and latency histograms (v14.0).
+    pub(crate) metrics: Arc<KernelMetrics>,
 }
 
 impl AIKernel {
@@ -147,6 +150,9 @@ impl AIKernel {
         // Tenant registry — manages all tenants in the system
         let tenant_store = Arc::new(ops::tenant::TenantStore::new());
 
+        // Observability metrics — operation counters and latency histograms (v14.0)
+        let metrics = Arc::new(KernelMetrics::new());
+
         let kernel = Self {
             root: root.clone(),
             cas,
@@ -166,6 +172,7 @@ impl AIKernel {
             prefetch,
             key_store,
             tenant_store,
+            metrics,
         };
 
         kernel.register_builtin_tools();
@@ -210,6 +217,11 @@ impl AIKernel {
         self.event_bus.poll(subscription_id)
     }
 
+    /// Get the kernel metrics for observability (v14.0).
+    pub fn metrics(&self) -> &KernelMetrics {
+        &self.metrics
+    }
+
     pub fn event_unsubscribe(&self, subscription_id: &str) -> bool {
         self.event_bus.unsubscribe(subscription_id)
     }
@@ -223,10 +235,21 @@ impl AIKernel {
         };
         use crate::api::semantic::ContentEncoding;
 
+        // Generate correlation ID for distributed tracing (v14.0)
+        let correlation_id = ops::observability::CorrelationId::new();
+        let _timer = OperationTimer::new(&self.metrics, OpType::HandleApiRequest);
+        let span = tracing::info_span!(
+            "handle_api_request",
+            operation = "handle_api_request",
+            correlation_id = %correlation_id,
+        );
+        let _guard = span.enter();
+
         fn decode_content(content: &str, encoding: &ContentEncoding) -> Result<Vec<u8>, String> {
             crate::api::semantic::decode_content(content, encoding)
         }
 
+        let _corr_id = correlation_id; // Used in tracing span above
         let response = match req {
             ApiRequest::Create { content, content_encoding, tags, agent_id, agent_token, intent, .. } => {
                 // Verify token (Optional mode: allow no token)

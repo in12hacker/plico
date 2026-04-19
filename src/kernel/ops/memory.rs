@@ -10,6 +10,7 @@ use crate::memory::{MemoryEntry, MemoryContent, MemoryTier, MemoryScope};
 use crate::scheduler::AgentId;
 use crate::kernel::event_bus::KernelEvent;
 use crate::kernel::ops::tier_maintenance::TierMaintenance;
+use super::observability::{OpType, OperationTimer};
 
 impl crate::kernel::AIKernel {
     fn agent_memory_quota(&self, agent_id: &str) -> u64 {
@@ -75,6 +76,16 @@ impl crate::kernel::AIKernel {
         tags: Vec<String>,
         scope: MemoryScope,
     ) -> Result<(), String> {
+        let _timer = OperationTimer::new(&self.metrics, OpType::RememberWorking);
+        let span = tracing::info_span!(
+            "remember_working",
+            operation = "remember_working",
+            agent_id = %agent_id,
+            tenant_id = %tenant_id,
+            tags = ?tags,
+        );
+        let _guard = span.enter();
+
         let ctx = PermissionContext::new(agent_id.to_string(), tenant_id.to_string());
         self.permissions.check(&ctx, PermissionAction::Write).map_err(|e| e.to_string())?;
         let entry = MemoryEntry {
@@ -87,7 +98,7 @@ impl crate::kernel::AIKernel {
             access_count: 0,
             last_accessed: crate::memory::layered::now_ms(),
             created_at: crate::memory::layered::now_ms(),
-            tags,
+            tags: tags.clone(),
             embedding: None,
             ttl_ms: None,
             scope,
@@ -100,19 +111,31 @@ impl crate::kernel::AIKernel {
             tier: "working".into(),
         });
         self.persist_memories();
+        tracing::info!(tags = ?tags, "working memory stored");
         Ok(())
     }
 
     /// Retrieve all entries from all tiers (filtered by tenant).
     pub fn recall(&self, agent_id: &str, tenant_id: &str) -> Vec<MemoryEntry> {
+        let _timer = OperationTimer::new(&self.metrics, OpType::Recall);
+        let span = tracing::info_span!(
+            "recall",
+            operation = "recall",
+            agent_id = %agent_id,
+            tenant_id = %tenant_id,
+        );
+        let _guard = span.enter();
+
         let ctx = PermissionContext::new(agent_id.to_string(), tenant_id.to_string());
         if self.permissions.check(&ctx, PermissionAction::Read).is_err() {
             return Vec::new();
         }
-        self.memory.get_all(agent_id)
+        let entries: Vec<MemoryEntry> = self.memory.get_all(agent_id)
             .into_iter()
             .filter(|e| e.tenant_id == tenant_id)
-            .collect()
+            .collect();
+        tracing::info!(count = entries.len(), "memories recalled");
+        entries
     }
 
     /// Retrieve all entries visible to an agent (own + shared + group, filtered by tenant).
@@ -186,6 +209,17 @@ impl crate::kernel::AIKernel {
         importance: u8,
         scope: MemoryScope,
     ) -> Result<(), String> {
+        let _timer = OperationTimer::new(&self.metrics, OpType::RememberLongTerm);
+        let span = tracing::info_span!(
+            "remember_long_term",
+            operation = "remember_long_term",
+            agent_id = %agent_id,
+            tenant_id = %tenant_id,
+            importance = importance,
+            tags = ?tags,
+        );
+        let _guard = span.enter();
+
         let ctx = PermissionContext::new(agent_id.to_string(), tenant_id.to_string());
         self.permissions.check(&ctx, PermissionAction::Write).map_err(|e| e.to_string())?;
         let embedding = self.embedding.embed(&content).ok();
@@ -199,7 +233,7 @@ impl crate::kernel::AIKernel {
             access_count: 0,
             last_accessed: crate::memory::layered::now_ms(),
             created_at: crate::memory::layered::now_ms(),
-            tags,
+            tags: tags.clone(),
             embedding,
             ttl_ms: None,
             scope,
@@ -212,6 +246,7 @@ impl crate::kernel::AIKernel {
             tier: "long_term".into(),
         });
         self.persist_memories();
+        tracing::info!(tags = ?tags, importance = importance, "long-term memory stored");
         Ok(())
     }
 

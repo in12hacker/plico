@@ -16,3 +16,4 @@ pub mod permission;
 pub mod prefetch;
 pub mod tenant;
 pub mod tier_maintenance;
+pub mod observability;

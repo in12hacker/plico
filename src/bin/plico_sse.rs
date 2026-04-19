@@ -865,6 +865,7 @@ mod tests {
             discovered_skills: None,
             token: None,
             tenants: None,
+            correlation_id: None,
         }
     }
 

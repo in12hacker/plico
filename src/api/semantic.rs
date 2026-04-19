@@ -816,6 +816,10 @@ pub struct ApiResponse {
     /// List of tenants (returned in ListTenants response).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tenants: Option<Vec<TenantDto>>,
+    /// Correlation ID for distributed tracing (v14.0).
+    /// Present in responses when a correlation ID was passed or generated for the request.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub correlation_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -966,6 +970,7 @@ impl ApiResponse {
             discovered_skills: None,
             token: None,
             tenants: None,
+            correlation_id: None,
         }
     }
 
@@ -1026,7 +1031,14 @@ impl ApiResponse {
             discovered_skills: None,
             token: None,
             tenants: None,
+            correlation_id: None,
         }
+    }
+
+    /// Add a correlation ID to this response (for distributed tracing).
+    pub fn with_correlation_id(mut self, correlation_id: String) -> Self {
+        self.correlation_id = Some(correlation_id);
+        self
     }
 }
 

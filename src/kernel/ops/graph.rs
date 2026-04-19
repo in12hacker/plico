@@ -1,6 +1,7 @@
 //! Knowledge graph operations — explore, node/edge CRUD.
 
 use crate::fs::{KGNodeType, KGNode, KGEdgeType, KGEdge, KGSearchHit};
+use super::observability::{OpType, OperationTimer};
 
 impl crate::kernel::AIKernel {
     /// Explore graph neighbors of a CID at a given depth.
@@ -68,6 +69,17 @@ impl crate::kernel::AIKernel {
         agent_id: &str,
         tenant_id: &str,
     ) -> std::io::Result<String> {
+        let _timer = OperationTimer::new(&self.metrics, OpType::KgAddNode);
+        let span = tracing::info_span!(
+            "kg_add_node",
+            operation = "kg_add_node",
+            label = %label,
+            node_type = ?node_type,
+            agent_id = %agent_id,
+            tenant_id = %tenant_id,
+        );
+        let _guard = span.enter();
+
         let ctx = crate::api::permission::PermissionContext::new(agent_id.to_string(), tenant_id.to_string());
         self.permissions.check(&ctx, crate::api::permission::PermissionAction::Write)?;
         let Some(ref kg) = self.knowledge_graph else {
@@ -90,6 +102,7 @@ impl crate::kernel::AIKernel {
         };
         kg.add_node(node)
             .map_err(|e| std::io::Error::other(e.to_string()))?;
+        tracing::info!(node_id = %id, "KG node added");
         Ok(id)
     }
 
@@ -103,6 +116,19 @@ impl crate::kernel::AIKernel {
         agent_id: &str,
         tenant_id: &str,
     ) -> std::io::Result<()> {
+        let _timer = OperationTimer::new(&self.metrics, OpType::KgAddEdge);
+        let span = tracing::info_span!(
+            "kg_add_edge",
+            operation = "kg_add_edge",
+            src = %src,
+            dst = %dst,
+            edge_type = ?edge_type,
+            weight = ?weight,
+            agent_id = %agent_id,
+            tenant_id = %tenant_id,
+        );
+        let _guard = span.enter();
+
         let ctx = crate::api::permission::PermissionContext::new(agent_id.to_string(), tenant_id.to_string());
         self.permissions.check(&ctx, crate::api::permission::PermissionAction::Write)?;
         let Some(ref kg) = self.knowledge_graph else {
@@ -129,7 +155,9 @@ impl crate::kernel::AIKernel {
             episode: None,
         };
         kg.add_edge(edge)
-            .map_err(|e| std::io::Error::other(e.to_string()))
+            .map_err(|e| std::io::Error::other(e.to_string()))?;
+        tracing::info!(src = %src, dst = %dst, "KG edge added");
+        Ok(())
     }
 
     /// List KG nodes, optionally filtered by type.
@@ -161,10 +189,22 @@ impl crate::kernel::AIKernel {
         dst: &str,
         max_depth: u8,
     ) -> Vec<Vec<KGNode>> {
+        let _timer = OperationTimer::new(&self.metrics, OpType::KgFindPaths);
+        let span = tracing::info_span!(
+            "kg_find_paths",
+            operation = "kg_find_paths",
+            src = %src,
+            dst = %dst,
+            max_depth = %max_depth,
+        );
+        let _guard = span.enter();
+
         let Some(ref kg) = self.knowledge_graph else {
             return Vec::new();
         };
-        kg.find_paths(src, dst, max_depth).unwrap_or_default()
+        let paths = kg.find_paths(src, dst, max_depth).unwrap_or_default();
+        tracing::info!(path_count = paths.len(), "KG paths found");
+        paths
     }
 
     /// Find the highest-weighted path between two KG nodes using best-first search.
