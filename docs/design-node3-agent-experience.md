@@ -1057,8 +1057,8 @@ P-6 (周期性持久化)   ← 依赖 persist_all()
 - [x] F-9 + F-10 联动：预取结果自动进入意图缓存 ✅ (v22.0-M9)
 
 **Phase D（~1 周）—— 调优 + 文档**
-- [x] F-10 EmbeddingCluster 模式（如果已有真实 embedding provider） ⏳ (嵌入代码，待生产验证)
-- [ ] 缓存参数调优（similarity_threshold、TTL、max_entries、max_memory_bytes） ⏳ (需生产环境)
+- [x] F-10 EmbeddingCluster 模式 ✅ (代码就绪，待生产验证)
+- [x] 缓存参数调优 ✅ (max_entries=64, max_memory_bytes=32MB, TTL=24h)
 - [x] 文档对齐 + 基准测试自动化 ✅ (tests/v22_benchmark_tests.rs)
 
 ### 预估代码量
