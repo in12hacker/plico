@@ -887,6 +887,7 @@ mod tests {
             session_ended: None,
             hybrid_result: None,
             growth_report: None,
+            task_result: None,
         }
     }
 

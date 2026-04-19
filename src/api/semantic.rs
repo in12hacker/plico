@@ -916,17 +916,56 @@ pub enum ApiRequest {
         agent_id: String,
     },
 
-    // ── Agent Delegation (v6.3) ─────────────────────────────────
+    // ── Agent Delegation (v6.3 → F-14) ─────────────────────────────────
 
+    /// Delegate a task to another agent with state tracking and deadline support (F-14).
+    /// Replaces v6.3 DelegateTask which used intent+messaging approach.
     #[serde(rename = "delegate_task")]
     DelegateTask {
-        from: String,
-        to: String,
-        description: String,
+        /// Caller-provided unique task ID.
+        task_id: String,
+        /// Agent delegating the task.
+        from_agent: String,
+        /// Agent assigned to execute the task.
+        to_agent: String,
+        /// Natural-language intent description for the task.
+        intent: String,
+        /// Content CIDs providing context for the task.
         #[serde(default)]
-        action: Option<String>,
-        #[serde(default = "default_priority")]
-        priority: String,
+        context_cids: Vec<String>,
+        /// Optional deadline as Unix timestamp in milliseconds.
+        /// Task auto-transitions to Failed when deadline expires.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        deadline_ms: Option<u64>,
+    },
+
+    /// Query the status of a delegated task (F-14).
+    #[serde(rename = "query_task_status")]
+    QueryTaskStatus {
+        task_id: String,
+    },
+
+    /// Start working on a task — transitions from Pending to InProgress (F-14).
+    #[serde(rename = "task_start")]
+    TaskStart {
+        task_id: String,
+        agent_id: String,
+    },
+
+    /// Report task completion with result CIDs (F-14).
+    #[serde(rename = "task_complete")]
+    TaskComplete {
+        task_id: String,
+        agent_id: String,
+        result_cids: Vec<String>,
+    },
+
+    /// Report task failure with reason (F-14).
+    #[serde(rename = "task_fail")]
+    TaskFail {
+        task_id: String,
+        agent_id: String,
+        reason: String,
     },
 
     // ── Event History (v7.0) ───────────────────────────────────
@@ -1396,6 +1435,9 @@ pub struct ApiResponse {
     /// Growth report showing agent learning progress and efficiency (F-13).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub growth_report: Option<GrowthReport>,
+    /// Task result for delegation queries (F-14).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub task_result: Option<TaskResult>,
 }
 
 /// Response for a successful model switch operation (v18.0).
@@ -1813,6 +1855,53 @@ pub struct GrowthReport {
     pub kg_edges_created: u64,
 }
 
+// ── Task Delegation (F-14) ─────────────────────────────────────────────────
+
+/// Task status enum — complete lifecycle for delegated tasks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskStatus {
+    /// Task created, waiting for target agent to pick up.
+    Pending,
+    /// Target agent started working on the task.
+    InProgress,
+    /// Task completed successfully with results.
+    Completed,
+    /// Task failed or timed out.
+    Failed,
+}
+
+impl std::fmt::Display for TaskStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TaskStatus::Pending => write!(f, "pending"),
+            TaskStatus::InProgress => write!(f, "in_progress"),
+            TaskStatus::Completed => write!(f, "completed"),
+            TaskStatus::Failed => write!(f, "failed"),
+        }
+    }
+}
+
+/// Task result returned by query_task_status (F-14).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskResult {
+    /// Task identifier.
+    pub task_id: String,
+    /// Agent that executed (or is executing) the task.
+    pub agent_id: String,
+    /// Current status.
+    pub status: TaskStatus,
+    /// Result CIDs produced by the task (empty if not completed).
+    pub result_cids: Vec<String>,
+    /// Optional failure reason (present if status is Failed).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failure_reason: Option<String>,
+    /// When the task was created (Unix ms).
+    pub created_at_ms: u64,
+    /// When the task was last updated (Unix ms).
+    pub updated_at_ms: u64,
+}
+
 /// Agent resource usage and quota snapshot.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentUsageDto {
@@ -1890,6 +1979,7 @@ impl ApiResponse {
             session_ended: None,
             hybrid_result: None,
             growth_report: None,
+            task_result: None,
         }
     }
 
@@ -1977,6 +2067,7 @@ impl ApiResponse {
             session_ended: None,
             hybrid_result: None,
             growth_report: None,
+            task_result: None,
         }
     }
 

@@ -2929,18 +2929,18 @@ fn test_delegate_task_via_api() {
     let bob = kernel.register_agent("bob".into());
 
     let resp = kernel.handle_api_request(plico::api::semantic::ApiRequest::DelegateTask {
-        from: alice.clone(),
-        to: bob.clone(),
-        description: "review code".into(),
-        action: None,
-        priority: "high".into(),
+        task_id: "task-1".into(),
+        from_agent: alice.clone(),
+        to_agent: bob.clone(),
+        intent: "review code".into(),
+        context_cids: vec![],
+        deadline_ms: None,
     });
     assert!(resp.ok);
-    let d = resp.delegation.unwrap();
-    assert_eq!(d.from, alice);
-    assert_eq!(d.to, bob);
-    assert!(!d.intent_id.is_empty());
-    assert!(!d.message_id.is_empty());
+    let result = resp.task_result.unwrap();
+    assert_eq!(result.task_id, "task-1");
+    assert_eq!(result.agent_id, bob);
+    assert!(matches!(result.status, plico::api::semantic::TaskStatus::Pending));
 }
 
 // ─── v7.0: Durable Event Store ──────────────────────────────────────

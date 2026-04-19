@@ -77,6 +77,8 @@ pub struct AIKernel {
     pub(crate) session_store: Arc<ops::session::SessionStore>,
     /// Checkpoint store — persists agent checkpoints to CAS (P-2).
     pub(crate) checkpoint_store: Arc<CheckpointStore>,
+    /// Task store — manages multi-agent task delegation with state tracking (F-14).
+    pub(crate) task_store: Arc<ops::task::TaskStore>,
 }
 
 impl AIKernel {
@@ -215,6 +217,9 @@ impl AIKernel {
         // Checkpoint store — persists agent checkpoints to CAS (P-2)
         let checkpoint_store = Arc::new(CheckpointStore::restore(&root, &cas, 10));
 
+        // Task store — manages multi-agent task delegation with state tracking (F-14)
+        let task_store = Arc::new(ops::task::TaskStore::restore(root.clone(), event_bus.clone()));
+
         let kernel = Self {
             root: root.clone(),
             cas,
@@ -240,6 +245,7 @@ impl AIKernel {
             cluster,
             session_store,
             checkpoint_store,
+            task_store,
         };
 
         kernel.register_builtin_tools();
@@ -249,6 +255,7 @@ impl AIKernel {
         kernel.restore_permissions();
         kernel.restore_event_log();
         kernel.restore_checkpoints();
+        kernel.restore_task_store();
 
         Ok(kernel)
     }
@@ -1104,21 +1111,98 @@ impl AIKernel {
                 r
             }
 
-            ApiRequest::DelegateTask { from, to, description, action, priority } => {
-                let p = match priority.to_lowercase().as_str() {
-                    "critical" => IntentPriority::Critical,
-                    "high" => IntentPriority::High,
-                    "medium" => IntentPriority::Medium,
-                    _ => IntentPriority::Low,
-                };
-                match self.delegate_task(&from, &to, description, action, p) {
-                    Ok((intent_id, msg_id)) => {
+            ApiRequest::DelegateTask { task_id, from_agent, to_agent, intent, context_cids, deadline_ms } => {
+                // F-14: Create task in TaskStore with state tracking
+                let task = self.task_store.create_task(
+                    task_id,
+                    from_agent,
+                    to_agent,
+                    intent,
+                    context_cids,
+                    deadline_ms,
+                );
+                let mut r = ApiResponse::ok();
+                r.task_result = Some(crate::api::semantic::TaskResult {
+                    task_id: task.task_id,
+                    agent_id: task.to_agent,
+                    status: task.status,
+                    result_cids: task.result_cids,
+                    failure_reason: task.failure_reason,
+                    created_at_ms: task.created_at_ms,
+                    updated_at_ms: task.updated_at_ms,
+                });
+                r
+            }
+
+            ApiRequest::QueryTaskStatus { task_id } => {
+                match self.task_store.get(&task_id) {
+                    Some(task) => {
                         let mut r = ApiResponse::ok();
-                        r.delegation = Some(crate::api::semantic::DelegationResultDto {
-                            intent_id,
-                            message_id: msg_id,
-                            from,
-                            to,
+                        r.task_result = Some(crate::api::semantic::TaskResult {
+                            task_id: task.task_id,
+                            agent_id: task.to_agent,
+                            status: task.status,
+                            result_cids: task.result_cids,
+                            failure_reason: task.failure_reason,
+                            created_at_ms: task.created_at_ms,
+                            updated_at_ms: task.updated_at_ms,
+                        });
+                        r
+                    }
+                    None => ApiResponse::error(format!("Task not found: {}", task_id)),
+                }
+            }
+
+            ApiRequest::TaskStart { task_id, agent_id } => {
+                match self.task_store.start_task(&task_id, &agent_id) {
+                    Ok(task) => {
+                        let mut r = ApiResponse::ok();
+                        r.task_result = Some(crate::api::semantic::TaskResult {
+                            task_id: task.task_id,
+                            agent_id: task.to_agent,
+                            status: task.status,
+                            result_cids: task.result_cids,
+                            failure_reason: task.failure_reason,
+                            created_at_ms: task.created_at_ms,
+                            updated_at_ms: task.updated_at_ms,
+                        });
+                        r
+                    }
+                    Err(e) => ApiResponse::error(e),
+                }
+            }
+
+            ApiRequest::TaskComplete { task_id, agent_id, result_cids } => {
+                match self.task_store.complete_task(&task_id, &agent_id, result_cids) {
+                    Ok(task) => {
+                        let mut r = ApiResponse::ok();
+                        r.task_result = Some(crate::api::semantic::TaskResult {
+                            task_id: task.task_id,
+                            agent_id: task.to_agent,
+                            status: task.status,
+                            result_cids: task.result_cids,
+                            failure_reason: task.failure_reason,
+                            created_at_ms: task.created_at_ms,
+                            updated_at_ms: task.updated_at_ms,
+                        });
+                        r
+                    }
+                    Err(e) => ApiResponse::error(e),
+                }
+            }
+
+            ApiRequest::TaskFail { task_id, agent_id, reason } => {
+                match self.task_store.fail_task(&task_id, &agent_id, reason) {
+                    Ok(task) => {
+                        let mut r = ApiResponse::ok();
+                        r.task_result = Some(crate::api::semantic::TaskResult {
+                            task_id: task.task_id,
+                            agent_id: task.to_agent,
+                            status: task.status,
+                            result_cids: task.result_cids,
+                            failure_reason: task.failure_reason,
+                            created_at_ms: task.created_at_ms,
+                            updated_at_ms: task.updated_at_ms,
                         });
                         r
                     }

@@ -61,6 +61,7 @@ impl AIKernel {
         self.persist_event_log();
         self.persist_search_index();
         self.persist_checkpoints();
+        self.persist_task_store();
         self.persist_tenants();
         self.persist_key_store();
         tracing::info!("All kernel state persisted to disk");
@@ -212,12 +213,29 @@ impl AIKernel {
         self.checkpoint_store.persist(&self.root, &self.cas);
     }
 
+    // ─── Task Persistence (F-14) ────────────────────────────────────────
+
+    pub fn persist_task_store(&self) {
+        self.task_store.persist();
+    }
+
     pub(crate) fn restore_checkpoints(&self) {
         // CheckpointStore is already restored in AIKernel::new() via CheckpointStore::restore()
         // This method exists for consistency with other restore_* methods
         let count = self.checkpoint_store.list_all().len();
         if count > 0 {
             tracing::info!("Checkpoint store ready with {count} checkpoints");
+        }
+    }
+
+    // ─── Task Store (F-14) ────────────────────────────────────────────
+
+    pub(crate) fn restore_task_store(&self) {
+        // TaskStore is already restored in AIKernel::new() via TaskStore::restore()
+        // This method exists for consistency with other restore_* methods
+        let count = self.task_store.len();
+        if count > 0 {
+            tracing::info!("Task store ready with {count} tasks");
         }
     }
 
