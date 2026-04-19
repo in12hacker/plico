@@ -1846,6 +1846,17 @@ impl ApiResponse {
         self.correlation_id = Some(correlation_id);
         self
     }
+
+    /// Calculate and set the top-level token_estimate field based on the
+    /// serialized JSON of this response.
+    ///
+    /// Call this before serializing the response to ensure 100% token cost
+    /// visibility in all API responses.
+    pub fn with_token_estimate(mut self) -> Self {
+        let json = serde_json::to_string(&self).unwrap_or_default();
+        self.token_estimate = Some(estimate_tokens(&json));
+        self
+    }
 }
 
 #[cfg(test)]

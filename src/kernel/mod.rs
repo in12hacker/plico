@@ -318,7 +318,7 @@ impl AIKernel {
         }
 
         let _corr_id = correlation_id; // Used in tracing span above
-        let response = match req {
+        let mut response = match req {
             ApiRequest::Create { content, content_encoding, tags, agent_id, agent_token, intent, .. } => {
                 // Verify token (Optional mode: allow no token)
                 if let Err(e) = self.key_store.verify_agent_token(&agent_id, agent_token.as_deref()) {
@@ -1495,6 +1495,9 @@ impl AIKernel {
             }
         };
         self.maybe_persist_event_log();
+        // Token cost transparency (F-8): calculate estimate for every response
+        let json = serde_json::to_string(&response).unwrap_or_default();
+        response.token_estimate = Some(crate::api::semantic::estimate_tokens(&json));
         response
     }
 }
