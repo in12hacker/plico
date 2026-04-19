@@ -532,6 +532,9 @@ F-0（前置修正）
 **Phase G（第七轮迭代）**
 - [x] Batch Operations API ✅ (v15.0-M1)
 
+**Phase H（第八轮迭代）**
+- [x] KG Causal Reasoning ✅ (v16.0-M1)
+
 ---
 
 ## 9. 验证实验设计
