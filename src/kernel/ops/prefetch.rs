@@ -24,7 +24,7 @@
 //! ```
 
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, RwLock, atomic::{AtomicUsize, Ordering}};
 use std::time::Duration;
 
 use tokio::time::timeout;
@@ -47,6 +47,304 @@ const PATH_LIMIT: usize = 20;
 
 /// Timeout per recall path (500ms).
 const PATH_TIMEOUT_MS: u64 = 500;
+
+// ── Intent Assembly Cache (F-9) ───────────────────────────────────────────────
+
+/// Default maximum entries in the intent cache (reduced from 1000 due to memory constraints).
+const DEFAULT_MAX_CACHE_ENTRIES: usize = 64;
+
+/// Default maximum memory bytes for the intent cache (32MB).
+const DEFAULT_MAX_CACHE_MEMORY_BYTES: usize = 32 * 1024 * 1024;
+
+/// Default similarity threshold for cosine matching (0.85).
+const DEFAULT_SIMILARITY_THRESHOLD: f32 = 0.85;
+
+/// Default TTL for cache entries (24 hours in milliseconds).
+const DEFAULT_CACHE_TTL_MS: u64 = 24 * 60 * 60 * 1000;
+
+/// A cached intent assembly result.
+#[derive(Debug, Clone)]
+struct CachedAssembly {
+    /// Original intent text.
+    intent_text: String,
+    /// Pre-computed embedding (None in stub mode).
+    intent_embedding: Option<Vec<f32>>,
+    /// The pre-assembled budget allocation.
+    assembly: BudgetAllocation,
+    /// When this entry was created.
+    created_at_ms: u64,
+    /// Number of cache hits.
+    hit_count: u64,
+    /// Estimated memory size of this entry.
+    estimated_size_bytes: usize,
+    /// CIDs this assembly depends on (for invalidation).
+    dependency_cids: Vec<String>,
+}
+
+impl CachedAssembly {
+    fn new(
+        intent_text: String,
+        intent_embedding: Option<Vec<f32>>,
+        assembly: BudgetAllocation,
+        dependency_cids: Vec<String>,
+    ) -> Self {
+        let estimated_size_bytes = Self::estimate_size(&intent_text, &intent_embedding, &assembly);
+        Self {
+            intent_text,
+            intent_embedding,
+            assembly,
+            created_at_ms: now_ms(),
+            hit_count: 0,
+            estimated_size_bytes,
+            dependency_cids,
+        }
+    }
+
+    fn estimate_size(
+        intent_text: &str,
+        intent_embedding: &Option<Vec<f32>>,
+        assembly: &BudgetAllocation,
+    ) -> usize {
+        let text_size = intent_text.len();
+        let embedding_size = intent_embedding.as_ref().map_or(0, |e| e.len() * 4);
+        let items_size: usize = assembly
+            .items
+            .iter()
+            .map(|item| item.content.len())
+            .sum();
+        let cids_size: usize = assembly
+            .items
+            .iter()
+            .map(|item| item.cid.len())
+            .sum();
+        text_size + embedding_size + items_size + cids_size
+    }
+
+    fn is_expired(&self, ttl_ms: u64) -> bool {
+        now_ms() - self.created_at_ms > ttl_ms
+    }
+}
+
+/// Intent assembly cache with dual-path matching.
+///
+/// Dual-path matching:
+/// - Path A (real embedding): cosine similarity matching
+/// - Path B (stub mode): exact string matching
+struct IntentAssemblyCache {
+    entries: RwLock<Vec<CachedAssembly>>,
+    max_entries: usize,
+    max_memory_bytes: usize,
+    current_memory_bytes: AtomicUsize,
+    similarity_threshold: f32,
+    ttl_ms: u64,
+}
+
+impl IntentAssemblyCache {
+    fn new(
+        max_entries: usize,
+        max_memory_bytes: usize,
+        similarity_threshold: f32,
+        ttl_ms: u64,
+    ) -> Self {
+        Self {
+            entries: RwLock::new(Vec::new()),
+            max_entries,
+            max_memory_bytes,
+            current_memory_bytes: AtomicUsize::new(0),
+            similarity_threshold,
+            ttl_ms,
+        }
+    }
+
+    /// Look up a cached assembly using dual-path matching.
+    /// Returns the cached assembly if found and valid.
+    fn lookup(&self, intent: &str, embedding: &Option<Vec<f32>>) -> Option<BudgetAllocation> {
+        let mut entries = self.entries.write().unwrap();
+
+        // Check for exact match first (stub mode Path B)
+        if let Some(pos) = entries.iter().position(|e| e.intent_text == intent) {
+            let entry = &mut entries[pos];
+
+            // Check TTL
+            if entry.is_expired(self.ttl_ms) {
+                let removed = entries.remove(pos);
+                self.current_memory_bytes.fetch_sub(removed.estimated_size_bytes, Ordering::Relaxed);
+                return None;
+            }
+
+            entry.hit_count += 1;
+            tracing::debug!("intent cache hit (exact match) for: {}", intent);
+            return Some(entry.assembly.clone());
+        }
+
+        // Path A: cosine similarity matching (only if we have real embedding)
+        if let Some(intent_emb) = embedding {
+            let best_pos = self.find_best_similarity(intent_emb, &entries);
+
+            if let Some(pos) = best_pos {
+                let entry = &mut entries[pos];
+
+                // Check TTL
+                if entry.is_expired(self.ttl_ms) {
+                    let removed = entries.remove(pos);
+                    self.current_memory_bytes.fetch_sub(removed.estimated_size_bytes, Ordering::Relaxed);
+                    return None;
+                }
+
+                entry.hit_count += 1;
+                tracing::debug!(
+                    "intent cache hit (similarity {:.3}) for: {}",
+                    self.cosine_similarity(intent_emb, entry.intent_embedding.as_ref().unwrap()),
+                    intent
+                );
+                return Some(entry.assembly.clone());
+            }
+        }
+
+        None
+    }
+
+    /// Find the best matching entry by cosine similarity.
+    fn find_best_similarity(&self, intent_emb: &[f32], entries: &[CachedAssembly]) -> Option<usize> {
+        let mut best_pos: Option<usize> = None;
+        let mut best_score: f32 = self.similarity_threshold;
+
+        for (i, entry) in entries.iter().enumerate() {
+            if let Some(ref entry_emb) = entry.intent_embedding {
+                let score = self.cosine_similarity(intent_emb, entry_emb);
+                if score > best_score {
+                    best_score = score;
+                    best_pos = Some(i);
+                }
+            }
+        }
+
+        best_pos
+    }
+
+    /// Compute cosine similarity between two vectors.
+    fn cosine_similarity(&self, a: &[f32], b: &[f32]) -> f32 {
+        if a.len() != b.len() {
+            return 0.0;
+        }
+
+        let dot_product: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
+        let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
+        let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
+
+        if norm_a == 0.0 || norm_b == 0.0 {
+            return 0.0;
+        }
+
+        dot_product / (norm_a * norm_b)
+    }
+
+    /// Store a new assembly in the cache.
+    fn store(
+        &self,
+        intent_text: String,
+        intent_embedding: Option<Vec<f32>>,
+        assembly: BudgetAllocation,
+        dependency_cids: Vec<String>,
+    ) {
+        let entry = CachedAssembly::new(intent_text, intent_embedding, assembly, dependency_cids);
+        let entry_size = entry.estimated_size_bytes;
+
+        let mut entries = self.entries.write().unwrap();
+
+        // Evict if necessary to make room
+        self.evict_if_needed_locked(entry_size, &mut entries);
+
+        entries.push(entry);
+        self.current_memory_bytes.fetch_add(entry_size, Ordering::Relaxed);
+    }
+
+    /// Evict oldest/least valuable entries to make room.
+    fn evict_if_needed_locked(&self, new_entry_size: usize, entries: &mut Vec<CachedAssembly>) {
+        // First, remove expired entries
+        entries.retain(|e| !e.is_expired(self.ttl_ms));
+
+        // Evict by LRU (oldest first) until we have room
+        while entries.len() >= self.max_entries
+            || self.current_memory_bytes.load(Ordering::Relaxed) + new_entry_size > self.max_memory_bytes
+            || self.over_budget_memory(new_entry_size)
+        {
+            if entries.is_empty() {
+                break;
+            }
+
+            // Find and remove the oldest entry (lowest created_at_ms)
+            let min_pos = entries
+                .iter()
+                .enumerate()
+                .min_by_key(|(_, e)| e.created_at_ms)
+                .map(|(pos, _)| pos);
+
+            if let Some(pos) = min_pos {
+                let removed = entries.remove(pos);
+                self.current_memory_bytes.fetch_sub(removed.estimated_size_bytes, Ordering::Relaxed);
+            } else {
+                break;
+            }
+        }
+    }
+
+    fn over_budget_memory(&self, additional: usize) -> bool {
+        self.current_memory_bytes.load(Ordering::Relaxed) + additional > self.max_memory_bytes
+    }
+
+    /// Invalidate entries that depend on any of the given CIDs.
+    fn invalidate_by_cids(&self, modified_cids: &[String]) {
+        if modified_cids.is_empty() {
+            return;
+        }
+
+        let mut entries = self.entries.write().unwrap();
+        let mut total_removed: usize = 0;
+
+        entries.retain(|e| {
+            let has_dependency = e.dependency_cids.iter().any(|cid| modified_cids.contains(cid));
+            if has_dependency {
+                total_removed = total_removed.saturating_add(e.estimated_size_bytes);
+            }
+            !has_dependency
+        });
+
+        self.current_memory_bytes.fetch_sub(total_removed, Ordering::Relaxed);
+    }
+
+    /// Clear the entire cache.
+    fn clear(&self) {
+        let mut entries = self.entries.write().unwrap();
+        entries.clear();
+        self.current_memory_bytes.store(0, Ordering::Relaxed);
+    }
+
+    /// Get cache statistics.
+    fn stats(&self) -> IntentCacheStats {
+        let entries = self.entries.read().unwrap();
+        IntentCacheStats {
+            entries: entries.len(),
+            memory_bytes: self.current_memory_bytes.load(Ordering::Relaxed),
+            hits: entries.iter().map(|e| e.hit_count).sum(),
+        }
+    }
+}
+
+/// Statistics for the intent cache.
+#[derive(Debug, Clone, Default)]
+pub struct IntentCacheStats {
+    pub entries: usize,
+    pub memory_bytes: usize,
+    pub hits: u64,
+}
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
 
 /// State of a prefetch assembly.
 #[derive(Debug)]
@@ -74,11 +372,12 @@ pub struct Assembly {
 ///
 /// Stores pending/running/ready assemblies in memory.
 /// When `declare_intent` is called, the prefetcher:
-///   1. Registers a new assembly with state `Pending`
-///   2. Kicks off multi-path recall (semantic + KG + procedural + events)
-///   3. Fuses results via RRF
-///   4. Allocates budget via context_budget::assemble()
-///   5. Stores result in `Assembly.state = Ready(allocation)`
+///   1. Checks intent cache (F-9) — returns cached result if hit
+///   2. Registers a new assembly with state `Pending`
+///   3. Kicks off multi-path recall (semantic + KG + procedural + events)
+///   4. Fuses results via RRF
+///   5. Allocates budget via context_budget::assemble()
+///   6. Stores result in cache and `Assembly.state = Ready(allocation)`
 ///
 /// Agent calls `fetch_assembled_context` to retrieve the result.
 pub struct IntentPrefetcher {
@@ -98,6 +397,8 @@ pub struct IntentPrefetcher {
     ctx_loader: Arc<ContextLoader>,
     /// Maximum age of an assembly before it's evicted (default: 1 hour).
     max_age_ms: u64,
+    /// Intent assembly cache (F-9).
+    intent_cache: IntentAssemblyCache,
 }
 
 impl IntentPrefetcher {
@@ -119,11 +420,21 @@ impl IntentPrefetcher {
             embedding,
             ctx_loader,
             max_age_ms: 3_600_000, // 1 hour
+            intent_cache: IntentAssemblyCache::new(
+                DEFAULT_MAX_CACHE_ENTRIES,
+                DEFAULT_MAX_CACHE_MEMORY_BYTES,
+                DEFAULT_SIMILARITY_THRESHOLD,
+                DEFAULT_CACHE_TTL_MS,
+            ),
         }
     }
 
     /// Declare a new intent and trigger async prefetch.
     /// Returns the assembly_id immediately.
+    ///
+    /// F-9 Intent Cache: Checks cache first using dual-path matching.
+    /// - Path A (real embedding): cosine similarity matching
+    /// - Path B (stub mode): exact string matching
     pub fn declare_intent(
         &self,
         agent_id: &str,
@@ -133,6 +444,27 @@ impl IntentPrefetcher {
     ) -> String {
         let assembly_id = uuid::Uuid::new_v4().to_string();
         let now = crate::memory::layered::now_ms();
+
+        // F-9: Try to get embedding and check cache first
+        let intent_embedding: Option<Vec<f32>> = self.embedding.embed(intent).ok().map(|e| e.into());
+
+        if let Some(cached_allocation) = self.intent_cache.lookup(intent, &intent_embedding) {
+            // Cache hit! Store directly as Ready assembly
+            let assembly = Assembly {
+                assembly_id: assembly_id.clone(),
+                agent_id: agent_id.to_string(),
+                intent: intent.to_string(),
+                budget_tokens,
+                state: AssemblyState::Ready(cached_allocation),
+                created_at_ms: now,
+            };
+            let mut assemblies = self.assemblies.write().unwrap();
+            assemblies.insert(assembly_id.clone(), assembly);
+            tracing::debug!("intent cache hit for: {}", intent);
+            return assembly_id;
+        }
+
+        // Cache miss: proceed with normal prefetch flow
         let assembly = Assembly {
             assembly_id: assembly_id.clone(),
             agent_id: agent_id.to_string(),
@@ -159,6 +491,13 @@ impl IntentPrefetcher {
         let assembly_id_clone = assembly_id.clone();
         let intent_clone = intent.to_string();
         let max_age = self.max_age_ms;
+        let intent_cache = Arc::new(IntentAssemblyCache::new(
+            DEFAULT_MAX_CACHE_ENTRIES,
+            DEFAULT_MAX_CACHE_MEMORY_BYTES,
+            DEFAULT_SIMILARITY_THRESHOLD,
+            DEFAULT_CACHE_TTL_MS,
+        ));
+        let related_cids_clone = related_cids.clone();
 
         // Spawn background task using std thread (no tokio feature needed)
         std::thread::spawn(move || {
@@ -171,7 +510,8 @@ impl IntentPrefetcher {
             rt.block_on(async move {
                 Self::run_prefetch(
                     assemblies, search, kg, memory, event_bus, embedding, ctx_loader,
-                    assembly_id_clone, intent_clone, related_cids, budget_tokens, max_age,
+                    assembly_id_clone, intent_clone, related_cids_clone, budget_tokens, max_age,
+                    Some(intent_cache),
                 ).await;
             });
         });
@@ -208,7 +548,24 @@ impl IntentPrefetcher {
         assemblies.retain(|_id, a| now - a.created_at_ms < self.max_age_ms);
     }
 
+    /// F-9: Invalidate intent cache entries that depend on any of the given CIDs.
+    /// Call this when objects are modified to ensure cache consistency.
+    pub fn invalidate_intent_cache_by_cids(&self, modified_cids: &[String]) {
+        self.intent_cache.invalidate_by_cids(modified_cids);
+    }
+
+    /// F-9: Clear the entire intent cache.
+    pub fn clear_intent_cache(&self) {
+        self.intent_cache.clear();
+    }
+
+    /// F-9: Get intent cache statistics.
+    pub fn intent_cache_stats(&self) -> IntentCacheStats {
+        self.intent_cache.stats()
+    }
+
     /// Run the full multi-path prefetch in a background thread.
+    /// Optionally stores result in intent cache (F-9).
     async fn run_prefetch(
         assemblies: Arc<RwLock<HashMap<String, Assembly>>>,
         search: Arc<dyn crate::fs::SemanticSearch>,
@@ -222,6 +579,7 @@ impl IntentPrefetcher {
         related_cids: Vec<String>,
         budget_tokens: usize,
         _max_age_ms: u64,
+        intent_cache: Option<Arc<IntentAssemblyCache>>,
     ) {
         let result = Self::multi_path_recall_async(
             &search, &kg, &memory, &event_bus, &embedding,
@@ -235,6 +593,17 @@ impl IntentPrefetcher {
         match (result, entry) {
             (Ok(candidates), Some(a)) => {
                 let allocation = context_budget::assemble(&ctx_loader, &candidates, budget_tokens);
+
+                // F-9: Store in intent cache for future hits
+                if let Some(ref cache) = intent_cache {
+                    // Get embedding for cache storage (Path A)
+                    let intent_embedding: Option<Vec<f32>> = embedding
+                        .embed(&intent)
+                        .ok()
+                        .map(|e| e.into());
+                    cache.store(intent, intent_embedding, allocation.clone(), related_cids);
+                }
+
                 a.state = AssemblyState::Ready(allocation);
                 a.created_at_ms = now;
             }
@@ -820,5 +1189,192 @@ mod tests {
     #[test]
     fn test_path_limit_constant() {
         assert_eq!(PATH_LIMIT, 20);
+    }
+
+    // ── IntentAssemblyCache tests (F-9) ─────────────────────────────────────────
+
+    #[test]
+    fn test_intent_cache_exact_match_stub_mode() {
+        // Test Path B (stub mode): exact string matching
+        let cache = IntentAssemblyCache::new(64, 32 * 1024 * 1024, 0.85, 24 * 60 * 60 * 1000);
+
+        let allocation = BudgetAllocation {
+            items: vec![],
+            total_tokens: 100,
+            budget: 100,
+            candidates_considered: 5,
+            candidates_included: 3,
+        };
+
+        // Store with no embedding (stub mode)
+        cache.store("fix auth bug".to_string(), None, allocation.clone(), vec![]);
+
+        // Exact match should hit
+        let result = cache.lookup("fix auth bug", &None);
+        assert!(result.is_some());
+
+        // Different text should miss
+        let result = cache.lookup("fix auth module", &None);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_intent_cache_similarity_match_with_embedding() {
+        // Test Path A: cosine similarity matching
+        let cache = IntentAssemblyCache::new(64, 32 * 1024 * 1024, 0.85, 24 * 60 * 60 * 1000);
+
+        let allocation = BudgetAllocation {
+            items: vec![],
+            total_tokens: 100,
+            budget: 100,
+            candidates_considered: 5,
+            candidates_included: 3,
+        };
+
+        // Store with a real embedding (simple unit vectors for testing)
+        let embedding_a = vec![1.0, 0.0, 0.0]; // "fix auth bug"
+        let embedding_b = vec![0.9, 0.1, 0.0]; // Similar to embedding_a (cosine ~0.995)
+        let embedding_c = vec![0.0, 1.0, 0.0]; // Orthogonal (cosine ~0)
+
+        cache.store("fix auth bug".to_string(), Some(embedding_a.clone()), allocation.clone(), vec![]);
+
+        // Very similar embedding should hit (cosine ~0.995 > 0.85)
+        let result = cache.lookup("fix auth bug variant", &Some(embedding_b));
+        assert!(result.is_some());
+
+        // Orthogonal embedding should miss (cosine ~0 < 0.85)
+        let result = cache.lookup("unrelated task", &Some(embedding_c));
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_intent_cache_memory_limit() {
+        // Test that cache respects memory limits
+        let cache = IntentAssemblyCache::new(64, 200, 0.85, 24 * 60 * 60 * 1000);
+
+        let allocation = BudgetAllocation {
+            items: vec![],
+            total_tokens: 100,
+            budget: 100,
+            candidates_considered: 5,
+            candidates_included: 3,
+        };
+
+        // Each entry is ~50 bytes, so 4 entries should exceed 200 byte limit
+        cache.store("entry1".to_string(), None, allocation.clone(), vec![]);
+        cache.store("entry2".to_string(), None, allocation.clone(), vec![]);
+        cache.store("entry3".to_string(), None, allocation.clone(), vec![]);
+        cache.store("entry4".to_string(), None, allocation.clone(), vec![]);
+
+        // After hitting memory limit, oldest entries should be evicted
+        let stats = cache.stats();
+        // At most 4 entries can fit in 200 bytes
+        assert!(stats.entries <= 4);
+    }
+
+    #[test]
+    fn test_intent_cache_ttl_expiry() {
+        // Test that cache entries expire after TTL
+        let cache = IntentAssemblyCache::new(64, 32 * 1024 * 1024, 0.85, 100); // 100ms TTL
+
+        let allocation = BudgetAllocation {
+            items: vec![],
+            total_tokens: 100,
+            budget: 100,
+            candidates_considered: 5,
+            candidates_included: 3,
+        };
+
+        cache.store("test intent".to_string(), None, allocation.clone(), vec![]);
+
+        // Should hit immediately
+        let result = cache.lookup("test intent", &None);
+        assert!(result.is_some());
+
+        // Wait for TTL to expire
+        std::thread::sleep(std::time::Duration::from_millis(150));
+
+        // Should miss after TTL
+        let result = cache.lookup("test intent", &None);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_intent_cache_invalidate_by_cids() {
+        // Test that cache entries can be invalidated by dependency CIDs
+        let cache = IntentAssemblyCache::new(64, 32 * 1024 * 1024, 0.85, 24 * 60 * 60 * 1000);
+
+        let allocation = BudgetAllocation {
+            items: vec![],
+            total_tokens: 100,
+            budget: 100,
+            candidates_considered: 5,
+            candidates_included: 3,
+        };
+
+        // Store entry with dependencies
+        cache.store(
+            "fix auth".to_string(),
+            None,
+            allocation.clone(),
+            vec!["cid1".to_string(), "cid2".to_string()],
+        );
+
+        // Should hit
+        let result = cache.lookup("fix auth", &None);
+        assert!(result.is_some());
+
+        // Invalidate by one of the dependencies
+        cache.invalidate_by_cids(&["cid2".to_string()]);
+
+        // Should miss after invalidation
+        let result = cache.lookup("fix auth", &None);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_intent_cache_stats() {
+        let cache = IntentAssemblyCache::new(64, 32 * 1024 * 1024, 0.85, 24 * 60 * 60 * 1000);
+
+        let allocation = BudgetAllocation {
+            items: vec![],
+            total_tokens: 100,
+            budget: 100,
+            candidates_considered: 5,
+            candidates_included: 3,
+        };
+
+        // Store an entry
+        cache.store("test".to_string(), None, allocation.clone(), vec![]);
+
+        // Lookup to increment hit count
+        let _ = cache.lookup("test", &None);
+        let _ = cache.lookup("test", &None);
+
+        let stats = cache.stats();
+        assert_eq!(stats.entries, 1);
+        assert!(stats.hits >= 1);
+        assert!(stats.memory_bytes > 0);
+    }
+
+    #[test]
+    fn test_intent_cache_cosine_similarity() {
+        let cache = IntentAssemblyCache::new(64, 32 * 1024 * 1024, 0.85, 24 * 60 * 60 * 1000);
+
+        // Test cosine similarity calculation
+        let vec_a = vec![1.0, 0.0, 0.0];
+        let vec_b = vec![1.0, 0.0, 0.0];
+        let vec_c = vec![0.0, 1.0, 0.0];
+        let vec_d = vec![0.5_f32.sqrt(), 0.5_f32.sqrt(), 0.0]; // 45 degrees
+
+        // Identical vectors should have similarity 1.0
+        assert!((cache.cosine_similarity(&vec_a, &vec_b) - 1.0).abs() < 0.001);
+
+        // Orthogonal vectors should have similarity 0.0
+        assert!(cache.cosine_similarity(&vec_a, &vec_c).abs() < 0.001);
+
+        // 45 degree vectors should have similarity ~0.707
+        let similarity = cache.cosine_similarity(&vec_a, &vec_d);
+        assert!((similarity - 0.707).abs() < 0.01);
     }
 }

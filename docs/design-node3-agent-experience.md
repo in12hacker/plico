@@ -1034,13 +1034,13 @@ P-6 (周期性持久化)   ← 依赖 persist_all()
 ### 分阶段里程碑
 
 **Phase 0（~1 周）—— 持久化地基 🔴 最高优先**
-- [ ] P-5：`atomic_write_json()` + 迁移现有写入
-- [ ] P-2：CheckpointStore `persist()` / `restore()` + CAS 存储
-- [ ] P-3：TenantStore `persist()` / `restore()`
-- [ ] P-4：AgentKeyStore `open(root)` + secret 持久化 + token 持久化
-- [ ] P-1：plicod SIGTERM/SIGINT handler + `kernel.persist_all()`
-- [ ] P-6：5 分钟周期性 `persist_all()` 定时器
-- [ ] 验证：冷启动恢复测试 + 原子性测试
+- [x] P-5：`atomic_write_json()` + 迁移现有写入 ✅ (v22.0-M3)
+- [x] P-2：CheckpointStore `persist()` / `restore()` + CAS 存储 ✅ (v22.0-M4)
+- [x] P-3：TenantStore `persist()` / `restore()` ✅ (v22.0-M5)
+- [x] P-4：AgentKeyStore `open(root)` + secret 持久化 + token 持久化 ✅ (v22.0-M5)
+- [x] P-1：plicod SIGTERM/SIGINT handler + `kernel.persist_all()` ✅ (v22.0-M6)
+- [x] P-6：5 分钟周期性 `persist_all()` 定时器 ✅ (v22.0-M6)
+- [ ] 验证：冷启动恢复测试 + 原子性测试 ⏳ (TODO)
 
 **Phase A（~1 周）—— 基础可观测性**
 - [ ] F-8：ApiResponse + `estimate_tokens()` + QueryTokenUsage
