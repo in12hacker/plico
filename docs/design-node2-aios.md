@@ -526,6 +526,9 @@ F-0（前置修正）
 - [x] Memory Tier Automation（自动层级管理） ✅ (v12.0-M1)
 - [x] F-5：流式传输适配层（生产就绪） ✅ (v13.0-M1)
 
+**Phase F（第六轮迭代）**
+- [x] Observability & Structured Logging ✅ (v14.0-M1)
+
 ---
 
 ## 9. 验证实验设计
