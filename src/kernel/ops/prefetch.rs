@@ -397,8 +397,8 @@ pub struct IntentPrefetcher {
     ctx_loader: Arc<ContextLoader>,
     /// Maximum age of an assembly before it's evicted (default: 1 hour).
     max_age_ms: u64,
-    /// Intent assembly cache (F-9).
-    intent_cache: IntentAssemblyCache,
+    /// Intent assembly cache (F-9). Wrapped in Arc for thread-safe sharing.
+    intent_cache: Arc<IntentAssemblyCache>,
 }
 
 impl IntentPrefetcher {
@@ -420,12 +420,12 @@ impl IntentPrefetcher {
             embedding,
             ctx_loader,
             max_age_ms: 3_600_000, // 1 hour
-            intent_cache: IntentAssemblyCache::new(
+            intent_cache: Arc::new(IntentAssemblyCache::new(
                 DEFAULT_MAX_CACHE_ENTRIES,
                 DEFAULT_MAX_CACHE_MEMORY_BYTES,
                 DEFAULT_SIMILARITY_THRESHOLD,
                 DEFAULT_CACHE_TTL_MS,
-            ),
+            )),
         }
     }
 
@@ -491,12 +491,8 @@ impl IntentPrefetcher {
         let assembly_id_clone = assembly_id.clone();
         let intent_clone = intent.to_string();
         let max_age = self.max_age_ms;
-        let intent_cache = Arc::new(IntentAssemblyCache::new(
-            DEFAULT_MAX_CACHE_ENTRIES,
-            DEFAULT_MAX_CACHE_MEMORY_BYTES,
-            DEFAULT_SIMILARITY_THRESHOLD,
-            DEFAULT_CACHE_TTL_MS,
-        ));
+        // Use the actual prefetcher's intent cache, not a new one
+        let intent_cache = Arc::clone(&self.intent_cache);
         let related_cids_clone = related_cids.clone();
 
         // Spawn background task using std thread (no tokio feature needed)

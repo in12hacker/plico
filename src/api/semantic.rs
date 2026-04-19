@@ -820,6 +820,11 @@ pub enum ApiRequest {
     #[serde(rename = "cache_invalidate")]
     CacheInvalidate,
 
+    // ── Intent Cache (F-9) ────────────────────────────────────────
+
+    #[serde(rename = "intent_cache_stats")]
+    IntentCacheStats,
+
     // ── Distributed Mode (v20.0) ─────────────────────────────────
 
     #[serde(rename = "cluster_status")]
@@ -1328,6 +1333,9 @@ pub struct ApiResponse {
     /// Cache statistics (v19.0).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cache_stats: Option<CacheStatsDto>,
+    /// Intent cache statistics (F-9).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub intent_cache_stats: Option<IntentCacheStatsDto>,
     /// Cluster status (v20.0).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cluster_status: Option<ClusterStatusDto>,
@@ -1581,6 +1589,14 @@ pub struct CacheStatsDto {
     pub search_hit_rate: f64,
 }
 
+/// Intent cache statistics (F-9).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IntentCacheStatsDto {
+    pub entries: usize,
+    pub memory_bytes: usize,
+    pub hits: u64,
+}
+
 /// Cluster status for distributed mode (v20.0).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClusterStatusDto {
@@ -1731,6 +1747,7 @@ impl ApiResponse {
             model_switch: None,
             model_health: None,
             cache_stats: None,
+            intent_cache_stats: None,
             cluster_status: None,
             token_estimate: None,
             delta_result: None,
@@ -1815,6 +1832,7 @@ impl ApiResponse {
             model_switch: None,
             model_health: None,
             cache_stats: None,
+            intent_cache_stats: None,
             cluster_status: None,
             token_estimate: None,
             delta_result: None,

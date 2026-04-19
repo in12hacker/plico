@@ -1021,6 +1021,13 @@ impl AIKernel {
                 self.cache_invalidate_all();
                 ApiResponse::ok()
             }
+            // ── Intent Cache (F-9) ─────────────────────────────────────
+            ApiRequest::IntentCacheStats => {
+                let stats = self.intent_cache_stats();
+                let mut r = ApiResponse::ok();
+                r.intent_cache_stats = Some(stats);
+                r
+            }
             // ── Distributed Mode (v20.0) ─────────────────────────────────
             ApiRequest::ClusterStatus => {
                 let status = self.cluster_status();

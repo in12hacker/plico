@@ -1043,13 +1043,13 @@ P-6 (周期性持久化)   ← 依赖 persist_all()
 - [ ] 验证：冷启动恢复测试 + 原子性测试 ⏳ (TODO)
 
 **Phase A（~1 周）—— 基础可观测性**
-- [ ] F-8：ApiResponse + `estimate_tokens()` + QueryTokenUsage
-- [ ] F-7：DeltaSince API（seq-based）+ ChangeEntry 元数据拼接（无 LLM 依赖）
+- [x] F-8：ApiResponse + `estimate_tokens()` + QueryTokenUsage ✅ (v22.0-M1)
+- [x] F-7：DeltaSince API（seq-based）+ ChangeEntry 元数据拼接（无 LLM 依赖） ✅ (v22.0-M1)
 
 **Phase B（~2 周）—— Agent 生命周期**
-- [ ] F-6：StartSession / EndSession + SessionStore + 超时扫描
-- [ ] F-6：异常退出处理（session TTL + 自动 checkpoint）
-- [ ] F-9：IntentAssemblyCache（双路匹配 + 内存限制 + 失效逻辑）
+- [x] F-6：StartSession / EndSession + SessionStore + 超时扫描 ✅ (v22.0-M2)
+- [x] F-6：异常退出处理（session TTL + 自动 checkpoint） ✅ (v22.0-M2)
+- [x] F-9：IntentAssemblyCache（双路匹配 + 内存限制 + 失效逻辑） ✅ (v22.0-M7)
 
 **Phase C（~1-2 周）—— 验证 + 探索**
 - [ ] 验证实验 1+2：token 衰减曲线 + 缓存命中率

@@ -1,7 +1,7 @@
 //! System status operations — runtime kernel metrics.
 
 use crate::api::semantic::{
-    SystemStatus, CacheStatsDto, ClusterStatusDto, NodeInfoDto,
+    SystemStatus, CacheStatsDto, ClusterStatusDto, NodeInfoDto, IntentCacheStatsDto,
 };
 
 impl crate::kernel::AIKernel {
@@ -48,6 +48,16 @@ impl crate::kernel::AIKernel {
     /// Invalidate all caches (v19.0).
     pub fn cache_invalidate_all(&self) {
         self.edge_cache.invalidate_all();
+    }
+
+    /// Get intent cache statistics (F-9).
+    pub fn intent_cache_stats(&self) -> IntentCacheStatsDto {
+        let stats = self.prefetch.intent_cache_stats();
+        IntentCacheStatsDto {
+            entries: stats.entries,
+            memory_bytes: stats.memory_bytes,
+            hits: stats.hits,
+        }
     }
 
     /// Get cluster status (v20.0).
