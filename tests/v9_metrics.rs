@@ -1,4 +1,17 @@
-//! Phase C: Automated Verification Test Framework
+//! Phase C: Automated Verification Test Framework (DEPRECATED)
+//!
+//! **NOTE**: This file contains ESTIMATED metrics based on calculations.
+//! For REAL measurements, use `tests/v11_metrics.rs` instead.
+//!
+//! This file is kept for historical reference but its tests may not pass
+//! with real benchmarking. The v11_metrics.rs file provides actual
+//! measurements using the benchmark_runner.rs framework.
+//!
+//! ## DEPRECATED
+//!
+//! The metrics in this file were calculated estimates, not real measurements.
+//! See Section 9 of docs/design-node2-aios.md for details on the shift
+//! from estimation to real benchmarking in v11.0.
 //!
 //! Implements automated verification tests for the AIOS v9.0 metrics as specified
 //! in `docs/design-node2-aios.md` Section 9 (Verification Experiments).
