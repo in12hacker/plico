@@ -36,6 +36,7 @@ use crate::fs::embedding::EmbeddingProvider;
 use crate::fs::graph::KnowledgeGraph;
 use crate::fs::search::SearchFilter;
 use crate::kernel::event_bus::EventBus;
+use crate::kernel::ops::session::{AgentProfile, IntentKeyStrategy};
 use crate::memory::LayeredMemory;
 use crate::memory::MemoryTier;
 
@@ -339,6 +340,117 @@ pub struct IntentCacheStats {
     pub hits: u64,
 }
 
+// ── F-10: Agent Profile Store ──────────────────────────────────────────────────
+
+/// Minimum confidence threshold for triggering prefetch (0.5 = 50%).
+const PREFETCH_CONFIDENCE_THRESHOLD: f32 = 0.5;
+
+/// Maximum profiles to keep per agent store.
+const MAX_PROFILE_HISTORY: usize = 100;
+
+/// Agent profile store — manages per-agent transition statistics (F-10).
+///
+/// Thread-safe profile storage for cognitive prefetch.
+/// Each agent has a profile that tracks:
+/// - Intent transitions (which tag keys follow which)
+/// - Hot objects (frequently accessed CIDs)
+pub struct AgentProfileStore {
+    profiles: RwLock<HashMap<String, AgentProfile>>,
+    strategy: IntentKeyStrategy,
+}
+
+impl AgentProfileStore {
+    /// Create a new profile store with the given strategy.
+    pub fn new(strategy: IntentKeyStrategy) -> Self {
+        Self {
+            profiles: RwLock::new(HashMap::new()),
+            strategy,
+        }
+    }
+
+    /// Get or create a profile for an agent.
+    pub fn get_or_create(&self, agent_id: &str) -> AgentProfile {
+        let mut profiles = self.profiles.write().unwrap();
+        profiles
+            .entry(agent_id.to_string())
+            .or_insert_with(|| AgentProfile::new(agent_id.to_string()))
+            .clone()
+    }
+
+    /// Record an intent completion and update transition statistics.
+    ///
+    /// This is called when an agent completes an intent (not when they declare it).
+    /// It updates the transition matrix and may trigger background prefetch.
+    ///
+    /// Returns the predicted next tag key if confidence is high enough for prefetch.
+    pub fn record_intent_complete(
+        &self,
+        agent_id: &str,
+        intent_tag_key: Option<&str>,
+        next_intent_tag_key: Option<&str>,
+    ) -> Option<String> {
+        let mut profiles = self.profiles.write().unwrap();
+        let profile = profiles
+            .entry(agent_id.to_string())
+            .or_insert_with(|| AgentProfile::new(agent_id.to_string()));
+
+        if let Some(tag_key) = intent_tag_key {
+            profile.record_intent(tag_key, next_intent_tag_key);
+
+            // Predict next based on new data
+            if let Some(next) = profile.predict_next(tag_key) {
+                // Check if we have enough confidence to prefetch
+                if let Some(succs) = profile.intent_transitions.get(tag_key) {
+                    if let Some((_, count)) = succs.first() {
+                        // Simple confidence: count of this transition / total transitions
+                        let total: u32 = succs.iter().map(|(_, c)| c).sum();
+                        let confidence = *count as f32 / total.max(1) as f32;
+                        if confidence >= PREFETCH_CONFIDENCE_THRESHOLD {
+                            return Some(next);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Limit profile history to avoid unbounded growth
+        if profile.intent_transitions.len() > MAX_PROFILE_HISTORY {
+            // Keep only the most recent entries
+            let to_keep: Vec<_> = profile.intent_transitions.iter()
+                .take(MAX_PROFILE_HISTORY)
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect();
+            profile.intent_transitions.clear();
+            for (k, v) in to_keep {
+                profile.intent_transitions.insert(k, v);
+            }
+        }
+
+        None
+    }
+
+    /// Get the current strategy.
+    pub fn strategy(&self) -> &IntentKeyStrategy {
+        &self.strategy
+    }
+
+    /// Update the strategy.
+    pub fn set_strategy(&mut self, strategy: IntentKeyStrategy) {
+        self.strategy = strategy;
+    }
+
+    /// Extract tag key from intent text using the configured strategy.
+    pub fn extract_tag_key(&self, intent: &str, known_tags: &[String]) -> Option<String> {
+        self.strategy.extract_tag_key(intent, known_tags)
+    }
+}
+
+impl Default for AgentProfileStore {
+    fn default() -> Self {
+        Self::new(IntentKeyStrategy::default())
+    }
+}
+
 fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -379,6 +491,11 @@ pub struct Assembly {
 ///   5. Allocates budget via context_budget::assemble()
 ///   6. Stores result in cache and `Assembly.state = Ready(allocation)`
 ///
+/// F-10 Cognitive Prefetch:
+///   - Records intent completions in agent profile
+///   - Maintains transition matrix of tag key → next tag key
+///   - Silently prefetches predicted next intent when confidence > threshold
+///
 /// Agent calls `fetch_assembled_context` to retrieve the result.
 pub struct IntentPrefetcher {
     /// Active assemblies keyed by assembly_id.
@@ -399,6 +516,8 @@ pub struct IntentPrefetcher {
     max_age_ms: u64,
     /// Intent assembly cache (F-9). Wrapped in Arc for thread-safe sharing.
     intent_cache: Arc<IntentAssemblyCache>,
+    /// Agent profiles for cognitive prefetch (F-10).
+    profile_store: Arc<AgentProfileStore>,
 }
 
 impl IntentPrefetcher {
@@ -426,6 +545,37 @@ impl IntentPrefetcher {
                 DEFAULT_SIMILARITY_THRESHOLD,
                 DEFAULT_CACHE_TTL_MS,
             )),
+            profile_store: Arc::new(AgentProfileStore::default()),
+        }
+    }
+
+    /// Create a new prefetcher with a custom profile strategy (for testing).
+    #[allow(dead_code)]
+    pub fn new_with_strategy(
+        search: Arc<dyn crate::fs::SemanticSearch>,
+        kg: Option<Arc<dyn KnowledgeGraph>>,
+        memory: Arc<LayeredMemory>,
+        event_bus: Arc<EventBus>,
+        embedding: Arc<dyn EmbeddingProvider>,
+        ctx_loader: Arc<ContextLoader>,
+        strategy: IntentKeyStrategy,
+    ) -> Self {
+        Self {
+            assemblies: Arc::new(RwLock::new(HashMap::new())),
+            search,
+            kg,
+            memory,
+            event_bus,
+            embedding,
+            ctx_loader,
+            max_age_ms: 3_600_000, // 1 hour
+            intent_cache: Arc::new(IntentAssemblyCache::new(
+                DEFAULT_MAX_CACHE_ENTRIES,
+                DEFAULT_MAX_CACHE_MEMORY_BYTES,
+                DEFAULT_SIMILARITY_THRESHOLD,
+                DEFAULT_CACHE_TTL_MS,
+            )),
+            profile_store: Arc::new(AgentProfileStore::new(strategy)),
         }
     }
 
@@ -558,6 +708,106 @@ impl IntentPrefetcher {
     /// F-9: Get intent cache statistics.
     pub fn intent_cache_stats(&self) -> IntentCacheStats {
         self.intent_cache.stats()
+    }
+
+    // ── F-10: Cognitive Prefetch ───────────────────────────────────────────────
+
+    /// F-10: Record intent completion and potentially trigger background prefetch.
+    ///
+    /// Call this when an agent completes an intent (e.g., via EndSession or
+    /// when declaring a new intent that supersedes the previous one).
+    ///
+    /// This:
+    /// 1. Updates the agent's transition profile
+    /// 2. Predicts the next likely intent
+    /// 3. Silently prefetches if confidence > threshold
+    ///
+    /// Returns the predicted next tag key if prefetch was triggered, None otherwise.
+    pub fn on_intent_complete(
+        &self,
+        agent_id: &str,
+        intent: &str,
+        next_intent: Option<&str>,
+        known_tags: &[String],
+    ) -> Option<String> {
+        // Extract tag keys for current and next intent
+        let current_tag_key = self.profile_store.extract_tag_key(intent, known_tags);
+        let next_tag_key = next_intent.and_then(|n| self.profile_store.extract_tag_key(n, known_tags));
+
+        // Record in profile and get prediction
+        let predicted_next = self.profile_store.record_intent_complete(
+            agent_id,
+            current_tag_key.as_deref(),
+            next_tag_key.as_deref(),
+        );
+
+        if let Some(ref predicted) = predicted_next {
+            tracing::debug!(
+                "F-10: Agent {} intent '{}' -> predicting next '{}', triggering prefetch",
+                agent_id,
+                intent,
+                predicted
+            );
+
+            // Silently prefetch the predicted intent
+            // Use a default budget and no related_cids for background prefetch
+            let _ = self.trigger_cognitive_prefetch(agent_id, predicted, known_tags);
+        }
+
+        predicted_next
+    }
+
+    /// F-10: Trigger background prefetch for a predicted next intent.
+    ///
+    /// This is called silently by the system when an intent completes and
+    /// the transition matrix predicts a likely next intent.
+    fn trigger_cognitive_prefetch(
+        &self,
+        agent_id: &str,
+        predicted_tag_key: &str,
+        _known_tags: &[String],
+    ) -> Option<String> {
+        // Skip if strategy is disabled
+        if self.profile_store.strategy().is_disabled() {
+            return None;
+        }
+
+        // Convert tag key back to a representative intent text
+        // We use the tag key itself as the intent (not ideal but works for POC)
+        // In a real implementation, we'd look up a representative intent for this tag key
+        let predicted_intent = format!("next: {}", predicted_tag_key);
+
+        // Use a smaller budget for background prefetch (not user-facing)
+        let budget = 1024;
+
+        // Check if this is already being prefetched or cached
+        // Skip if already in cache (F-9 would handle it)
+        let intent_embedding: Option<Vec<f32>> = self.embedding.embed(&predicted_intent).ok().map(|e| e.into());
+        if self.intent_cache.lookup(&predicted_intent, &intent_embedding).is_some() {
+            tracing::debug!("F-10: predicted intent already cached, skipping prefetch");
+            return None;
+        }
+
+        // Trigger silent prefetch
+        let assembly_id = self.declare_intent(
+            agent_id,
+            &predicted_intent,
+            vec![],  // no related cids for predicted intent
+            budget,
+        );
+
+        tracing::debug!("F-10: triggered silent prefetch for '{}', assembly_id={}", predicted_tag_key, assembly_id);
+        Some(assembly_id)
+    }
+
+    /// F-10: Get the agent profile for inspection.
+    pub fn get_agent_profile(&self, agent_id: &str) -> AgentProfile {
+        self.profile_store.get_or_create(agent_id)
+    }
+
+    /// F-10: Extract tag key from intent text using the profile strategy.
+    pub fn extract_tag_key(&self, intent: &str, known_tags: &[String]) -> Option<String> {
+        self.profile_store.extract_tag_key(intent, known_tags)
     }
 
     /// Run the full multi-path prefetch in a background thread.

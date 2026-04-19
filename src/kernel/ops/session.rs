@@ -12,6 +12,142 @@ use crate::kernel::event_bus::EventBus;
 use crate::kernel::ops::delta::handle_delta_since;
 use crate::memory::layered::{LayeredMemory, MemoryTier};
 
+// ── F-10: Agent Profile & Intent Key Strategy ─────────────────────────────────
+
+/// Minimum tag length to consider for extraction.
+const MIN_TAG_LENGTH: usize = 2;
+
+/// Agent profile for cognitive prefetch (F-10).
+///
+/// Stores statistical patterns of agent behavior:
+/// - Intent transitions: which tag keys follow which
+/// - Hot objects: frequently accessed CIDs
+#[derive(Debug, Clone)]
+pub struct AgentProfile {
+    pub agent_id: String,
+    /// Maps tag key → list of (successor_tag_key, count)
+    /// Example: "auth|test" → [("auth|doc", 5), ("auth|perf", 2)]
+    pub intent_transitions: HashMap<String, Vec<(String, u32)>>,
+    /// Hot objects — (CID, access_count)
+    pub hot_objects: Vec<(String, u64)>,
+    pub updated_at_ms: u64,
+}
+
+impl AgentProfile {
+    pub fn new(agent_id: String) -> Self {
+        Self {
+            agent_id,
+            intent_transitions: HashMap::new(),
+            hot_objects: Vec::new(),
+            updated_at_ms: now_ms(),
+        }
+    }
+
+    /// Record an intent completion and update transition statistics.
+    pub fn record_intent(&mut self, tag_key: &str, next_tag_key: Option<&str>) {
+        self.updated_at_ms = now_ms();
+
+        if let Some(next) = next_tag_key {
+            let successors = self.intent_transitions.entry(tag_key.to_string()).or_default();
+            // Increment count for this transition
+            if let Some(entry) = successors.iter_mut().find(|(k, _)| k == next) {
+                entry.1 += 1;
+            } else {
+                successors.push((next.to_string(), 1));
+            }
+            // Sort by count descending, then alphabetically by key for stable ordering
+            successors.sort_by(|a, b| {
+                let count_cmp = b.1.cmp(&a.1);
+                if count_cmp == std::cmp::Ordering::Equal {
+                    a.0.cmp(&b.0)
+                } else {
+                    count_cmp
+                }
+            });
+            // Keep top 10 successors
+            successors.truncate(10);
+        }
+    }
+
+    /// Get the most likely next tag key based on transition history.
+    pub fn predict_next(&self, tag_key: &str) -> Option<String> {
+        self.intent_transitions
+            .get(tag_key)
+            .and_then(|succs| succs.first().map(|(k, _)| k.clone()))
+    }
+}
+
+/// Strategy for converting intent text to a lookup key.
+#[derive(Debug, Clone)]
+pub enum IntentKeyStrategy {
+    /// Extract known tags from intent text, normalize to sorted tag key.
+    /// Example: "修复 auth 的测试" → extracts ["auth", "test"] → "auth|test"
+    TagExtraction,
+    /// Cluster similar intents using embedding (requires real embedding provider).
+    EmbeddingCluster { bucket_count: usize },
+    /// Disabled — stub embedding mode without tag extraction.
+    Disabled,
+}
+
+impl IntentKeyStrategy {
+    /// Extract tags from intent text using known tag dictionary.
+    ///
+    /// For TagExtraction mode:
+    /// - Finds all known tags that appear in the intent text (case-insensitive)
+    /// - Returns normalized key as sorted, pipe-separated tags
+    ///
+    /// Returns None if no tags found or strategy is Disabled.
+    pub fn extract_tag_key(&self, intent: &str, known_tags: &[String]) -> Option<String> {
+        match self {
+            IntentKeyStrategy::TagExtraction => {
+                let intent_lower = intent.to_lowercase();
+                let mut matched: Vec<&str> = known_tags
+                    .iter()
+                    .filter(|tag| {
+                        let t = tag.to_lowercase();
+                        t.len() >= MIN_TAG_LENGTH && intent_lower.contains(&t)
+                    })
+                    .map(|s| s.as_str())
+                    .collect();
+
+                if matched.is_empty() {
+                    return None;
+                }
+
+                // Sort and deduplicate
+                matched.sort();
+                matched.dedup();
+                // Take up to 5 tags to avoid overly specific keys
+                matched.truncate(5);
+
+                Some(matched.join("|"))
+            }
+            IntentKeyStrategy::EmbeddingCluster { .. } => {
+                // For embedding cluster, we return None here — caller should use embedding
+                None
+            }
+            IntentKeyStrategy::Disabled => None,
+        }
+    }
+
+    /// Check if this strategy requires embedding (for gating).
+    pub fn requires_embedding(&self) -> bool {
+        matches!(self, IntentKeyStrategy::EmbeddingCluster { .. })
+    }
+
+    /// Check if this strategy is effectively disabled.
+    pub fn is_disabled(&self) -> bool {
+        matches!(self, IntentKeyStrategy::Disabled)
+    }
+}
+
+/// Default strategy is TagExtraction when tags are available.
+impl Default for IntentKeyStrategy {
+    fn default() -> Self {
+        IntentKeyStrategy::TagExtraction
+    }
+}
+
 /// Default session TTL: 30 minutes of inactivity before auto-EndSession.
 const DEFAULT_SESSION_TTL_MS: u64 = 30 * 60 * 1000;
 /// Interval between session timeout scans: 60 seconds.
@@ -360,5 +496,191 @@ mod tests {
         assert_eq!(session.agent_id, "aid");
         assert_eq!(session.start_seq, 42);
         assert!(session.created_at_ms > 0);
+    }
+
+    // ── F-10: AgentProfile tests ──────────────────────────────────────────────
+
+    #[test]
+    fn test_agent_profile_new() {
+        let profile = AgentProfile::new("agent-1".to_string());
+        assert_eq!(profile.agent_id, "agent-1");
+        assert!(profile.intent_transitions.is_empty());
+        assert!(profile.hot_objects.is_empty());
+        assert!(profile.updated_at_ms > 0);
+    }
+
+    #[test]
+    fn test_agent_profile_record_intent() {
+        let mut profile = AgentProfile::new("agent-1".to_string());
+
+        // Record a transition: auth|test -> auth|doc
+        profile.record_intent("auth|test", Some("auth|doc"));
+
+        let successors = profile.intent_transitions.get("auth|test");
+        assert!(successors.is_some());
+        let succs = successors.unwrap();
+        assert_eq!(succs.len(), 1);
+        assert_eq!(succs[0].0, "auth|doc");
+        assert_eq!(succs[0].1, 1);
+    }
+
+    #[test]
+    fn test_agent_profile_record_intent_increments_count() {
+        let mut profile = AgentProfile::new("agent-1".to_string());
+
+        // Record same transition twice
+        profile.record_intent("auth|test", Some("auth|doc"));
+        profile.record_intent("auth|test", Some("auth|doc"));
+
+        let successors = profile.intent_transitions.get("auth|test").unwrap();
+        assert_eq!(successors.len(), 1);
+        assert_eq!(successors[0].1, 2); // Count should be 2
+    }
+
+    #[test]
+    fn test_agent_profile_predict_next() {
+        let mut profile = AgentProfile::new("agent-1".to_string());
+
+        // Add multiple successors
+        profile.record_intent("auth|test", Some("auth|doc"));
+        profile.record_intent("auth|test", Some("auth|perf"));
+        profile.record_intent("auth|test", Some("auth|doc")); // auth|doc becomes more frequent
+
+        let predicted = profile.predict_next("auth|test");
+        assert!(predicted.is_some());
+        // auth|doc has count 2, should be predicted
+        assert_eq!(predicted.unwrap(), "auth|doc");
+    }
+
+    #[test]
+    fn test_agent_profile_predict_next_no_history() {
+        let profile = AgentProfile::new("agent-1".to_string());
+        let predicted = profile.predict_next("nonexistent");
+        assert!(predicted.is_none());
+    }
+
+    #[test]
+    fn test_agent_profile_multiple_successors_sorted() {
+        let mut profile = AgentProfile::new("agent-1".to_string());
+
+        // Add successors in reverse order
+        profile.record_intent("auth", Some("c"));
+        profile.record_intent("auth", Some("b"));
+        profile.record_intent("auth", Some("a"));
+
+        let successors = profile.intent_transitions.get("auth").unwrap();
+        // Should be sorted by count descending, so all have count 1
+        assert_eq!(successors.len(), 3);
+        // First should be "a" (alphabetically first among equal counts)
+        assert_eq!(successors[0].0, "a");
+    }
+
+    // ── F-10: IntentKeyStrategy tests ──────────────────────────────────────────
+
+    #[test]
+    fn test_tag_extraction_extracts_matching_tags() {
+        let strategy = IntentKeyStrategy::TagExtraction;
+        let known_tags = vec!["auth".to_string(), "test".to_string(), "doc".to_string(), "api".to_string()];
+
+        // "修复 auth 和 test" should extract "auth" and "test"
+        let tag_key = strategy.extract_tag_key("修复 auth 和 test", &known_tags);
+        assert!(tag_key.is_some());
+        let key = tag_key.unwrap();
+        // Tags should be sorted alphabetically
+        assert_eq!(key, "auth|test");
+    }
+
+    #[test]
+    fn test_tag_extraction_no_match() {
+        let strategy = IntentKeyStrategy::TagExtraction;
+        let known_tags = vec!["auth".to_string(), "test".to_string()];
+
+        // "修复完全不相关的内容" should not match any tags
+        let tag_key = strategy.extract_tag_key("修复完全不相关的内容", &known_tags);
+        assert!(tag_key.is_none());
+    }
+
+    #[test]
+    fn test_tag_extraction_empty_tags() {
+        let strategy = IntentKeyStrategy::TagExtraction;
+        let known_tags: Vec<String> = vec![];
+
+        let tag_key = strategy.extract_tag_key("任何内容", &known_tags);
+        assert!(tag_key.is_none());
+    }
+
+    #[test]
+    fn test_tag_extraction_deduplicates() {
+        let strategy = IntentKeyStrategy::TagExtraction;
+        let known_tags = vec!["auth".to_string(), "test".to_string()];
+
+        // Intent mentions "auth" twice and test once
+        let tag_key = strategy.extract_tag_key("auth auth auth test", &known_tags);
+        assert!(tag_key.is_some());
+        let key = tag_key.unwrap();
+        // Should only have unique tags, sorted alphabetically
+        assert_eq!(key, "auth|test");
+    }
+
+    #[test]
+    fn test_tag_extraction_case_insensitive() {
+        let strategy = IntentKeyStrategy::TagExtraction;
+        let known_tags = vec!["Auth".to_string(), "TEST".to_string()];
+
+        // Should match regardless of case
+        let tag_key = strategy.extract_tag_key("AUTH and test", &known_tags);
+        assert!(tag_key.is_some());
+    }
+
+    #[test]
+    fn test_tag_extraction_short_tag_filter() {
+        let strategy = IntentKeyStrategy::TagExtraction;
+        // "a" is too short (MIN_TAG_LENGTH = 2)
+        let known_tags = vec!["a".to_string(), "ab".to_string()];
+
+        let tag_key = strategy.extract_tag_key("修复 a 和 ab 的问题", &known_tags);
+        assert!(tag_key.is_some());
+        let key = tag_key.unwrap();
+        // Should only include "ab", not "a"
+        assert_eq!(key, "ab");
+    }
+
+    #[test]
+    fn test_tag_extraction_disabled_always_returns_none() {
+        let strategy = IntentKeyStrategy::Disabled;
+        let known_tags = vec!["auth".to_string(), "test".to_string()];
+
+        let tag_key = strategy.extract_tag_key("修复 auth 测试", &known_tags);
+        assert!(tag_key.is_none());
+    }
+
+    #[test]
+    fn test_embedding_cluster_returns_none() {
+        let strategy = IntentKeyStrategy::EmbeddingCluster { bucket_count: 10 };
+        let known_tags = vec!["auth".to_string(), "test".to_string()];
+
+        // TagExtraction mode should return None (caller should use embedding)
+        let tag_key = strategy.extract_tag_key("修复 auth 测试", &known_tags);
+        assert!(tag_key.is_none());
+    }
+
+    #[test]
+    fn test_strategy_requires_embedding() {
+        assert!(!IntentKeyStrategy::TagExtraction.requires_embedding());
+        assert!(IntentKeyStrategy::EmbeddingCluster { bucket_count: 5 }.requires_embedding());
+        assert!(!IntentKeyStrategy::Disabled.requires_embedding());
+    }
+
+    #[test]
+    fn test_strategy_is_disabled() {
+        assert!(!IntentKeyStrategy::TagExtraction.is_disabled());
+        assert!(!IntentKeyStrategy::EmbeddingCluster { bucket_count: 5 }.is_disabled());
+        assert!(IntentKeyStrategy::Disabled.is_disabled());
+    }
+
+    #[test]
+    fn test_default_strategy_is_tag_extraction() {
+        let strategy = IntentKeyStrategy::default();
+        assert!(matches!(strategy, IntentKeyStrategy::TagExtraction));
     }
 }
