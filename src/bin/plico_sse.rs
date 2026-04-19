@@ -27,9 +27,11 @@ use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::broadcast;
+use tokio::time::timeout;
 use tokio_stream::wrappers::BroadcastStream;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
+use tokio::signal;
 
 use plico::api::semantic::{ApiRequest, ApiResponse};
 
@@ -119,12 +121,18 @@ impl SseError {
 
 // ── App State ──────────────────────────────────────────────────────────────────
 
+/// Connection pool configuration
+const MAX_CONCURRENT_REQUESTS: usize = 100;
+const SHUTDOWN_TIMEOUT_SECS: u64 = 10;
+
 #[derive(Clone)]
 struct AppState {
     plicod_port: u16,
     broadcast_tx: Arc<broadcast::Sender<ServerEvent>>,
     /// Track if plicod is connected (updated on each request)
     plicod_connected: Arc<tokio::sync::RwLock<bool>>,
+    /// Connection pool: track in-flight requests
+    in_flight: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 #[derive(Clone, Debug)]
@@ -146,7 +154,7 @@ enum ServerEvent {
     },
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum TaskState {
     Working,
@@ -509,6 +517,88 @@ async fn task_send_subscribe(
         .into_response()
 }
 
+/// Handle POST /tasks/send — Non-streaming task submission fallback
+async fn task_send(
+    State(state): State<AppState>,
+    body: String,
+) -> Response {
+    // Parse the incoming request
+    let request: serde_json::Value = match serde_json::from_str(&body) {
+        Ok(v) => v,
+        Err(e) => {
+            return (StatusCode::BAD_REQUEST, [(header::CONTENT_TYPE, "application/json")],
+                serde_json::json!({ "error": format!("JSON parse error: {}", e) }).to_string()
+            ).into_response();
+        }
+    };
+
+    let method = request.get("method")
+        .and_then(|v| v.as_str())
+        .unwrap_or("submit_intent")
+        .to_string();
+
+    let params = request.get("params").cloned();
+
+    // Check connection pool limit
+    let current_in_flight = state.in_flight.load(std::sync::atomic::Ordering::SeqCst);
+    if current_in_flight >= MAX_CONCURRENT_REQUESTS {
+        let error = SseError::Internal("server overloaded: too many in-flight requests".to_string());
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            [
+                (header::CONTENT_TYPE, "application/json"),
+                (header::HeaderName::from_static("x-retry-after"), "5"),
+            ],
+            error.to_json_response().to_string(),
+        ).into_response();
+    }
+
+    // Increment in-flight counter
+    state.in_flight.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+
+    // Build and send API request to plicod
+    let api_request = match build_api_request(&method, params.as_ref()) {
+        Ok(req) => req,
+        Err(e) => {
+            state.in_flight.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+            return (StatusCode::BAD_REQUEST, [(header::CONTENT_TYPE, "application/json")],
+                serde_json::json!({ "error": e }).to_string()
+            ).into_response();
+        }
+    };
+
+    // Send to plicod synchronously (non-streaming)
+    let plicod_port = state.plicod_port;
+    let plicod_connected = state.plicod_connected.clone();
+
+    let result = send_to_plicod(plicod_port, api_request, Some(plicod_connected)).await;
+
+    // Decrement in-flight counter
+    state.in_flight.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+
+    match result {
+        Ok(response) => {
+            let body = serde_json::to_string(&response).unwrap_or_else(|_| "{}".to_string());
+            (StatusCode::OK, [(header::CONTENT_TYPE, "application/json")], body).into_response()
+        }
+        Err(e) => {
+            let status = match e.class() {
+                ErrorClass::Client => StatusCode::BAD_REQUEST,
+                ErrorClass::Server => StatusCode::SERVICE_UNAVAILABLE,
+            };
+            let mut resp = e.to_json_response();
+            if let Some(retry) = e.retry_after_secs() {
+                resp["retry_after"] = serde_json::json!(retry);
+            }
+            let retry_secs = e.retry_after_secs().unwrap_or(5);
+            (status, [
+                (header::CONTENT_TYPE, "application/json"),
+                (header::HeaderName::from_static("x-retry-after"), &retry_secs.to_string()),
+            ], resp.to_string()).into_response()
+        }
+    }
+}
+
 fn event_to_sse_event(event: ServerEvent) -> Event {
     match event {
         ServerEvent::TaskUpdate { task_id, state, data } => {
@@ -672,15 +762,17 @@ async fn main() {
         plicod_port,
         broadcast_tx: Arc::new(broadcast_tx),
         plicod_connected: Arc::new(tokio::sync::RwLock::new(false)),
+        in_flight: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
     };
 
     let app = Router::new()
         .route("/.well-known/agent.json", get(get_agent_card))
         .route("/tasks/sendSubscribe", post(task_send_subscribe))
+        .route("/tasks/send", post(task_send))
         .route("/tasks/:task_id", delete(task_cancel))
         .route("/health", get(health_check))
         .layer(cors_layer())
-        .with_state(state);
+        .with_state(state.clone());
 
     let addr: SocketAddr = format!("0.0.0.0:{}", port).parse().unwrap();
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
@@ -688,11 +780,43 @@ async fn main() {
     println!("SSE adapter ready. Endpoints:");
     println!("  GET  /.well-known/agent.json  — Agent Card");
     println!("  POST /tasks/sendSubscribe      — Task streaming");
+    println!("  POST /tasks/send              — Non-streaming fallback");
     println!("  DELETE /tasks/:task_id         — Task cancellation");
     println!("  GET  /health                    — Health check");
+    println!("Connection pool: max {} concurrent requests", MAX_CONCURRENT_REQUESTS);
     println!("Accepting connections...");
 
-    axum::serve(listener, app).await.unwrap();
+    // Graceful shutdown setup
+    let graceful = async {
+        signal::ctrl_c()
+            .await
+            .expect("Failed to listen for Ctrl+C");
+        println!("\nReceived shutdown signal, initiating graceful shutdown...");
+    };
+
+    let server = axum::serve(listener, app);
+
+    // Run either Ctrl+C or server, whichever completes first
+    match timeout(Duration::from_secs(SHUTDOWN_TIMEOUT_SECS), async {
+        tokio::select! {
+            _ = graceful => {}
+            _ = server => {}
+        }
+    }).await {
+        Ok(_) => {
+            // Check if there are in-flight requests
+            let remaining = state.in_flight.load(std::sync::atomic::Ordering::SeqCst);
+            if remaining > 0 {
+                println!("Waiting for {} in-flight requests to complete...", remaining);
+                // Wait a bit more for requests to finish
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            }
+            println!("Server shutdown complete.");
+        }
+        Err(_) => {
+            println!("Shutdown timeout reached ({}s), forcing shutdown...", SHUTDOWN_TIMEOUT_SECS);
+        }
+    }
 }
 
 // ── Unit Tests ────────────────────────────────────────────────────────────────
