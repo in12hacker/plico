@@ -1,9 +1,15 @@
 //! Memory tier operations — ephemeral, working, long-term.
+//!
+//! Memory tier automation (v12.0):
+//! - Automatic promotion based on access thresholds
+//! - Automatic eviction of low-importance ephemeral entries
+//! - Tier maintenance via TierMaintenance struct
 
 use crate::api::permission::{PermissionAction, PermissionContext};
 use crate::memory::{MemoryEntry, MemoryContent, MemoryTier, MemoryScope};
 use crate::scheduler::AgentId;
 use crate::kernel::event_bus::KernelEvent;
+use crate::kernel::ops::tier_maintenance::TierMaintenance;
 
 impl crate::kernel::AIKernel {
     fn agent_memory_quota(&self, agent_id: &str) -> u64 {
@@ -11,6 +17,37 @@ impl crate::kernel::AIKernel {
             .get_resources(&AgentId(agent_id.to_string()))
             .map(|r| r.memory_quota)
             .unwrap_or(0)
+    }
+
+    /// Check and promote a specific memory entry if it meets promotion thresholds.
+    ///
+    /// Returns `true` if the entry was promoted, `false` otherwise.
+    pub fn check_and_promote(&self, agent_id: &str, entry_id: &str) -> bool {
+        let thresholds = crate::memory::relevance::PromotionThresholds::default();
+        let thresholds_ref = &thresholds;
+
+        // Find the entry across all tiers
+        let entry_opt = self.memory.get_all(agent_id)
+            .into_iter()
+            .find(|e| e.id == entry_id);
+
+        let Some(entry) = entry_opt else { return false; };
+
+        // Check if promotion is needed
+        let Some(target_tier) = crate::memory::relevance::check_promotion(&entry, thresholds_ref) else {
+            return false;
+        };
+
+        // Move the entry to the target tier
+        self.memory.move_entry(agent_id, entry_id, target_tier)
+    }
+
+    /// Run tier maintenance for an agent:
+    /// - Process ephemeral eviction (low-importance entries are discarded)
+    /// - Process promotions across all tiers
+    pub fn run_tier_maintenance(&self, agent_id: &str) {
+        let maintenance = TierMaintenance::new();
+        maintenance.run_maintenance_cycle(&self.memory, agent_id);
     }
 
     /// Store a memory entry in the agent's ephemeral (L0) tier.

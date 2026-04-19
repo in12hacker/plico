@@ -751,6 +751,14 @@ impl LayeredMemory {
         true
     }
 
+    /// Move a memory entry to a different tier (alias for move_entry).
+    ///
+    /// This is the preferred API for tier movement as it matches
+    /// the semantic naming in the memory tier automation spec.
+    pub fn move_entry_to_tier(&self, agent_id: &str, entry_id: &str, target_tier: MemoryTier) -> bool {
+        self.move_entry(agent_id, entry_id, target_tier)
+    }
+
     /// Delete a specific memory entry by ID.
     ///
     /// Returns `true` if the entry was found and deleted, `false` if not found.

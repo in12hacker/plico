@@ -251,3 +251,252 @@ fn test_recall_semantic_skips_entries_without_embeddings() {
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].0.content.display(), "embedded entry");
 }
+
+// ─── Promotion Tests (v12.0 Memory Tier Automation) ─────────────────────────
+
+#[test]
+fn test_promotion_ephemeral_to_working() {
+    // Ephemeral entry with access_count >= 3 should be promoted to Working
+    let mem = LayeredMemory::new();
+
+    // Create entry with access_count = 3 (meets threshold)
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+    let entry = MemoryEntry {
+        id: uuid::Uuid::new_v4().to_string(),
+        agent_id: "a1".to_string(),
+        tenant_id: "default".to_string(),
+        tier: MemoryTier::Ephemeral,
+        content: MemoryContent::Text("test content".to_string()),
+        importance: 50,
+        access_count: 3, // meets ephemeral_to_working_access threshold of 3
+        last_accessed: now,
+        created_at: now,
+        tags: Vec::new(),
+        embedding: None,
+        ttl_ms: None,
+        scope: plico::memory::MemoryScope::Private,
+    };
+    mem.store(entry);
+
+    mem.promote_check("a1");
+
+    let working = mem.get_tier("a1", MemoryTier::Working);
+    assert_eq!(working.len(), 1);
+    assert_eq!(working[0].tier, MemoryTier::Working);
+
+    let ephemeral = mem.get_tier("a1", MemoryTier::Ephemeral);
+    assert_eq!(ephemeral.len(), 0);
+}
+
+#[test]
+fn test_promotion_working_to_longterm() {
+    // Working entry with access_count >= 10 && importance >= 50 should be promoted
+    let mem = LayeredMemory::new();
+
+    let mut entry = MemoryEntry {
+        id: uuid::Uuid::new_v4().to_string(),
+        agent_id: "a1".to_string(),
+        tenant_id: "default".to_string(),
+        tier: MemoryTier::Working,
+        content: MemoryContent::Text("test content".to_string()),
+        importance: 60,
+        access_count: 10,
+        last_accessed: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64,
+        created_at: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64,
+        tags: Vec::new(),
+        embedding: None,
+        ttl_ms: None,
+        scope: plico::memory::MemoryScope::Private,
+    };
+    mem.store(entry);
+
+    mem.promote_check("a1");
+
+    let longterm = mem.get_tier("a1", MemoryTier::LongTerm);
+    assert_eq!(longterm.len(), 1);
+    assert_eq!(longterm[0].tier, MemoryTier::LongTerm);
+
+    let working = mem.get_tier("a1", MemoryTier::Working);
+    assert_eq!(working.len(), 0);
+}
+
+#[test]
+fn test_no_promotion_below_threshold() {
+    // Ephemeral entry with access_count < 3 should NOT be promoted
+    let mem = LayeredMemory::new();
+
+    // Create entry with access_count = 2 (below threshold of 3)
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+    let entry = MemoryEntry {
+        id: uuid::Uuid::new_v4().to_string(),
+        agent_id: "a1".to_string(),
+        tenant_id: "default".to_string(),
+        tier: MemoryTier::Ephemeral,
+        content: MemoryContent::Text("below threshold".to_string()),
+        importance: 50,
+        access_count: 2, // below ephemeral_to_working_access threshold of 3
+        last_accessed: now,
+        created_at: now,
+        tags: Vec::new(),
+        embedding: None,
+        ttl_ms: None,
+        scope: plico::memory::MemoryScope::Private,
+    };
+    mem.store(entry);
+
+    mem.promote_check("a1");
+
+    let ephemeral = mem.get_tier("a1", MemoryTier::Ephemeral);
+    assert_eq!(ephemeral.len(), 1);
+
+    let working = mem.get_tier("a1", MemoryTier::Working);
+    assert_eq!(working.len(), 0);
+}
+
+#[test]
+fn test_no_promotion_working_low_importance() {
+    // Working entry with access_count >= 10 but importance < 50 should NOT be promoted
+    let mem = LayeredMemory::new();
+
+    // Create entry with access_count = 10 but importance = 30 (below threshold of 50)
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+    let entry = MemoryEntry {
+        id: uuid::Uuid::new_v4().to_string(),
+        agent_id: "a1".to_string(),
+        tenant_id: "default".to_string(),
+        tier: MemoryTier::Working,
+        content: MemoryContent::Text("low importance".to_string()),
+        importance: 30, // below working_to_longterm_importance threshold of 50
+        access_count: 10, // meets access threshold
+        last_accessed: now,
+        created_at: now,
+        tags: Vec::new(),
+        embedding: None,
+        ttl_ms: None,
+        scope: plico::memory::MemoryScope::Private,
+    };
+    mem.store(entry);
+
+    mem.promote_check("a1");
+
+    let working = mem.get_tier("a1", MemoryTier::Working);
+    assert_eq!(working.len(), 1);
+
+    let longterm = mem.get_tier("a1", MemoryTier::LongTerm);
+    assert_eq!(longterm.len(), 0);
+}
+
+#[test]
+fn test_eviction_low_importance() {
+    // Ephemeral entries with importance < 70 should be discarded on eviction
+    let mem = LayeredMemory::new();
+
+    // These entries have importance < 70 so they should be discarded
+    mem.store(make_entry("a1", MemoryTier::Ephemeral, 69, "discard1"));
+    mem.store(make_entry("a1", MemoryTier::Ephemeral, 50, "discard2"));
+    mem.store(make_entry("a1", MemoryTier::Ephemeral, 30, "discard3"));
+
+    let discarded = mem.evict_ephemeral("a1");
+
+    assert_eq!(discarded.len(), 3);
+
+    let ephemeral = mem.get_tier("a1", MemoryTier::Ephemeral);
+    assert_eq!(ephemeral.len(), 0);
+}
+
+#[test]
+fn test_move_entry_to_tier() {
+    // Test the move_entry_to_tier method
+    let mem = LayeredMemory::new();
+
+    let entry = make_entry("a1", MemoryTier::Ephemeral, 50, "test entry");
+    mem.store(entry);
+
+    let entries = mem.get_tier("a1", MemoryTier::Ephemeral);
+    let entry_id = entries[0].id.clone();
+
+    let result = mem.move_entry_to_tier("a1", &entry_id, MemoryTier::Working);
+    assert!(result);
+
+    let working = mem.get_tier("a1", MemoryTier::Working);
+    assert_eq!(working.len(), 1);
+    assert_eq!(working[0].tier, MemoryTier::Working);
+
+    let ephemeral = mem.get_tier("a1", MemoryTier::Ephemeral);
+    assert_eq!(ephemeral.len(), 0);
+}
+
+#[test]
+fn test_longterm_entries_not_promoted() {
+    // LongTerm and Procedural entries should never be promoted
+    let mem = LayeredMemory::new();
+
+    let mut lt_entry = MemoryEntry {
+        id: uuid::Uuid::new_v4().to_string(),
+        agent_id: "a1".to_string(),
+        tenant_id: "default".to_string(),
+        tier: MemoryTier::LongTerm,
+        content: MemoryContent::Text("lt content".to_string()),
+        importance: 100,
+        access_count: 100,
+        last_accessed: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64,
+        created_at: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64,
+        tags: Vec::new(),
+        embedding: None,
+        ttl_ms: None,
+        scope: plico::memory::MemoryScope::Private,
+    };
+    mem.store(lt_entry);
+
+    let mut proc_entry = MemoryEntry {
+        id: uuid::Uuid::new_v4().to_string(),
+        agent_id: "a1".to_string(),
+        tenant_id: "default".to_string(),
+        tier: MemoryTier::Procedural,
+        content: MemoryContent::Text("proc content".to_string()),
+        importance: 100,
+        access_count: 100,
+        last_accessed: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64,
+        created_at: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64,
+        tags: Vec::new(),
+        embedding: None,
+        ttl_ms: None,
+        scope: plico::memory::MemoryScope::Private,
+    };
+    mem.store(proc_entry);
+
+    mem.promote_check("a1");
+
+    // Both should remain in their tiers
+    let longterm = mem.get_tier("a1", MemoryTier::LongTerm);
+    assert_eq!(longterm.len(), 1);
+    let procedural = mem.get_tier("a1", MemoryTier::Procedural);
+    assert_eq!(procedural.len(), 1);
+}
