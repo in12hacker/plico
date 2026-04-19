@@ -66,8 +66,9 @@ impl crate::kernel::AIKernel {
         node_type: KGNodeType,
         properties: serde_json::Value,
         agent_id: &str,
+        tenant_id: &str,
     ) -> std::io::Result<String> {
-        let ctx = crate::api::permission::PermissionContext::new(agent_id.to_string(), "default".to_string());
+        let ctx = crate::api::permission::PermissionContext::new(agent_id.to_string(), tenant_id.to_string());
         self.permissions.check(&ctx, crate::api::permission::PermissionAction::Write)?;
         let Some(ref kg) = self.knowledge_graph else {
             return Err(std::io::Error::other("knowledge graph not available"));
@@ -81,7 +82,7 @@ impl crate::kernel::AIKernel {
             content_cid: None,
             properties,
             agent_id: agent_id.to_string(),
-            tenant_id: "default".to_string(),
+            tenant_id: tenant_id.to_string(),
             created_at: now,
             valid_at: Some(now),
             invalid_at: None,
@@ -100,12 +101,20 @@ impl crate::kernel::AIKernel {
         edge_type: KGEdgeType,
         weight: Option<f32>,
         agent_id: &str,
+        tenant_id: &str,
     ) -> std::io::Result<()> {
-        let ctx = crate::api::permission::PermissionContext::new(agent_id.to_string(), "default".to_string());
+        let ctx = crate::api::permission::PermissionContext::new(agent_id.to_string(), tenant_id.to_string());
         self.permissions.check(&ctx, crate::api::permission::PermissionAction::Write)?;
         let Some(ref kg) = self.knowledge_graph else {
             return Err(std::io::Error::other("knowledge graph not available"));
         };
+        // Verify tenant isolation for both nodes
+        if let Ok(Some(src_node)) = kg.get_node(src) {
+            self.permissions.check_tenant_access(&ctx, &src_node.tenant_id)?;
+        }
+        if let Ok(Some(dst_node)) = kg.get_node(dst) {
+            self.permissions.check_tenant_access(&ctx, &dst_node.tenant_id)?;
+        }
         let now = chrono::Utc::now().timestamp_millis() as u64;
         let edge = KGEdge {
             src: src.to_string(),
@@ -124,18 +133,25 @@ impl crate::kernel::AIKernel {
     }
 
     /// List KG nodes, optionally filtered by type.
+    /// Returns only nodes belonging to the caller's tenant.
     pub fn kg_list_nodes(
         &self,
         node_type: Option<KGNodeType>,
         agent_id: &str,
+        tenant_id: &str,
     ) -> std::io::Result<Vec<KGNode>> {
-        let ctx = crate::api::permission::PermissionContext::new(agent_id.to_string(), "default".to_string());
+        let ctx = crate::api::permission::PermissionContext::new(agent_id.to_string(), tenant_id.to_string());
         self.permissions.check(&ctx, crate::api::permission::PermissionAction::Read)?;
         let Some(ref kg) = self.knowledge_graph else {
             return Ok(Vec::new());
         };
         kg.list_nodes(agent_id, node_type)
             .map_err(|e| std::io::Error::other(e.to_string()))
+            .map(|mut nodes| {
+                // Filter by tenant isolation
+                nodes.retain(|n| n.tenant_id == tenant_id);
+                nodes
+            })
     }
 
     /// Find all paths between two KG nodes up to a given depth.
@@ -169,44 +185,65 @@ impl crate::kernel::AIKernel {
     /// - `valid_at <= t`
     /// - `invalid_at.is_none() || invalid_at > t`
     /// - `expired_at.is_none()` (soft-deleted nodes excluded)
+    /// - tenant_id matches caller's tenant
     pub fn kg_get_valid_nodes_at(
         &self,
         agent_id: &str,
+        tenant_id: &str,
         node_type: Option<KGNodeType>,
         t: u64,
     ) -> std::io::Result<Vec<KGNode>> {
-        let ctx = crate::api::permission::PermissionContext::new(agent_id.to_string(), "default".to_string());
+        let ctx = crate::api::permission::PermissionContext::new(agent_id.to_string(), tenant_id.to_string());
         self.permissions.check(&ctx, crate::api::permission::PermissionAction::Read)?;
         let Some(ref kg) = self.knowledge_graph else {
             return Ok(Vec::new());
         };
         kg.get_valid_nodes_at(agent_id, node_type, t)
             .map_err(|e| std::io::Error::other(e.to_string()))
+            .map(|mut nodes| {
+                // Filter by tenant isolation
+                nodes.retain(|n| n.tenant_id == tenant_id);
+                nodes
+            })
     }
 
     /// Get a single KG node by ID.
-    pub fn kg_get_node(&self, node_id: &str, agent_id: &str) -> std::io::Result<Option<KGNode>> {
-        let ctx = crate::api::permission::PermissionContext::new(agent_id.to_string(), "default".to_string());
+    pub fn kg_get_node(&self, node_id: &str, agent_id: &str, tenant_id: &str) -> std::io::Result<Option<KGNode>> {
+        let ctx = crate::api::permission::PermissionContext::new(agent_id.to_string(), tenant_id.to_string());
         self.permissions.check(&ctx, crate::api::permission::PermissionAction::Read)?;
         let Some(ref kg) = self.knowledge_graph else {
             return Ok(None);
         };
-        kg.get_node(node_id).map_err(|e| std::io::Error::other(e.to_string()))
+        let node = kg.get_node(node_id).map_err(|e| std::io::Error::other(e.to_string()))?;
+        // Check tenant isolation
+        if let Some(ref n) = node {
+            self.permissions.check_tenant_access(&ctx, &n.tenant_id)?;
+        }
+        Ok(node)
     }
 
     /// List edges, optionally filtered by a node they touch.
-    pub fn kg_list_edges(&self, agent_id: &str, node_id: Option<&str>) -> std::io::Result<Vec<KGEdge>> {
-        let ctx = crate::api::permission::PermissionContext::new(agent_id.to_string(), "default".to_string());
+    /// Only returns edges where both source and destination nodes belong to the caller's tenant.
+    pub fn kg_list_edges(&self, agent_id: &str, tenant_id: &str, node_id: Option<&str>) -> std::io::Result<Vec<KGEdge>> {
+        let ctx = crate::api::permission::PermissionContext::new(agent_id.to_string(), tenant_id.to_string());
         self.permissions.check(&ctx, crate::api::permission::PermissionAction::Read)?;
         let Some(ref kg) = self.knowledge_graph else {
             return Ok(Vec::new());
         };
         let edges = kg.list_edges(agent_id)
             .map_err(|e| std::io::Error::other(e.to_string()))?;
+        // Filter edges by tenant isolation (both src and dst nodes must be in same tenant)
+        let filtered: Vec<KGEdge> = edges.into_iter().filter(|e| {
+            if let (Ok(Some(src_node)), Ok(Some(dst_node))) = (kg.get_node(&e.src), kg.get_node(&e.dst)) {
+                src_node.tenant_id == tenant_id && dst_node.tenant_id == tenant_id
+            } else {
+                false
+            }
+        }).collect();
         if let Some(nid) = node_id {
-            Ok(edges.into_iter().filter(|e| e.src == nid || e.dst == nid).collect())
+            Ok(filtered.into_iter().filter(|e| e.src == nid || e.dst == nid).collect())
         } else {
-            Ok(edges)
+            Ok(filtered)
         }
     }
 
@@ -217,12 +254,20 @@ impl crate::kernel::AIKernel {
         dst: &str,
         edge_type: Option<KGEdgeType>,
         agent_id: &str,
+        tenant_id: &str,
     ) -> std::io::Result<()> {
-        let ctx = crate::api::permission::PermissionContext::new(agent_id.to_string(), "default".to_string());
+        let ctx = crate::api::permission::PermissionContext::new(agent_id.to_string(), tenant_id.to_string());
         self.permissions.check(&ctx, crate::api::permission::PermissionAction::Delete)?;
         let Some(ref kg) = self.knowledge_graph else {
             return Err(std::io::Error::other("knowledge graph not available"));
         };
+        // Verify tenant isolation for both nodes
+        if let Ok(Some(src_node)) = kg.get_node(src) {
+            self.permissions.check_tenant_access(&ctx, &src_node.tenant_id)?;
+        }
+        if let Ok(Some(dst_node)) = kg.get_node(dst) {
+            self.permissions.check_tenant_access(&ctx, &dst_node.tenant_id)?;
+        }
         kg.remove_edge(src, dst, edge_type)
             .map_err(|e| std::io::Error::other(e.to_string()))
     }
@@ -234,23 +279,32 @@ impl crate::kernel::AIKernel {
         label: Option<&str>,
         properties: Option<serde_json::Value>,
         agent_id: &str,
+        tenant_id: &str,
     ) -> std::io::Result<()> {
-        let ctx = crate::api::permission::PermissionContext::new(agent_id.to_string(), "default".to_string());
+        let ctx = crate::api::permission::PermissionContext::new(agent_id.to_string(), tenant_id.to_string());
         self.permissions.check(&ctx, crate::api::permission::PermissionAction::Write)?;
         let Some(ref kg) = self.knowledge_graph else {
             return Err(std::io::Error::other("knowledge graph not available"));
         };
+        // Check tenant isolation before update
+        if let Ok(Some(node)) = kg.get_node(node_id) {
+            self.permissions.check_tenant_access(&ctx, &node.tenant_id)?;
+        }
         kg.update_node(node_id, label, properties)
             .map_err(|e| std::io::Error::other(e.to_string()))
     }
 
     /// Remove a KG node and all its edges.
-    pub fn kg_remove_node(&self, node_id: &str, agent_id: &str) -> std::io::Result<()> {
-        let ctx = crate::api::permission::PermissionContext::new(agent_id.to_string(), "default".to_string());
+    pub fn kg_remove_node(&self, node_id: &str, agent_id: &str, tenant_id: &str) -> std::io::Result<()> {
+        let ctx = crate::api::permission::PermissionContext::new(agent_id.to_string(), tenant_id.to_string());
         self.permissions.check(&ctx, crate::api::permission::PermissionAction::Delete)?;
         let Some(ref kg) = self.knowledge_graph else {
             return Err(std::io::Error::other("knowledge graph not available"));
         };
+        // Check tenant isolation before delete
+        if let Ok(Some(node)) = kg.get_node(node_id) {
+            self.permissions.check_tenant_access(&ctx, &node.tenant_id)?;
+        }
         kg.remove_node(node_id)
             .map_err(|e| std::io::Error::other(e.to_string()))
     }
@@ -262,12 +316,20 @@ impl crate::kernel::AIKernel {
         dst: &str,
         edge_type: Option<KGEdgeType>,
         agent_id: &str,
+        tenant_id: &str,
     ) -> std::io::Result<Vec<KGEdge>> {
-        let ctx = crate::api::permission::PermissionContext::new(agent_id.to_string(), "default".to_string());
+        let ctx = crate::api::permission::PermissionContext::new(agent_id.to_string(), tenant_id.to_string());
         self.permissions.check(&ctx, crate::api::permission::PermissionAction::Read)?;
         let Some(ref kg) = self.knowledge_graph else {
             return Ok(Vec::new());
         };
+        // Check tenant isolation for both nodes
+        if let Ok(Some(src_node)) = kg.get_node(src) {
+            self.permissions.check_tenant_access(&ctx, &src_node.tenant_id)?;
+        }
+        if let Ok(Some(dst_node)) = kg.get_node(dst) {
+            self.permissions.check_tenant_access(&ctx, &dst_node.tenant_id)?;
+        }
         kg.edge_history(src, dst, edge_type)
             .map_err(|e| std::io::Error::other(e.to_string()))
     }

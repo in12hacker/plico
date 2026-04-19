@@ -38,7 +38,7 @@ fn test_kernel_create_and_get() {
         .expect("create failed");
 
     let obj = kernel
-        .get_object(&cid, "TestAgent")
+        .get_object(&cid, "TestAgent", "default")
         .expect("get failed");
 
     assert_eq!(obj.data, b"Agent task output: embedding batch result");
@@ -61,7 +61,7 @@ fn test_kernel_semantic_create_and_read() {
 
     // Read by CID
     let objs = kernel
-        .semantic_read(&plico::fs::Query::ByCid(cid.clone()), "DevAgent")
+        .semantic_read(&plico::fs::Query::ByCid(cid.clone()), "DevAgent", "default")
         .expect("read failed");
     assert_eq!(objs.len(), 1);
     assert_eq!(objs[0].data, b"Rust async programming discussion");
@@ -76,7 +76,7 @@ fn test_kernel_read_by_tags() {
     kernel.semantic_create(b"doc3".to_vec(), vec!["b".to_string()], "x", None).ok();
 
     let objs = kernel
-        .semantic_read(&plico::fs::Query::ByTags(vec!["a".to_string()]), "x")
+        .semantic_read(&plico::fs::Query::ByTags(vec!["a".to_string()]), "x", "default")
         .expect("read by tags failed");
 
     assert_eq!(objs.len(), 2);
@@ -91,18 +91,18 @@ fn test_kernel_update_changes_cid() {
         .expect("create failed");
 
     let new_cid = kernel
-        .semantic_update(&old_cid, b"updated".to_vec(), None, "x")
+        .semantic_update(&old_cid, b"updated".to_vec(), None, "x", "default")
         .expect("update failed");
 
     // Content changed → new CID
     assert_ne!(new_cid, old_cid);
 
     // Old object still exists (immutable CAS)
-    let old_obj = kernel.get_object(&old_cid, "x").expect("old should exist");
+    let old_obj = kernel.get_object(&old_cid, "x", "default").expect("old should exist");
     assert_eq!(old_obj.data, b"original");
 
     // New object has new content
-    let new_obj = kernel.get_object(&new_cid, "x").expect("new should exist");
+    let new_obj = kernel.get_object(&new_cid, "x", "default").expect("new should exist");
     assert_eq!(new_obj.data, b"updated");
 }
 
@@ -115,15 +115,15 @@ fn test_kernel_delete_requires_permission() {
         .expect("create failed");
 
     // 'cli' agent has no Delete grant by default
-    let result = kernel.semantic_delete(&cid, "cli");
+    let result = kernel.semantic_delete(&cid, "cli", "default");
     assert!(result.is_err(), "delete should fail without permission");
 
     // Object still readable by owner (isolation prevents 'cli' from reading 'x' data)
-    let obj = kernel.get_object(&cid, "x").expect("should still exist");
+    let obj = kernel.get_object(&cid, "x", "default").expect("should still exist");
     assert_eq!(obj.data, b"secret");
 
     // 'cli' cannot read 'x' data (ownership isolation)
-    let result = kernel.get_object(&cid, "cli");
+    let result = kernel.get_object(&cid, "cli", "default");
     assert!(result.is_err(), "cli should not read x's object");
 }
 
@@ -139,25 +139,26 @@ fn test_kernel_agent_isolation() {
         .expect("create by B failed");
 
     // A can read own object
-    let obj_a = kernel.get_object(&cid_a, "agent-a").expect("A reads own");
+    let obj_a = kernel.get_object(&cid_a, "agent-a", "default").expect("A reads own");
     assert_eq!(obj_a.data, b"agent A data");
 
     // A cannot read B's object
-    let result = kernel.get_object(&cid_b, "agent-a");
+    let result = kernel.get_object(&cid_b, "agent-a", "default");
     assert!(result.is_err(), "A should not read B's object");
 
     // B can read own object
-    let obj_b = kernel.get_object(&cid_b, "agent-b").expect("B reads own");
+    let obj_b = kernel.get_object(&cid_b, "agent-b", "default").expect("B reads own");
     assert_eq!(obj_b.data, b"agent B data");
 
     // Trusted "kernel" can read both
-    let obj_a2 = kernel.get_object(&cid_a, "kernel").expect("kernel reads A");
+    let obj_a2 = kernel.get_object(&cid_a, "kernel", "default").expect("kernel reads A");
     assert_eq!(obj_a2.data, b"agent A data");
 
     // A search only returns own objects
     let results = kernel.semantic_read(
         &plico::fs::Query::ByTags(vec!["shared-tag".to_string()]),
         "agent-a",
+        "default",
     ).expect("read by tags");
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].meta.created_by, "agent-a");
@@ -166,6 +167,7 @@ fn test_kernel_agent_isolation() {
     let results = kernel.semantic_read(
         &plico::fs::Query::ByTags(vec!["shared-tag".to_string()]),
         "kernel",
+        "default",
     ).expect("kernel read by tags");
     assert_eq!(results.len(), 2);
 }
@@ -186,8 +188,8 @@ fn test_kernel_agent_registration() {
 fn test_kernel_remember_and_recall() {
     let (kernel, _dir) = make_kernel();
 
-    kernel.remember("agent1", "Remember to check the logs".to_string()).unwrap();
-    let memories = kernel.recall("agent1");
+    kernel.remember("agent1", "default", "Remember to check the logs".to_string()).unwrap();
+    let memories = kernel.recall("agent1", "default");
 
     assert!(!memories.is_empty());
     assert!(memories.iter().any(|m| m.content.display().contains("logs")));
@@ -197,11 +199,11 @@ fn test_kernel_remember_and_recall() {
 fn test_kernel_forget_ephemeral() {
     let (kernel, _dir) = make_kernel();
 
-    kernel.remember("agent1", "Temporary note".to_string()).unwrap();
-    assert!(!kernel.recall("agent1").is_empty());
+    kernel.remember("agent1", "default", "Temporary note".to_string()).unwrap();
+    assert!(!kernel.recall("agent1", "default").is_empty());
 
     kernel.forget_ephemeral("agent1");
-    let memories = kernel.recall("agent1");
+    let memories = kernel.recall("agent1", "default");
 
     // Ephemeral tier entries should be gone
     let ephemeral: Vec<_> = memories
@@ -236,7 +238,7 @@ fn test_kernel_list_deleted_after_delete() {
         .expect("create failed");
 
     // "kernel" has all permissions granted by default
-    kernel.semantic_delete(&cid, "kernel").expect("delete failed");
+    kernel.semantic_delete(&cid, "kernel", "default").expect("delete failed");
 
     let deleted = kernel.list_deleted("kernel");
     assert_eq!(deleted.len(), 1);
@@ -252,7 +254,7 @@ fn test_kernel_restore_deleted() {
         .semantic_create(b"restore me".to_vec(), vec!["restore-test".to_string()], "kernel", None)
         .expect("create failed");
 
-    kernel.semantic_delete(&cid, "kernel").expect("delete failed");
+    kernel.semantic_delete(&cid, "kernel", "default").expect("delete failed");
     assert_eq!(kernel.list_deleted("kernel").len(), 1);
 
     kernel.restore_deleted(&cid, "kernel").expect("restore failed");
@@ -262,7 +264,7 @@ fn test_kernel_restore_deleted() {
 
     // Object should be searchable by tag again
     let results = kernel
-        .semantic_read(&plico::fs::Query::ByTags(vec!["restore-test".to_string()]), "kernel")
+        .semantic_read(&plico::fs::Query::ByTags(vec!["restore-test".to_string()]), "kernel", "default")
         .expect("read after restore failed");
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].data, b"restore me");
@@ -437,7 +439,7 @@ fn test_kernel_executor_dispatches_intent_action() {
     assert!(resp.ok);
     let cid = resp.cid.expect("should have cid from execution");
 
-    let obj = kernel.get_object(&cid, "executor-test-agent").unwrap();
+    let obj = kernel.get_object(&cid, "executor-test-agent", "default").unwrap();
     assert_eq!(obj.data, b"Created via intent execution");
 }
 
@@ -588,15 +590,16 @@ fn test_e2e_agent_autonomy_cycle() {
         assert!(resp.ok);
         created_cid = resp.cid.clone().expect("should have created object");
 
-        let obj = kernel.get_object(&created_cid, &agent_id).expect("get object");
+        let obj = kernel.get_object(&created_cid, &agent_id, "default").expect("get object");
         assert_eq!(obj.data, b"E2E: agent-created data via intent execution");
         assert_eq!(obj.meta.created_by, agent_id);
 
-        let iso_result = kernel.get_object(&created_cid, "other-agent");
+        let iso_result = kernel.get_object(&created_cid, "other-agent", "default");
         assert!(iso_result.is_err(), "other agent should not read this");
 
         kernel.remember_working(
             &agent_id,
+            "default",
             "E2E test completed successfully".to_string(),
             vec!["e2e".to_string()],
         ).unwrap();
@@ -622,10 +625,10 @@ fn test_e2e_agent_autonomy_cycle() {
         assert!(restored.is_some(), "E2ETestAgent should be restored");
         assert_eq!(restored.unwrap().name, "E2ETestAgent");
 
-        let obj = kernel2.get_object(&created_cid, &agent_id).expect("restored read");
+        let obj = kernel2.get_object(&created_cid, &agent_id, "default").expect("restored read");
         assert_eq!(obj.data, b"E2E: agent-created data via intent execution");
 
-        let memories = kernel2.recall(&agent_id);
+        let memories = kernel2.recall(&agent_id, "default");
         let has_e2e = memories.iter().any(|m| m.content.display().contains("E2E test completed"));
         assert!(has_e2e, "memory should survive restart: got {:?}",
             memories.iter().map(|m| m.content.display()).collect::<Vec<_>>());
@@ -690,15 +693,15 @@ fn test_e2e_tool_cognitive_memory_cycle() {
 
     // 7. Store ephemeral memories and access them for promotion
     for _ in 0..4 {
-        kernel.remember(&agent_id, "frequently accessed memory".to_string()).unwrap();
+        kernel.remember(&agent_id, "default", "frequently accessed memory".to_string()).unwrap();
     }
     // Use recall() which just reads; then use recall_relevant to trigger tracking
     for _ in 0..4 {
-        let _ = kernel.recall_relevant(&agent_id, 10000);
+        let _ = kernel.recall_relevant(&agent_id, "default", 10000);
     }
     // After enough accesses, promotion should occur
     kernel.promote_check(&agent_id);
-    let all_memories = kernel.recall(&agent_id);
+    let all_memories = kernel.recall(&agent_id, "default");
     let promoted = all_memories.iter().any(|m| {
         m.content.display().contains("frequently accessed memory")
             && m.tier == plico::memory::MemoryTier::Working
@@ -707,7 +710,7 @@ fn test_e2e_tool_cognitive_memory_cycle() {
         all_memories.iter().map(|m| (m.tier, m.access_count, m.content.display())).collect::<Vec<_>>());
 
     // 8. Test recall_relevant with budget
-    let relevant = kernel.recall_relevant(&agent_id, 1000);
+    let relevant = kernel.recall_relevant(&agent_id, "default", 1000);
     assert!(!relevant.is_empty(), "recall_relevant should return memories");
 
     // 9. Transition agent to Waiting (required for suspend)
@@ -720,7 +723,7 @@ fn test_e2e_tool_cognitive_memory_cycle() {
 
     // 9b. Suspend agent → verify context snapshot
     kernel.agent_suspend(&agent_id).expect("suspend failed");
-    let all_after_suspend = kernel.recall(&agent_id);
+    let all_after_suspend = kernel.recall(&agent_id, "default");
     let has_snapshot = all_after_suspend.iter().any(|m| {
         m.tags.contains(&"plico:internal:snapshot".to_string())
     });
@@ -734,7 +737,7 @@ fn test_e2e_tool_cognitive_memory_cycle() {
 
     // 11. Resume agent → verify snapshot loaded into ephemeral
     kernel.agent_resume(&agent_id).expect("resume failed");
-    let all_after_resume = kernel.recall(&agent_id);
+    let all_after_resume = kernel.recall(&agent_id, "default");
     let has_context = all_after_resume.iter().any(|m| {
         m.content.display().contains("Context restored")
     });
@@ -775,7 +778,7 @@ fn test_e2e_tool_cognitive_memory_cycle() {
     assert!(kernel2.tool_count() >= 19, "tools should be re-registered after restart");
 
     // Working memories should survive restart
-    let memories2 = kernel2.recall(&agent_id);
+    let memories2 = kernel2.recall(&agent_id, "default");
     let has_cognitive = memories2.iter().any(|m| {
         m.content.display().contains("important cognitive memory")
     });
@@ -870,7 +873,7 @@ fn test_e2e_intent_resources_messaging() {
     // Test quota enforcement on agent_b with memory_quota=3 via tool API
     kernel.agent_set_resources(&agent_b, Some(3), None, None).expect("set b resources");
     for i in 0..3 {
-        kernel.remember(&agent_b, format!("memory-{}", i)).unwrap();
+        kernel.remember(&agent_b, "default", format!("memory-{}", i)).unwrap();
     }
     // 4th store should be rejected by quota (via tool call)
     let overflow_result = kernel.execute_tool(
@@ -944,15 +947,15 @@ fn test_messaging_permission_denied() {
 fn test_kg_remove_edge_via_kernel() {
     let (kernel, _dir) = make_kernel();
     let agent = "kernel";
-    let n1 = kernel.kg_add_node("Alice", plico::fs::KGNodeType::Entity, serde_json::Value::Null, agent).unwrap();
-    let n2 = kernel.kg_add_node("Bob", plico::fs::KGNodeType::Entity, serde_json::Value::Null, agent).unwrap();
-    kernel.kg_add_edge(&n1, &n2, plico::fs::KGEdgeType::RelatedTo, None, agent).unwrap();
+    let n1 = kernel.kg_add_node("Alice", plico::fs::KGNodeType::Entity, serde_json::Value::Null, agent, "default").unwrap();
+    let n2 = kernel.kg_add_node("Bob", plico::fs::KGNodeType::Entity, serde_json::Value::Null, agent, "default").unwrap();
+    kernel.kg_add_edge(&n1, &n2, plico::fs::KGEdgeType::RelatedTo, None, agent, "default").unwrap();
 
-    let edges = kernel.kg_list_edges(agent, Some(&n1)).unwrap();
+    let edges = kernel.kg_list_edges(agent, "default", Some(&n1)).unwrap();
     assert_eq!(edges.len(), 1);
 
-    kernel.kg_remove_edge(&n1, &n2, Some(plico::fs::KGEdgeType::RelatedTo), agent).unwrap();
-    let edges_after = kernel.kg_list_edges(agent, Some(&n1)).unwrap();
+    kernel.kg_remove_edge(&n1, &n2, Some(plico::fs::KGEdgeType::RelatedTo), agent, "default").unwrap();
+    let edges_after = kernel.kg_list_edges(agent, "default", Some(&n1)).unwrap();
     assert_eq!(edges_after.len(), 0);
 }
 
@@ -960,11 +963,11 @@ fn test_kg_remove_edge_via_kernel() {
 fn test_kg_update_node_via_kernel() {
     let (kernel, _dir) = make_kernel();
     let agent = "kernel";
-    let nid = kernel.kg_add_node("OldLabel", plico::fs::KGNodeType::Entity, serde_json::json!({"key":"v1"}), agent).unwrap();
+    let nid = kernel.kg_add_node("OldLabel", plico::fs::KGNodeType::Entity, serde_json::json!({"key":"v1"}), agent, "default").unwrap();
 
-    kernel.kg_update_node(&nid, Some("NewLabel"), Some(serde_json::json!({"key":"v2","extra":true})), agent).unwrap();
+    kernel.kg_update_node(&nid, Some("NewLabel"), Some(serde_json::json!({"key":"v2","extra":true})), agent, "default").unwrap();
 
-    let node = kernel.kg_get_node(&nid, agent).unwrap().unwrap();
+    let node = kernel.kg_get_node(&nid, agent, "default").unwrap().unwrap();
     assert_eq!(node.label, "NewLabel");
     assert_eq!(node.properties["key"], "v2");
     assert_eq!(node.properties["extra"], true);
@@ -974,15 +977,15 @@ fn test_kg_update_node_via_kernel() {
 fn test_kg_remove_node_cascades_edges() {
     let (kernel, _dir) = make_kernel();
     let agent = "kernel";
-    let n1 = kernel.kg_add_node("Center", plico::fs::KGNodeType::Entity, serde_json::Value::Null, agent).unwrap();
-    let n2 = kernel.kg_add_node("Leaf", plico::fs::KGNodeType::Entity, serde_json::Value::Null, agent).unwrap();
-    kernel.kg_add_edge(&n1, &n2, plico::fs::KGEdgeType::Mentions, None, agent).unwrap();
+    let n1 = kernel.kg_add_node("Center", plico::fs::KGNodeType::Entity, serde_json::Value::Null, agent, "default").unwrap();
+    let n2 = kernel.kg_add_node("Leaf", plico::fs::KGNodeType::Entity, serde_json::Value::Null, agent, "default").unwrap();
+    kernel.kg_add_edge(&n1, &n2, plico::fs::KGEdgeType::Mentions, None, agent, "default").unwrap();
 
-    kernel.kg_remove_node(&n1, agent).unwrap();
+    kernel.kg_remove_node(&n1, agent, "default").unwrap();
 
-    let node = kernel.kg_get_node(&n1, agent).unwrap();
+    let node = kernel.kg_get_node(&n1, agent, "default").unwrap();
     assert!(node.is_none());
-    let edges = kernel.kg_list_edges(agent, Some(&n1)).unwrap();
+    let edges = kernel.kg_list_edges(agent, "default", Some(&n1)).unwrap();
     assert_eq!(edges.len(), 0);
 }
 
@@ -1050,9 +1053,9 @@ fn test_remember_respects_memory_quota() {
     let id = kernel.register_agent("QuotaAgent".to_string());
     kernel.agent_set_resources(&id, Some(2), None, None).unwrap();
 
-    kernel.remember(&id, "first".to_string()).unwrap();
-    kernel.remember(&id, "second".to_string()).unwrap();
-    let result = kernel.remember(&id, "third".to_string());
+    kernel.remember(&id, "default", "first".to_string()).unwrap();
+    kernel.remember(&id, "default", "second".to_string()).unwrap();
+    let result = kernel.remember(&id, "default", "third".to_string());
     assert!(result.is_err());
     let err_msg = result.unwrap_err();
     assert!(err_msg.contains("quota") || err_msg.contains("Quota"));
@@ -1063,9 +1066,9 @@ fn test_memory_tier_api_via_handle_request() {
     use plico::api::semantic::ApiRequest;
     let (kernel, _dir) = make_kernel();
     let id = kernel.register_agent("MemTierAgent".to_string());
-    kernel.remember(&id, "test entry".to_string()).unwrap();
+    kernel.remember(&id, "default", "test entry".to_string()).unwrap();
 
-    let memories = kernel.recall(&id);
+    let memories = kernel.recall(&id, "default");
     let entry_id = memories[0].id.clone();
 
     let resp = kernel.handle_api_request(ApiRequest::MemoryMove {
@@ -1102,36 +1105,36 @@ fn test_v07_graph_scheduler_e2e_roundtrip() {
     let admin = "kernel";
 
     // 2. Add nodes + edges
-    let n1 = kernel.kg_add_node("Project-X", plico::fs::KGNodeType::Entity, serde_json::json!({"status":"active"}), &agent_id).unwrap();
-    let n2 = kernel.kg_add_node("Meeting-2026-04-18", plico::fs::KGNodeType::Entity, serde_json::Value::Null, &agent_id).unwrap();
-    let n3 = kernel.kg_add_node("Decision-A", plico::fs::KGNodeType::Fact, serde_json::Value::Null, &agent_id).unwrap();
-    kernel.kg_add_edge(&n1, &n2, plico::fs::KGEdgeType::RelatedTo, Some(0.9), &agent_id).unwrap();
-    kernel.kg_add_edge(&n2, &n3, plico::fs::KGEdgeType::HasFact, Some(0.8), &agent_id).unwrap();
+    let n1 = kernel.kg_add_node("Project-X", plico::fs::KGNodeType::Entity, serde_json::json!({"status":"active"}), &agent_id, "default").unwrap();
+    let n2 = kernel.kg_add_node("Meeting-2026-04-18", plico::fs::KGNodeType::Entity, serde_json::Value::Null, &agent_id, "default").unwrap();
+    let n3 = kernel.kg_add_node("Decision-A", plico::fs::KGNodeType::Fact, serde_json::Value::Null, &agent_id, "default").unwrap();
+    kernel.kg_add_edge(&n1, &n2, plico::fs::KGEdgeType::RelatedTo, Some(0.9), &agent_id, "default").unwrap();
+    kernel.kg_add_edge(&n2, &n3, plico::fs::KGEdgeType::HasFact, Some(0.8), &agent_id, "default").unwrap();
 
     // 3. Update node
-    kernel.kg_update_node(&n1, Some("Project-X-Updated"), Some(serde_json::json!({"status":"active","priority":"high"})), &agent_id).unwrap();
-    let updated = kernel.kg_get_node(&n1, &agent_id).unwrap().unwrap();
+    kernel.kg_update_node(&n1, Some("Project-X-Updated"), Some(serde_json::json!({"status":"active","priority":"high"})), &agent_id, "default").unwrap();
+    let updated = kernel.kg_get_node(&n1, &agent_id, "default").unwrap().unwrap();
     assert_eq!(updated.label, "Project-X-Updated");
     assert_eq!(updated.properties["priority"], "high");
 
     // 4. Verify edges (use agent_id who owns the nodes)
-    let edges = kernel.kg_list_edges(&agent_id, Some(&n1)).unwrap();
+    let edges = kernel.kg_list_edges(&agent_id, "default", Some(&n1)).unwrap();
     assert_eq!(edges.len(), 1);
 
     // 5. Remove edge → verify (use admin for Delete permission)
-    kernel.kg_remove_edge(&n1, &n2, Some(plico::fs::KGEdgeType::RelatedTo), admin).unwrap();
-    let edges_after = kernel.kg_list_edges(&agent_id, Some(&n1)).unwrap();
+    kernel.kg_remove_edge(&n1, &n2, Some(plico::fs::KGEdgeType::RelatedTo), admin, "default").unwrap();
+    let edges_after = kernel.kg_list_edges(&agent_id, "default", Some(&n1)).unwrap();
     assert_eq!(edges_after.len(), 0);
 
     // 6. Remove node → verify cascade (use admin for Delete)
-    kernel.kg_remove_node(&n2, admin).unwrap();
-    assert!(kernel.kg_get_node(&n2, &agent_id).unwrap().is_none());
+    kernel.kg_remove_node(&n2, admin, "default").unwrap();
+    assert!(kernel.kg_get_node(&n2, &agent_id, "default").unwrap().is_none());
 
     // 7. Store memories up to quota → verify 6th rejected
     for i in 0..5 {
-        kernel.remember(&agent_id, format!("memory-{}", i)).unwrap();
+        kernel.remember(&agent_id, "default", format!("memory-{}", i)).unwrap();
     }
-    let overflow = kernel.remember(&agent_id, "overflow".to_string());
+    let overflow = kernel.remember(&agent_id, "default", "overflow".to_string());
     assert!(overflow.is_err(), "6th memory should exceed quota=5");
 
     // 8. Complete agent → verify no more intents accepted
@@ -1164,7 +1167,7 @@ fn test_list_nodes_pagination() {
     let agent_id = kernel.register_agent("paginator".to_string());
 
     for i in 0..10 {
-        let _ = kernel.kg_add_node(&format!("n{}", i), plico::fs::KGNodeType::Entity, serde_json::Value::Null, &agent_id);
+        let _ = kernel.kg_add_node(&format!("n{}", i), plico::fs::KGNodeType::Entity, serde_json::Value::Null, &agent_id, "default");
     }
 
     let resp = kernel.handle_api_request(ApiRequest::ListNodes {
@@ -1191,9 +1194,9 @@ fn test_list_edges_pagination() {
     let mut src_ids = Vec::new();
     let mut dst_ids = Vec::new();
     for i in 0..5 {
-        let sid = kernel.kg_add_node(&format!("s{}", i), plico::fs::KGNodeType::Entity, serde_json::Value::Null, &agent_id).unwrap();
-        let did = kernel.kg_add_node(&format!("d{}", i), plico::fs::KGNodeType::Entity, serde_json::Value::Null, &agent_id).unwrap();
-        kernel.kg_add_edge(&sid, &did, plico::fs::KGEdgeType::RelatedTo, Some(1.0), &agent_id).unwrap();
+        let sid = kernel.kg_add_node(&format!("s{}", i), plico::fs::KGNodeType::Entity, serde_json::Value::Null, &agent_id, "default").unwrap();
+        let did = kernel.kg_add_node(&format!("d{}", i), plico::fs::KGNodeType::Entity, serde_json::Value::Null, &agent_id, "default").unwrap();
+        kernel.kg_add_edge(&sid, &did, plico::fs::KGEdgeType::RelatedTo, Some(1.0), &agent_id, "default").unwrap();
         src_ids.push(sid);
         dst_ids.push(did);
     }
@@ -1214,7 +1217,7 @@ fn test_pagination_beyond_total() {
     let agent_id = kernel.register_agent("beyond".to_string());
 
     for i in 0..3 {
-        let _ = kernel.kg_add_node(&format!("x{}", i), plico::fs::KGNodeType::Entity, serde_json::Value::Null, &agent_id);
+        let _ = kernel.kg_add_node(&format!("x{}", i), plico::fs::KGNodeType::Entity, serde_json::Value::Null, &agent_id, "default");
     }
 
     let resp = kernel.handle_api_request(ApiRequest::ListNodes {
@@ -1413,7 +1416,7 @@ fn test_intent_execute_sync_stores_result_in_memory() {
         Ok(r) => {
             assert!(!r.resolved.is_empty(), "should have resolved intents");
             if r.executed {
-                let memories = kernel.recall(&agent_id);
+                let memories = kernel.recall(&agent_id, "default");
                 let has_exec_memory = memories.iter().any(|m| {
                     m.tags.iter().any(|t| t == "execution-success" || t == "execution-failure")
                 });
@@ -1471,7 +1474,7 @@ fn test_intent_execute_sync_learn_creates_procedural_memory() {
 
     if let Ok(r) = result {
         if r.executed && r.success {
-            let proc_memories = kernel.recall_procedural(&agent_id, None);
+            let proc_memories = kernel.recall_procedural(&agent_id, "default", None);
             let has_auto = proc_memories.iter().any(|m| {
                 m.tags.iter().any(|t| t == "auto-learned")
             });
@@ -1536,14 +1539,14 @@ fn test_e2e_autonomous_loop_resolve_execute_learn_reuse() {
     assert!(result.executed, "should execute the action");
 
     // Step 2: Verify execution result stored in working memory
-    let memories = kernel.recall(&agent_id);
+    let memories = kernel.recall(&agent_id, "default");
     let has_exec_result = memories.iter().any(|m| {
         m.tags.iter().any(|t| t.contains("execution"))
     });
     assert!(has_exec_result, "execution outcome should be in memory");
 
     // Step 3: Verify procedural memory was learned
-    let proc_memories = kernel.recall_procedural(&agent_id, None);
+    let proc_memories = kernel.recall_procedural(&agent_id, "default", None);
     let auto_learned = proc_memories.iter().find(|m| {
         m.tags.iter().any(|t| t == "auto-learned")
     });
@@ -1576,7 +1579,7 @@ fn test_e2e_autonomous_loop_resolve_execute_learn_reuse() {
             result2.resolved.iter().map(|r| &r.explanation).collect::<Vec<_>>());
 
         // Step 5: Verify reuse is tracked in memory
-        let memories_after = kernel.recall(&agent_id);
+        let memories_after = kernel.recall(&agent_id, "default");
         let has_reused_tag = memories_after.iter().any(|m| {
             m.tags.iter().any(|t| t == "reused")
         });
@@ -1602,6 +1605,7 @@ fn test_version_history_returns_chain() {
         b"version two".to_vec(),
         None,
         "cli",
+        "default",
     ).unwrap();
 
     let cid3 = kernel.semantic_update(
@@ -1609,6 +1613,7 @@ fn test_version_history_returns_chain() {
         b"version three".to_vec(),
         None,
         "cli",
+        "default",
     ).unwrap();
 
     let history = kernel.version_history(&cid3, "cli");
@@ -1647,14 +1652,15 @@ fn test_rollback_restores_previous_content() {
         b"modified content".to_vec(),
         Some(vec!["doc".to_string(), "changed".to_string()]),
         "cli",
+        "default",
     ).unwrap();
 
-    let obj_before = kernel.get_object(&cid2, "cli").unwrap();
+    let obj_before = kernel.get_object(&cid2, "cli", "default").unwrap();
     assert_eq!(String::from_utf8_lossy(&obj_before.data), "modified content");
 
     let restored_cid = kernel.rollback(&cid2, "cli").expect("rollback should succeed");
 
-    let restored_obj = kernel.get_object(&restored_cid, "cli").unwrap();
+    let restored_obj = kernel.get_object(&restored_cid, "cli", "default").unwrap();
     assert_eq!(
         String::from_utf8_lossy(&restored_obj.data),
         "original content",
@@ -1694,6 +1700,7 @@ fn test_history_and_rollback_via_api() {
         b"api version two".to_vec(),
         None,
         "cli",
+        "default",
     ).unwrap();
 
     // Test History API
@@ -1762,7 +1769,7 @@ fn test_multi_step_learn_creates_multi_step_procedure() {
 
     if result.success && result.resolved.len() > 1 {
         // Verify procedural memory has multiple steps
-        let procedures = kernel.recall_procedural(&agent_id, None);
+        let procedures = kernel.recall_procedural(&agent_id, "default", None);
         let multi_proc = procedures.iter().find(|p| {
             if let plico::memory::MemoryContent::Procedure(ref proc) = p.content {
                 proc.steps.len() > 1
@@ -1879,12 +1886,12 @@ fn test_memory_scope_private_isolation() {
     kernel.permission_grant(&agent_a, PermissionAction::Read, None, None);
     kernel.permission_grant(&agent_b, PermissionAction::Read, None, None);
 
-    kernel.remember_working(&agent_a, "secret data".to_string(), vec!["private".into()]).unwrap();
+    kernel.remember_working(&agent_a, "default", "secret data".to_string(), vec!["private".into()]).unwrap();
 
-    let a_memories = kernel.recall(&agent_a);
+    let a_memories = kernel.recall(&agent_a, "default");
     assert_eq!(a_memories.len(), 1, "agent-a sees own private memory");
 
-    let b_memories = kernel.recall(&agent_b);
+    let b_memories = kernel.recall(&agent_b, "default");
     assert_eq!(b_memories.len(), 0, "agent-b does NOT see agent-a's private memory");
 }
 
@@ -1902,6 +1909,7 @@ fn test_memory_scope_shared_cross_agent() {
 
     kernel.remember_long_term_scoped(
         &agent_a,
+        "default",
         "shared company knowledge".to_string(),
         vec!["company".into()],
         80,
@@ -1910,13 +1918,14 @@ fn test_memory_scope_shared_cross_agent() {
 
     kernel.remember_long_term(
         &agent_a,
+        "default",
         "agent-a private note".to_string(),
         vec!["private".into()],
         50,
     ).unwrap();
 
-    let visible_a = kernel.recall_visible(&agent_a, &[]);
-    let visible_b = kernel.recall_visible(&agent_b, &[]);
+    let visible_a = kernel.recall_visible(&agent_a, "default", &[]);
+    let visible_b = kernel.recall_visible(&agent_b, "default", &[]);
 
     assert_eq!(visible_a.len(), 2, "agent-a sees both private + shared");
     assert_eq!(visible_b.len(), 1, "agent-b only sees shared");
@@ -1939,14 +1948,15 @@ fn test_memory_scope_group_visibility() {
 
     kernel.remember_working_scoped(
         &agent_a,
+        "default",
         "engineering standup notes".to_string(),
         vec!["standup".into()],
         MemoryScope::Group("engineering".into()),
     ).unwrap();
 
-    let visible_a = kernel.recall_visible(&agent_a, &[]);
-    let visible_b = kernel.recall_visible(&agent_b, &["engineering".into()]);
-    let visible_c = kernel.recall_visible(&agent_c, &["marketing".into()]);
+    let visible_a = kernel.recall_visible(&agent_a, "default", &[]);
+    let visible_b = kernel.recall_visible(&agent_b, "default", &["engineering".into()]);
+    let visible_c = kernel.recall_visible(&agent_c, "default", &["marketing".into()]);
 
     assert_eq!(visible_a.len(), 1, "owner sees own group memory");
     assert_eq!(visible_b.len(), 1, "engineering member sees group memory");
@@ -1967,6 +1977,7 @@ fn test_shared_procedural_memory_cross_agent() {
 
     kernel.remember_procedural_scoped(
         &agent_a,
+        "default",
         "deploy-workflow".to_string(),
         "Standard deploy procedure".to_string(),
         vec![plico::memory::layered::ProcedureStep {
@@ -1980,14 +1991,14 @@ fn test_shared_procedural_memory_cross_agent() {
         MemoryScope::Shared,
     ).unwrap();
 
-    let a_procs = kernel.recall_procedural(&agent_a, None);
+    let a_procs = kernel.recall_procedural(&agent_a, "default", None);
     assert_eq!(a_procs.len(), 1, "agent-a sees own procedural");
 
     let shared = kernel.recall_shared_procedural(None);
     assert_eq!(shared.len(), 1, "shared procedural is discoverable");
     assert!(shared[0].content.display().contains("deploy"));
 
-    let b_visible = kernel.recall_visible(&agent_b, &[]);
+    let b_visible = kernel.recall_visible(&agent_b, "default", &[]);
     assert_eq!(b_visible.len(), 1, "agent-b sees shared procedural via recall_visible");
 }
 
@@ -2055,7 +2066,7 @@ fn test_cross_agent_workflow_reuse_via_shared_scope() {
     assert!(result.executed && result.success, "Agent A should successfully learn");
 
     // Verify Agent A has the procedural memory (private scope by default)
-    let a_procs = kernel.recall_procedural(&agent_a, None);
+    let a_procs = kernel.recall_procedural(&agent_a, "default", None);
     assert!(!a_procs.is_empty(), "Agent A should have learned procedure");
 
     // Agent B tries to reuse — should NOT find it (private scope)
@@ -2075,6 +2086,7 @@ fn test_cross_agent_workflow_reuse_via_shared_scope() {
     if let plico::memory::MemoryContent::Procedure(ref proc) = proc_entry.content {
         kernel.remember_procedural_scoped(
             &agent_a,
+            "default",
             proc.name.clone(),
             proc.description.clone(),
             proc.steps.clone(),
@@ -2135,11 +2147,12 @@ fn test_shared_procedure_appears_as_tool() {
     assert!(result.success);
 
     // Share the learned procedure
-    let procs = kernel.recall_procedural(&agent_a, None);
+    let procs = kernel.recall_procedural(&agent_a, "default", None);
     assert!(!procs.is_empty());
     if let plico::memory::MemoryContent::Procedure(ref proc) = procs[0].content {
         kernel.remember_procedural_scoped(
             &agent_a,
+            "default",
             proc.name.clone(),
             proc.description.clone(),
             proc.steps.clone(),
@@ -2190,15 +2203,15 @@ fn test_checkpoint_creates_cas_object() {
     kernel.permission_grant(&agent_id, PermissionAction::Write, None, None);
 
     // Store some memories
-    kernel.remember_working(&agent_id, "task in progress".into(), vec!["wip".into()]).unwrap();
-    kernel.remember_long_term(&agent_id, "important fact".into(), vec!["fact".into()], 80).unwrap();
+    kernel.remember_working(&agent_id, "default", "task in progress".into(), vec!["wip".into()]).unwrap();
+    kernel.remember_long_term(&agent_id, "default", "important fact".into(), vec!["fact".into()], 80).unwrap();
 
     // Checkpoint
     let cid = kernel.checkpoint_agent(&agent_id).expect("checkpoint should succeed");
     assert!(!cid.is_empty(), "CID should be non-empty");
 
     // Verify CAS object exists
-    let obj = kernel.get_object(&cid, &agent_id).expect("should fetch checkpoint object");
+    let obj = kernel.get_object(&cid, &agent_id, "default").expect("should fetch checkpoint object");
     let entries: Vec<plico::memory::MemoryEntry> = serde_json::from_slice(&obj.data).unwrap();
     assert_eq!(entries.len(), 2, "checkpoint should contain 2 memory entries");
 }
@@ -2213,15 +2226,15 @@ fn test_restore_checkpoint_replaces_memory() {
     kernel.permission_grant(&agent_id, PermissionAction::Write, None, None);
 
     // Store initial state and checkpoint
-    kernel.remember_working(&agent_id, "original note".into(), vec!["v1".into()]).unwrap();
+    kernel.remember_working(&agent_id, "default", "original note".into(), vec!["v1".into()]).unwrap();
     let cid = kernel.checkpoint_agent(&agent_id).unwrap();
 
     // Modify memory (add more, simulating continued work)
-    kernel.remember_working(&agent_id, "new note after checkpoint".into(), vec!["v2".into()]).unwrap();
-    kernel.remember_long_term(&agent_id, "extra long-term".into(), vec!["v2".into()], 90).unwrap();
+    kernel.remember_working(&agent_id, "default", "new note after checkpoint".into(), vec!["v2".into()]).unwrap();
+    kernel.remember_long_term(&agent_id, "default", "extra long-term".into(), vec!["v2".into()], 90).unwrap();
 
     // Verify memory grew
-    let before_restore = kernel.recall(&agent_id);
+    let before_restore = kernel.recall(&agent_id, "default");
     assert!(before_restore.len() >= 3, "should have original + new entries");
 
     // Restore to checkpoint
@@ -2229,7 +2242,7 @@ fn test_restore_checkpoint_replaces_memory() {
     assert_eq!(restored, 1, "should restore 1 entry from checkpoint");
 
     // Verify memory matches checkpoint state
-    let after_restore = kernel.recall(&agent_id);
+    let after_restore = kernel.recall(&agent_id, "default");
     assert_eq!(after_restore.len(), 1, "should have exactly the checkpointed entries");
     assert!(
         after_restore.iter().any(|e| {
@@ -2250,7 +2263,7 @@ fn test_checkpoint_deduplication() {
     kernel.permission_grant(&agent_id, PermissionAction::Read, None, None);
     kernel.permission_grant(&agent_id, PermissionAction::Write, None, None);
 
-    kernel.remember_working(&agent_id, "stable state".into(), vec!["stable".into()]).unwrap();
+    kernel.remember_working(&agent_id, "default", "stable state".into(), vec!["stable".into()]).unwrap();
 
     // Two checkpoints of the same state should produce the same CID (CAS dedup)
     let cid1 = kernel.checkpoint_agent(&agent_id).unwrap();
@@ -2287,7 +2300,7 @@ fn test_checkpoint_via_api() {
     kernel.permission_grant(&agent_id, PermissionAction::Read, None, None);
     kernel.permission_grant(&agent_id, PermissionAction::Write, None, None);
 
-    kernel.remember_working(&agent_id, "api test data".into(), vec!["api".into()]).unwrap();
+    kernel.remember_working(&agent_id, "default", "api test data".into(), vec!["api".into()]).unwrap();
 
     let resp = kernel.handle_api_request(plico::api::semantic::ApiRequest::AgentCheckpoint {
         agent_id: agent_id.clone(),
@@ -2322,13 +2335,13 @@ fn test_suspend_auto_checkpoints() {
         agent_id: agent_id.clone(),
     });
 
-    kernel.remember_working(&agent_id, "important data".into(), vec!["pre-suspend".into()]).unwrap();
+    kernel.remember_working(&agent_id, "default", "important data".into(), vec!["pre-suspend".into()]).unwrap();
 
     // Suspend — should auto-checkpoint
     kernel.agent_suspend(&agent_id).unwrap();
 
     // Look for checkpoint tag in the context snapshot
-    let memories = kernel.recall(&agent_id);
+    let memories = kernel.recall(&agent_id, "default");
     let has_checkpoint_tag = memories.iter().any(|e| {
         e.tags.iter().any(|t| t.starts_with("checkpoint:"))
     });
@@ -2347,9 +2360,9 @@ fn test_full_suspend_resume_cycle_preserves_memory() {
     kernel.permission_grant(&agent_id, PermissionAction::Write, None, None);
 
     // Store working memory
-    kernel.remember_working(&agent_id, "important fact 1".into(), vec!["fact".into()]).unwrap();
-    kernel.remember_working(&agent_id, "important fact 2".into(), vec!["fact".into()]).unwrap();
-    let pre_suspend_count = kernel.recall(&agent_id).len();
+    kernel.remember_working(&agent_id, "default", "important fact 1".into(), vec!["fact".into()]).unwrap();
+    kernel.remember_working(&agent_id, "default", "important fact 2".into(), vec!["fact".into()]).unwrap();
+    let pre_suspend_count = kernel.recall(&agent_id, "default").len();
     assert_eq!(pre_suspend_count, 2);
 
     // Move to Running so we can suspend
@@ -2375,7 +2388,7 @@ fn test_full_suspend_resume_cycle_preserves_memory() {
 
     // Memory should contain the original facts (restored from checkpoint)
     // plus an ephemeral context summary
-    let post_resume = kernel.recall(&agent_id);
+    let post_resume = kernel.recall(&agent_id, "default");
     let has_fact1 = post_resume.iter().any(|e| {
         if let plico::memory::MemoryContent::Text(t) = &e.content { t.contains("important fact 1") } else { false }
     });
@@ -2456,7 +2469,7 @@ fn test_event_bus_memory_stored_notification() {
 
     let sub_id = kernel.event_subscribe();
 
-    kernel.remember_working(&agent, "test fact".into(), vec!["tag".into()]).unwrap();
+    kernel.remember_working(&agent, "default", "test fact".into(), vec!["tag".into()]).unwrap();
 
     let events = kernel.event_poll(&sub_id).unwrap();
     let has_mem_stored = events.iter().any(|e| {
@@ -2481,7 +2494,7 @@ fn test_event_bus_cross_agent_reactive_workflow() {
         None,
     ).unwrap();
 
-    kernel.remember_working(&agent_a, "learned something".into(), vec![]).unwrap();
+    kernel.remember_working(&agent_a, "default", "learned something".into(), vec![]).unwrap();
 
     let events = kernel.event_poll(&sub_b).unwrap();
     assert!(events.len() >= 2, "consumer should see both producer events");
@@ -2559,7 +2572,7 @@ fn test_event_bus_filtered_subscribe_by_type() {
     };
     let sub_id = kernel.event_subscribe_filtered(Some(filter));
 
-    let _ = kernel.remember_working_scoped(&agent, "filter-noise".into(), vec![], plico::memory::MemoryScope::Private);
+    let _ = kernel.remember_working_scoped(&agent, "default", "filter-noise".into(), vec![], plico::memory::MemoryScope::Private);
     kernel.semantic_create(b"filtered data".to_vec(), vec!["ft".into()], &agent, None).unwrap();
 
     let events = kernel.event_poll(&sub_id).unwrap();
@@ -2608,7 +2621,7 @@ fn test_event_bus_filtered_subscribe_via_api() {
     let sub_id = resp.subscription_id.unwrap();
 
     kernel.semantic_create(b"noise".to_vec(), vec![], &agent, None).unwrap();
-    let _ = kernel.remember_working_scoped(&agent, "signal".into(), vec![], plico::memory::MemoryScope::Private);
+    let _ = kernel.remember_working_scoped(&agent, "default", "signal".into(), vec![], plico::memory::MemoryScope::Private);
 
     let resp = kernel.handle_api_request(ApiRequest::EventPoll { subscription_id: sub_id.clone() });
     assert!(resp.ok);
@@ -2714,8 +2727,8 @@ fn test_agent_usage_tracks_memory() {
     let (kernel, _dir) = make_kernel();
     let agent = kernel.register_agent("mem-track".into());
 
-    kernel.remember(&agent, "fact one".into()).unwrap();
-    kernel.remember(&agent, "fact two".into()).unwrap();
+    kernel.remember(&agent, "default", "fact one".into()).unwrap();
+    kernel.remember(&agent, "default", "fact two".into()).unwrap();
 
     let usage = kernel.agent_usage(&agent).unwrap();
     assert_eq!(usage.memory_entries, 2);
@@ -2752,7 +2765,7 @@ fn test_agent_usage_via_api() {
     let (kernel, _dir) = make_kernel();
     let agent = kernel.register_agent("api-usage".into());
 
-    kernel.remember(&agent, "data".into()).unwrap();
+    kernel.remember(&agent, "default", "data".into()).unwrap();
 
     let resp = kernel.handle_api_request(plico::api::semantic::ApiRequest::AgentUsage {
         agent_id: agent.clone(),
@@ -2836,7 +2849,7 @@ fn test_discover_agents_via_api() {
 fn test_agent_card_includes_usage() {
     let (kernel, _dir) = make_kernel();
     let a = kernel.register_agent("tracked".into());
-    kernel.remember(&a, "test memory".into()).unwrap();
+    kernel.remember(&a, "default", "test memory".into()).unwrap();
     kernel.execute_tool("cas.create", &serde_json::json!({"content": "x", "tags": ["t"]}), &a);
 
     let cards = kernel.discover_agents(None, None);

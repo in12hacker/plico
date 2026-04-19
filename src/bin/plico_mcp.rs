@@ -197,7 +197,7 @@ fn dispatch_tool(name: &str, args: &Value, kernel: &AIKernel) -> Result<String, 
         }
 
         "plico_skills_list" => {
-            let entries = kernel.recall_procedural(agent, None);
+            let entries = kernel.recall_procedural(agent, "default", None);
             let skills: Vec<Value> = entries.iter().filter_map(|e| {
                 if let plico::memory::MemoryContent::Procedure(p) = &e.content {
                     Some(serde_json::json!({
@@ -220,7 +220,7 @@ fn dispatch_tool(name: &str, args: &Value, kernel: &AIKernel) -> Result<String, 
         "plico_skills_run" => {
             let name = args.get("name").and_then(|n| n.as_str())
                 .ok_or("missing required parameter: name")?;
-            let entries = kernel.recall_procedural(agent, Some(name));
+            let entries = kernel.recall_procedural(agent, "default", Some(name));
             if entries.is_empty() {
                 return Err(format!("no skill named '{}' found for agent '{}'", name, agent));
             }

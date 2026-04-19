@@ -22,14 +22,17 @@ impl crate::kernel::AIKernel {
     }
 
     /// Retrieve an object by CID.
-    pub fn get_object(&self, cid: &str, agent_id: &str) -> std::io::Result<AIObject> {
-        let ctx = PermissionContext::new(agent_id.to_string(), "default".to_string());
+    pub fn get_object(&self, cid: &str, agent_id: &str, tenant_id: &str) -> std::io::Result<AIObject> {
+        let ctx = PermissionContext::new(agent_id.to_string(), tenant_id.to_string());
         self.permissions.check(&ctx, PermissionAction::Read)?;
         let results = self.fs.read(&Query::ByCid(cid.to_string()))?;
         let obj = results.into_iter().next().ok_or_else(|| {
             std::io::Error::new(std::io::ErrorKind::NotFound, format!("CID={}", cid))
         })?;
-        self.permissions.check_ownership(agent_id, &obj.meta.created_by)?;
+        // Check tenant isolation
+        self.permissions.check_tenant_access(&ctx, &obj.meta.tenant_id)?;
+        // Check ownership (owner can always access)
+        self.permissions.check_ownership(&ctx, &obj.meta.created_by)?;
         Ok(obj)
     }
 
@@ -59,11 +62,12 @@ impl crate::kernel::AIKernel {
         &self,
         query: &str,
         agent_id: &str,
+        tenant_id: &str,
         limit: usize,
         require_tags: Vec<String>,
         exclude_tags: Vec<String>,
     ) -> std::io::Result<Vec<crate::fs::SearchResult>> {
-        self.semantic_search_with_time(query, agent_id, limit, require_tags, exclude_tags, None, None)
+        self.semantic_search_with_time(query, agent_id, tenant_id, limit, require_tags, exclude_tags, None, None)
     }
 
     /// Semantic search with time-range bounds.
@@ -72,13 +76,14 @@ impl crate::kernel::AIKernel {
         &self,
         query: &str,
         agent_id: &str,
+        tenant_id: &str,
         limit: usize,
         require_tags: Vec<String>,
         exclude_tags: Vec<String>,
         since: Option<i64>,
         until: Option<i64>,
     ) -> std::io::Result<Vec<crate::fs::SearchResult>> {
-        let ctx = PermissionContext::new(agent_id.to_string(), "default".to_string());
+        let ctx = PermissionContext::new(agent_id.to_string(), tenant_id.to_string());
         self.permissions.check(&ctx, PermissionAction::Read)?;
         let can_read_any = self.permissions.can_read_any(agent_id);
 
@@ -91,28 +96,44 @@ impl crate::kernel::AIKernel {
         };
 
         let results = self.fs.search_with_filter(query, limit * 2, filter);
-        Ok(if can_read_any {
-            results.into_iter().take(limit).collect()
-        } else {
-            results.into_iter()
-                .filter(|r| r.meta.created_by == agent_id)
-                .take(limit)
-                .collect()
-        })
+        // Filter by tenant isolation AND ownership
+        Ok(results.into_iter()
+            .filter(|r| {
+                // Tenant isolation: must match tenant_id or have CrossTenant permission
+                if r.meta.tenant_id != tenant_id {
+                    return false;
+                }
+                // Ownership check
+                if can_read_any {
+                    true
+                } else {
+                    r.meta.created_by == agent_id
+                }
+            })
+            .take(limit)
+            .collect())
     }
 
-    /// Semantic read with ownership isolation.
-    pub fn semantic_read(&self, query: &Query, agent_id: &str) -> std::io::Result<Vec<AIObject>> {
-        let ctx = PermissionContext::new(agent_id.to_string(), "default".to_string());
+    /// Semantic read with ownership and tenant isolation.
+    pub fn semantic_read(&self, query: &Query, agent_id: &str, tenant_id: &str) -> std::io::Result<Vec<AIObject>> {
+        let ctx = PermissionContext::new(agent_id.to_string(), tenant_id.to_string());
         self.permissions.check(&ctx, PermissionAction::Read)?;
         let results = self.fs.read(query)?;
-        if self.permissions.can_read_any(agent_id) {
-            Ok(results)
-        } else {
-            Ok(results.into_iter()
-                .filter(|obj| obj.meta.created_by == agent_id)
-                .collect())
-        }
+        let can_read_any = self.permissions.can_read_any(agent_id);
+        Ok(results.into_iter()
+            .filter(|obj| {
+                // Tenant isolation: must match tenant_id or have CrossTenant permission
+                if obj.meta.tenant_id != tenant_id {
+                    return false;
+                }
+                // Ownership check
+                if can_read_any {
+                    true
+                } else {
+                    obj.meta.created_by == agent_id
+                }
+            })
+            .collect())
     }
 
     /// Semantic update — only owner or trusted can update.
@@ -122,24 +143,29 @@ impl crate::kernel::AIKernel {
         new_content: Vec<u8>,
         new_tags: Option<Vec<String>>,
         agent_id: &str,
+        tenant_id: &str,
     ) -> std::io::Result<String> {
-        let ctx = PermissionContext::new(agent_id.to_string(), "default".to_string());
+        let ctx = PermissionContext::new(agent_id.to_string(), tenant_id.to_string());
         self.permissions.check(&ctx, PermissionAction::Write)?;
         if let Ok(obj) = self.fs.read(&Query::ByCid(cid.to_string())) {
             if let Some(existing) = obj.first() {
-                self.permissions.check_ownership(agent_id, &existing.meta.created_by)?;
+                // Check tenant isolation first
+                self.permissions.check_tenant_access(&ctx, &existing.meta.tenant_id)?;
+                self.permissions.check_ownership(&ctx, &existing.meta.created_by)?;
             }
         }
         self.fs.update(cid, new_content, new_tags, agent_id.to_string())
     }
 
     /// Semantic delete (soft delete) — only owner or trusted can delete.
-    pub fn semantic_delete(&self, cid: &str, agent_id: &str) -> std::io::Result<()> {
-        let ctx = PermissionContext::new(agent_id.to_string(), "default".to_string());
+    pub fn semantic_delete(&self, cid: &str, agent_id: &str, tenant_id: &str) -> std::io::Result<()> {
+        let ctx = PermissionContext::new(agent_id.to_string(), tenant_id.to_string());
         self.permissions.check(&ctx, PermissionAction::Delete)?;
         if let Ok(obj) = self.fs.read(&Query::ByCid(cid.to_string())) {
             if let Some(existing) = obj.first() {
-                self.permissions.check_ownership(agent_id, &existing.meta.created_by)?;
+                // Check tenant isolation first
+                self.permissions.check_tenant_access(&ctx, &existing.meta.tenant_id)?;
+                self.permissions.check_ownership(&ctx, &existing.meta.created_by)?;
             }
         }
         self.fs.delete(cid, agent_id.to_string())
@@ -259,6 +285,7 @@ impl crate::kernel::AIKernel {
             previous_obj.data.clone(),
             Some(previous_obj.meta.tags.clone()),
             agent_id,
+            "default",
         ).map_err(|e| format!("Rollback update failed: {}", e))?;
 
         self.maybe_persist_search_index();

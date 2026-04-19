@@ -31,7 +31,7 @@ pub fn cmd_add_node(kernel: &AIKernel, args: &[String]) -> ApiResponse {
         .unwrap_or(serde_json::Value::Null);
     let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
 
-    match kernel.kg_add_node(&label, node_type, props, &agent_id) {
+    match kernel.kg_add_node(&label, node_type, props, &agent_id, "default") {
         Ok(id) => ApiResponse::with_node_id(id),
         Err(e) => ApiResponse::error(e.to_string()),
     }
@@ -44,7 +44,7 @@ pub fn cmd_add_edge(kernel: &AIKernel, args: &[String]) -> ApiResponse {
     let weight = extract_arg(args, "--weight").and_then(|s| s.parse().ok());
     let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
 
-    match kernel.kg_add_edge(&src, &dst, edge_type, weight, &agent_id) {
+    match kernel.kg_add_edge(&src, &dst, edge_type, weight, &agent_id, "default") {
         Ok(()) => ApiResponse::ok(),
         Err(e) => ApiResponse::error(e.to_string()),
     }
@@ -56,12 +56,12 @@ pub fn cmd_list_nodes(kernel: &AIKernel, args: &[String]) -> ApiResponse {
 
     let nodes = if let Some(at_str) = extract_arg(args, "--at-time") {
         let t: u64 = at_str.parse().unwrap_or(0);
-        match kernel.kg_get_valid_nodes_at(&agent_id, node_type, t) {
+        match kernel.kg_get_valid_nodes_at(&agent_id, "default", node_type, t) {
             Ok(n) => n,
             Err(e) => return ApiResponse::error(e.to_string()),
         }
     } else {
-        match kernel.kg_list_nodes(node_type, &agent_id) {
+        match kernel.kg_list_nodes(node_type, &agent_id, "default") {
             Ok(n) => n,
             Err(e) => return ApiResponse::error(e.to_string()),
         }
@@ -112,7 +112,7 @@ pub fn cmd_get_node(kernel: &AIKernel, args: &[String]) -> ApiResponse {
     let node_id = extract_arg(args, "--id").unwrap_or_default();
     let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
 
-    match kernel.kg_get_node(&node_id, &agent_id) {
+    match kernel.kg_get_node(&node_id, &agent_id, "default") {
         Ok(Some(n)) => {
             let dto = KGNodeDto {
                 id: n.id, label: n.label, node_type: n.node_type,
@@ -130,7 +130,7 @@ pub fn cmd_list_edges(kernel: &AIKernel, args: &[String]) -> ApiResponse {
     let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
     let node_id = extract_arg(args, "--node");
 
-    match kernel.kg_list_edges(&agent_id, node_id.as_deref()) {
+    match kernel.kg_list_edges(&agent_id, "default", node_id.as_deref()) {
         Ok(edges) => {
             let dto: Vec<KGEdgeDto> = edges.into_iter().map(|e| KGEdgeDto {
                 src: e.src, dst: e.dst, edge_type: e.edge_type,
@@ -148,7 +148,7 @@ pub fn cmd_rm_node(kernel: &AIKernel, args: &[String]) -> ApiResponse {
     let node_id = extract_arg(args, "--id").unwrap_or_default();
     let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
 
-    match kernel.kg_remove_node(&node_id, &agent_id) {
+    match kernel.kg_remove_node(&node_id, &agent_id, "default") {
         Ok(()) => ApiResponse::ok(),
         Err(e) => ApiResponse::error(e.to_string()),
     }
@@ -160,7 +160,7 @@ pub fn cmd_rm_edge(kernel: &AIKernel, args: &[String]) -> ApiResponse {
     let edge_type = extract_arg(args, "--type").map(|s| parse_edge_type(&s));
     let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
 
-    match kernel.kg_remove_edge(&src, &dst, edge_type, &agent_id) {
+    match kernel.kg_remove_edge(&src, &dst, edge_type, &agent_id, "default") {
         Ok(()) => ApiResponse::ok(),
         Err(e) => ApiResponse::error(e.to_string()),
     }
@@ -173,7 +173,7 @@ pub fn cmd_update_node(kernel: &AIKernel, args: &[String]) -> ApiResponse {
         .and_then(|s| serde_json::from_str(&s).ok());
     let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
 
-    match kernel.kg_update_node(&node_id, label.as_deref(), properties, &agent_id) {
+    match kernel.kg_update_node(&node_id, label.as_deref(), properties, &agent_id, "default") {
         Ok(()) => ApiResponse::ok(),
         Err(e) => ApiResponse::error(e.to_string()),
     }
@@ -220,7 +220,7 @@ pub fn cmd_edge_history(kernel: &AIKernel, args: &[String]) -> ApiResponse {
         return ApiResponse::error("Missing --src or --dst argument");
     }
 
-    match kernel.kg_edge_history(&src, &dst, edge_type, &agent_id) {
+    match kernel.kg_edge_history(&src, &dst, edge_type, &agent_id, "default") {
         Ok(edges) => {
             let dtos: Vec<KGEdgeDto> = edges.iter().map(|e| {
                 KGEdgeDto {

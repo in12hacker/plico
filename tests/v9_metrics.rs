@@ -56,6 +56,7 @@ fn test_shared_memory_enables_cross_agent_knowledge() {
     let agent_a = register_with_permissions(&kernel, "cursor-session-1");
     kernel.remember_long_term_scoped(
         &agent_a,
+        "default",
         "auth module uses Arc<Mutex<T>> for thread-safe state".to_string(),
         vec!["architecture".to_string(), "auth".to_string()],
         90, // High importance
@@ -66,7 +67,7 @@ fn test_shared_memory_enables_cross_agent_knowledge() {
     let agent_b = register_with_permissions(&kernel, "cursor-session-2");
 
     // Agent B queries for relevant architectural knowledge
-    let visible = kernel.recall_visible(&agent_b, &[]);
+    let visible = kernel.recall_visible(&agent_b, "default", &[]);
 
     // Verify Agent B can see Agent A's shared insight
     let shared_insights: Vec<_> = visible.iter()
@@ -199,6 +200,7 @@ fn test_agent_b_reuses_agent_a_insights() {
     let agent_a = register_with_permissions(&kernel, "agent-a");
     kernel.remember_long_term_scoped(
         &agent_a,
+        "default",
         "src/auth/ directory contains the authentication logic. Key files: mod.rs (exports), \
         login.rs (login handler), session.rs (session management)".to_string(),
         vec!["architecture".to_string(), "auth".to_string(), "navigation".to_string()],
@@ -208,6 +210,7 @@ fn test_agent_b_reuses_agent_a_insights() {
 
     kernel.remember_long_term_scoped(
         &agent_a,
+        "default",
         "The scheduler module uses a priority queue with 4 priority levels: \
         Critical, High, Medium, Low. Located in src/scheduler/queue.rs".to_string(),
         vec!["architecture".to_string(), "scheduler".to_string(), "navigation".to_string()],
@@ -219,7 +222,7 @@ fn test_agent_b_reuses_agent_a_insights() {
     let agent_b = register_with_permissions(&kernel, "agent-b");
 
     // Agent B recalls visible memories (shared from Agent A)
-    let visible = kernel.recall_visible(&agent_b, &[]);
+    let visible = kernel.recall_visible(&agent_b, "default", &[]);
 
     // Agent B should have access to Agent A's architectural insights
     let auth_insights: Vec<_> = visible.iter()
@@ -439,6 +442,7 @@ fn test_shared_procedural_memory_cross_agent() {
 
     kernel.remember_procedural_scoped(
         &agent_a,
+        "default",
         "auth debugging procedure".to_string(),
         "Step-by-step procedure for debugging auth module issues".to_string(),
         proc_steps,
@@ -449,7 +453,7 @@ fn test_shared_procedural_memory_cross_agent() {
 
     // Agent B starts and looks for shared knowledge via recall_visible
     let agent_b = register_with_permissions(&kernel, "agent-newcomer");
-    let visible = kernel.recall_visible(&agent_b, &[]);
+    let visible = kernel.recall_visible(&agent_b, "default", &[]);
 
     // Agent B should be able to see Agent A's shared auth debugging procedure
     // via recall_visible (which includes Shared scope memories from all agents)

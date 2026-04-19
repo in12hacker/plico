@@ -19,7 +19,7 @@ pub fn cmd_create(kernel: &AIKernel, args: &[String]) -> ApiResponse {
 pub fn cmd_read(kernel: &AIKernel, args: &[String]) -> ApiResponse {
     let cid = args.get(1).cloned().unwrap_or_default();
     let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
-    match kernel.get_object(&cid, &agent_id) {
+    match kernel.get_object(&cid, &agent_id, "default") {
         Ok(obj) => {
             let mut r = ApiResponse::with_cid(obj.cid);
             r.tags = Some(obj.meta.tags);
@@ -58,7 +58,7 @@ pub fn cmd_search(kernel: &AIKernel, args: &[String]) -> ApiResponse {
     }
 
     let results = match kernel.semantic_search_with_time(
-        &query, &agent_id, limit, require_tags, exclude_tags, since, until,
+        &query, &agent_id, "default", limit, require_tags, exclude_tags, since, until,
     ) {
         Ok(r) => r,
         Err(e) => return ApiResponse::error(e.to_string()),
@@ -78,7 +78,7 @@ pub fn cmd_update(kernel: &AIKernel, args: &[String]) -> ApiResponse {
     let new_tags = extract_tags_opt(args, "--tags");
     let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
 
-    match kernel.semantic_update(&cid, content.into_bytes(), new_tags, &agent_id) {
+    match kernel.semantic_update(&cid, content.into_bytes(), new_tags, &agent_id, "default") {
         Ok(new_cid) => ApiResponse::with_cid(new_cid),
         Err(e) => ApiResponse::error(e.to_string()),
     }
@@ -88,7 +88,7 @@ pub fn cmd_delete(kernel: &AIKernel, args: &[String]) -> ApiResponse {
     let cid = extract_arg(args, "--cid").unwrap_or_default();
     let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
 
-    match kernel.semantic_delete(&cid, &agent_id) {
+    match kernel.semantic_delete(&cid, &agent_id, "default") {
         Ok(()) => ApiResponse::ok(),
         Err(e) => ApiResponse::error(e.to_string()),
     }

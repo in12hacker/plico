@@ -251,7 +251,7 @@ impl AIKernel {
             }
             "cas.read" => {
                 let cid = params.get("cid").and_then(|v| v.as_str()).unwrap_or("");
-                match self.get_object(cid, agent_id) {
+                match self.get_object(cid, agent_id, "default") {
                     Ok(obj) => ToolResult::ok(json!({
                         "cid": obj.cid,
                         "data": String::from_utf8_lossy(&obj.data),
@@ -275,7 +275,7 @@ impl AIKernel {
                 let since = params.get("since").and_then(|v| v.as_i64());
                 let until = params.get("until").and_then(|v| v.as_i64());
                 let results = match self.semantic_search_with_time(
-                    query, agent_id, limit, require_tags, exclude_tags, since, until,
+                    query, agent_id, "default", limit, require_tags, exclude_tags, since, until,
                 ) {
                     Ok(r) => r,
                     Err(e) => return ToolResult::error(e.to_string()),
@@ -291,14 +291,14 @@ impl AIKernel {
                 let new_tags: Option<Vec<String>> = params.get("new_tags")
                     .and_then(|v| v.as_array())
                     .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect());
-                match self.semantic_update(cid, content.as_bytes().to_vec(), new_tags, agent_id) {
+                match self.semantic_update(cid, content.as_bytes().to_vec(), new_tags, agent_id, "default") {
                     Ok(new_cid) => ToolResult::ok(json!({"cid": new_cid})),
                     Err(e) => ToolResult::error(e.to_string()),
                 }
             }
             "cas.delete" => {
                 let cid = params.get("cid").and_then(|v| v.as_str()).unwrap_or("");
-                match self.semantic_delete(cid, agent_id) {
+                match self.semantic_delete(cid, agent_id, "default") {
                     Ok(()) => ToolResult::ok(json!({"deleted": cid})),
                     Err(e) => ToolResult::error(e.to_string()),
                 }
@@ -349,7 +349,7 @@ impl AIKernel {
                 }
             }
             "memory.recall" => {
-                let memories = self.recall(agent_id);
+                let memories = self.recall(agent_id, "default");
                 let dto: Vec<serde_json::Value> = memories.into_iter().map(|m| json!({
                     "id": m.id,
                     "tier": m.tier.name(),
@@ -375,7 +375,7 @@ impl AIKernel {
                     _ => KGNodeType::Entity,
                 };
                 let props = params.get("properties").cloned().unwrap_or(serde_json::Value::Null);
-                match self.kg_add_node(label, node_type, props, agent_id) {
+                match self.kg_add_node(label, node_type, props, agent_id, "default") {
                     Ok(id) => ToolResult::ok(json!({"node_id": id})),
                     Err(e) => ToolResult::error(e.to_string()),
                 }
@@ -394,7 +394,7 @@ impl AIKernel {
                     _ => KGEdgeType::RelatedTo,
                 };
                 let weight = params.get("weight").and_then(|v| v.as_f64()).map(|w| w as f32);
-                match self.kg_add_edge(src, dst, edge_type, weight, agent_id) {
+                match self.kg_add_edge(src, dst, edge_type, weight, agent_id, "default") {
                     Ok(()) => ToolResult::ok(json!({"created": true})),
                     Err(e) => ToolResult::error(e.to_string()),
                 }
@@ -424,7 +424,7 @@ impl AIKernel {
             }
             "kg.get_node" => {
                 let node_id = params.get("node_id").and_then(|v| v.as_str()).unwrap_or("");
-                match self.kg_get_node(node_id, agent_id) {
+                match self.kg_get_node(node_id, agent_id, "default") {
                     Ok(Some(n)) => ToolResult::ok(json!({
                         "id": n.id, "label": n.label, "node_type": format!("{:?}", n.node_type),
                         "properties": n.properties, "agent_id": n.agent_id, "created_at": n.created_at,
@@ -435,7 +435,7 @@ impl AIKernel {
             }
             "kg.list_edges" => {
                 let node_id = params.get("node_id").and_then(|v| v.as_str());
-                match self.kg_list_edges(agent_id, node_id) {
+                match self.kg_list_edges(agent_id, "default", node_id) {
                     Ok(edges) => {
                         let dto: Vec<serde_json::Value> = edges.into_iter().map(|e| json!({
                             "src": e.src, "dst": e.dst, "edge_type": format!("{:?}", e.edge_type),
@@ -448,7 +448,7 @@ impl AIKernel {
             }
             "kg.remove_node" => {
                 let node_id = params.get("node_id").and_then(|v| v.as_str()).unwrap_or("");
-                match self.kg_remove_node(node_id, agent_id) {
+                match self.kg_remove_node(node_id, agent_id, "default") {
                     Ok(()) => ToolResult::ok(json!({"removed": node_id})),
                     Err(e) => ToolResult::error(e.to_string()),
                 }
@@ -465,7 +465,7 @@ impl AIKernel {
                     "similar_to" => KGEdgeType::SimilarTo,
                     _ => KGEdgeType::RelatedTo,
                 });
-                match self.kg_remove_edge(src, dst, edge_type, agent_id) {
+                match self.kg_remove_edge(src, dst, edge_type, agent_id, "default") {
                     Ok(()) => ToolResult::ok(json!({"removed": true})),
                     Err(e) => ToolResult::error(e.to_string()),
                 }
@@ -474,7 +474,7 @@ impl AIKernel {
                 let node_id = params.get("node_id").and_then(|v| v.as_str()).unwrap_or("");
                 let label = params.get("label").and_then(|v| v.as_str());
                 let properties = params.get("properties").cloned();
-                match self.kg_update_node(node_id, label, properties, agent_id) {
+                match self.kg_update_node(node_id, label, properties, agent_id, "default") {
                     Ok(()) => ToolResult::ok(json!({"updated": node_id})),
                     Err(e) => ToolResult::error(e.to_string()),
                 }
@@ -654,14 +654,14 @@ impl AIKernel {
                         }
                     }).collect())
                     .unwrap_or_default();
-                match self.remember_procedural(agent_id, name, description, steps, learned_from, tags) {
+                match self.remember_procedural(agent_id, "default", name, description, steps, learned_from, tags) {
                     Ok(entry_id) => ToolResult::ok(json!({"entry_id": entry_id, "stored": true})),
                     Err(e) => ToolResult::error(e),
                 }
             }
             "memory.recall_procedure" => {
                 let name = params.get("name").and_then(|v| v.as_str());
-                let entries = self.recall_procedural(agent_id, name);
+                let entries = self.recall_procedural(agent_id, "default", name);
                 let data: Vec<serde_json::Value> = entries.iter().map(|e| {
                     match &e.content {
                         crate::memory::MemoryContent::Procedure(p) => {

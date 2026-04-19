@@ -160,6 +160,8 @@ pub enum PermissionAction {
     Execute,
     /// Send messages to other agents.
     SendMessage,
+    /// Cross-tenant access — required to access resources in other tenants.
+    CrossTenant,
     All,
 }
 
@@ -210,10 +212,10 @@ impl PermissionGuard {
         }
 
         // Default policy: Read and Write are allowed by default.
-        // ReadAny, Delete, Network, Execute require explicit grants.
+        // ReadAny, Delete, Network, Execute, CrossTenant require explicit grants.
         match action {
             PermissionAction::Read | PermissionAction::Write => Ok(()),
-            PermissionAction::ReadAny | PermissionAction::Delete | PermissionAction::Network | PermissionAction::Execute | PermissionAction::SendMessage => {
+            PermissionAction::ReadAny | PermissionAction::Delete | PermissionAction::Network | PermissionAction::Execute | PermissionAction::SendMessage | PermissionAction::CrossTenant => {
                 Err(std::io::Error::new(
                     std::io::ErrorKind::PermissionDenied,
                     format!(
@@ -326,22 +328,24 @@ impl PermissionGuard {
     /// Check if an agent can read an object owned by `owner_id`.
     ///
     /// Returns Ok(()) if:
-    /// - agent is trusted
     /// - agent is the owner
     /// - agent has ReadAny or All grant
+    ///
+    /// Note: Trusted agents still cannot bypass tenant isolation.
+    /// Use `check_tenant_access` for cross-tenant isolation.
     pub fn check_ownership(
         &self,
-        agent_id: &str,
+        ctx: &PermissionContext,
         owner_id: &str,
     ) -> std::io::Result<()> {
-        if self.trusted_agents.contains(agent_id) {
+        if ctx.agent_id == owner_id {
             return Ok(());
         }
-        if agent_id == owner_id {
+        // Trusted agents bypass ownership check (but NOT tenant isolation)
+        if self.trusted_agents.contains(&ctx.agent_id) {
             return Ok(());
         }
-        let ctx = PermissionContext::new(agent_id.to_string(), "default".to_string());
-        if let Some(grants) = self.grants.read().unwrap().get(agent_id) {
+        if let Some(grants) = self.grants.read().unwrap().get(&ctx.agent_id) {
             if grants.iter().any(|g| g.covers(PermissionAction::ReadAny) || g.covers(PermissionAction::All)) {
                 return Ok(());
             }
@@ -352,8 +356,42 @@ impl PermissionGuard {
         Err(std::io::Error::new(
             std::io::ErrorKind::PermissionDenied,
             format!(
-                "Agent '{}' cannot read objects owned by '{}'. Grant ReadAny to override.",
-                agent_id, owner_id
+                "Agent '{}' cannot access object owned by '{}'. Grant ReadAny to override.",
+                ctx.agent_id, owner_id
+            ),
+        ))
+    }
+
+    /// Check tenant access permission — verifies tenant isolation.
+    ///
+    /// This is the critical security boundary: even trusted agents CANNOT
+    /// bypass tenant isolation. Cross-tenant access requires explicit
+    /// CrossTenant permission grant.
+    ///
+    /// Returns Ok(()) if:
+    /// - Context tenant_id matches resource tenant_id
+    /// - Context has explicit CrossTenant permission grant
+    pub fn check_tenant_access(
+        &self,
+        ctx: &PermissionContext,
+        resource_tenant_id: &str,
+    ) -> std::io::Result<()> {
+        // Same tenant: always allowed (tenant isolation is about cross-tenant)
+        if ctx.tenant_id == resource_tenant_id {
+            return Ok(());
+        }
+
+        // Cross-tenant: requires explicit CrossTenant permission
+        // No bypass allowed — not even for "kernel" or "system" trusted agents
+        if ctx.embedded_grants.iter().any(|g| g.covers(PermissionAction::CrossTenant)) {
+            return Ok(());
+        }
+
+        Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            format!(
+                "Agent '{}' in tenant '{}' cannot access resource in tenant '{}'. Need CrossTenant permission.",
+                ctx.agent_id, ctx.tenant_id, resource_tenant_id
             ),
         ))
     }
@@ -380,6 +418,7 @@ impl PermissionGuard {
             "network" => Some(PermissionAction::Network),
             "execute" => Some(PermissionAction::Execute),
             "send_message" | "sendmessage" => Some(PermissionAction::SendMessage),
+            "cross_tenant" | "crosstenant" => Some(PermissionAction::CrossTenant),
             "all" => Some(PermissionAction::All),
             _ => None,
         }

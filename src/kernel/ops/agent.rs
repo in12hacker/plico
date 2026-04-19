@@ -286,7 +286,7 @@ impl crate::kernel::AIKernel {
         let aid = AgentId(agent_id.to_string());
         self.scheduler.get(&aid).ok_or_else(|| format!("Agent not found: {}", agent_id))?;
 
-        let obj = self.get_object(checkpoint_cid, agent_id)
+        let obj = self.get_object(checkpoint_cid, agent_id, "default")
             .map_err(|e| format!("Failed to fetch checkpoint: {}", e))?;
 
         let entries: Vec<crate::memory::MemoryEntry> = serde_json::from_slice(&obj.data)
@@ -395,14 +395,14 @@ impl crate::kernel::AIKernel {
             props["tags"] = serde_json::json!(tags);
         }
 
-        let node_id = self.kg_add_node(name, KGNodeType::Fact, props, agent_id)
+        let node_id = self.kg_add_node(name, KGNodeType::Fact, props, agent_id, "default")
             .map_err(|e| e.to_string())?;
 
-        let agent_nodes = self.kg_list_nodes(Some(KGNodeType::Entity), agent_id)
+        let agent_nodes = self.kg_list_nodes(Some(KGNodeType::Entity), agent_id, "default")
             .unwrap_or_default();
         let agent_entity = agent_nodes.iter().find(|n| n.label == agent_id);
         if let Some(entity) = agent_entity {
-            let _ = self.kg_add_edge(&entity.id, &node_id, KGEdgeType::HasFact, None, agent_id);
+            let _ = self.kg_add_edge(&entity.id, &node_id, KGEdgeType::HasFact, None, agent_id, "default");
         }
 
         Ok(node_id)
@@ -422,7 +422,7 @@ impl crate::kernel::AIKernel {
             self.scheduler.list_agents().into_iter().map(|h| h.id).collect()
         };
         let all_facts: Vec<_> = agent_ids.iter()
-            .flat_map(|aid| self.kg_list_nodes(Some(KGNodeType::Fact), aid).unwrap_or_default())
+            .flat_map(|aid| self.kg_list_nodes(Some(KGNodeType::Fact), aid, "default").unwrap_or_default())
             .collect();
         all_facts.into_iter()
             .filter(|n| {

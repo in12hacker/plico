@@ -62,18 +62,20 @@ fn test_file_qa_agent_full_lifecycle() {
     // ── Phase 3: Memory operations ──────────────────────────────
     kernel.remember_working(
         &agent_id,
+        "default",
         "User is interested in Q1 financial data".to_string(),
         vec!["context".to_string(), "finance".to_string()],
     ).unwrap();
 
     kernel.remember_long_term(
         &agent_id,
+        "default",
         "Company fiscal year starts in January".to_string(),
         vec!["fact".to_string(), "finance".to_string()],
         5,
     ).unwrap();
 
-    let memories = kernel.recall(&agent_id);
+    let memories = kernel.recall(&agent_id, "default");
     assert!(memories.len() >= 2, "should have working + long-term memories");
 
     // ── Phase 4: NL intent → search (single action) ─────────────
@@ -128,6 +130,7 @@ fn test_file_qa_agent_full_lifecycle() {
         b"CORRECTED: Quarterly revenue report Q1 2026: total revenue $4.5M, up 18% YoY".to_vec(),
         None,
         &agent_id,
+        "default",
     ).unwrap();
 
     let history = kernel.version_history(&updated_cid, &agent_id);
@@ -136,14 +139,14 @@ fn test_file_qa_agent_full_lifecycle() {
 
     let rolled_back = kernel.rollback(&updated_cid, &agent_id)
         .expect("rollback should succeed");
-    let restored = kernel.get_object(&rolled_back, &agent_id).unwrap();
+    let restored = kernel.get_object(&rolled_back, &agent_id, "default").unwrap();
     assert!(
         String::from_utf8_lossy(&restored.data).contains("$4.2M"),
         "rollback should restore original $4.2M figure"
     );
 
     // ── Phase 9: Soft delete + restore ──────────────────────────
-    kernel.semantic_delete(&doc3, &agent_id).unwrap();
+    kernel.semantic_delete(&doc3, &agent_id, "default").unwrap();
     let deleted = kernel.list_deleted(&agent_id);
     assert!(!deleted.is_empty(), "recycle bin should have deleted doc");
 
@@ -155,7 +158,7 @@ fn test_file_qa_agent_full_lifecycle() {
     );
 
     // ── Phase 10: Procedural memory verification ────────────────
-    let procedures = kernel.recall_procedural(&agent_id, None);
+    let procedures = kernel.recall_procedural(&agent_id, "default", None);
     let has_auto_learned = procedures.iter().any(|p| {
         p.tags.iter().any(|t| t == "verified")
     });
@@ -163,7 +166,7 @@ fn test_file_qa_agent_full_lifecycle() {
 
     // ── Phase 11: Permission isolation ──────────────────────────
     let other_agent = kernel.register_agent("other-agent".to_string());
-    let isolated_read = kernel.get_object(&doc2, &other_agent);
+    let isolated_read = kernel.get_object(&doc2, &other_agent, "default");
     assert!(isolated_read.is_err(), "other agent should not read doc owned by file-qa-bot");
 
     // ── Phase 12: Agent lifecycle ───────────────────────────────
@@ -218,6 +221,7 @@ fn test_file_qa_agent_full_lifecycle() {
 
     kernel.remember_long_term_scoped(
         &agent_id,
+        "default",
         "Company fiscal year starts January".to_string(),
         vec!["policy".into(), "finance".into()],
         90,
@@ -226,12 +230,13 @@ fn test_file_qa_agent_full_lifecycle() {
 
     kernel.remember_working_scoped(
         &agent_id,
+        "default",
         "Q1 analysis in progress".to_string(),
         vec!["status".into()],
         MemoryScope::Group("finance-team".into()),
     ).unwrap();
 
-    let visible_analyst = kernel.recall_visible(&agent_b, &["finance-team".into()]);
+    let visible_analyst = kernel.recall_visible(&agent_b, "default", &["finance-team".into()]);
     assert!(visible_analyst.len() >= 2, "analyst-bot sees shared + group(finance-team) memories");
     let has_shared = visible_analyst.iter().any(|e| e.content.display().contains("fiscal year"));
     let has_group = visible_analyst.iter().any(|e| e.content.display().contains("Q1 analysis"));
@@ -240,7 +245,7 @@ fn test_file_qa_agent_full_lifecycle() {
 
     let outsider = kernel.register_agent("outsider-bot".to_string());
     kernel.permission_grant(&outsider, PermissionAction::Read, None, None);
-    let visible_outsider = kernel.recall_visible(&outsider, &[]);
+    let visible_outsider = kernel.recall_visible(&outsider, "default", &[]);
     assert!(
         visible_outsider.iter().all(|e| !e.content.display().contains("Q1 analysis")),
         "outsider should NOT see finance-team group memory"

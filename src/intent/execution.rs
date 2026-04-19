@@ -56,7 +56,7 @@ pub fn execute_sync(
             &text.chars().take(40).collect::<String>(),
             if all_ok { "success" } else { "failed" }
         );
-        let _ = kernel.remember_working(agent_id, summary, tags);
+        let _ = kernel.remember_working(agent_id, "default", summary, tags);
 
         return Ok(IntentExecutionResult {
             resolved,
@@ -115,7 +115,7 @@ pub fn execute_sync(
     } else {
         vec!["execution-failure".into(), "sync".into()]
     };
-    let _ = kernel.remember_working(agent_id, result_summary, tags);
+    let _ = kernel.remember_working(agent_id, "default", result_summary, tags);
 
     if learn && all_ok {
         let steps: Vec<crate::memory::layered::ProcedureStep> = if is_multi {
@@ -137,6 +137,7 @@ pub fn execute_sync(
         let name = format!("auto:{}", &text.chars().take(40).collect::<String>());
         let _ = kernel.remember_procedural(
             agent_id,
+            "default",
             name,
             format!("Verified: when asked '{}', execute {} step(s)", text, steps.len()),
             steps,
@@ -193,6 +194,7 @@ pub fn execute_async(
         let name = format!("auto:{}", &text.chars().take(40).collect::<String>());
         let _ = kernel.remember_procedural(
             agent_id,
+            "default",
             name,
             format!("When asked '{}', execute resolved action", text),
             vec![step],
@@ -233,7 +235,7 @@ fn recall_learned_workflow(
     let name_prefix = format!("auto:{}", &text.chars().take(40).collect::<String>());
 
     // First: check agent's own procedural memory
-    let procedures = kernel.recall_procedural(agent_id, Some(&name_prefix));
+    let procedures = kernel.recall_procedural(agent_id, "default", Some(&name_prefix));
     if let Some(result) = extract_verified_workflow(&procedures) {
         return Some(result);
     }

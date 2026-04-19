@@ -20,7 +20,7 @@ pub fn cmd_skills(kernel: &AIKernel, args: &[String]) -> ApiResponse {
 
 fn cmd_skills_list(kernel: &AIKernel, args: &[String]) -> ApiResponse {
     let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
-    let entries = kernel.recall_procedural(&agent_id, None);
+    let entries = kernel.recall_procedural(&agent_id, "default", None);
     let mut r = ApiResponse::ok();
     let skills: Vec<serde_json::Value> = entries.iter().filter_map(|e| {
         if let MemoryContent::Procedure(p) = &e.content {
@@ -55,7 +55,7 @@ fn cmd_skills_describe(kernel: &AIKernel, args: &[String]) -> ApiResponse {
             return ApiResponse::error("Usage: skills describe <name> [--agent ID]");
         }
     };
-    let entries = kernel.recall_procedural(&agent_id, Some(name_str));
+    let entries = kernel.recall_procedural(&agent_id, "default", Some(name_str));
     if entries.is_empty() {
         return ApiResponse::error(format!("No skill named '{}' found for agent '{}'", name_str, agent_id));
     }

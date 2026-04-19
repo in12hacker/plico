@@ -264,9 +264,9 @@ fn test_get_with_agent_flag_works() {
     let default_stderr = String::from_utf8_lossy(&get_default.stderr);
     let default_combined = format!("{}\n{}", default_stdout, default_stderr);
     // Should fail because 'cli' is not the owner
-    // Note: aicli exits 0 even on API error; check combined output for "cannot read"
+    // Note: aicli exits 0 even on API error; check combined output for "cannot access"
     assert!(
-        default_combined.contains("cannot read"),
+        default_combined.contains("cannot access"),
         "get without agent should fail for non-owned object, got: {}",
         default_combined
     );
