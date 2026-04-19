@@ -258,7 +258,7 @@ pub fn decode_content(content: &str, encoding: &ContentEncoding) -> Result<Vec<u
 /// Estimate token count for a text string (F-8).
 ///
 /// Uses the formula: (ascii + 3) / 4 + (non_ascii + 1) / 2
-/// This is a coarse approximation suitable for POC.
+/// This is a coarse approximation (±20%). Can be refined with tiktoken-rs in future versions.
 /// Note: This is an estimate, not precise. For code the result may be high,
 /// for non-ASCII text (e.g., Chinese) the result may be low.
 pub fn estimate_tokens(text: &str) -> usize {
@@ -1127,6 +1127,35 @@ pub enum ApiRequest {
         /// Model type: "embedding" or "llm"
         model_type: String,
     },
+
+    // ── Hybrid Retrieval / Graph-RAG (F-11) ────────────────────────────────
+
+    /// Hybrid retrieval combining vector search and knowledge graph traversal.
+    /// Returns results with provenance showing the causal path from query to result.
+    #[serde(rename = "hybrid_retrieve")]
+    HybridRetrieve {
+        /// Semantic query text for vector search.
+        query_text: String,
+        /// Optional: KG seed node tags to start graph traversal from.
+        #[serde(default)]
+        seed_tags: Vec<String>,
+        /// Graph traversal depth (default 2).
+        #[serde(default)]
+        graph_depth: u8,
+        /// Optional: filter to only these edge types (e.g., ["causes", "has_resolution"]).
+        #[serde(default)]
+        edge_types: Vec<String>,
+        /// Maximum number of results to return (default 20).
+        #[serde(default)]
+        max_results: usize,
+        /// Token budget limit — stops adding results when budget is reached.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        token_budget: Option<usize>,
+        /// Agent performing the operation.
+        agent_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tenant_id: Option<String>,
+    },
 }
 
 /// An item within a BatchCreate request.
@@ -1351,6 +1380,9 @@ pub struct ApiResponse {
     /// Session ended result (F-6).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_ended: Option<SessionEnded>,
+    /// Hybrid retrieval result — Graph-RAG combining vector search + KG traversal (F-11).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hybrid_result: Option<HybridResult>,
 }
 
 /// Response for a successful model switch operation (v18.0).
@@ -1678,6 +1710,51 @@ pub struct SessionEnded {
     pub last_seq: u64,
 }
 
+// ── Hybrid Retrieval / Graph-RAG (F-11) ───────────────────────────────────────
+
+/// A single step in the provenance chain showing how a result was reached.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProvenanceStep {
+    /// CID of the source node at this hop.
+    pub from_cid: String,
+    /// Type of edge traversed to reach this node.
+    pub edge_type: String,
+    /// Hop number (0 = direct result).
+    pub hop: u8,
+}
+
+/// A single hybrid retrieval result — combining vector and graph scores.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HybridHit {
+    /// Content identifier of the result.
+    pub cid: String,
+    /// Human-readable content preview (first 200 chars).
+    pub content_preview: String,
+    /// Vector similarity score [0, 1].
+    pub vector_score: f32,
+    /// Knowledge graph authority score [0, 1].
+    pub graph_score: f32,
+    /// Combined score: α × vector_score + (1-α) × graph_score, α = 0.6.
+    pub combined_score: f32,
+    /// Provenance chain showing the path from query to result.
+    pub provenance: Vec<ProvenanceStep>,
+}
+
+/// Hybrid retrieval result — combines vector search with KG traversal.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HybridResult {
+    /// Ordered list of hybrid hits (descending by combined_score).
+    pub items: Vec<HybridHit>,
+    /// Estimated total token count for transmitting all items.
+    pub token_estimate: usize,
+    /// Number of results that came from vector search.
+    pub vector_hits: usize,
+    /// Number of results that came from graph traversal.
+    pub graph_hits: usize,
+    /// Number of causal paths discovered.
+    pub paths_found: usize,
+}
+
 /// Agent resource usage and quota snapshot.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentUsageDto {
@@ -1753,6 +1830,7 @@ impl ApiResponse {
             delta_result: None,
             session_started: None,
             session_ended: None,
+            hybrid_result: None,
         }
     }
 
@@ -1838,6 +1916,7 @@ impl ApiResponse {
             delta_result: None,
             session_started: None,
             session_ended: None,
+            hybrid_result: None,
         }
     }
 

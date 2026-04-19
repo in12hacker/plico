@@ -13,8 +13,8 @@
 //!
 //! # Auth Modes
 //!
-//! - `Optional` (POC): token optional, allow unauthenticated requests
-//! - `Required` (Production): all authenticated requests must carry valid token
+//! - `Optional`: token optional, allow unauthenticated requests (development/testing)
+//! - `Required`: all requests must carry valid token (production)
 
 use base64::Engine;
 use hmac::{Hmac, Mac};
@@ -212,8 +212,13 @@ impl AgentKeyStore {
             }
         }
 
-        // Token string comparison (constant-time would be better but this is POC)
-        token.token == token_str
+        use subtle::ConstantTimeEq;
+        let a = token.token.as_bytes();
+        let b = token_str.as_bytes();
+        if a.len() != b.len() {
+            return false;
+        }
+        a.ct_eq(b).into()
     }
 
     /// Get a token for an agent (returns clone).

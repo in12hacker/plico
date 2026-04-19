@@ -773,7 +773,7 @@ impl IntentPrefetcher {
         }
 
         // Convert tag key back to a representative intent text
-        // We use the tag key itself as the intent (not ideal but works for POC)
+        // Tag key serves as a coarse intent identifier; embedding-based clustering is a future enhancement
         // In a real implementation, we'd look up a representative intent for this tag key
         let predicted_intent = format!("next: {}", predicted_tag_key);
 

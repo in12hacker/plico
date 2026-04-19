@@ -885,6 +885,7 @@ mod tests {
             delta_result: None,
             session_started: None,
             session_ended: None,
+            hybrid_result: None,
         }
     }
 

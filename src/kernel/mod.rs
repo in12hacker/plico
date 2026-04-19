@@ -267,8 +267,8 @@ impl AIKernel {
     }
 
     fn maybe_persist_event_log(&self) {
-        let count = self.event_bus.event_count() as u64;
-        if count > 0 && count.is_multiple_of(Self::EVENT_LOG_PERSIST_EVERY_N) {
+        let seq = self.event_bus.current_seq();
+        if seq > 1 && (seq - 1).is_multiple_of(Self::EVENT_LOG_PERSIST_EVERY_N) {
             self.persist_event_log();
         }
     }
@@ -1057,12 +1057,10 @@ impl AIKernel {
             // ── Token Usage (F-8) ────────────────────────────────────────
 
             ApiRequest::QueryTokenUsage { agent_id: _, session_id: _ } => {
-                // Token estimation is informational only in this POC implementation.
-                // Future versions could track per-agent/per-session token consumption.
                 let mut r = ApiResponse::ok();
                 r.data = Some(serde_json::json!({
-                    "message": "Token usage tracking is informational in POC. \
-                                Actual token counts are estimated via token_estimate field in responses."
+                    "message": "Token usage is estimated via the token_estimate field in every API response. \
+                                Per-session tracking available via GrowthReport (Node 4)."
                 }).to_string());
                 r
             }
@@ -1491,6 +1489,16 @@ impl AIKernel {
                 let health = self.check_model_health(&model_type);
                 let mut r = ApiResponse::ok();
                 r.model_health = Some(health);
+                r
+            }
+
+            ApiRequest::HybridRetrieve { query_text, seed_tags, graph_depth, edge_types, max_results, token_budget, agent_id: _, tenant_id } => {
+                let _tenant = tenant_id.unwrap_or_else(|| "default".to_string());
+                let depth = if graph_depth == 0 { 2 } else { graph_depth };
+                let max = if max_results == 0 { 20 } else { max_results };
+                let result = self.hybrid_retrieve(&query_text, &seed_tags, depth, &edge_types, max, token_budget);
+                let mut r = ApiResponse::ok();
+                r.hybrid_result = Some(result);
                 r
             }
         };

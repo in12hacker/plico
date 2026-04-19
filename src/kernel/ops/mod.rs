@@ -24,3 +24,4 @@ pub mod distributed;
 pub mod model;
 pub mod delta;
 pub mod session;
+pub mod hybrid;

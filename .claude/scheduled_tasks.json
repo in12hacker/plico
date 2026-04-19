@@ -1,11 +1,10 @@
 {
   "tasks": [
     {
-      "id": "f206b3b3",
+      "id": "97fe6dc6",
       "cron": "*/10 * * * *",
-      "prompt": "阅读 /home/leo/work/Plico/docs/design-node3-agent-experience.md 第3节点设计文档，system-v2.md 灵魂2.0文档，链式思考推进关键里程碑。当前进度：v21.0完成，Node3开始。\n\n执行步骤：\n1. 读取 src/kernel/ops/mod.rs 和 src/api/semantic.rs 了解现有代码结构\n2. 识别下一个需要实现的里程碑（F-8 Token透明最简单无依赖）\n3. 使用 subagent (general-purpose) 串行实现该里程碑\n4. 实现后执行 cargo test 验证\n5. dogfood：用 plico 管理进度和知识\n6. 同步 github\n7. 更新相关文档\n\n只推进一个里程碑，不要并行。报告进度。",
-      "createdAt": 1776607557461,
-      "lastFiredAt": 1776615283921,
+      "prompt": "阅读Node4设计文档，推进Sprint 1任务。\n\n当前状态：Node3完成，Node4开始。\n\n执行步骤：\n1. 检查cargo test状态\n2. 识别下一个任务（D-1 EventLog RingBuffer是第一个）\n3. 使用subagent串行实现\n4. cargo test验证\n5. dogfood保存进度\n6. git push\n7. 更新文档\n\n只推进一个任务。报告进度。",
+      "createdAt": 1776619598128,
       "recurring": true
     }
   ]

@@ -267,7 +267,7 @@ pub fn start_session_orchestrate(
     prefetch: &crate::kernel::ops::prefetch::IntentPrefetcher,
 ) -> Result<StartSessionResult, String> {
     // 1. Get current event seq for this session's start point
-    let current_seq = event_bus.event_count() as u64;
+    let current_seq = event_bus.current_seq();
 
     // 2. Generate session ID
     let session_id = uuid::Uuid::new_v4().to_string();

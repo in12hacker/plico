@@ -4,7 +4,7 @@
 //! events at key operation points. This is pure mechanism — the kernel
 //! never decides what to do with events (that's upper-layer policy).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, RwLock};
 use serde::{Deserialize, Serialize};
@@ -101,18 +101,90 @@ impl EventFilter {
     }
 }
 
-const DEFAULT_CAPACITY: usize = 256;
+const DEFAULT_BROADCAST_CAPACITY: usize = 4096;
+const DEFAULT_EVENT_LOG_CAPACITY: usize = 65536;
 
 struct Subscription {
     receiver: Mutex<broadcast::Receiver<KernelEvent>>,
     filter: Option<EventFilter>,
+    last_seen_seq: AtomicU64,
+}
+
+struct RingEventLog {
+    events: VecDeque<SequencedEvent>,
+    max_capacity: usize,
+    min_seq: u64,
+}
+
+impl RingEventLog {
+    fn new(capacity: usize) -> Self {
+        Self {
+            events: VecDeque::with_capacity(capacity.min(1024)),
+            max_capacity: capacity,
+            min_seq: 0,
+        }
+    }
+
+    fn push(&mut self, event: SequencedEvent) {
+        if self.events.len() >= self.max_capacity {
+            if let Some(evicted) = self.events.pop_front() {
+                self.min_seq = evicted.seq + 1;
+            }
+        }
+        self.events.push_back(event);
+    }
+
+    fn events_since(&self, since_seq: u64) -> Vec<SequencedEvent> {
+        if since_seq < self.min_seq && since_seq > 0 {
+            tracing::warn!(
+                requested_seq = since_seq,
+                oldest_available = self.min_seq,
+                "Event log gap: requested seq evicted, returning available events"
+            );
+        }
+        let effective_seq = since_seq.max(self.min_seq.saturating_sub(1));
+        self.events
+            .iter()
+            .filter(|e| e.seq > effective_seq)
+            .cloned()
+            .collect()
+    }
+
+    fn events_by_agent(&self, agent_id: &str) -> Vec<SequencedEvent> {
+        self.events
+            .iter()
+            .filter(|e| e.event.agent_id() == Some(agent_id))
+            .cloned()
+            .collect()
+    }
+
+    fn len(&self) -> usize {
+        self.events.len()
+    }
+
+    fn snapshot(&self) -> Vec<SequencedEvent> {
+        self.events.iter().cloned().collect()
+    }
+
+    fn restore(&mut self, events: Vec<SequencedEvent>) {
+        let max_seq = events.iter().map(|e| e.seq).max().unwrap_or(0);
+        if events.len() > self.max_capacity {
+            let skip = events.len() - self.max_capacity;
+            self.min_seq = events[skip - 1].seq + 1;
+            self.events = events.into_iter().skip(skip).collect();
+        } else {
+            self.min_seq = 0;
+            self.events = events.into();
+        }
+        let _ = max_seq; // next_seq is managed by EventBus
+    }
 }
 
 pub struct EventBus {
     sender: broadcast::Sender<KernelEvent>,
     subscriptions: RwLock<HashMap<String, Subscription>>,
     next_sub_id: AtomicU64,
-    event_log: RwLock<Vec<SequencedEvent>>,
+    event_log: RwLock<RingEventLog>,
     next_seq: AtomicU64,
 }
 
@@ -125,12 +197,12 @@ fn now_ms() -> u64 {
 
 impl EventBus {
     pub fn new() -> Self {
-        let (sender, _) = broadcast::channel(DEFAULT_CAPACITY);
+        let (sender, _) = broadcast::channel(DEFAULT_BROADCAST_CAPACITY);
         Self {
             sender,
             subscriptions: RwLock::new(HashMap::new()),
             next_sub_id: AtomicU64::new(1),
-            event_log: RwLock::new(Vec::new()),
+            event_log: RwLock::new(RingEventLog::new(DEFAULT_EVENT_LOG_CAPACITY)),
             next_seq: AtomicU64::new(1),
         }
     }
@@ -147,32 +219,37 @@ impl EventBus {
     }
 
     pub fn events_since(&self, since_seq: u64) -> Vec<SequencedEvent> {
-        let log = self.event_log.read().unwrap();
-        log.iter()
-            .filter(|e| e.seq > since_seq)
-            .cloned()
-            .collect()
+        self.event_log.read().unwrap().events_since(since_seq)
     }
 
     pub fn events_by_agent(&self, agent_id: &str) -> Vec<SequencedEvent> {
-        let log = self.event_log.read().unwrap();
-        log.iter()
-            .filter(|e| e.event.agent_id() == Some(agent_id))
-            .cloned()
-            .collect()
+        self.event_log.read().unwrap().events_by_agent(agent_id)
     }
 
+    /// Number of events currently buffered (may be less than total emitted due to eviction).
     pub fn event_count(&self) -> usize {
         self.event_log.read().unwrap().len()
     }
 
+    /// The sequence number that will be assigned to the next emitted event.
+    /// Use this instead of `event_count()` when you need a monotonic position marker.
+    pub fn current_seq(&self) -> u64 {
+        self.next_seq.load(Ordering::Relaxed)
+    }
+
+    /// The oldest sequence number still available in the event log.
+    /// Returns 0 if no events have been evicted.
+    pub fn oldest_seq(&self) -> u64 {
+        self.event_log.read().unwrap().min_seq
+    }
+
     pub fn snapshot_events(&self) -> Vec<SequencedEvent> {
-        self.event_log.read().unwrap().clone()
+        self.event_log.read().unwrap().snapshot()
     }
 
     pub fn restore_events(&self, events: Vec<SequencedEvent>) {
         let max_seq = events.iter().map(|e| e.seq).max().unwrap_or(0);
-        *self.event_log.write().unwrap() = events;
+        self.event_log.write().unwrap().restore(events);
         self.next_seq.store(max_seq + 1, Ordering::Relaxed);
     }
 
@@ -183,12 +260,14 @@ impl EventBus {
     pub fn subscribe_filtered(&self, filter: Option<EventFilter>) -> String {
         let id = format!("sub-{}", self.next_sub_id.fetch_add(1, Ordering::Relaxed));
         let rx = self.sender.subscribe();
+        let current = self.next_seq.load(Ordering::Relaxed);
         self.subscriptions
             .write()
             .unwrap()
             .insert(id.clone(), Subscription {
                 receiver: Mutex::new(rx),
                 filter,
+                last_seen_seq: AtomicU64::new(current),
             });
         id
     }
@@ -208,14 +287,25 @@ impl EventBus {
                 Err(broadcast::error::TryRecvError::Empty) => break,
                 Err(broadcast::error::TryRecvError::Lagged(n)) => {
                     tracing::warn!(
-                        "Subscription {} lagged by {} events",
-                        subscription_id,
-                        n
+                        subscription = subscription_id,
+                        lagged = n,
+                        "Broadcast lagged, recovering from event log"
                     );
-                    continue;
+                    let last_seq = sub.last_seen_seq.load(Ordering::Relaxed);
+                    let recovered = self.event_log.read().unwrap().events_since(last_seq);
+                    for se in recovered {
+                        if sub.filter.as_ref().map_or(true, |f| f.matches(&se.event)) {
+                            events.push(se.event);
+                        }
+                    }
+                    break;
                 }
                 Err(broadcast::error::TryRecvError::Closed) => break,
             }
+        }
+        if !events.is_empty() {
+            let current = self.next_seq.load(Ordering::Relaxed);
+            sub.last_seen_seq.store(current, Ordering::Relaxed);
         }
         Some(events)
     }
@@ -686,5 +776,93 @@ mod tests {
         let polled = bus.poll(&sub).unwrap();
         assert_eq!(polled.len(), 1);
         assert_eq!(bus.event_count(), 1);
+    }
+
+    #[test]
+    fn test_current_seq_increments() {
+        let bus = EventBus::new();
+        assert_eq!(bus.current_seq(), 1);
+
+        bus.emit(KernelEvent::ObjectStored {
+            cid: "c1".into(), agent_id: "a1".into(), tags: vec![],
+        });
+        assert_eq!(bus.current_seq(), 2);
+
+        bus.emit(KernelEvent::MemoryStored {
+            agent_id: "a1".into(), tier: "working".into(),
+        });
+        assert_eq!(bus.current_seq(), 3);
+    }
+
+    #[test]
+    fn test_ring_buffer_eviction() {
+        let bus = EventBus::new();
+        {
+            let mut log = bus.event_log.write().unwrap();
+            *log = RingEventLog::new(5);
+        }
+
+        for i in 0..10 {
+            bus.emit(KernelEvent::ObjectStored {
+                cid: format!("c{}", i), agent_id: "a1".into(), tags: vec![],
+            });
+        }
+
+        assert_eq!(bus.event_count(), 5);
+        assert_eq!(bus.current_seq(), 11);
+        assert!(bus.oldest_seq() > 0);
+
+        let all = bus.snapshot_events();
+        assert_eq!(all.len(), 5);
+        assert_eq!(all[0].seq, 6);
+        assert_eq!(all[4].seq, 10);
+    }
+
+    #[test]
+    fn test_events_since_with_gap() {
+        let bus = EventBus::new();
+        {
+            let mut log = bus.event_log.write().unwrap();
+            *log = RingEventLog::new(5);
+        }
+
+        for i in 0..10 {
+            bus.emit(KernelEvent::ObjectStored {
+                cid: format!("c{}", i), agent_id: "a1".into(), tags: vec![],
+            });
+        }
+
+        let from_old = bus.events_since(2);
+        assert_eq!(from_old.len(), 5);
+        assert_eq!(from_old[0].seq, 6);
+
+        let from_recent = bus.events_since(8);
+        assert_eq!(from_recent.len(), 2);
+        assert_eq!(from_recent[0].seq, 9);
+    }
+
+    #[test]
+    fn test_restore_with_capacity_overflow() {
+        let bus = EventBus::new();
+        {
+            let mut log = bus.event_log.write().unwrap();
+            *log = RingEventLog::new(3);
+        }
+
+        let events: Vec<SequencedEvent> = (1..=10).map(|i| SequencedEvent {
+            seq: i,
+            timestamp_ms: 1000 + i,
+            event: KernelEvent::ObjectStored {
+                cid: format!("c{}", i), agent_id: "a1".into(), tags: vec![],
+            },
+        }).collect();
+
+        bus.restore_events(events);
+        assert_eq!(bus.event_count(), 3);
+        assert_eq!(bus.current_seq(), 11);
+
+        let snap = bus.snapshot_events();
+        assert_eq!(snap[0].seq, 8);
+        assert_eq!(snap[2].seq, 10);
     }
 }

@@ -4,7 +4,7 @@
 **版本**: v2.2（新增 Phase 0 持久化里程碑 + 合理性审计）
 **日期**: 2026-04-19
 **灵魂依据**: `system-v2.md`（Soul 2.0）
-**定位**: POC 第三阶段指导性设计文档（可直接指导开发）
+**定位**: EXP 阶段设计文档（可直接指导开发）
 
 ---
 
@@ -58,14 +58,14 @@ pub struct AIKernel {
 | 功能 | 设计点 | 判定 | 问题 | 调整方案 |
 |------|--------|------|------|---------|
 | F-7 | `DeltaSince.since_ms` 用时间戳 | ⚠️ 不合理 | `events_since()` 接受的是序列号 `since_seq: u64`，不是时间戳。SequencedEvent 有 `seq` 和 `timestamp_ms` 两个字段，但 API 是 seq-based。 | 改为 `since_seq: u64`，或在 delta.rs 中增加按时间戳查找最近 seq 的辅助函数。推荐前者——Agent 在 EndSession 时记录 last_seq，下次 StartSession 用它。 |
-| F-7 | `ChangeEntry.summary` 声称 L0 摘要 | ⚠️ 需降级 | L0 摘要依赖 Summarizer（LLM）。当 Summarizer 未配置时（POC 常态），无法生成 L0。 | summary 降级为事件元数据拼接（event_type + cid 前 8 位 + agent_id + tags），不依赖 LLM。有 Summarizer 时可选增强。 |
+| F-7 | `ChangeEntry.summary` 声称 L0 摘要 | ⚠️ 需降级 | L0 摘要依赖 Summarizer（LLM）。当 Summarizer 未配置时，无法生成 L0。 | summary 降级为事件元数据拼接（event_type + cid 前 8 位 + agent_id + tags），不依赖 LLM。有 Summarizer 时可选增强。 |
 | F-9 | 意图缓存用余弦相似度匹配 | ⚠️ 有条件 | 需要 EmbeddingProvider 生成 intent embedding。`StubEmbeddingProvider` 返回零向量，余弦相似度恒为 NaN/0。 | 增加双路匹配：有真实 embedding 时走语义匹配；stub 模式时回退到精确字符串匹配（只匹配完全相同的意图文本）。 |
 | F-9 | 缓存 `BudgetAllocation` 在内存 | ⚠️ 需限制 | `BudgetAllocation.items` 包含 `LoadedContext.content: String`（完整文本）。一个装配可能有几十 KB。缓存 1000 条 = 几十 MB 内存。 | 默认 `max_entries` 从 1000 降为 64。增加 `max_memory_bytes` 硬限制（默认 32MB）。超限时 LRU 淘汰。 |
 | F-10 | 意图转移矩阵用原始字符串做 key | ⚠️ 不实用 | Agent 意图几乎每次都不同（"修复 auth 的测试" vs "修复 auth 模块的单元测试"）。字符串精确匹配导致转移矩阵极度稀疏，几乎不会命中。 | **降级为 Phase D 探索性功能**。当前阶段用 tag 聚类代替原始字符串（从意图中提取关键 tag 做 key）。或者依赖 F-9 的 embedding 相似度来归并相似意图。 |
 | F-10 | 声称"不需要 embedding" | ⚠️ 自相矛盾 | 不用 embedding 就只能精确匹配字符串，这使得 F-10 几乎无用（见上条）。 | 承认 F-10 在 stub embedding 模式下功能退化。有真实 embedding 时，用向量聚类归并相似意图做 key。无 embedding 时，F-10 自动禁用。 |
 | F-6 | EndSession 未考虑异常退出 | ⚠️ 需补充 | Agent 崩溃/断连时不会调用 EndSession，session 成为孤儿。 | 增加 session 超时机制：超过 TTL（默认 30 分钟）无活动自动触发 EndSession + checkpoint。session_store 定期扫描。 |
 | F-6 | `load_tiers: Vec<String>` | ⚠️ 类型不严谨 | 应该用已有的 `MemoryTier` 枚举而非字符串。 | 改为 `Vec<MemoryTier>` 或至少在 API 层做验证映射。 |
-| F-8 | token 估算公式 `(ascii+3)/4 + (non_ascii+1)/2` | ✅ 可迭代 | 粗粒度但足够 POC。对纯代码会偏高（代码 token 密度 > 自然语言），对中文会偏低。 | Phase A 先用此公式。Phase D 可用实际 tokenizer（tiktoken-rs）校准。在 API 文档中标注 "estimate, not precise"。 |
+| F-8 | token 估算公式 `(ascii+3)/4 + (non_ascii+1)/2` | ✅ 可迭代 | 粗粒度，对纯代码偏高（代码 token 密度 > 自然语言），对中文偏低。精度 ±20%。 | Phase A 先用此公式。后续可用 `tiktoken-rs` 校准。在 API 文档中标注 "estimate, ±20%"。 |
 | F-7 | Delta 99.6% 节省率 | ✅ 数学正确但需注明前提 | 仅在"大部分文件未变"的场景下成立。如果 Agent 跨项目工作或项目大规模重构，delta 可能接近全量。 | 在文档中注明"节省率取决于变更比例"。 |
 | F-6 | StartSession 编排 | ✅ 合理可迭代 | 底层零件全部已有。编排逻辑清晰，依赖关系明确。 | 按设计实现。 |
 | F-8 | 整体设计 | ✅ 合理 | 最简单、风险最低、价值明确。 | 作为 Phase A 第一个实现。 |
@@ -1154,7 +1154,7 @@ P-6 (周期性持久化)   ← 依赖 persist_all()
 |--------|------|
 | 🔴 **持久化缺口** | ⚠️ **v21.0 的 CheckpointStore、TenantStore、AgentKeyStore 均为纯内存**。一次重启摧毁认知连续性。已新增 Phase 0 里程碑（P-1~P-6）作为最高优先修复。 |
 | v18.0 模型热切换 | 偏运维方向。Agent 不关心 OS 用什么模型。但 trait 抽象保证了模型无关性，不违反公理。 |
-| v20.0 分布式模式 | 偏运维方向。但它使认知迁移成为可能（v21.0 checkpoint + v20.0 migration = Agent 跨节点连续性）。⚠️ 当前实现使用同步 TCP ping 检测节点连通性，POC 阶段可接受，生产需改进。 |
+| v20.0 分布式模式 | 偏运维方向。但它使认知迁移成为可能（v21.0 checkpoint + v20.0 migration = Agent 跨节点连续性）。⚠️ 当前实现使用同步 TCP ping 检测节点连通性，需在进入生产前改进为异步健康检查。 |
 | F-10 认知预取 | ⚠️ **已降级为探索性功能**。原设计"不需要 embedding"与实际需求矛盾（见评审）。调整后依赖 embedding 或 tag 提取。红线不变：OS 预取但不执行，Agent 不知道 OS 在预取。 |
 | F-6 session 孤儿 | ⚠️ **原设计遗漏**。Agent 崩溃不调用 EndSession 时缺乏清理机制。已补充 session TTL 超时扫描。 |
 | F-7 since_ms vs since_seq | ⚠️ **原设计与代码不符**。`events_since()` 是 seq-based 不是 time-based。已修正 API 签名。 |
