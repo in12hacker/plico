@@ -14,3 +14,4 @@ pub mod dashboard;
 pub mod tools_external;
 pub mod permission;
 pub mod prefetch;
+pub mod tenant;

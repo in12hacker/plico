@@ -740,6 +740,7 @@ mod tests {
             event_history: None,
             discovered_skills: None,
             token: None,
+            tenants: None,
         }
     }
 

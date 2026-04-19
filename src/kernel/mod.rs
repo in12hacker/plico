@@ -57,6 +57,8 @@ pub struct AIKernel {
     pub(crate) prefetch: Arc<ops::prefetch::IntentPrefetcher>,
     /// Agent authentication — cryptographic token store.
     pub(crate) key_store: Arc<AgentKeyStore>,
+    /// Tenant registry — manages all tenants in the system.
+    pub(crate) tenant_store: Arc<ops::tenant::TenantStore>,
 }
 
 impl AIKernel {
@@ -142,6 +144,9 @@ impl AIKernel {
         // Agent authentication — cryptographic token store
         let key_store = Arc::new(AgentKeyStore::new());
 
+        // Tenant registry — manages all tenants in the system
+        let tenant_store = Arc::new(ops::tenant::TenantStore::new());
+
         let kernel = Self {
             root: root.clone(),
             cas,
@@ -160,6 +165,7 @@ impl AIKernel {
             event_bus,
             prefetch,
             key_store,
+            tenant_store,
         };
 
         kernel.register_builtin_tools();
@@ -1041,6 +1047,91 @@ impl AIKernel {
                     Some(Err(e)) => ApiResponse::error(e),
                     None => ApiResponse::error(format!("assembly not found: {}", assembly_id)),
                 }
+            }
+
+            // ── Tenant Management (Phase 3C) ──────────────────────────────
+
+            ApiRequest::CreateTenant { tenant_id, admin_agent_id, caller_agent_id } => {
+                // Only trusted agents (kernel, system) or existing admins can create tenants
+                if !self.permissions.is_trusted(&caller_agent_id) {
+                    // Check if caller has CrossTenant permission (needed for tenant management)
+                    let ctx = crate::api::permission::PermissionContext::new(
+                        caller_agent_id.clone(),
+                        "default".to_string(),
+                    );
+                    if let Err(e) = self.permissions.check(&ctx, crate::api::permission::PermissionAction::CrossTenant) {
+                        return ApiResponse::error(format!(
+                            "Agent '{}' cannot create tenants: {}. Only trusted agents or those with CrossTenant permission can create tenants.",
+                            caller_agent_id, e
+                        ));
+                    }
+                }
+                match self.tenant_store.create(&tenant_id, &admin_agent_id) {
+                    Ok(_tenant) => {
+                        // Tenant created successfully
+                        ApiResponse::ok()
+                    }
+                    Err(e) => ApiResponse::error(e.to_string()),
+                }
+            }
+
+            ApiRequest::ListTenants { agent_id } => {
+                let tenants = self.tenant_store.list_for_agent(&agent_id);
+                let dtos: Vec<crate::api::semantic::TenantDto> = tenants.into_iter().map(|t| {
+                    crate::api::semantic::TenantDto {
+                        id: t.id,
+                        admin_agent_id: t.admin_agent_id,
+                        created_at_ms: t.created_at_ms,
+                    }
+                }).collect();
+                let mut r = ApiResponse::ok();
+                r.tenants = Some(dtos);
+                r
+            }
+
+            ApiRequest::TenantShare { from_tenant, to_tenant, resource_type, resource_pattern, agent_id } => {
+                // Validate resource type
+                if !crate::kernel::ops::tenant::TenantShare::is_valid_resource_type(&resource_type) {
+                    return ApiResponse::error(format!(
+                        "Invalid resource_type '{}'. Must be 'kg', 'memory', or 'cas'.",
+                        resource_type
+                    ));
+                }
+
+                // Check CrossTenant permission for the agent
+                let ctx = crate::api::permission::PermissionContext::new(
+                    agent_id.clone(),
+                    from_tenant.clone(),
+                );
+                if let Err(e) = self.permissions.check(&ctx, crate::api::permission::PermissionAction::CrossTenant) {
+                    return ApiResponse::error(format!(
+                        "Agent '{}' in tenant '{}' cannot share resources with tenant '{}': {}. CrossTenant permission required.",
+                        agent_id, from_tenant, to_tenant, e
+                    ));
+                }
+
+                // Verify both tenants exist
+                if !self.tenant_store.exists(&from_tenant) {
+                    return ApiResponse::error(format!("Source tenant '{}' does not exist.", from_tenant));
+                }
+                if !self.tenant_store.exists(&to_tenant) {
+                    return ApiResponse::error(format!("Destination tenant '{}' does not exist.", to_tenant));
+                }
+
+                // TODO: Implement actual resource sharing logic for each resource type.
+                // For now, we just validate that the operation is authorized.
+                let mut r = ApiResponse::ok();
+                r.data = Some(serde_json::json!({
+                    "message": format!(
+                        "Share {} resources matching '{}' from tenant '{}' to tenant '{}' initiated by agent '{}'.",
+                        resource_type, resource_pattern, from_tenant, to_tenant, agent_id
+                    ),
+                    "from_tenant": from_tenant,
+                    "to_tenant": to_tenant,
+                    "resource_type": resource_type,
+                    "resource_pattern": resource_pattern,
+                }).to_string());
+                r
             }
         };
         self.maybe_persist_event_log();

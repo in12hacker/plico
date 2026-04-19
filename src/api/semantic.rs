@@ -669,6 +669,41 @@ pub enum ApiRequest {
         tag_filter: Option<String>,
     },
 
+    // ── Tenant Management (Phase 3C) ──────────────────────────────
+
+    /// Create a new tenant.
+    #[serde(rename = "create_tenant")]
+    CreateTenant {
+        /// Unique tenant identifier (must be non-empty).
+        tenant_id: String,
+        /// Agent ID of the tenant administrator.
+        admin_agent_id: String,
+        /// Agent performing the operation (must be trusted or system).
+        caller_agent_id: String,
+    },
+
+    /// List all tenants accessible to the calling agent.
+    #[serde(rename = "list_tenants")]
+    ListTenants {
+        /// Agent performing the operation.
+        agent_id: String,
+    },
+
+    /// Share resources between tenants (requires CrossTenant permission).
+    #[serde(rename = "tenant_share")]
+    TenantShare {
+        /// Source tenant ID.
+        from_tenant: String,
+        /// Destination tenant ID.
+        to_tenant: String,
+        /// Resource type: "kg" | "memory" | "cas"
+        resource_type: String,
+        /// Tag pattern to match resources (e.g., "project-x*" or "*").
+        resource_pattern: String,
+        /// Agent performing the operation.
+        agent_id: String,
+    },
+
     // ── Proactive Context Assembly (F-2) ───────────────────────────
 
     /// Declare an intent and trigger asynchronous semantic prefetch.
@@ -778,6 +813,9 @@ pub struct ApiResponse {
     /// Token issued to an agent on registration (returned in RegisterAgent response).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub token: Option<String>,
+    /// List of tenants (returned in ListTenants response).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tenants: Option<Vec<TenantDto>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -846,6 +884,14 @@ pub struct SkillDto {
     pub description: String,
     pub agent_id: String,
     pub tags: Vec<String>,
+}
+
+/// Tenant descriptor — returned by ListTenants.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TenantDto {
+    pub id: String,
+    pub admin_agent_id: String,
+    pub created_at_ms: u64,
 }
 
 // ── Project Self-Management (Dogfooding Plico) ─────────────────────────────────
@@ -919,6 +965,7 @@ impl ApiResponse {
             event_history: None,
             discovered_skills: None,
             token: None,
+            tenants: None,
         }
     }
 
@@ -978,6 +1025,7 @@ impl ApiResponse {
             event_history: None,
             discovered_skills: None,
             token: None,
+            tenants: None,
         }
     }
 }
