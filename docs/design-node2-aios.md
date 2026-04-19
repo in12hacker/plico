@@ -536,6 +536,9 @@ F-0（前置修正）
 - [x] KG Causal Reasoning ✅ (v16.0-M1)
 - [x] API Versioning & Stability ✅ (v17.0-M1)
 
+**Phase J（第十轮迭代）**
+- [x] Model Hot-Swap ✅ (v18.0-M1)
+
 ---
 
 ## 9. 验证实验设计
