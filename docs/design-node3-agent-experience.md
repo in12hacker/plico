@@ -1052,14 +1052,14 @@ P-6 (周期性持久化)   ← 依赖 persist_all()
 - [x] F-9：IntentAssemblyCache（双路匹配 + 内存限制 + 失效逻辑） ✅ (v22.0-M7)
 
 **Phase C（~1-2 周）—— 验证 + 探索**
-- [ ] 验证实验 1+2：token 衰减曲线 + 缓存命中率
-- [ ] F-10 TagExtraction 模式（仅在 F-9 验证通过后启动）
-- [ ] F-9 + F-10 联动：预取结果自动进入意图缓存
+- [x] 验证实验 1+2：token 衰减曲线 + 缓存命中率 ✅ (v22.0-M8)
+- [x] F-10 TagExtraction 模式（仅在 F-9 验证通过后启动） ✅ (v22.0-M9)
+- [x] F-9 + F-10 联动：预取结果自动进入意图缓存 ✅ (v22.0-M9)
 
 **Phase D（~1 周）—— 调优 + 文档**
-- [ ] F-10 EmbeddingCluster 模式（如果已有真实 embedding provider）
-- [ ] 缓存参数调优（similarity_threshold、TTL、max_entries、max_memory_bytes）
-- [ ] 文档对齐 + 基准测试自动化
+- [x] F-10 EmbeddingCluster 模式（如果已有真实 embedding provider） ⏳ (嵌入代码，待生产验证)
+- [ ] 缓存参数调优（similarity_threshold、TTL、max_entries、max_memory_bytes） ⏳ (需生产环境)
+- [ ] 文档对齐 + 基准测试自动化 ⏳ (TODO)
 
 ### 预估代码量
 
