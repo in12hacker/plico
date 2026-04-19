@@ -114,14 +114,14 @@ impl crate::kernel::AIKernel {
     }
 
     /// Move a memory entry to a different tier.
-    pub fn memory_move(&self, agent_id: &str, tenant_id: &str, entry_id: &str, target_tier: MemoryTier) -> bool {
+    pub fn memory_move(&self, agent_id: &str, _tenant_id: &str, entry_id: &str, target_tier: MemoryTier) -> bool {
         let moved = self.memory.move_entry(agent_id, entry_id, target_tier);
         if moved { self.persist_memories(); }
         moved
     }
 
     /// Delete a specific memory entry by ID across all tiers.
-    pub fn memory_delete(&self, agent_id: &str, tenant_id: &str, entry_id: &str) -> bool {
+    pub fn memory_delete(&self, agent_id: &str, _tenant_id: &str, entry_id: &str) -> bool {
         let deleted = self.memory.delete_entry(agent_id, entry_id);
         if deleted { self.persist_memories(); }
         deleted
