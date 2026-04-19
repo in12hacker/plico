@@ -18,3 +18,4 @@ pub mod tenant;
 pub mod tier_maintenance;
 pub mod observability;
 pub mod batch;
+pub mod model;

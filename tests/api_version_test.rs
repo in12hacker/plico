@@ -1,4 +1,4 @@
-//! API Versioning Tests (v17.0)
+//! API Versioning Tests (v18.0)
 //!
 //! Tests for the API versioning system including:
 //! - ApiVersion parsing and comparison
@@ -32,7 +32,7 @@ fn test_version_constants() {
     assert_eq!(ApiVersion::V1.major, 1);
     assert_eq!(ApiVersion::V1.minor, 0);
     assert_eq!(ApiVersion::V1.patch, 0);
-    assert_eq!(ApiVersion::CURRENT.major, 17);
+    assert_eq!(ApiVersion::CURRENT.major, 18);
     assert_eq!(ApiVersion::MIN_SUPPORTED.major, 1);
 }
 
@@ -81,6 +81,7 @@ fn test_version_supports_feature() {
     let v15 = ApiVersion::parse("15.0.0").unwrap();
     let v16 = ApiVersion::parse("16.0.0").unwrap();
     let v17 = ApiVersion::parse("17.0.0").unwrap();
+    let v18 = ApiVersion::parse("18.0.0").unwrap();
     let v14 = ApiVersion::parse("14.0.0").unwrap();
     let v13 = ApiVersion::parse("13.0.0").unwrap();
 
@@ -90,27 +91,35 @@ fn test_version_supports_feature() {
     assert!(v15.supports("batch_operations"));
     assert!(v16.supports("batch_operations"));
     assert!(v17.supports("batch_operations"));
+    assert!(v18.supports("batch_operations"));
 
     // KG causal introduced in v16
     assert!(!v14.supports("kg_causal"));
     assert!(!v15.supports("kg_causal"));
     assert!(v16.supports("kg_causal"));
     assert!(v17.supports("kg_causal"));
+    assert!(v18.supports("kg_causal"));
 
     // Deprecation notices introduced in v17
     assert!(!v15.supports("deprecation_notices"));
     assert!(!v16.supports("deprecation_notices"));
     assert!(v17.supports("deprecation_notices"));
+    assert!(v18.supports("deprecation_notices"));
 
     // Tenant management introduced in v14
     assert!(!v13.supports("tenant_management"));
     assert!(v14.supports("tenant_management"));
     assert!(v15.supports("tenant_management"));
+    assert!(v18.supports("tenant_management"));
+
+    // Model hot-swap introduced in v18
+    assert!(!v17.supports("model_hot_swap"));
+    assert!(v18.supports("model_hot_swap"));
 }
 
 #[test]
 fn test_version_supports_unknown_feature() {
-    let v = ApiVersion::parse("17.0.0").unwrap();
+    let v = ApiVersion::parse("18.0.0").unwrap();
     assert!(!v.supports("unknown_feature"));
     assert!(!v.supports(""));
 }
@@ -122,40 +131,43 @@ fn test_version_supports_none_defaults_to_current() {
     assert!(version_supports(None, "kg_causal"));
     assert!(version_supports(None, "deprecation_notices"));
     assert!(version_supports(None, "tenant_management"));
+    assert!(version_supports(None, "model_hot_swap"));
 }
 
 #[test]
 fn test_version_is_deprecated() {
     assert!(ApiVersion::parse("1.0.0").unwrap().is_deprecated());
     assert!(ApiVersion::parse("16.0.0").unwrap().is_deprecated());
-    assert!(!ApiVersion::parse("17.0.0").unwrap().is_deprecated());
-    assert!(!ApiVersion::parse("17.5.0").unwrap().is_deprecated());
+    assert!(ApiVersion::parse("17.0.0").unwrap().is_deprecated());
+    assert!(!ApiVersion::parse("18.0.0").unwrap().is_deprecated());
+    assert!(!ApiVersion::parse("18.5.0").unwrap().is_deprecated());
 }
 
 #[test]
 fn test_deprecation_notice_structure() {
     let notice = DeprecationNotice {
-        deprecated_since: ApiVersion::parse("17.0.0").unwrap(),
-        sunset_version: ApiVersion::parse("18.0.0").unwrap(),
-        message: "Upgrade to v17.0 or later".to_string(),
+        deprecated_since: ApiVersion::parse("18.0.0").unwrap(),
+        sunset_version: ApiVersion::parse("19.0.0").unwrap(),
+        message: "Upgrade to v18.0 or later".to_string(),
     };
     let json = serde_json::to_string(&notice).unwrap();
     assert!(json.contains("deprecated_since"));
     assert!(json.contains("sunset_version"));
     assert!(json.contains("message"));
     let decoded: DeprecationNotice = serde_json::from_str(&json).unwrap();
-    assert_eq!(decoded.sunset_version.major, 18);
-    assert_eq!(decoded.message, "Upgrade to v17.0 or later");
+    assert_eq!(decoded.sunset_version.major, 19);
+    assert_eq!(decoded.message, "Upgrade to v18.0 or later");
 }
 
 #[test]
 fn test_version_features_from_version() {
-    let v17 = ApiVersion::parse("17.0.0").unwrap();
-    let features = VersionFeatures::from_version(v17);
+    let v18 = ApiVersion::parse("18.0.0").unwrap();
+    let features = VersionFeatures::from_version(v18);
     assert!(features.deprecation_notices);
     assert!(features.batch_operations);
     assert!(features.kg_causal);
     assert!(features.tenant_management);
+    assert!(features.model_hot_swap);
 
     let v14 = ApiVersion::parse("14.0.0").unwrap();
     let features14 = VersionFeatures::from_version(v14);
@@ -163,6 +175,7 @@ fn test_version_features_from_version() {
     assert!(!features14.kg_causal);
     assert!(!features14.batch_operations); // batch_operations introduced in v15
     assert!(features14.tenant_management);
+    assert!(!features14.model_hot_swap);
 
     let v13 = ApiVersion::parse("13.0.0").unwrap();
     let features13 = VersionFeatures::from_version(v13);
@@ -170,6 +183,7 @@ fn test_version_features_from_version() {
     assert!(!features13.kg_causal);
     assert!(!features13.batch_operations);
     assert!(!features13.tenant_management);
+    assert!(!features13.model_hot_swap);
 }
 
 #[test]
@@ -204,14 +218,14 @@ fn test_api_response_includes_version() {
 #[test]
 fn test_api_response_with_deprecation() {
     let notice = DeprecationNotice {
-        deprecated_since: ApiVersion::parse("17.0.0").unwrap(),
-        sunset_version: ApiVersion::parse("18.0.0").unwrap(),
+        deprecated_since: ApiVersion::parse("18.0.0").unwrap(),
+        sunset_version: ApiVersion::parse("19.0.0").unwrap(),
         message: "Deprecated".to_string(),
     };
     let resp = ApiResponse::ok().with_deprecation(notice);
     assert!(resp.deprecation.is_some());
     let d = resp.deprecation.unwrap();
-    assert_eq!(d.sunset_version.major, 18);
+    assert_eq!(d.sunset_version.major, 19);
 }
 
 #[test]

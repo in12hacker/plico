@@ -16,19 +16,21 @@ mod persistence;
 pub mod ops;
 
 use ops::prefetch::IntentPrefetcher;
+use ops::model::{HotSwapEmbeddingProvider, HotSwapLlmProvider};
 use ops::observability::{KernelMetrics, OperationTimer, OpType};
 
 use crate::api::semantic::{ApiRequest, ApiResponse};
 use crate::api::agent_auth::AgentKeyStore;
 
 use std::path::PathBuf;
-use std::sync::{Arc, atomic::{AtomicU64, Ordering}};
+use std::sync::{Arc, RwLock, atomic::{AtomicU64, Ordering}};
 
 use crate::cas::CASStorage;
 use crate::memory::{LayeredMemory, MemoryScope, CASPersister, MemoryPersister};
 use crate::scheduler::{AgentScheduler, IntentPriority};
 use crate::scheduler::messaging::MessageBus;
 use crate::fs::{SemanticFS, InMemoryBackend, HnswBackend, EmbeddingProvider, SemanticSearch, LlmSummarizer, Summarizer, KnowledgeGraph, PetgraphBackend, StubEmbeddingProvider};
+use crate::llm::LlmProvider;
 use crate::api::permission::PermissionGuard;
 use crate::tool::ToolRegistry;
 use crate::kernel::event_bus::EventBus;
@@ -42,8 +44,10 @@ pub struct AIKernel {
     pub(crate) fs: Arc<SemanticFS>,
     pub(crate) permissions: Arc<PermissionGuard>,
     pub(crate) memory_persister: Option<Arc<dyn MemoryPersister + Send + Sync>>,
-    #[allow(dead_code)]
-    pub(crate) embedding: Arc<dyn EmbeddingProvider>,
+    /// Embedding provider — hot-swap wrapper for runtime model switching (v18.0).
+    pub(crate) embedding: HotSwapEmbeddingProvider,
+    /// LLM provider for summarization — hot-swap wrapper for runtime model switching (v18.0).
+    pub(crate) llm_provider: HotSwapLlmProvider,
     #[allow(dead_code)]
     pub(crate) summarizer: Option<Arc<dyn Summarizer>>,
     pub(crate) knowledge_graph: Option<Arc<dyn KnowledgeGraph>>,
@@ -69,21 +73,35 @@ impl AIKernel {
     pub fn new(root: PathBuf) -> std::io::Result<Self> {
         let cas = Arc::new(CASStorage::new(root.join("cas"))?);
 
-        let embedding: Arc<dyn EmbeddingProvider> =
+        let embedding_raw: Arc<dyn EmbeddingProvider> =
             persistence::create_embedding_provider().unwrap_or_else(|e| {
                 tracing::warn!("Embedding backend failed: {e}. Using stub (tag-only search).");
                 Arc::new(StubEmbeddingProvider::new()) as Arc<dyn EmbeddingProvider>
             });
+        // Wrap in RwLock for hot-swap support (RwLock stores Arc for cloneability), then wrap in HotSwapEmbeddingProvider
+        let embedding_inner: Arc<RwLock<Arc<dyn EmbeddingProvider>>> =
+            Arc::new(RwLock::new(embedding_raw));
+        let embedding = HotSwapEmbeddingProvider::new(embedding_inner.clone());
 
-        let summarizer: Option<Arc<dyn Summarizer>> = match persistence::create_llm_provider("PLICO_SUMMARIZER_MODEL", "llama3.2") {
+        let llm_raw: Arc<dyn LlmProvider> = match persistence::create_llm_provider("PLICO_SUMMARIZER_MODEL", "llama3.2") {
             Ok(provider) => {
                 tracing::info!("LLM summarizer enabled: {}", provider.model_name());
-                Some(Arc::new(LlmSummarizer::new(provider)))
+                provider
             }
             Err(e) => {
-                tracing::warn!("Could not create summarizer: {e}. ContextLoader will use heuristic summaries.");
-                None
+                tracing::warn!("Could not create LLM provider: {e}. Using stub provider.");
+                Arc::new(crate::llm::StubProvider::empty()) as Arc<dyn LlmProvider>
             }
+        };
+        // Wrap in RwLock for hot-swap support (RwLock stores Arc for cloneability), then wrap in HotSwapLlmProvider
+        let llm_inner: Arc<RwLock<Arc<dyn LlmProvider>>> =
+            Arc::new(RwLock::new(llm_raw));
+        let llm_provider = HotSwapLlmProvider::new(llm_inner.clone());
+
+        let summarizer: Option<Arc<dyn Summarizer>> = {
+            // Get the actual LLM provider from the inner Arc
+            let llm_provider = llm_inner.read().unwrap().clone();
+            Some(Arc::new(LlmSummarizer::new(llm_provider)) as Arc<dyn Summarizer>)
         };
 
         let search_backend: Arc<dyn SemanticSearch> = match std::env::var("SEARCH_BACKEND")
@@ -111,7 +129,7 @@ impl AIKernel {
 
         let fs = Arc::new(SemanticFS::new(
             root.clone(),
-            embedding.clone(),
+            Arc::new(embedding.clone()) as Arc<dyn EmbeddingProvider>,
             search_index,
             summarizer.clone(),
             knowledge_graph.clone(),
@@ -140,7 +158,7 @@ impl AIKernel {
             knowledge_graph.clone(),
             memory.clone(),
             event_bus.clone(),
-            embedding.clone(),
+            Arc::new(embedding.clone()) as Arc<dyn EmbeddingProvider>,
             fs.ctx_loader_arc(),
         ));
 
@@ -162,6 +180,7 @@ impl AIKernel {
             permissions,
             memory_persister: persister,
             embedding,
+            llm_provider,
             summarizer,
             knowledge_graph,
             search_backend,
@@ -1264,6 +1283,37 @@ impl AIKernel {
                     }
                     Err(e) => ApiResponse::error(e.to_string()),
                 }
+            }
+
+            // ── Model Hot-Swap (v18.0) ────────────────────────────────────
+
+            ApiRequest::SwitchEmbeddingModel { model_type, model_id, python_path } => {
+                match self.switch_embedding_model(&model_type, &model_id, python_path.as_deref()) {
+                    Ok(resp) => {
+                        let mut r = ApiResponse::ok();
+                        r.model_switch = Some(resp);
+                        r
+                    }
+                    Err(e) => ApiResponse::error(e),
+                }
+            }
+
+            ApiRequest::SwitchLlmModel { backend, model, url } => {
+                match self.switch_llm_model(&backend, &model, url.as_deref()) {
+                    Ok(resp) => {
+                        let mut r = ApiResponse::ok();
+                        r.model_switch = Some(resp);
+                        r
+                    }
+                    Err(e) => ApiResponse::error(e),
+                }
+            }
+
+            ApiRequest::CheckModelHealth { model_type } => {
+                let health = self.check_model_health(&model_type);
+                let mut r = ApiResponse::ok();
+                r.model_health = Some(health);
+                r
             }
         };
         self.maybe_persist_event_log();

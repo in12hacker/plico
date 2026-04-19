@@ -876,6 +876,8 @@ mod tests {
             causal_paths: None,
             impact_analysis: None,
             temporal_changes: None,
+            model_switch: None,
+            model_health: None,
         }
     }
 

@@ -10,6 +10,7 @@ use crate::memory::{MemoryEntry, MemoryContent, MemoryTier, MemoryScope};
 use crate::scheduler::AgentId;
 use crate::kernel::event_bus::KernelEvent;
 use crate::kernel::ops::tier_maintenance::TierMaintenance;
+use crate::fs::embedding::types::EmbeddingProvider;
 use super::observability::{OpType, OperationTimer};
 
 impl crate::kernel::AIKernel {

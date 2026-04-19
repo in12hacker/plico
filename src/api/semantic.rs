@@ -21,6 +21,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// # Examples
 /// ```
+/// use plico::api::semantic::ApiVersion;
 /// let v = ApiVersion::parse("1.2.0").unwrap();
 /// assert!(v.major == 1 && v.minor == 2 && v.patch == 0);
 /// ```
@@ -90,7 +91,7 @@ impl ApiVersion {
     /// Version 1.0.0 — initial stable release.
     pub const V1: ApiVersion = ApiVersion { major: 1, minor: 0, patch: 0 };
     /// Current stable version.
-    pub const CURRENT: ApiVersion = ApiVersion { major: 17, minor: 0, patch: 0 };
+    pub const CURRENT: ApiVersion = ApiVersion { major: 18, minor: 0, patch: 0 };
     /// Minimum supported version (for compatibility checks).
     pub const MIN_SUPPORTED: ApiVersion = ApiVersion { major: 1, minor: 0, patch: 0 };
 
@@ -113,12 +114,14 @@ impl ApiVersion {
     /// - `"kg_causal"` — kg_causal_path, kg_impact_analysis, kg_temporal_changes (v16.0+)
     /// - `"deprecation_notices"` — response includes deprecation field (v17.0+)
     /// - `"tenant_management"` — create_tenant, list_tenants, tenant_share (v14.0+)
+    /// - `"model_hot_swap"` — switch_embedding_model, switch_llm_model, check_model_health (v18.0+)
     pub fn supports(&self, feature: &str) -> bool {
         match feature {
             "batch_operations" => *self >= ApiVersion { major: 15, minor: 0, patch: 0 },
             "kg_causal" => *self >= ApiVersion { major: 16, minor: 0, patch: 0 },
             "deprecation_notices" => *self >= ApiVersion { major: 17, minor: 0, patch: 0 },
             "tenant_management" => *self >= ApiVersion { major: 14, minor: 0, patch: 0 },
+            "model_hot_swap" => *self >= ApiVersion { major: 18, minor: 0, patch: 0 },
             _ => false,
         }
     }
@@ -131,7 +134,7 @@ impl ApiVersion {
 
     /// Returns true if this version is deprecated.
     pub fn is_deprecated(&self) -> bool {
-        *self < (ApiVersion { major: 17, minor: 0, patch: 0 })
+        *self < (ApiVersion { major: 18, minor: 0, patch: 0 })
     }
 }
 
@@ -182,6 +185,8 @@ pub struct VersionFeatures {
     pub deprecation_notices: bool,
     /// True if the request supports tenant management (v14.0+).
     pub tenant_management: bool,
+    /// True if the request supports model hot-swap (v18.0+).
+    pub model_hot_swap: bool,
 }
 
 impl VersionFeatures {
@@ -192,6 +197,7 @@ impl VersionFeatures {
             kg_causal: version.supports("kg_causal"),
             deprecation_notices: version.supports("deprecation_notices"),
             tenant_management: version.supports("tenant_management"),
+            model_hot_swap: version.supports("model_hot_swap"),
         }
     }
 }
@@ -982,6 +988,39 @@ pub enum ApiRequest {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         tenant_id: Option<String>,
     },
+
+    // ── Model Hot-Swap (v18.0) ────────────────────────────────────────────
+
+    /// Switch embedding model at runtime without restart.
+    #[serde(rename = "switch_embedding_model")]
+    SwitchEmbeddingModel {
+        /// Backend type: "local", "ollama", "stub"
+        model_type: String,
+        /// Model identifier, e.g. "BAAI/bge-small-en-v1.5"
+        model_id: String,
+        /// Optional python interpreter path for local backend
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        python_path: Option<String>,
+    },
+
+    /// Switch LLM model at runtime without restart.
+    #[serde(rename = "switch_llm_model")]
+    SwitchLlmModel {
+        /// Backend: "ollama", "openai", "stub"
+        backend: String,
+        /// Model name, e.g. "llama3.2"
+        model: String,
+        /// Optional URL override
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        url: Option<String>,
+    },
+
+    /// Check if a model is currently available and responsive.
+    #[serde(rename = "check_model_health")]
+    CheckModelHealth {
+        /// Model type: "embedding" or "llm"
+        model_type: String,
+    },
 }
 
 /// An item within a BatchCreate request.
@@ -1179,6 +1218,40 @@ pub struct ApiResponse {
     /// Temporal changes result (v16.0).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub temporal_changes: Option<Vec<TemporalChangeDto>>,
+    /// Model switch response (v18.0).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_switch: Option<ModelSwitchResponse>,
+    /// Model health check response (v18.0).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_health: Option<ModelHealthResponse>,
+}
+
+/// Response for a successful model switch operation (v18.0).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelSwitchResponse {
+    /// True if the switch was successful.
+    pub success: bool,
+    /// The model that was active before the switch.
+    pub previous_model: String,
+    /// The newly activated model.
+    pub new_model: String,
+    /// Human-readable status message.
+    pub message: String,
+}
+
+/// Response for a model health check (v18.0).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelHealthResponse {
+    /// True if the model is available and responsive.
+    pub available: bool,
+    /// The model identifier that was checked.
+    pub model: String,
+    /// Observed latency in milliseconds, if available.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latency_ms: Option<u64>,
+    /// Error message if the model is unavailable.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1409,6 +1482,8 @@ impl ApiResponse {
             causal_paths: None,
             impact_analysis: None,
             temporal_changes: None,
+            model_switch: None,
+            model_health: None,
         }
     }
 
@@ -1485,6 +1560,8 @@ impl ApiResponse {
             causal_paths: None,
             impact_analysis: None,
             temporal_changes: None,
+            model_switch: None,
+            model_health: None,
         }
     }
 
@@ -1567,7 +1644,7 @@ mod tests {
     #[test]
     fn test_version_constants() {
         assert_eq!(ApiVersion::V1.major, 1);
-        assert_eq!(ApiVersion::CURRENT.major, 17);
+        assert_eq!(ApiVersion::CURRENT.major, 18);
         assert_eq!(ApiVersion::MIN_SUPPORTED.major, 1);
     }
 
@@ -1647,20 +1724,21 @@ mod tests {
     #[test]
     fn test_version_is_deprecated() {
         assert!(ApiVersion::parse("16.0.0").unwrap().is_deprecated());
-        assert!(!ApiVersion::parse("17.0.0").unwrap().is_deprecated());
+        assert!(ApiVersion::parse("17.0.0").unwrap().is_deprecated());
+        assert!(!ApiVersion::parse("18.0.0").unwrap().is_deprecated());
         assert!(ApiVersion::parse("1.0.0").unwrap().is_deprecated());
     }
 
     #[test]
     fn test_deprecation_notice_structure() {
         let notice = DeprecationNotice {
-            deprecated_since: ApiVersion::parse("17.0.0").unwrap(),
-            sunset_version: ApiVersion::parse("18.0.0").unwrap(),
-            message: "Upgrade to v17.0 or later".to_string(),
+            deprecated_since: ApiVersion::parse("18.0.0").unwrap(),
+            sunset_version: ApiVersion::parse("19.0.0").unwrap(),
+            message: "Upgrade to v18.0 or later".to_string(),
         };
         let json = serde_json::to_string(&notice).unwrap();
         let decoded: DeprecationNotice = serde_json::from_str(&json).unwrap();
-        assert_eq!(decoded.sunset_version.major, 18);
+        assert_eq!(decoded.sunset_version.major, 19);
     }
 
     #[test]
