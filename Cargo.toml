@@ -53,6 +53,14 @@ path = "src/bin/plico_mcp.rs"
 name = "plico-sse"
 path = "src/bin/plico_sse.rs"
 
+[[example]]
+name = "ingest_agent"
+path = "examples/ingest_agent.rs"
+
+[[example]]
+name = "knowledge_agent"
+path = "examples/knowledge_agent.rs"
+
 [profile.release]
 opt-level = 3
 lto = true
