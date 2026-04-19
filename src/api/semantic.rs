@@ -1486,6 +1486,35 @@ pub struct NodeInfoDto {
     pub is_stale: bool,
 }
 
+/// Agent checkpoint result (v21.0).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentCheckpointDto {
+    pub checkpoint_id: String,
+    pub agent_id: String,
+    pub created_at_ms: u64,
+    pub agent_state: String,
+    pub pending_intents: usize,
+    pub memory_count: usize,
+    pub kg_associations: usize,
+    pub last_intent_description: Option<String>,
+}
+
+/// List of checkpoint IDs for an agent (v21.0).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentCheckpointsDto {
+    pub agent_id: String,
+    pub checkpoints: Vec<CheckpointSummaryDto>,
+}
+
+/// Summary of a single checkpoint (v21.0).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CheckpointSummaryDto {
+    pub checkpoint_id: String,
+    pub created_at_ms: u64,
+    pub agent_state: String,
+    pub memory_count: usize,
+}
+
 /// Agent resource usage and quota snapshot.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentUsageDto {

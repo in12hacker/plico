@@ -1,6 +1,8 @@
 //! System status operations — runtime kernel metrics.
 
-use crate::api::semantic::{SystemStatus, CacheStatsDto, ClusterStatusDto, NodeInfoDto};
+use crate::api::semantic::{
+    SystemStatus, CacheStatsDto, ClusterStatusDto, NodeInfoDto,
+};
 
 impl crate::kernel::AIKernel {
     /// Build runtime kernel metrics from live system state.
