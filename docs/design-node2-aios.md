@@ -529,6 +529,9 @@ F-0（前置修正）
 **Phase F（第六轮迭代）**
 - [x] Observability & Structured Logging ✅ (v14.0-M1)
 
+**Phase G（第七轮迭代）**
+- [x] Batch Operations API ✅ (v15.0-M1)
+
 ---
 
 ## 9. 验证实验设计
