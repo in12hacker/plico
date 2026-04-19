@@ -77,6 +77,10 @@ pub struct MemoryEntry {
     /// Which agent owns this memory.
     pub agent_id: String,
 
+    /// Tenant ID for multi-tenant isolation.
+    #[serde(default)]
+    pub tenant_id: String,
+
     /// The tier this entry lives in.
     pub tier: MemoryTier,
 
@@ -175,12 +179,18 @@ pub struct KnowledgePiece {
 }
 
 impl MemoryEntry {
+    /// Default tenant ID for backward compatibility.
+    pub fn default_tenant() -> String {
+        "default".to_string()
+    }
+
     /// Create a new ephemeral memory entry.
     pub fn ephemeral(agent_id: impl Into<String>, content: impl Into<String>) -> Self {
         let now = now_ms();
         Self {
             id: Uuid::new_v4().to_string(),
             agent_id: agent_id.into(),
+            tenant_id: Self::default_tenant(),
             tier: MemoryTier::Ephemeral,
             content: MemoryContent::Text(content.into()),
             importance: 50,
@@ -204,6 +214,7 @@ impl MemoryEntry {
         Self {
             id: Uuid::new_v4().to_string(),
             agent_id: agent_id.into(),
+            tenant_id: Self::default_tenant(),
             tier: MemoryTier::LongTerm,
             content,
             importance: 50,

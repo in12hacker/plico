@@ -20,7 +20,7 @@
 //! use plico::{PermissionGuard, PermissionContext, PermissionAction, PermissionGrant};
 //! let guard = PermissionGuard::new();
 //! guard.grant("agent1", PermissionGrant::new(PermissionAction::Delete));
-//! let ctx = PermissionContext::new("agent1".into());
+//! let ctx = PermissionContext::new("agent1".into(), "default".into());
 //! guard.check(&ctx, PermissionAction::Delete).unwrap(); // OK
 //! guard.check(&ctx, PermissionAction::Network).unwrap_err(); // Err: permission denied
 //! ```
@@ -30,26 +30,45 @@ use std::collections::HashMap;
 use std::sync::RwLock;
 
 /// A permission context — carries agent identity and granted permissions.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PermissionContext {
     pub agent_id: String,
+    /// Tenant ID for multi-tenant isolation.
+    #[serde(default)]
+    pub tenant_id: String,
     /// Grants embedded in the context (e.g., from API request).
     pub embedded_grants: Vec<PermissionGrant>,
 }
 
 impl PermissionContext {
-    pub fn new(agent_id: String) -> Self {
+    /// Default tenant ID for backward compatibility.
+    pub fn default_tenant() -> String {
+        "default".to_string()
+    }
+
+    pub fn new(agent_id: String, tenant_id: String) -> Self {
         Self {
             agent_id,
+            tenant_id,
             embedded_grants: Vec::new(),
         }
     }
 
     /// Create a context with embedded grants (from API call).
-    pub fn with_grants(agent_id: String, grants: Vec<PermissionGrant>) -> Self {
+    pub fn with_grants(agent_id: String, tenant_id: String, grants: Vec<PermissionGrant>) -> Self {
         Self {
             agent_id,
+            tenant_id,
             embedded_grants: grants,
+        }
+    }
+
+    /// Create a context with tenant inferred from token (falls back to "default").
+    pub fn with_inferred_tenant(agent_id: String, token_tenant: Option<String>) -> Self {
+        Self {
+            agent_id,
+            tenant_id: token_tenant.unwrap_or_else(Self::default_tenant),
+            embedded_grants: Vec::new(),
         }
     }
 
@@ -321,7 +340,7 @@ impl PermissionGuard {
         if agent_id == owner_id {
             return Ok(());
         }
-        let ctx = PermissionContext::new(agent_id.to_string());
+        let ctx = PermissionContext::new(agent_id.to_string(), "default".to_string());
         if let Some(grants) = self.grants.read().unwrap().get(agent_id) {
             if grants.iter().any(|g| g.covers(PermissionAction::ReadAny) || g.covers(PermissionAction::All)) {
                 return Ok(());

@@ -51,6 +51,7 @@ impl SemanticFS {
                 properties: serde_json::to_value(&meta)
                     .map_err(|e| FSError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())))?,
                 agent_id: agent_id.to_string(),
+                tenant_id: "default".to_string(),
                 created_at: now_ms(),
                 valid_at: None,
                 invalid_at: None,

@@ -218,6 +218,7 @@ mod tests {
         MemoryEntry {
             id: uuid::Uuid::new_v4().to_string(),
             agent_id: "test".into(),
+            tenant_id: "default".to_string(),
             tier: MemoryTier::Ephemeral,
             content: MemoryContent::Text(text.into()),
             importance,

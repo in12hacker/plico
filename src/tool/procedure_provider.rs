@@ -140,6 +140,7 @@ mod tests {
         MemoryEntry {
             id: format!("proc-{}", name),
             agent_id: agent.into(),
+            tenant_id: "default".to_string(),
             tier: MemoryTier::Procedural,
             content: MemoryContent::Procedure(Procedure {
                 name: name.into(),

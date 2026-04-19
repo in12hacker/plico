@@ -8,7 +8,7 @@ use plico::api::permission::{
 };
 
 fn check_ok(guard: &PermissionGuard, agent: &str, action: PermissionAction) {
-    let ctx = PermissionContext::new(agent.to_string());
+    let ctx = PermissionContext::new(agent.to_string(), "default".to_string());
     assert!(
         guard.check(&ctx, action).is_ok(),
         "Agent '{}' should have {:?} permission",
@@ -18,7 +18,7 @@ fn check_ok(guard: &PermissionGuard, agent: &str, action: PermissionAction) {
 }
 
 fn check_denied(guard: &PermissionGuard, agent: &str, action: PermissionAction) {
-    let ctx = PermissionContext::new(agent.to_string());
+    let ctx = PermissionContext::new(agent.to_string(), "default".to_string());
     assert!(
         guard.check(&ctx, action).is_err(),
         "Agent '{}' should NOT have {:?} permission without grant",
@@ -190,6 +190,7 @@ fn test_permission_context_with_embedded_grants() {
     // Create context with embedded grant
     let ctx = PermissionContext::with_grants(
         "embedded_agent".to_string(),
+        "default".to_string(),
         vec![PermissionGrant::new(PermissionAction::Execute)],
     );
 
@@ -338,7 +339,7 @@ fn test_check_scoped_on_guard() {
         PermissionGrant::new(PermissionAction::Execute).with_scope("tool:cas.search"),
     );
 
-    let ctx = PermissionContext::new("agent1".to_string());
+    let ctx = PermissionContext::new("agent1".to_string(), "default".to_string());
     assert!(guard.check_scoped(&ctx, PermissionAction::Execute, Some("tool:cas.search")).is_ok());
     assert!(guard.check_scoped(&ctx, PermissionAction::Execute, Some("tool:web_search")).is_err());
 }

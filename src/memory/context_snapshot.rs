@@ -31,6 +31,7 @@ impl ContextSnapshot {
         MemoryEntry {
             id: uuid::Uuid::new_v4().to_string(),
             agent_id: self.agent_id.clone(),
+            tenant_id: "default".to_string(),
             tier: MemoryTier::Working,
             content: MemoryContent::Structured(serde_json::to_value(self).unwrap_or_default()),
             importance: 80,

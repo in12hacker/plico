@@ -67,7 +67,7 @@ impl crate::kernel::AIKernel {
         properties: serde_json::Value,
         agent_id: &str,
     ) -> std::io::Result<String> {
-        let ctx = crate::api::permission::PermissionContext::new(agent_id.to_string());
+        let ctx = crate::api::permission::PermissionContext::new(agent_id.to_string(), "default".to_string());
         self.permissions.check(&ctx, crate::api::permission::PermissionAction::Write)?;
         let Some(ref kg) = self.knowledge_graph else {
             return Err(std::io::Error::other("knowledge graph not available"));
@@ -81,6 +81,7 @@ impl crate::kernel::AIKernel {
             content_cid: None,
             properties,
             agent_id: agent_id.to_string(),
+            tenant_id: "default".to_string(),
             created_at: now,
             valid_at: Some(now),
             invalid_at: None,
@@ -100,7 +101,7 @@ impl crate::kernel::AIKernel {
         weight: Option<f32>,
         agent_id: &str,
     ) -> std::io::Result<()> {
-        let ctx = crate::api::permission::PermissionContext::new(agent_id.to_string());
+        let ctx = crate::api::permission::PermissionContext::new(agent_id.to_string(), "default".to_string());
         self.permissions.check(&ctx, crate::api::permission::PermissionAction::Write)?;
         let Some(ref kg) = self.knowledge_graph else {
             return Err(std::io::Error::other("knowledge graph not available"));
@@ -128,7 +129,7 @@ impl crate::kernel::AIKernel {
         node_type: Option<KGNodeType>,
         agent_id: &str,
     ) -> std::io::Result<Vec<KGNode>> {
-        let ctx = crate::api::permission::PermissionContext::new(agent_id.to_string());
+        let ctx = crate::api::permission::PermissionContext::new(agent_id.to_string(), "default".to_string());
         self.permissions.check(&ctx, crate::api::permission::PermissionAction::Read)?;
         let Some(ref kg) = self.knowledge_graph else {
             return Ok(Vec::new());
@@ -174,7 +175,7 @@ impl crate::kernel::AIKernel {
         node_type: Option<KGNodeType>,
         t: u64,
     ) -> std::io::Result<Vec<KGNode>> {
-        let ctx = crate::api::permission::PermissionContext::new(agent_id.to_string());
+        let ctx = crate::api::permission::PermissionContext::new(agent_id.to_string(), "default".to_string());
         self.permissions.check(&ctx, crate::api::permission::PermissionAction::Read)?;
         let Some(ref kg) = self.knowledge_graph else {
             return Ok(Vec::new());
@@ -185,7 +186,7 @@ impl crate::kernel::AIKernel {
 
     /// Get a single KG node by ID.
     pub fn kg_get_node(&self, node_id: &str, agent_id: &str) -> std::io::Result<Option<KGNode>> {
-        let ctx = crate::api::permission::PermissionContext::new(agent_id.to_string());
+        let ctx = crate::api::permission::PermissionContext::new(agent_id.to_string(), "default".to_string());
         self.permissions.check(&ctx, crate::api::permission::PermissionAction::Read)?;
         let Some(ref kg) = self.knowledge_graph else {
             return Ok(None);
@@ -195,7 +196,7 @@ impl crate::kernel::AIKernel {
 
     /// List edges, optionally filtered by a node they touch.
     pub fn kg_list_edges(&self, agent_id: &str, node_id: Option<&str>) -> std::io::Result<Vec<KGEdge>> {
-        let ctx = crate::api::permission::PermissionContext::new(agent_id.to_string());
+        let ctx = crate::api::permission::PermissionContext::new(agent_id.to_string(), "default".to_string());
         self.permissions.check(&ctx, crate::api::permission::PermissionAction::Read)?;
         let Some(ref kg) = self.knowledge_graph else {
             return Ok(Vec::new());
@@ -217,7 +218,7 @@ impl crate::kernel::AIKernel {
         edge_type: Option<KGEdgeType>,
         agent_id: &str,
     ) -> std::io::Result<()> {
-        let ctx = crate::api::permission::PermissionContext::new(agent_id.to_string());
+        let ctx = crate::api::permission::PermissionContext::new(agent_id.to_string(), "default".to_string());
         self.permissions.check(&ctx, crate::api::permission::PermissionAction::Delete)?;
         let Some(ref kg) = self.knowledge_graph else {
             return Err(std::io::Error::other("knowledge graph not available"));
@@ -234,7 +235,7 @@ impl crate::kernel::AIKernel {
         properties: Option<serde_json::Value>,
         agent_id: &str,
     ) -> std::io::Result<()> {
-        let ctx = crate::api::permission::PermissionContext::new(agent_id.to_string());
+        let ctx = crate::api::permission::PermissionContext::new(agent_id.to_string(), "default".to_string());
         self.permissions.check(&ctx, crate::api::permission::PermissionAction::Write)?;
         let Some(ref kg) = self.knowledge_graph else {
             return Err(std::io::Error::other("knowledge graph not available"));
@@ -245,7 +246,7 @@ impl crate::kernel::AIKernel {
 
     /// Remove a KG node and all its edges.
     pub fn kg_remove_node(&self, node_id: &str, agent_id: &str) -> std::io::Result<()> {
-        let ctx = crate::api::permission::PermissionContext::new(agent_id.to_string());
+        let ctx = crate::api::permission::PermissionContext::new(agent_id.to_string(), "default".to_string());
         self.permissions.check(&ctx, crate::api::permission::PermissionAction::Delete)?;
         let Some(ref kg) = self.knowledge_graph else {
             return Err(std::io::Error::other("knowledge graph not available"));
@@ -262,7 +263,7 @@ impl crate::kernel::AIKernel {
         edge_type: Option<KGEdgeType>,
         agent_id: &str,
     ) -> std::io::Result<Vec<KGEdge>> {
-        let ctx = crate::api::permission::PermissionContext::new(agent_id.to_string());
+        let ctx = crate::api::permission::PermissionContext::new(agent_id.to_string(), "default".to_string());
         self.permissions.check(&ctx, crate::api::permission::PermissionAction::Read)?;
         let Some(ref kg) = self.knowledge_graph else {
             return Ok(Vec::new());

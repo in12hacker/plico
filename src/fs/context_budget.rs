@@ -141,6 +141,7 @@ mod tests {
             created_by: "test".to_string(),
             created_at: 0,
             intent: None,
+            tenant_id: "default".to_string(),
         };
         let obj = AIObject::new(content.as_bytes().to_vec(), meta);
         cas.put(&obj).unwrap()

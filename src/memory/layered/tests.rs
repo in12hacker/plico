@@ -72,6 +72,7 @@ fn test_private_memory_invisible_to_other_agents() {
     let entry = MemoryEntry {
         id: "priv-1".into(),
         agent_id: "agent-a".into(),
+        tenant_id: "default".to_string(),
         tier: MemoryTier::Working,
         content: MemoryContent::Text("secret plan".into()),
         importance: 50,
@@ -99,6 +100,7 @@ fn test_shared_memory_visible_to_all() {
     let entry = MemoryEntry {
         id: "shared-1".into(),
         agent_id: "agent-a".into(),
+        tenant_id: "default".to_string(),
         tier: MemoryTier::LongTerm,
         content: MemoryContent::Text("company policy".into()),
         importance: 80,
@@ -128,6 +130,7 @@ fn test_group_memory_visible_to_group_members() {
     let entry = MemoryEntry {
         id: "group-1".into(),
         agent_id: "agent-a".into(),
+        tenant_id: "default".to_string(),
         tier: MemoryTier::Procedural,
         content: MemoryContent::Text("team workflow".into()),
         importance: 90,
@@ -159,6 +162,7 @@ fn test_get_shared_returns_only_shared_scope() {
     mem.store(MemoryEntry {
         id: "private-1".into(),
         agent_id: "agent-a".into(),
+        tenant_id: "default".to_string(),
         tier: MemoryTier::Working,
         content: MemoryContent::Text("private".into()),
         importance: 50, access_count: 0, last_accessed: now_ms(), created_at: now_ms(),
@@ -168,6 +172,7 @@ fn test_get_shared_returns_only_shared_scope() {
     mem.store(MemoryEntry {
         id: "shared-1".into(),
         agent_id: "agent-a".into(),
+        tenant_id: "default".to_string(),
         tier: MemoryTier::Working,
         content: MemoryContent::Text("shared knowledge".into()),
         importance: 50, access_count: 0, last_accessed: now_ms(), created_at: now_ms(),
@@ -177,6 +182,7 @@ fn test_get_shared_returns_only_shared_scope() {
     mem.store(MemoryEntry {
         id: "group-1".into(),
         agent_id: "agent-b".into(),
+        tenant_id: "default".to_string(),
         tier: MemoryTier::Working,
         content: MemoryContent::Text("group data".into()),
         importance: 50, access_count: 0, last_accessed: now_ms(), created_at: now_ms(),
@@ -196,6 +202,7 @@ fn test_get_by_group_returns_only_matching_group() {
     mem.store(MemoryEntry {
         id: "eng-1".into(),
         agent_id: "agent-a".into(),
+        tenant_id: "default".to_string(),
         tier: MemoryTier::Procedural,
         content: MemoryContent::Text("eng procedure".into()),
         importance: 50, access_count: 0, last_accessed: now_ms(), created_at: now_ms(),
@@ -205,6 +212,7 @@ fn test_get_by_group_returns_only_matching_group() {
     mem.store(MemoryEntry {
         id: "mkt-1".into(),
         agent_id: "agent-b".into(),
+        tenant_id: "default".to_string(),
         tier: MemoryTier::Procedural,
         content: MemoryContent::Text("marketing procedure".into()),
         importance: 50, access_count: 0, last_accessed: now_ms(), created_at: now_ms(),
@@ -228,6 +236,7 @@ fn test_recall_visible_combines_private_shared_group() {
     mem.store(MemoryEntry {
         id: "my-private".into(),
         agent_id: "agent-a".into(),
+        tenant_id: "default".to_string(),
         tier: MemoryTier::Working,
         content: MemoryContent::Text("my secret".into()),
         importance: 50, access_count: 0, last_accessed: now_ms(), created_at: now_ms(),
@@ -237,6 +246,7 @@ fn test_recall_visible_combines_private_shared_group() {
     mem.store(MemoryEntry {
         id: "other-private".into(),
         agent_id: "agent-b".into(),
+        tenant_id: "default".to_string(),
         tier: MemoryTier::Working,
         content: MemoryContent::Text("b secret".into()),
         importance: 50, access_count: 0, last_accessed: now_ms(), created_at: now_ms(),
@@ -246,6 +256,7 @@ fn test_recall_visible_combines_private_shared_group() {
     mem.store(MemoryEntry {
         id: "common-shared".into(),
         agent_id: "agent-b".into(),
+        tenant_id: "default".to_string(),
         tier: MemoryTier::LongTerm,
         content: MemoryContent::Text("public knowledge".into()),
         importance: 80, access_count: 0, last_accessed: now_ms(), created_at: now_ms(),
@@ -255,6 +266,7 @@ fn test_recall_visible_combines_private_shared_group() {
     mem.store(MemoryEntry {
         id: "team-group".into(),
         agent_id: "agent-c".into(),
+        tenant_id: "default".to_string(),
         tier: MemoryTier::Procedural,
         content: MemoryContent::Text("team procedure".into()),
         importance: 90, access_count: 0, last_accessed: now_ms(), created_at: now_ms(),
@@ -295,13 +307,13 @@ fn test_clear_agent_removes_all_tiers() {
 
     mem.store(MemoryEntry::ephemeral(agent, "ephemeral note"));
     mem.store(MemoryEntry {
-        id: "w-1".into(), agent_id: agent.into(), tier: MemoryTier::Working,
+        id: "w-1".into(), agent_id: agent.into(), tenant_id: "default".to_string(), tier: MemoryTier::Working,
         content: MemoryContent::Text("working note".into()),
         importance: 50, access_count: 0, last_accessed: now_ms(), created_at: now_ms(),
         tags: vec![], embedding: None, ttl_ms: None, scope: MemoryScope::Private,
     });
     mem.store(MemoryEntry {
-        id: "lt-1".into(), agent_id: agent.into(), tier: MemoryTier::LongTerm,
+        id: "lt-1".into(), agent_id: agent.into(), tenant_id: "default".to_string(), tier: MemoryTier::LongTerm,
         content: MemoryContent::Text("long-term note".into()),
         importance: 80, access_count: 0, last_accessed: now_ms(), created_at: now_ms(),
         tags: vec![], embedding: None, ttl_ms: None, scope: MemoryScope::Private,

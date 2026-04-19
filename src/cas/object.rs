@@ -88,9 +88,18 @@ pub struct AIObjectMeta {
 
     /// Optional intent description — what this object is FOR.
     pub intent: Option<String>,
+
+    /// Tenant ID — provides multi-tenant isolation.
+    #[serde(default)]
+    pub tenant_id: String,
 }
 
 impl AIObjectMeta {
+    /// Default tenant ID for backward compatibility.
+    pub fn default_tenant() -> String {
+        "default".to_string()
+    }
+
     /// Create a text metadata block.
     pub fn text<const N: usize>(tags: [&str; N]) -> Self {
         Self {
@@ -99,6 +108,7 @@ impl AIObjectMeta {
             created_by: String::new(),
             created_at: now_ms(),
             intent: None,
+            tenant_id: Self::default_tenant(),
         }
     }
 
@@ -111,6 +121,12 @@ impl AIObjectMeta {
     /// Set the creating agent ID.
     pub fn with_agent(mut self, agent_id: impl Into<String>) -> Self {
         self.created_by = agent_id.into();
+        self
+    }
+
+    /// Set the tenant ID.
+    pub fn with_tenant(mut self, tenant_id: impl Into<String>) -> Self {
+        self.tenant_id = tenant_id.into();
         self
     }
 }

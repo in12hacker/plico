@@ -101,6 +101,7 @@ fn test_procedural_memory_roundtrip() {
     let entry = MemoryEntry {
         id: "proc-001".to_string(),
         agent_id: "agent1".to_string(),
+        tenant_id: "default".to_string(),
         tier: MemoryTier::Procedural,
         content: MemoryContent::Procedure(proc),
         importance: 100,

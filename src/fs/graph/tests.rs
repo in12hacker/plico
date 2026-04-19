@@ -20,6 +20,7 @@ fn make_node(id: &str, node_type: KGNodeType, tags: Vec<String>, agent: &str) ->
         content_cid: None,
         properties: serde_json::json!({ "tags": tags }),
         agent_id: agent.to_string(),
+        tenant_id: "default".to_string(),
         created_at: 0,
         valid_at: None,
         invalid_at: None,
@@ -287,6 +288,7 @@ fn test_update_node_merges_properties() {
         valid_at: Some(now_ms()),
         invalid_at: None,
         expired_at: None,
+        tenant_id: "default".to_string(),
     };
     kg.add_node(node).unwrap();
 

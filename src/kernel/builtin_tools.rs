@@ -226,7 +226,7 @@ impl AIKernel {
         self.scheduler.record_tool_call(&aid);
 
         if let Some(handler) = self.tool_registry.get_handler(name) {
-            let ctx = crate::api::permission::PermissionContext::new(agent_id.to_string());
+            let ctx = crate::api::permission::PermissionContext::new(agent_id.to_string(), "default".to_string());
             let scope = format!("tool:{}", name);
             if self.permissions.check_scoped(&ctx, crate::api::permission::PermissionAction::Execute, Some(&scope)).is_err() {
                 return ToolResult::error(format!(

@@ -117,12 +117,12 @@ fn build_request(args: &[String]) -> Option<ApiRequest> {
             let content = commands::extract_arg(args, "--content").unwrap_or_default();
             let tags = commands::extract_tags(args, "--tags");
             let agent_id = commands::extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
-            Some(ApiRequest::Create { content, content_encoding: Default::default(), tags, agent_id, agent_token: None, intent: commands::extract_arg(args, "--intent") })
+            Some(ApiRequest::Create { content, content_encoding: Default::default(), tags, agent_id, tenant_id: None, agent_token: None, intent: commands::extract_arg(args, "--intent") })
         }
         Some("get") | Some("read") => {
             let cid = args.get(1).cloned().unwrap_or_default();
             let agent_id = commands::extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
-            Some(ApiRequest::Read { cid, agent_id, agent_token: None })
+            Some(ApiRequest::Read { cid, agent_id, tenant_id: None, agent_token: None })
         }
         Some("search") => {
             let query = commands::extract_arg(args, "--query")
@@ -136,19 +136,19 @@ fn build_request(args: &[String]) -> Option<ApiRequest> {
             let since = commands::extract_arg(args, "--since").and_then(|s| s.parse::<i64>().ok());
             let until = commands::extract_arg(args, "--until").and_then(|s| s.parse::<i64>().ok());
             let offset = commands::extract_arg(args, "--offset").and_then(|s| s.parse().ok());
-            Some(ApiRequest::Search { query, agent_id, agent_token: None, limit, offset, require_tags, exclude_tags, since, until })
+            Some(ApiRequest::Search { query, agent_id, tenant_id: None, agent_token: None, limit, offset, require_tags, exclude_tags, since, until })
         }
         Some("update") => {
             let cid = commands::extract_arg(args, "--cid").unwrap_or_default();
             let content = commands::extract_arg(args, "--content").unwrap_or_default();
             let new_tags = commands::extract_tags_opt(args, "--tags");
             let agent_id = commands::extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
-            Some(ApiRequest::Update { cid, content, content_encoding: Default::default(), new_tags, agent_id, agent_token: None })
+            Some(ApiRequest::Update { cid, content, content_encoding: Default::default(), new_tags, agent_id, tenant_id: None, agent_token: None })
         }
         Some("delete") => {
             let cid = commands::extract_arg(args, "--cid").unwrap_or_default();
             let agent_id = commands::extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
-            Some(ApiRequest::Delete { cid, agent_id, agent_token: None })
+            Some(ApiRequest::Delete { cid, agent_id, tenant_id: None, agent_token: None })
         }
         Some("agent") => {
             let name = commands::extract_arg(args, "--register").unwrap_or_else(|| "unnamed".to_string());
@@ -158,7 +158,7 @@ fn build_request(args: &[String]) -> Option<ApiRequest> {
         Some("remember") => {
             let agent_id = commands::extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
             let content = commands::extract_arg(args, "--content").unwrap_or_default();
-            Some(ApiRequest::Remember { agent_id, content })
+            Some(ApiRequest::Remember { agent_id, tenant_id: None, content })
         }
         Some("recall") => {
             let agent_id = commands::extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
@@ -197,7 +197,7 @@ fn build_request(args: &[String]) -> Option<ApiRequest> {
                 .and_then(|s| serde_json::from_str(&s).ok())
                 .unwrap_or(serde_json::Value::Null);
             let agent_id = commands::extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
-            Some(ApiRequest::AddNode { label, node_type, properties: props, agent_id })
+            Some(ApiRequest::AddNode { label, node_type, properties: props, agent_id, tenant_id: None })
         }
         Some("edge") => {
             let src_id = commands::extract_arg(args, "--src").unwrap_or_default();
@@ -205,7 +205,7 @@ fn build_request(args: &[String]) -> Option<ApiRequest> {
             let edge_type = commands::parse_edge_type(&commands::extract_arg(args, "--type").unwrap_or_else(|| "related_to".to_string()));
             let weight = commands::extract_arg(args, "--weight").and_then(|s| s.parse().ok());
             let agent_id = commands::extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
-            Some(ApiRequest::AddEdge { src_id, dst_id, edge_type, weight, agent_id })
+            Some(ApiRequest::AddEdge { src_id, dst_id, edge_type, weight, agent_id, tenant_id: None })
         }
         Some("nodes") => {
             let node_type = commands::extract_arg(args, "--type").map(|s| commands::parse_node_type(&s));
@@ -214,9 +214,9 @@ fn build_request(args: &[String]) -> Option<ApiRequest> {
             let offset = commands::extract_arg(args, "--offset").and_then(|s| s.parse().ok());
             if let Some(at_str) = commands::extract_arg(args, "--at-time") {
                 let t: u64 = at_str.parse().unwrap_or(0);
-                Some(ApiRequest::ListNodesAtTime { node_type, agent_id, t })
+                Some(ApiRequest::ListNodesAtTime { node_type, agent_id, tenant_id: None, t })
             } else {
-                Some(ApiRequest::ListNodes { node_type, agent_id, limit, offset })
+                Some(ApiRequest::ListNodes { node_type, agent_id, tenant_id: None, limit, offset })
             }
         }
         Some("paths") => {
@@ -225,7 +225,7 @@ fn build_request(args: &[String]) -> Option<ApiRequest> {
             let max_depth = commands::extract_arg(args, "--depth").and_then(|s| s.parse().ok());
             let weighted = args.iter().any(|a| a == "--weighted");
             let agent_id = commands::extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
-            Some(ApiRequest::FindPaths { src_id, dst_id, max_depth, weighted, agent_id })
+            Some(ApiRequest::FindPaths { src_id, dst_id, max_depth, weighted, agent_id, tenant_id: None })
         }
         Some("intent") => {
             if commands::extract_arg(args, "--description").is_some() {

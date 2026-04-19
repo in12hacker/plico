@@ -175,6 +175,7 @@ impl SemanticFS {
             created_by,
             created_at: now_ms(),
             intent,
+            tenant_id: "default".to_string(),
         };
 
         let obj = AIObject::new(content.clone(), meta.clone());
@@ -316,6 +317,7 @@ impl SemanticFS {
             created_by: old_obj.meta.created_by.clone(),
             created_at: now_ms(),
             intent: old_obj.meta.intent.clone(),
+            tenant_id: old_obj.meta.tenant_id.clone(),
         };
 
         let new_obj = AIObject::new(new_content.clone(), new_meta.clone());

@@ -1,20 +1,3 @@
 {
-  "tasks": [
-    {
-      "id": "ab874595",
-      "cron": "*/30 * * * *",
-      "prompt": "plico-dogfood skill\n\n当前里程碑: v0.6 M1 - Scheduler Suggestion Watcher\n\n目标: 让 Scheduler 能够消费 confirmed ActionSuggestions 并转换为 Intent 执行\n\n## 链式推导回顾\n1. Phase D 推理链完整 (观察→推断→行动建议)，但 ActionSuggestion 无人触发\n2. v0.5 M2 实现了 per-agent cpu_time_quota\n3. 网络知识: Suggestion + Approval Pattern + Scheduled Tasks Pattern\n\n## M1 链式推导\n1. ActionSuggestion 存储在 LongTermMemory (per agent)\n2. Scheduler 需要添加 watch_suggestions() 方法\n3. 定时检查 confirm == confirmed 的 suggestion\n4. 构造 Intent(intent.description = suggestion.action_description)\n5. submit 到调度队列 → KernelExecutor 执行\n\n## 执行步骤\n1. 检查 ActionSuggestion 存储位置 (memory layer)\n2. 检查 Scheduler 是否有定时任务能力 (或在 kernel 层)\n3. 设计 suggestion watcher: 如何读取 LongTermMemory 中的 pending suggestions\n4. 编写测试验证 suggestion → intent → execution 链路\n5. 测试通过后存储 progress 到 dogfood\n\n## 测试规则\n只在代码变动后测试，测试失败立即纠正\n\n## dogfood 验证\n每完成一个功能点，用 aicli CLI 验证：\n- 用 --agent plico-dev 存储/读取 suggestion\n- 验证 scheduler 执行链路\n\n## 注意事项\n- 优先在现有代码基础上添加，而非创建新文件\n- 使用 dogfood 的 aicli CLI 验证功能\n- 避免幻觉：不确定时搜索网络知识",
-      "createdAt": 1776384713903,
-      "lastFiredAt": 1776415699069,
-      "recurring": true
-    },
-    {
-      "id": "f50f3976",
-      "cron": "*/10 * * * *",
-      "prompt": "你需要阅读dogfood，根据dogfood中的开发指导和项目灵魂进行链式思考，检查之前的迭代方向里程碑，不断向灵魂对齐，生成新的里程碑进行开发，根据dogfood的提示进行测试和git提交，关键节点需要搜索网络最新知识避免模型幻觉，开发过程要符合ai友好项目，不要询问我你要自行利用连是思考和网络知识进行决策全自动开发",
-      "createdAt": 1776389975069,
-      "lastFiredAt": 1776416087952,
-      "recurring": true
-    }
-  ]
+  "tasks": []
 }

@@ -15,7 +15,7 @@ impl crate::kernel::AIKernel {
 
     /// Store a memory entry in the agent's ephemeral (L0) tier.
     pub fn remember(&self, agent_id: &str, content: String) -> Result<(), String> {
-        let ctx = PermissionContext::new(agent_id.to_string());
+        let ctx = PermissionContext::new(agent_id.to_string(), "default".to_string());
         self.permissions.check(&ctx, PermissionAction::Write).map_err(|e| e.to_string())?;
         let entry = MemoryEntry::ephemeral(agent_id.to_string(), content);
         let quota = self.agent_memory_quota(agent_id);
@@ -36,11 +36,12 @@ impl crate::kernel::AIKernel {
         tags: Vec<String>,
         scope: MemoryScope,
     ) -> Result<(), String> {
-        let ctx = PermissionContext::new(agent_id.to_string());
+        let ctx = PermissionContext::new(agent_id.to_string(), "default".to_string());
         self.permissions.check(&ctx, PermissionAction::Write).map_err(|e| e.to_string())?;
         let entry = MemoryEntry {
             id: uuid::Uuid::new_v4().to_string(),
             agent_id: agent_id.to_string(),
+            tenant_id: "default".to_string(),
             tier: MemoryTier::Working,
             content: MemoryContent::Text(content),
             importance: 50,
@@ -65,7 +66,7 @@ impl crate::kernel::AIKernel {
 
     /// Retrieve all entries from all tiers.
     pub fn recall(&self, agent_id: &str) -> Vec<MemoryEntry> {
-        let ctx = PermissionContext::new(agent_id.to_string());
+        let ctx = PermissionContext::new(agent_id.to_string(), "default".to_string());
         if self.permissions.check(&ctx, PermissionAction::Read).is_err() {
             return Vec::new();
         }
@@ -74,7 +75,7 @@ impl crate::kernel::AIKernel {
 
     /// Retrieve all entries visible to an agent (own + shared + group).
     pub fn recall_visible(&self, agent_id: &str, groups: &[String]) -> Vec<MemoryEntry> {
-        let ctx = PermissionContext::new(agent_id.to_string());
+        let ctx = PermissionContext::new(agent_id.to_string(), "default".to_string());
         if self.permissions.check(&ctx, PermissionAction::Read).is_err() {
             return Vec::new();
         }
@@ -135,12 +136,13 @@ impl crate::kernel::AIKernel {
         importance: u8,
         scope: MemoryScope,
     ) -> Result<(), String> {
-        let ctx = PermissionContext::new(agent_id.to_string());
+        let ctx = PermissionContext::new(agent_id.to_string(), "default".to_string());
         self.permissions.check(&ctx, PermissionAction::Write).map_err(|e| e.to_string())?;
         let embedding = self.embedding.embed(&content).ok();
         let entry = MemoryEntry {
             id: uuid::Uuid::new_v4().to_string(),
             agent_id: agent_id.to_string(),
+            tenant_id: "default".to_string(),
             tier: MemoryTier::LongTerm,
             content: MemoryContent::Text(content),
             importance,
@@ -170,7 +172,7 @@ impl crate::kernel::AIKernel {
         query: &str,
         k: usize,
     ) -> Result<Vec<MemoryEntry>, String> {
-        let ctx = PermissionContext::new(agent_id.to_string());
+        let ctx = PermissionContext::new(agent_id.to_string(), "default".to_string());
         self.permissions.check(&ctx, PermissionAction::Read).map_err(|e| e.to_string())?;
         let query_emb = self.embedding.embed(query).map_err(|e| e.to_string())?;
         let results = self.memory.recall_semantic(agent_id, &query_emb, k);
@@ -184,7 +186,7 @@ impl crate::kernel::AIKernel {
         query: &str,
         budget_tokens: usize,
     ) -> Vec<MemoryEntry> {
-        let ctx = PermissionContext::new(agent_id.to_string());
+        let ctx = PermissionContext::new(agent_id.to_string(), "default".to_string());
         if self.permissions.check(&ctx, PermissionAction::Read).is_err() {
             return Vec::new();
         }
@@ -218,7 +220,7 @@ impl crate::kernel::AIKernel {
         tags: Vec<String>,
         scope: MemoryScope,
     ) -> Result<String, String> {
-        let ctx = PermissionContext::new(agent_id.to_string());
+        let ctx = PermissionContext::new(agent_id.to_string(), "default".to_string());
         self.permissions.check(&ctx, PermissionAction::Write).map_err(|e| e.to_string())?;
         let procedure = crate::memory::layered::Procedure {
             name,
@@ -230,6 +232,7 @@ impl crate::kernel::AIKernel {
         let entry = MemoryEntry {
             id: entry_id.clone(),
             agent_id: agent_id.to_string(),
+            tenant_id: "default".to_string(),
             tier: MemoryTier::Procedural,
             content: MemoryContent::Procedure(procedure),
             importance: 100,
@@ -253,7 +256,7 @@ impl crate::kernel::AIKernel {
 
     /// Recall procedural memories, optionally filtered by procedure name.
     pub fn recall_procedural(&self, agent_id: &str, name_filter: Option<&str>) -> Vec<MemoryEntry> {
-        let ctx = PermissionContext::new(agent_id.to_string());
+        let ctx = PermissionContext::new(agent_id.to_string(), "default".to_string());
         if self.permissions.check(&ctx, PermissionAction::Read).is_err() {
             return Vec::new();
         }

@@ -222,7 +222,7 @@ impl AIKernel {
         }
 
         let response = match req {
-            ApiRequest::Create { content, content_encoding, tags, agent_id, agent_token, intent } => {
+            ApiRequest::Create { content, content_encoding, tags, agent_id, agent_token, intent, .. } => {
                 // Verify token (Optional mode: allow no token)
                 if let Err(e) = self.key_store.verify_agent_token(&agent_id, agent_token.as_deref()) {
                     return ApiResponse::error(e);
@@ -239,7 +239,7 @@ impl AIKernel {
                     Err(e) => ApiResponse::error(e.to_string()),
                 }
             }
-            ApiRequest::Read { cid, agent_id, agent_token } => {
+            ApiRequest::Read { cid, agent_id, agent_token, .. } => {
                 if let Err(e) = self.key_store.verify_agent_token(&agent_id, agent_token.as_deref()) {
                     return ApiResponse::error(e);
                 }
@@ -248,7 +248,7 @@ impl AIKernel {
                     Err(e) => ApiResponse::error(e.to_string()),
                 }
             }
-            ApiRequest::Search { query, agent_id, agent_token, limit, offset, require_tags, exclude_tags, since, until } => {
+            ApiRequest::Search { query, agent_id, agent_token, limit, offset, require_tags, exclude_tags, since, until, .. } => {
                 if let Err(e) = self.key_store.verify_agent_token(&agent_id, agent_token.as_deref()) {
                     return ApiResponse::error(e);
                 }
@@ -271,7 +271,7 @@ impl AIKernel {
                 r.results = Some(page);
                 r
             }
-            ApiRequest::Update { cid, content, content_encoding, new_tags, agent_id, agent_token } => {
+            ApiRequest::Update { cid, content, content_encoding, new_tags, agent_id, agent_token, .. } => {
                 if let Err(e) = self.key_store.verify_agent_token(&agent_id, agent_token.as_deref()) {
                     return ApiResponse::error(e);
                 }
@@ -287,7 +287,7 @@ impl AIKernel {
                     Err(e) => ApiResponse::error(e.to_string()),
                 }
             }
-            ApiRequest::Delete { cid, agent_id, agent_token } => {
+            ApiRequest::Delete { cid, agent_id, agent_token, .. } => {
                 if let Err(e) = self.key_store.verify_agent_token(&agent_id, agent_token.as_deref()) {
                     return ApiResponse::error(e);
                 }
@@ -317,7 +317,7 @@ impl AIKernel {
                 r.agents = Some(agents);
                 r
             }
-            ApiRequest::Remember { agent_id, content } => {
+            ApiRequest::Remember { agent_id, content, .. } => {
                 match self.remember(&agent_id, content) {
                     Ok(()) => ApiResponse::ok(),
                     Err(e) => ApiResponse::error(e),
@@ -333,7 +333,7 @@ impl AIKernel {
                 r.memory = Some(memories);
                 r
             }
-            ApiRequest::RememberLongTerm { agent_id, content, tags, importance, scope } => {
+            ApiRequest::RememberLongTerm { agent_id, content, tags, importance, scope, .. } => {
                 let scope = parse_scope(scope);
                 match self.remember_long_term_scoped(&agent_id, content, tags, importance, scope) {
                     Ok(()) => ApiResponse::ok(),
@@ -466,19 +466,19 @@ impl AIKernel {
                     Err(e) => ApiResponse::error(e.to_string()),
                 }
             }
-            ApiRequest::AddNode { label, node_type, properties, agent_id } => {
+            ApiRequest::AddNode { label, node_type, properties, agent_id, .. } => {
                 match self.kg_add_node(&label, node_type, properties, &agent_id) {
                     Ok(id) => ApiResponse::with_node_id(id),
                     Err(e) => ApiResponse::error(e.to_string()),
                 }
             }
-            ApiRequest::AddEdge { src_id, dst_id, edge_type, weight, agent_id } => {
+            ApiRequest::AddEdge { src_id, dst_id, edge_type, weight, agent_id, .. } => {
                 match self.kg_add_edge(&src_id, &dst_id, edge_type, weight, &agent_id) {
                     Ok(()) => ApiResponse::ok(),
                     Err(e) => ApiResponse::error(e.to_string()),
                 }
             }
-            ApiRequest::ListNodes { node_type, agent_id, limit, offset } => {
+            ApiRequest::ListNodes { node_type, agent_id, limit, offset, .. } => {
                 let nodes = match self.kg_list_nodes(node_type, &agent_id) {
                     Ok(n) => n,
                     Err(e) => return ApiResponse::error(e.to_string()),
@@ -496,7 +496,7 @@ impl AIKernel {
                 r.has_more = Some(off + dto.len() < total);
                 r
             }
-            ApiRequest::ListNodesAtTime { node_type, agent_id, t } => {
+            ApiRequest::ListNodesAtTime { node_type, agent_id, t, .. } => {
                 let nodes = match self.kg_get_valid_nodes_at(&agent_id, node_type, t) {
                     Ok(n) => n,
                     Err(e) => return ApiResponse::error(e.to_string()),
@@ -508,7 +508,7 @@ impl AIKernel {
                 }).collect();
                 ApiResponse::with_nodes(dto)
             }
-            ApiRequest::FindPaths { src_id, dst_id, max_depth, weighted, agent_id: _ } => {
+            ApiRequest::FindPaths { src_id, dst_id, max_depth, weighted, agent_id: _, .. } => {
                 let depth = max_depth.unwrap_or(3).min(5);
                 let dto: Vec<Vec<KGNodeDto>> = if weighted {
                     // Find single highest-weight path
@@ -724,7 +724,7 @@ impl AIKernel {
                 }
             }
             // ── Graph CRUD extensions (v0.7) ─────────────────────────────
-            ApiRequest::GetNode { node_id, agent_id } => {
+            ApiRequest::GetNode { node_id, agent_id, .. } => {
                 match self.kg_get_node(&node_id, &agent_id) {
                     Ok(Some(n)) => {
                         let dto = crate::api::semantic::KGNodeDto {
@@ -738,7 +738,7 @@ impl AIKernel {
                     Err(e) => ApiResponse::error(e.to_string()),
                 }
             }
-            ApiRequest::ListEdges { agent_id, node_id, limit, offset } => {
+            ApiRequest::ListEdges { agent_id, node_id, limit, offset, .. } => {
                 match self.kg_list_edges(&agent_id, node_id.as_deref()) {
                     Ok(edges) => {
                         let total = edges.len();
@@ -759,19 +759,19 @@ impl AIKernel {
                     Err(e) => ApiResponse::error(e.to_string()),
                 }
             }
-            ApiRequest::RemoveNode { node_id, agent_id } => {
+            ApiRequest::RemoveNode { node_id, agent_id, .. } => {
                 match self.kg_remove_node(&node_id, &agent_id) {
                     Ok(()) => ApiResponse::ok(),
                     Err(e) => ApiResponse::error(e.to_string()),
                 }
             }
-            ApiRequest::RemoveEdge { src_id, dst_id, edge_type, agent_id } => {
+            ApiRequest::RemoveEdge { src_id, dst_id, edge_type, agent_id, .. } => {
                 match self.kg_remove_edge(&src_id, &dst_id, edge_type, &agent_id) {
                     Ok(()) => ApiResponse::ok(),
                     Err(e) => ApiResponse::error(e.to_string()),
                 }
             }
-            ApiRequest::UpdateNode { node_id, label, properties, agent_id } => {
+            ApiRequest::UpdateNode { node_id, label, properties, agent_id, .. } => {
                 match self.kg_update_node(&node_id, label.as_deref(), properties, &agent_id) {
                     Ok(()) => ApiResponse::ok(),
                     Err(e) => ApiResponse::error(e.to_string()),
@@ -791,7 +791,7 @@ impl AIKernel {
                 }
             }
             // ── Memory tier management (v0.7) ────────────────────────────
-            ApiRequest::MemoryMove { agent_id, entry_id, target_tier } => {
+            ApiRequest::MemoryMove { agent_id, entry_id, target_tier, .. } => {
                 let tier = match target_tier.as_str() {
                     "ephemeral" => crate::memory::MemoryTier::Ephemeral,
                     "working" => crate::memory::MemoryTier::Working,
@@ -805,21 +805,21 @@ impl AIKernel {
                     ApiResponse::error(format!("memory entry not found: {}", entry_id))
                 }
             }
-            ApiRequest::MemoryDeleteEntry { agent_id, entry_id } => {
+            ApiRequest::MemoryDeleteEntry { agent_id, entry_id, .. } => {
                 if self.memory_delete(&agent_id, &entry_id) {
                     ApiResponse::ok()
                 } else {
                     ApiResponse::error(format!("memory entry not found: {}", entry_id))
                 }
             }
-            ApiRequest::EvictExpired { agent_id } => {
+            ApiRequest::EvictExpired { agent_id, .. } => {
                 let count = self.evict_expired(&agent_id);
                 let mut r = ApiResponse::ok();
                 r.data = Some(format!("{}", count));
                 r
             }
 
-            ApiRequest::LoadContext { cid, layer, agent_id } => {
+            ApiRequest::LoadContext { cid, layer, agent_id, .. } => {
                 let ctx_layer = match crate::fs::ContextLayer::parse_layer(&layer) {
                     Some(l) => l,
                     None => return ApiResponse::error(format!("Invalid layer '{}'. Use L0, L1, or L2.", layer)),
@@ -839,7 +839,7 @@ impl AIKernel {
                 }
             }
 
-            ApiRequest::EdgeHistory { src_id, dst_id, edge_type, agent_id } => {
+            ApiRequest::EdgeHistory { src_id, dst_id, edge_type, agent_id, .. } => {
                 match self.kg_edge_history(&src_id, &dst_id, edge_type, &agent_id) {
                     Ok(edges) => {
                         let dtos: Vec<crate::api::semantic::KGEdgeDto> = edges.iter().map(|e| {

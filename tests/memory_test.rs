@@ -13,6 +13,7 @@ fn make_entry(agent: &str, tier: MemoryTier, importance: u8, text: &str) -> Memo
     MemoryEntry {
         id: uuid::Uuid::new_v4().to_string(),
         agent_id: agent.to_string(),
+        tenant_id: "default".to_string(),
         tier,
         content: MemoryContent::Text(text.to_string()),
         importance,

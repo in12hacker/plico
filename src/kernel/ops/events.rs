@@ -18,7 +18,7 @@ impl crate::kernel::AIKernel {
         tags: Vec<String>,
         agent_id: &str,
     ) -> std::io::Result<String> {
-        let ctx = PermissionContext::new(agent_id.to_string());
+        let ctx = PermissionContext::new(agent_id.to_string(), "default".to_string());
         self.permissions.check(&ctx, PermissionAction::Write)?;
         let event_id = self.fs.create_event(label, event_type, start_time, end_time, location, tags, agent_id)
             .map_err(|e| std::io::Error::other(e.to_string()))?;
@@ -61,7 +61,7 @@ impl crate::kernel::AIKernel {
         relation: EventRelation,
         agent_id: &str,
     ) -> std::io::Result<()> {
-        let ctx = PermissionContext::new(agent_id.to_string());
+        let ctx = PermissionContext::new(agent_id.to_string(), "default".to_string());
         self.permissions.check(&ctx, PermissionAction::Write)?;
         self.fs.event_attach(event_id, target_id, relation, agent_id)
             .map_err(|e| std::io::Error::other(e.to_string()))

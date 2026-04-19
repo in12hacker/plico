@@ -139,6 +139,7 @@ impl CASPersister {
             created_by: "plico:memory-persister".to_string(),
             created_at: now_ms(),
             intent: Some(format!("Persisted {} memory for agent {}", Self::tier_name(tier), agent_id)),
+            tenant_id: "default".to_string(),
         }
     }
 }

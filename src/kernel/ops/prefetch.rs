@@ -643,7 +643,7 @@ impl crate::kernel::AIKernel {
         related_cids: Vec<String>,
         budget_tokens: usize,
     ) -> Result<String, String> {
-        let ctx = PermissionContext::new(agent_id.to_string());
+        let ctx = PermissionContext::new(agent_id.to_string(), "default".to_string());
         self.permissions
             .check(&ctx, PermissionAction::Read)
             .map_err(|e| e.to_string())?;

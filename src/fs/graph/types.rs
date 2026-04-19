@@ -137,6 +137,9 @@ pub struct KGNode {
     pub content_cid: Option<String>,
     pub properties: serde_json::Value,
     pub agent_id: String,
+    /// Tenant ID for multi-tenant isolation.
+    #[serde(default)]
+    pub tenant_id: String,
     pub created_at: u64,
     /// When this node became valid (Unix ms). None = unknown.
     #[serde(default)]
@@ -151,7 +154,7 @@ pub struct KGNode {
 
 impl KGNode {
     /// Create a new node with a UUID id.
-    pub fn new(label: String, node_type: KGNodeType, agent_id: String) -> Self {
+    pub fn new(label: String, node_type: KGNodeType, agent_id: String, tenant_id: String) -> Self {
         Self {
             id: uuid::Uuid::new_v4().to_string(),
             label,
@@ -159,6 +162,7 @@ impl KGNode {
             content_cid: None,
             properties: serde_json::Value::Null,
             agent_id,
+            tenant_id,
             created_at: now_ms(),
             valid_at: None,
             invalid_at: None,
@@ -172,6 +176,7 @@ impl KGNode {
         node_type: KGNodeType,
         content_cid: String,
         agent_id: String,
+        tenant_id: String,
     ) -> Self {
         Self {
             id: uuid::Uuid::new_v4().to_string(),
@@ -180,6 +185,7 @@ impl KGNode {
             content_cid: Some(content_cid),
             properties: serde_json::Value::Null,
             agent_id,
+            tenant_id,
             created_at: now_ms(),
             valid_at: None,
             invalid_at: None,

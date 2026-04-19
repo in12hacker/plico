@@ -555,6 +555,7 @@ fn build_api_request(method: &str, params: Option<&serde_json::Value>) -> Result
                 content_encoding: Default::default(),
                 tags,
                 agent_id,
+                tenant_id: None,
                 agent_token: None,
                 intent: params.get("intent").and_then(|v| v.as_str()).map(String::from),
             })
@@ -569,6 +570,7 @@ fn build_api_request(method: &str, params: Option<&serde_json::Value>) -> Result
             Ok(ApiRequest::Search {
                 query,
                 agent_id,
+                tenant_id: None,
                 agent_token: None,
                 limit: params.get("limit").and_then(|v| v.as_u64()).map(|v| v as usize),
                 offset: None,

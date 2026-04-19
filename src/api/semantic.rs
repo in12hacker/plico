@@ -98,17 +98,28 @@ pub enum ApiRequest {
         tags: Vec<String>,
         agent_id: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        tenant_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         agent_token: Option<String>,
         intent: Option<String>,
     },
 
     #[serde(rename = "read")]
-    Read { cid: String, agent_id: String, #[serde(default, skip_serializing_if = "Option::is_none")] agent_token: Option<String> },
+    Read {
+        cid: String,
+        agent_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tenant_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        agent_token: Option<String>,
+    },
 
     #[serde(rename = "search")]
     Search {
         query: String,
         agent_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tenant_id: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         agent_token: Option<String>,
         limit: Option<usize>,
@@ -138,11 +149,20 @@ pub enum ApiRequest {
         new_tags: Option<Vec<String>>,
         agent_id: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        tenant_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         agent_token: Option<String>,
     },
 
     #[serde(rename = "delete")]
-    Delete { cid: String, agent_id: String, #[serde(default, skip_serializing_if = "Option::is_none")] agent_token: Option<String> },
+    Delete {
+        cid: String,
+        agent_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tenant_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        agent_token: Option<String>,
+    },
 
     #[serde(rename = "register_agent")]
     RegisterAgent { name: String },
@@ -151,7 +171,12 @@ pub enum ApiRequest {
     ListAgents,
 
     #[serde(rename = "remember")]
-    Remember { agent_id: String, content: String },
+    Remember {
+        agent_id: String,
+        content: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tenant_id: Option<String>,
+    },
 
     #[serde(rename = "recall")]
     Recall { agent_id: String },
@@ -166,6 +191,8 @@ pub enum ApiRequest {
         importance: u8,
         #[serde(default)]
         scope: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tenant_id: Option<String>,
     },
 
     #[serde(rename = "recall_semantic")]
@@ -263,6 +290,8 @@ pub enum ApiRequest {
         #[serde(default)]
         properties: serde_json::Value,
         agent_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tenant_id: Option<String>,
     },
 
     #[serde(rename = "add_edge")]
@@ -273,6 +302,8 @@ pub enum ApiRequest {
         #[serde(default)]
         weight: Option<f32>,
         agent_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tenant_id: Option<String>,
     },
 
     #[serde(rename = "list_nodes")]
@@ -280,6 +311,8 @@ pub enum ApiRequest {
         #[serde(default)]
         node_type: Option<KGNodeType>,
         agent_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tenant_id: Option<String>,
         #[serde(default)]
         limit: Option<usize>,
         #[serde(default)]
@@ -291,6 +324,8 @@ pub enum ApiRequest {
         #[serde(default)]
         node_type: Option<KGNodeType>,
         agent_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tenant_id: Option<String>,
         /// Unix timestamp (ms) to query nodes valid at.
         t: u64,
     },
@@ -305,6 +340,8 @@ pub enum ApiRequest {
         #[serde(default)]
         weighted: bool,
         agent_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tenant_id: Option<String>,
     },
 
     // ── Agent Lifecycle operations ────────────────────────────────────
@@ -429,11 +466,18 @@ pub enum ApiRequest {
     // ── Graph CRUD extensions (v0.7) ─────────────────────────────────
 
     #[serde(rename = "get_node")]
-    GetNode { node_id: String, agent_id: String },
+    GetNode {
+        node_id: String,
+        agent_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tenant_id: Option<String>,
+    },
 
     #[serde(rename = "list_edges")]
     ListEdges {
         agent_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tenant_id: Option<String>,
         #[serde(default)]
         node_id: Option<String>,
         #[serde(default)]
@@ -443,7 +487,12 @@ pub enum ApiRequest {
     },
 
     #[serde(rename = "remove_node")]
-    RemoveNode { node_id: String, agent_id: String },
+    RemoveNode {
+        node_id: String,
+        agent_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tenant_id: Option<String>,
+    },
 
     #[serde(rename = "remove_edge")]
     RemoveEdge {
@@ -452,6 +501,8 @@ pub enum ApiRequest {
         #[serde(default)]
         edge_type: Option<KGEdgeType>,
         agent_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tenant_id: Option<String>,
     },
 
     #[serde(rename = "update_node")]
@@ -462,6 +513,8 @@ pub enum ApiRequest {
         #[serde(default)]
         properties: Option<serde_json::Value>,
         agent_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tenant_id: Option<String>,
     },
 
     // ── Agent lifecycle extensions (v0.7) ────────────────────────────
@@ -479,16 +532,24 @@ pub enum ApiRequest {
         agent_id: String,
         entry_id: String,
         target_tier: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tenant_id: Option<String>,
     },
 
     #[serde(rename = "memory_delete")]
     MemoryDeleteEntry {
         agent_id: String,
         entry_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tenant_id: Option<String>,
     },
 
     #[serde(rename = "evict_expired")]
-    EvictExpired { agent_id: String },
+    EvictExpired {
+        agent_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tenant_id: Option<String>,
+    },
 
     // ── Context Loading (v0.9) ──────────────────────────────────────
 
@@ -498,6 +559,8 @@ pub enum ApiRequest {
         /// "L0", "L1", or "L2"
         layer: String,
         agent_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tenant_id: Option<String>,
     },
 
     // ── Temporal Edge History (v0.9) ────────────────────────────────
@@ -509,6 +572,8 @@ pub enum ApiRequest {
         #[serde(default)]
         edge_type: Option<KGEdgeType>,
         agent_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tenant_id: Option<String>,
     },
 
     // ── Event Bus (v5.0) ───────────────────────────────────────────
@@ -955,6 +1020,7 @@ mod tests {
             content_encoding: ContentEncoding::Base64,
             tags: vec!["image".to_string()],
             agent_id: "agent1".to_string(),
+            tenant_id: None,
             agent_token: None,
             intent: None,
         };

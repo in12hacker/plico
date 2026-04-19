@@ -151,6 +151,7 @@ impl PetgraphBackend {
             content_cid: Some(cid.to_string()),
             properties: serde_json::json!({ "tags": tags }),
             agent_id: agent_id.to_string(),
+            tenant_id: "default".to_string(),
             created_at: now_ms(),
             valid_at: None,
             invalid_at: None,
