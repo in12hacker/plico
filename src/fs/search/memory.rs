@@ -167,8 +167,11 @@ impl SemanticSearch for InMemoryBackend {
             }
         }
         let path = dir.join("search_index.jsonl");
-        std::fs::write(&path, lines.join("\n"))
+        let tmp = path.with_extension("jsonl.tmp");
+        std::fs::write(&tmp, lines.join("\n"))
             .map_err(|e| format!("Failed to persist search index: {e}"))?;
+        std::fs::rename(&tmp, &path)
+            .map_err(|e| format!("Failed to rename search index: {e}"))?;
         tracing::info!("Persisted {} search index entries", entries.len());
         Ok(())
     }

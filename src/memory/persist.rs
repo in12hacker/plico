@@ -115,8 +115,11 @@ impl CASPersister {
 
     fn save_index(&self) -> std::io::Result<()> {
         let index = self.index.read().unwrap();
+        let tmp = self.index_path.with_extension("json.tmp");
         let json = serde_json::to_string_pretty(&*index)?;
-        fs::write(&self.index_path, json)
+        fs::write(&tmp, json)?;
+        std::fs::rename(&tmp, &self.index_path)?;
+        Ok(())
     }
 
     fn tier_name(tier: MemoryTier) -> &'static str {

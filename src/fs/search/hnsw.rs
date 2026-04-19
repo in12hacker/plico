@@ -295,8 +295,11 @@ impl SemanticSearch for HnswBackend {
             .collect();
 
         let path = dir.join("hnsw_index.jsonl");
-        std::fs::write(&path, lines.join("\n"))
+        let tmp = path.with_extension("jsonl.tmp");
+        std::fs::write(&tmp, lines.join("\n"))
             .map_err(|e| format!("Failed to persist HNSW index: {e}"))?;
+        std::fs::rename(&tmp, &path)
+            .map_err(|e| format!("Failed to rename HNSW index: {e}"))?;
         tracing::info!("Persisted {} HNSW index entries", lines.len());
         Ok(())
     }

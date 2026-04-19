@@ -3,7 +3,7 @@
 //! Persists and restores kernel state (agents, intents, memories, search index) to/from
 //! CAS and JSON files. Also contains the embedding provider factory functions.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::fs::{OllamaBackend, EmbeddingProvider, LocalEmbeddingBackend, StubEmbeddingProvider, EmbedError};
@@ -12,6 +12,22 @@ use crate::scheduler::Agent;
 use crate::scheduler::agent::Intent;
 
 use super::AIKernel;
+
+/// Atomically write a serializable value to a JSON file.
+///
+/// Writes to a `.json.tmp` file first, then renames on success.
+/// This prevents partial writes from corrupting the persisted file.
+pub(crate) fn atomic_write_json<T: serde::Serialize>(path: &Path, data: &T) {
+    let tmp = path.with_extension("json.tmp");
+    match serde_json::to_string_pretty(data) {
+        Ok(json) => {
+            if std::fs::write(&tmp, &json).is_ok() {
+                let _ = std::fs::rename(&tmp, path);
+            }
+        }
+        Err(e) => tracing::warn!("Failed to serialize for {}: {e}", path.display()),
+    }
+}
 
 impl AIKernel {
     /// Restore persisted memories from CAS for all known agents.
@@ -42,14 +58,7 @@ impl AIKernel {
     /// Persist all registered agents to a JSON index file.
     pub fn persist_agents(&self) {
         let agents = self.scheduler.snapshot_agents();
-        match serde_json::to_string_pretty(&agents) {
-            Ok(json) => {
-                if let Err(e) = std::fs::write(self.agent_index_path(), json) {
-                    tracing::warn!("Failed to persist agent index: {e}");
-                }
-            }
-            Err(e) => tracing::warn!("Failed to serialize agents: {e}"),
-        }
+        atomic_write_json(&self.agent_index_path(), &agents);
     }
 
     /// Restore agents from the persisted index (called during `new()`).
@@ -80,14 +89,7 @@ impl AIKernel {
     /// Persist all pending intents to a JSON index file.
     pub fn persist_intents(&self) {
         let intents = self.scheduler.snapshot_intents();
-        match serde_json::to_string_pretty(&intents) {
-            Ok(json) => {
-                if let Err(e) = std::fs::write(self.intent_index_path(), json) {
-                    tracing::warn!("Failed to persist intent index: {e}");
-                }
-            }
-            Err(e) => tracing::warn!("Failed to serialize intents: {e}"),
-        }
+        atomic_write_json(&self.intent_index_path(), &intents);
     }
 
     /// Restore pending intents from the persisted index (called during `new()`).
@@ -133,14 +135,7 @@ impl AIKernel {
             let _ = std::fs::remove_file(self.permission_index_path());
             return;
         }
-        match serde_json::to_string_pretty(&grants) {
-            Ok(json) => {
-                if let Err(e) = std::fs::write(self.permission_index_path(), json) {
-                    tracing::warn!("Failed to persist permission index: {e}");
-                }
-            }
-            Err(e) => tracing::warn!("Failed to serialize permissions: {e}"),
-        }
+        atomic_write_json(&self.permission_index_path(), &grants);
     }
 
     pub(crate) fn restore_permissions(&self) {
@@ -171,14 +166,7 @@ impl AIKernel {
 
     pub fn persist_event_log(&self) {
         let events = self.event_bus.snapshot_events();
-        match serde_json::to_string(&events) {
-            Ok(json) => {
-                if let Err(e) = std::fs::write(self.event_log_path(), json) {
-                    tracing::warn!("Failed to persist event log: {e}");
-                }
-            }
-            Err(e) => tracing::warn!("Failed to serialize event log: {e}"),
-        }
+        atomic_write_json(&self.event_log_path(), &events);
     }
 
     pub(crate) fn restore_event_log(&self) {

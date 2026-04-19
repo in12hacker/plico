@@ -118,7 +118,10 @@ impl PetgraphBackend {
 
         let nodes = self.nodes.read().unwrap();
         if let Ok(json) = serde_json::to_string(&*nodes) {
-            let _ = std::fs::write(&nodes_path, json);
+            let tmp = nodes_path.with_extension("json.tmp");
+            if std::fs::write(&tmp, json).is_ok() {
+                let _ = std::fs::rename(&tmp, &nodes_path);
+            }
         }
         drop(nodes);
 
@@ -134,7 +137,10 @@ impl PetgraphBackend {
             })
             .collect();
         if let Ok(json) = serde_json::to_string(&records) {
-            let _ = std::fs::write(&edges_path, json);
+            let tmp = edges_path.with_extension("json.tmp");
+            if std::fs::write(&tmp, json).is_ok() {
+                let _ = std::fs::rename(&tmp, &edges_path);
+            }
         }
     }
 
@@ -708,7 +714,9 @@ impl KnowledgeGraph for PetgraphBackend {
 
         let nodes = self.nodes.read().unwrap();
         let json = serde_json::to_string_pretty(&*nodes)?;
-        std::fs::write(&nodes_path, json)?;
+        let tmp = nodes_path.with_extension("json.tmp");
+        std::fs::write(&tmp, json)?;
+        std::fs::rename(&tmp, &nodes_path)?;
         drop(nodes);
 
         let out = self.out_edges.read().unwrap();
@@ -723,7 +731,9 @@ impl KnowledgeGraph for PetgraphBackend {
             })
             .collect();
         let json = serde_json::to_string_pretty(&records)?;
-        std::fs::write(&edges_path, json)?;
+        let tmp = edges_path.with_extension("json.tmp");
+        std::fs::write(&tmp, json)?;
+        std::fs::rename(&tmp, &edges_path)?;
         Ok(())
     }
 
