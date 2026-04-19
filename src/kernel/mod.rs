@@ -19,6 +19,7 @@ use ops::prefetch::IntentPrefetcher;
 use ops::model::{HotSwapEmbeddingProvider, HotSwapLlmProvider};
 use ops::observability::{KernelMetrics, OperationTimer, OpType};
 use ops::cache::EdgeCache;
+use ops::distributed::{ClusterManager, NodeId};
 
 use crate::api::semantic::{ApiRequest, ApiResponse};
 use crate::api::agent_auth::AgentKeyStore;
@@ -69,6 +70,8 @@ pub struct AIKernel {
     pub(crate) metrics: Arc<KernelMetrics>,
     /// Edge caching — L1/L2 cache for embeddings, KG queries, and semantic search (v19.0).
     pub(crate) edge_cache: Arc<EdgeCache>,
+    /// Distributed cluster manager — node membership, heartbeat, agent migration (v20.0).
+    pub(crate) cluster: Arc<ClusterManager>,
 }
 
 impl AIKernel {
@@ -177,6 +180,23 @@ impl AIKernel {
         // Edge caching — L1/L2 cache for embeddings, KG queries, and semantic search (v19.0)
         let edge_cache = Arc::new(EdgeCache::default());
 
+        // Distributed cluster manager — single-node by default (v20.0)
+        // Multi-node cluster requires explicit seed node configuration
+        let cluster_host = std::env::var("PLICO_CLUSTER_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
+        let cluster_port: u16 = std::env::var("PLICO_CLUSTER_PORT")
+            .unwrap_or_else(|_| "7878".to_string())
+            .parse()
+            .unwrap_or(7878);
+        let cluster_name = std::env::var("PLICO_CLUSTER_NAME").unwrap_or_else(|_| "plico-cluster".to_string());
+        let is_seed = std::env::var("PLICO_IS_SEED").unwrap_or_else(|_| "true".to_string()) == "true";
+        let cluster = Arc::new(ClusterManager::new(
+            NodeId::new(),
+            cluster_name,
+            is_seed,
+            cluster_host,
+            cluster_port,
+        ));
+
         let kernel = Self {
             root: root.clone(),
             cas,
@@ -199,6 +219,7 @@ impl AIKernel {
             tenant_store,
             metrics,
             edge_cache,
+            cluster,
         };
 
         kernel.register_builtin_tools();
@@ -978,6 +999,31 @@ impl AIKernel {
             ApiRequest::CacheInvalidate => {
                 self.cache_invalidate_all();
                 ApiResponse::ok()
+            }
+            // ── Distributed Mode (v20.0) ─────────────────────────────────
+            ApiRequest::ClusterStatus => {
+                let status = self.cluster_status();
+                let mut r = ApiResponse::ok();
+                r.cluster_status = Some(status);
+                r
+            }
+            ApiRequest::ClusterJoin { host, port } => {
+                self.cluster_join(&host, port);
+                ApiResponse::ok()
+            }
+            ApiRequest::ClusterLeave => {
+                self.cluster_leave();
+                ApiResponse::ok()
+            }
+            ApiRequest::NodePing { target_host, target_port } => {
+                match self.node_ping(&target_host, target_port) {
+                    Ok(latency_ms) => {
+                        let mut r = ApiResponse::ok();
+                        r.data = Some(format!("pong in {}ms", latency_ms));
+                        r
+                    }
+                    Err(e) => ApiResponse::error(e),
+                }
             }
             ApiRequest::ContextAssemble { agent_id, cids, budget_tokens } => {
                 let candidates: Vec<crate::fs::context_budget::ContextCandidate> = cids

@@ -879,6 +879,7 @@ mod tests {
             model_switch: None,
             model_health: None,
             cache_stats: None,
+            cluster_status: None,
         }
     }
 

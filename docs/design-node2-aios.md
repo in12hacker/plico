@@ -542,6 +542,9 @@ F-0（前置修正）
 **Phase K（第十一轮迭代）**
 - [x] Edge Caching ✅ (v19.0-M1)
 
+**Phase L（第十二轮迭代）**
+- [x] Distributed Mode ✅ (v20.0-M1)
+
 ---
 
 ## 9. 验证实验设计
@@ -628,6 +631,7 @@ F-0（前置修正）
 | H | API Versioning & Stability | v17.0-M1 | ✅ |
 | J | Model Hot-Swap | v18.0-M1 | ✅ |
 | K | Edge Caching | v19.0-M1 | ✅ |
+| L | Distributed Mode | v20.0-M1 | ✅ |
 
 **验证指标**:
 - Token 节省: 86.7% (目标 ≥50%) ✅

@@ -807,6 +807,26 @@ pub enum ApiRequest {
     #[serde(rename = "cache_invalidate")]
     CacheInvalidate,
 
+    // ── Distributed Mode (v20.0) ─────────────────────────────────
+
+    #[serde(rename = "cluster_status")]
+    ClusterStatus,
+
+    #[serde(rename = "cluster_join")]
+    ClusterJoin {
+        host: String,
+        port: u16,
+    },
+
+    #[serde(rename = "cluster_leave")]
+    ClusterLeave,
+
+    #[serde(rename = "node_ping")]
+    NodePing {
+        target_host: String,
+        target_port: u16,
+    },
+
     // ── Agent Discovery (v6.2) ──────────────────────────────────
 
     #[serde(rename = "discover_agents")]
@@ -1235,6 +1255,9 @@ pub struct ApiResponse {
     /// Cache statistics (v19.0).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cache_stats: Option<CacheStatsDto>,
+    /// Cluster status (v20.0).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cluster_status: Option<ClusterStatusDto>,
 }
 
 /// Response for a successful model switch operation (v18.0).
@@ -1440,6 +1463,29 @@ pub struct CacheStatsDto {
     pub search_hit_rate: f64,
 }
 
+/// Cluster status for distributed mode (v20.0).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClusterStatusDto {
+    pub cluster_name: String,
+    pub total_nodes: usize,
+    pub local_node_id: String,
+    pub is_seed: bool,
+    pub version: u64,
+    pub pending_migrations: usize,
+    pub known_nodes: Vec<NodeInfoDto>,
+}
+
+/// Node information in cluster (v20.0).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NodeInfoDto {
+    pub node_id: String,
+    pub host: String,
+    pub port: u16,
+    pub is_seed: bool,
+    pub last_heartbeat_ms: u64,
+    pub is_stale: bool,
+}
+
 /// Agent resource usage and quota snapshot.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentUsageDto {
@@ -1509,6 +1555,7 @@ impl ApiResponse {
             model_switch: None,
             model_health: None,
             cache_stats: None,
+            cluster_status: None,
         }
     }
 
@@ -1588,6 +1635,7 @@ impl ApiResponse {
             model_switch: None,
             model_health: None,
             cache_stats: None,
+            cluster_status: None,
         }
     }
 
