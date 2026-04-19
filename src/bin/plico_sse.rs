@@ -870,6 +870,9 @@ mod tests {
             batch_memory_store: None,
             batch_submit_intent: None,
             batch_query: None,
+            causal_paths: None,
+            impact_analysis: None,
+            temporal_changes: None,
         }
     }
 

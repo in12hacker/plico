@@ -1,7 +1,44 @@
 //! Knowledge graph operations — explore, node/edge CRUD.
 
-use crate::fs::{KGNodeType, KGNode, KGEdgeType, KGEdge, KGSearchHit};
+use std::collections::HashSet;
+
+use crate::fs::{KGNodeType, KGNode, KGEdgeType, KGEdge, KGSearchHit, KnowledgeGraph};
 use super::observability::{OpType, OperationTimer};
+
+// ── Causal Reasoning Types ───────────────────────────────────────────────────
+
+/// Change type for temporal queries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChangeType {
+    Created,
+    Modified,
+    Deleted,
+}
+
+/// Causal path with strength score.
+#[derive(Debug, Clone)]
+pub struct CausalPath {
+    pub nodes: Vec<KGNode>,
+    pub edges: Vec<KGEdge>,
+    pub causal_strength: f32,
+}
+
+/// Impact analysis result.
+#[derive(Debug, Clone)]
+pub struct ImpactResult {
+    pub affected_nodes: Vec<String>,
+    pub propagation_depth: u8,
+    pub severity: f32,
+}
+
+/// Temporal change record.
+#[derive(Debug, Clone)]
+pub struct TemporalChange {
+    pub before: Option<KGNode>,
+    pub after: Option<KGNode>,
+    pub change_type: ChangeType,
+    pub timestamp_ms: u64,
+}
 
 impl crate::kernel::AIKernel {
     /// Explore graph neighbors of a CID at a given depth.
@@ -372,5 +409,352 @@ impl crate::kernel::AIKernel {
         }
         kg.edge_history(src, dst, edge_type)
             .map_err(|e| std::io::Error::other(e.to_string()))
+    }
+
+    /// Find causal paths between two KG nodes up to a given depth.
+    ///
+    /// Unlike standard path finding which focuses on connectivity, causal path
+    /// analysis weights paths by causal edge strength and favors edges of type
+    /// `Causes` or similar causal relationships.
+    pub fn kg_find_causal_path(
+        &self,
+        src: &str,
+        dst: &str,
+        max_depth: u8,
+    ) -> Vec<CausalPath> {
+        let _timer = OperationTimer::new(&self.metrics, OpType::KgFindPaths);
+        let Some(ref kg) = self.knowledge_graph else {
+            return Vec::new();
+        };
+
+        // BFS to find all simple paths up to max_depth
+        let mut results = Vec::new();
+        let mut visited = HashSet::new();
+        let mut stack: Vec<(String, Vec<String>, Vec<KGEdge>, f32)> = vec![(
+            src.to_string(),
+            vec![src.to_string()],
+            vec![],
+            1.0,
+        )];
+
+        while let Some((current, path, path_edges, cumulative_strength)) = stack.pop() {
+            if current == dst && !path.is_empty() {
+                // Collect actual nodes and edges for this path
+                let causal_nodes: Vec<KGNode> = path
+                    .iter()
+                    .filter_map(|id| kg.get_node(id).ok().flatten())
+                    .collect();
+                let causal_strength = if path_edges.is_empty() {
+                    1.0
+                } else {
+                    cumulative_strength / path_edges.len() as f32
+                };
+                if !causal_nodes.is_empty() {
+                    results.push(CausalPath {
+                        nodes: causal_nodes,
+                        edges: path_edges.clone(),
+                        causal_strength,
+                    });
+                }
+                continue;
+            }
+            if path.len() >= max_depth as usize {
+                continue;
+            }
+            if visited.contains(&current) {
+                continue;
+            }
+            visited.insert(current.clone());
+
+            // Get outgoing edges (causal direction)
+            if let Ok(neighbors) = kg.get_neighbors(&current, None, 1) {
+                for (neighbor_node, edge) in neighbors {
+                    let next_node_id = neighbor_node.id.clone();
+                    if path.contains(&next_node_id) {
+                        continue;
+                    }
+                    // Weight causal strength by edge type and weight
+                    let edge_causal_weight = match edge.edge_type {
+                        KGEdgeType::Causes => edge.weight * 1.0,
+                        KGEdgeType::HasFact => edge.weight * 0.9,
+                        KGEdgeType::Follows => edge.weight * 0.7,
+                        KGEdgeType::RelatedTo => edge.weight * 0.5,
+                        KGEdgeType::AssociatesWith => edge.weight * 0.4,
+                        KGEdgeType::Mentions => edge.weight * 0.3,
+                        _ => edge.weight * 0.2,
+                    };
+                    let mut new_path = path.clone();
+                    new_path.push(next_node_id.clone());
+                    let mut new_edges = path_edges.clone();
+                    new_edges.push(edge);
+                    let new_strength = cumulative_strength * edge_causal_weight;
+                    stack.push((next_node_id, new_path, new_edges, new_strength));
+                }
+            }
+        }
+
+        // Sort by causal strength descending
+        results.sort_by(|a, b| b.causal_strength.partial_cmp(&a.causal_strength).unwrap_or(std::cmp::Ordering::Equal));
+        tracing::info!(path_count = results.len(), "KG causal paths found");
+        results
+    }
+
+    /// Analyze the impact of modifying or removing a node.
+    ///
+    /// Computes the transitive closure of effects up to `propagation_depth`
+    /// by following outgoing causal edges.
+    pub fn kg_impact_analysis(
+        &self,
+        node_id: &str,
+        propagation_depth: u8,
+    ) -> ImpactResult {
+        let _timer = OperationTimer::new(&self.metrics, OpType::KgFindPaths);
+        let Some(ref kg) = self.knowledge_graph else {
+            return ImpactResult {
+                affected_nodes: Vec::new(),
+                propagation_depth: 0,
+                severity: 0.0,
+            };
+        };
+
+        let mut affected: HashSet<String> = HashSet::new();
+        let mut frontier: Vec<(String, u8)> = vec![(node_id.to_string(), 0)];
+        let mut visited: HashSet<String> = HashSet::new();
+        let mut total_severity: f32 = 0.0;
+
+        while let Some((current, depth)) = frontier.pop() {
+            if visited.contains(&current) {
+                continue;
+            }
+            visited.insert(current.clone());
+
+            // Add to affected if not the source node
+            if current != node_id {
+                affected.insert(current.clone());
+                // Severity increases with closer proximity to the source
+                let depth_factor = if propagation_depth > 0 {
+                    1.0 - (depth as f32 / propagation_depth as f32)
+                } else {
+                    0.0
+                };
+                total_severity += depth_factor;
+            }
+
+            // Only explore neighbors if we haven't reached max propagation depth
+            if depth >= propagation_depth {
+                continue;
+            }
+
+            // Follow outgoing causal edges
+            if let Ok(neighbors) = kg.get_neighbors(&current, None, 1) {
+                for (neighbor_node, edge) in neighbors {
+                    let neighbor_id = neighbor_node.id.clone();
+                    if !visited.contains(&neighbor_id) {
+                        // Weight by edge causal strength
+                        let edge_strength = match edge.edge_type {
+                            KGEdgeType::Causes => edge.weight,
+                            KGEdgeType::HasFact => edge.weight * 0.9,
+                            KGEdgeType::Follows => edge.weight * 0.7,
+                            KGEdgeType::RelatedTo => edge.weight * 0.5,
+                            KGEdgeType::AssociatesWith => edge.weight * 0.4,
+                            _ => edge.weight * 0.2,
+                        };
+                        if edge_strength > 0.1 {
+                            frontier.push((neighbor_id, depth + 1));
+                        }
+                    }
+                }
+            }
+        }
+
+        let mut affected_list: Vec<String> = affected.into_iter().collect();
+        affected_list.sort();
+        let max_depth_reached = visited.len().min(propagation_depth as usize) as u8;
+        let severity = (total_severity / affected_list.len().max(1) as f32).min(1.0);
+
+        ImpactResult {
+            affected_nodes: affected_list,
+            propagation_depth: max_depth_reached,
+            severity,
+        }
+    }
+
+    /// Get temporal changes (created, modified, deleted nodes) between two timestamps.
+    ///
+    /// Uses valid_at/invalid_at timestamps to reconstruct the state at different points.
+    pub fn kg_temporal_changes(
+        &self,
+        from_ms: u64,
+        to_ms: u64,
+        agent_id: &str,
+        tenant_id: &str,
+    ) -> std::io::Result<Vec<TemporalChange>> {
+        let _timer = OperationTimer::new(&self.metrics, OpType::KgFindPaths);
+        let ctx = crate::api::permission::PermissionContext::new(agent_id.to_string(), tenant_id.to_string());
+        self.permissions.check(&ctx, crate::api::permission::PermissionAction::Read)?;
+        let Some(ref kg) = self.knowledge_graph else {
+            return Ok(Vec::new());
+        };
+
+        let mut changes = Vec::new();
+
+        // Get all nodes for the tenant
+        let all_nodes = kg.list_nodes(agent_id, None)
+            .map_err(|e| std::io::Error::other(e.to_string()))?;
+
+        for node in all_nodes {
+            if node.tenant_id != tenant_id {
+                continue;
+            }
+
+            let valid_at = node.valid_at.unwrap_or(node.created_at);
+            let invalid_at = node.invalid_at;
+            let expired_at = node.expired_at;
+
+            // Node created in the time range: valid_at is within [from_ms, to_ms]
+            if valid_at >= from_ms && valid_at <= to_ms {
+                changes.push(TemporalChange {
+                    before: None,
+                    after: Some(node.clone()),
+                    change_type: ChangeType::Created,
+                    timestamp_ms: valid_at,
+                });
+            }
+
+            // Node modified (re-activated after invalid_at) or deleted (expired_at set)
+            if let Some(exp) = expired_at {
+                if exp >= from_ms && exp <= to_ms {
+                    changes.push(TemporalChange {
+                        before: Some(node.clone()),
+                        after: None,
+                        change_type: ChangeType::Deleted,
+                        timestamp_ms: exp,
+                    });
+                }
+            }
+
+            if let Some(inv) = invalid_at {
+                if inv >= from_ms && inv <= to_ms {
+                    changes.push(TemporalChange {
+                        before: Some(node.clone()),
+                        after: None,
+                        change_type: ChangeType::Modified,
+                        timestamp_ms: inv,
+                    });
+                }
+            }
+        }
+
+        // Sort by timestamp descending (most recent first)
+        changes.sort_by(|a, b| b.timestamp_ms.cmp(&a.timestamp_ms));
+
+        Ok(changes)
+    }
+
+    /// Detect causal chains in the knowledge graph.
+    ///
+    /// A causal chain is a sequence of nodes connected by causal edges
+    /// (Causes, HasFact, Follows) where each edge represents a cause-effect relationship.
+    pub fn kg_detect_causal_chains(
+        &self,
+        start_node_id: &str,
+        max_depth: u8,
+    ) -> Vec<CausalPath> {
+        let _timer = OperationTimer::new(&self.metrics, OpType::KgFindPaths);
+        let Some(ref kg) = self.knowledge_graph else {
+            return Vec::new();
+        };
+
+        let mut results = Vec::new();
+        let mut visited: HashSet<String> = HashSet::new();
+
+        // Causal edge types that form chains
+        fn is_causal_edge(et: KGEdgeType) -> bool {
+            matches!(et, KGEdgeType::Causes | KGEdgeType::HasFact | KGEdgeType::Follows)
+        }
+
+        // DFS to find causal chains
+        fn dfs(
+            kg: &dyn KnowledgeGraph,
+            current: &str,
+            max_depth: u8,
+            current_depth: u8,
+            path: &mut Vec<String>,
+            edges: &mut Vec<KGEdge>,
+            visited: &mut HashSet<String>,
+            results: &mut Vec<CausalPath>,
+        ) {
+            if current_depth >= max_depth {
+                return;
+            }
+
+            if visited.contains(current) {
+                return;
+            }
+            visited.insert(current.to_string());
+
+            if let Ok(neighbors) = kg.get_neighbors(current, None, 1) {
+                for (neighbor_node, edge) in neighbors {
+                    if !is_causal_edge(edge.edge_type) {
+                        continue;
+                    }
+
+                    path.push(neighbor_node.id.clone());
+                    edges.push(edge.clone());
+
+                    // Found a chain of at least 2 edges
+                    if edges.len() >= 2 {
+                        let chain_nodes: Vec<KGNode> = path
+                            .iter()
+                            .filter_map(|id| kg.get_node(id).ok().flatten())
+                            .collect();
+                        if !chain_nodes.is_empty() {
+                            let strength = edges.iter()
+                                .map(|e| e.weight)
+                                .sum::<f32>() / edges.len() as f32;
+                            results.push(CausalPath {
+                                nodes: chain_nodes,
+                                edges: edges.clone(),
+                                causal_strength: strength,
+                            });
+                        }
+                    }
+
+                    dfs(
+                        kg,
+                        &neighbor_node.id,
+                        max_depth,
+                        current_depth + 1,
+                        path,
+                        edges,
+                        visited,
+                        results,
+                    );
+
+                    path.pop();
+                    edges.pop();
+                }
+            }
+
+            visited.remove(current);
+        }
+
+        let mut path = vec![start_node_id.to_string()];
+        let mut edges = Vec::new();
+        dfs(
+            kg.as_ref(),
+            start_node_id,
+            max_depth,
+            0,
+            &mut path,
+            &mut edges,
+            &mut visited,
+            &mut results,
+        );
+
+        // Sort by causal strength descending
+        results.sort_by(|a, b| b.causal_strength.partial_cmp(&a.causal_strength).unwrap_or(std::cmp::Ordering::Equal));
+
+        results
     }
 }

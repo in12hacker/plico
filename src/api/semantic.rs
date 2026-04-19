@@ -766,6 +766,41 @@ pub enum ApiRequest {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         tenant_id: Option<String>,
     },
+
+    // ── KG Causal Reasoning (v16.0) ────────────────────────────────────────
+
+    /// Find causal paths between two KG nodes.
+    #[serde(rename = "kg_causal_path")]
+    KGCausalPath {
+        source_id: String,
+        target_id: String,
+        #[serde(default)]
+        max_depth: u8,
+        agent_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tenant_id: Option<String>,
+    },
+
+    /// Analyze the impact of modifying or removing a node.
+    #[serde(rename = "kg_impact_analysis")]
+    KGImpactAnalysis {
+        node_id: String,
+        #[serde(default)]
+        propagation_depth: u8,
+        agent_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tenant_id: Option<String>,
+    },
+
+    /// Get temporal changes between two timestamps.
+    #[serde(rename = "kg_temporal_changes")]
+    KGTemporalChanges {
+        from_ms: u64,
+        to_ms: u64,
+        agent_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tenant_id: Option<String>,
+    },
 }
 
 /// An item within a BatchCreate request.
@@ -947,6 +982,15 @@ pub struct ApiResponse {
     /// Batch query results (v15.0).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub batch_query: Option<BatchQueryResponse>,
+    /// Causal path results (v16.0).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub causal_paths: Option<Vec<CausalPathDto>>,
+    /// Impact analysis result (v16.0).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub impact_analysis: Option<ImpactAnalysisDto>,
+    /// Temporal changes result (v16.0).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temporal_changes: Option<Vec<TemporalChangeDto>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1067,6 +1111,33 @@ pub struct BatchQueryResponse {
     pub failed: usize,
 }
 
+// ── KG Causal Reasoning DTOs (v16.0) ───────────────────────────────────────────
+
+/// A causal path result — path of cause-effect relationships between nodes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CausalPathDto {
+    pub nodes: Vec<KGNodeDto>,
+    pub edges: Vec<KGEdgeDto>,
+    pub causal_strength: f32,
+}
+
+/// An impact analysis result — predicted effects of modifying a node.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImpactAnalysisDto {
+    pub affected_nodes: Vec<String>,
+    pub propagation_depth: u8,
+    pub severity: f32,
+}
+
+/// A temporal change record — node created, modified, or deleted.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TemporalChangeDto {
+    pub before: Option<KGNodeDto>,
+    pub after: Option<KGNodeDto>,
+    pub change_type: String,
+    pub timestamp_ms: u64,
+}
+
 // ── Project Self-Management (Dogfooding Plico) ─────────────────────────────────
 
 
@@ -1144,6 +1215,9 @@ impl ApiResponse {
             batch_memory_store: None,
             batch_submit_intent: None,
             batch_query: None,
+            causal_paths: None,
+            impact_analysis: None,
+            temporal_changes: None,
         }
     }
 
@@ -1209,6 +1283,9 @@ impl ApiResponse {
             batch_memory_store: None,
             batch_submit_intent: None,
             batch_query: None,
+            causal_paths: None,
+            impact_analysis: None,
+            temporal_changes: None,
         }
     }
 

@@ -1189,6 +1189,82 @@ impl AIKernel {
                 r.batch_query = Some(batch_results);
                 r
             }
+
+            // ── KG Causal Reasoning (v16.0) ─────────────────────────────────
+
+            ApiRequest::KGCausalPath { source_id, target_id, max_depth, agent_id: _, tenant_id: _ } => {
+                let depth = max_depth.max(1).min(5);
+                let paths = self.kg_find_causal_path(&source_id, &target_id, depth);
+                let dtos: Vec<crate::api::semantic::CausalPathDto> = paths.into_iter().map(|p| {
+                    crate::api::semantic::CausalPathDto {
+                        nodes: p.nodes.into_iter().map(|n| crate::api::semantic::KGNodeDto {
+                            id: n.id, label: n.label, node_type: n.node_type,
+                            content_cid: n.content_cid, properties: n.properties,
+                            agent_id: n.agent_id, created_at: n.created_at,
+                        }).collect(),
+                        edges: p.edges.into_iter().map(|e| crate::api::semantic::KGEdgeDto {
+                            src: e.src, dst: e.dst, edge_type: e.edge_type,
+                            weight: e.weight, created_at: e.created_at,
+                        }).collect(),
+                        causal_strength: p.causal_strength,
+                    }
+                }).collect();
+                let mut r = ApiResponse::ok();
+                r.causal_paths = Some(dtos);
+                r
+            }
+
+            ApiRequest::KGImpactAnalysis { node_id, propagation_depth, agent_id, tenant_id } => {
+                let tenant = tenant_id.unwrap_or_else(|| "default".to_string());
+                let depth = propagation_depth.max(1).min(5);
+                // Check tenant access first
+                if let Ok(Some(node)) = self.kg_get_node(&node_id, &agent_id, &tenant) {
+                    let ctx = crate::api::permission::PermissionContext::new(agent_id.clone(), tenant);
+                    if let Err(e) = self.permissions.check_tenant_access(&ctx, &node.tenant_id) {
+                        return ApiResponse::error(e.to_string());
+                    }
+                }
+                let impact = self.kg_impact_analysis(&node_id, depth);
+                let mut r = ApiResponse::ok();
+                r.impact_analysis = Some(crate::api::semantic::ImpactAnalysisDto {
+                    affected_nodes: impact.affected_nodes,
+                    propagation_depth: impact.propagation_depth,
+                    severity: impact.severity,
+                });
+                r
+            }
+
+            ApiRequest::KGTemporalChanges { from_ms, to_ms, agent_id, tenant_id } => {
+                let tenant = tenant_id.unwrap_or_else(|| "default".to_string());
+                match self.kg_temporal_changes(from_ms, to_ms, &agent_id, &tenant) {
+                    Ok(changes) => {
+                        let dtos: Vec<crate::api::semantic::TemporalChangeDto> = changes.into_iter().map(|c| {
+                            crate::api::semantic::TemporalChangeDto {
+                                before: c.before.map(|n| crate::api::semantic::KGNodeDto {
+                                    id: n.id, label: n.label, node_type: n.node_type,
+                                    content_cid: n.content_cid, properties: n.properties,
+                                    agent_id: n.agent_id, created_at: n.created_at,
+                                }),
+                                after: c.after.map(|n| crate::api::semantic::KGNodeDto {
+                                    id: n.id, label: n.label, node_type: n.node_type,
+                                    content_cid: n.content_cid, properties: n.properties,
+                                    agent_id: n.agent_id, created_at: n.created_at,
+                                }),
+                                change_type: match c.change_type {
+                                    crate::kernel::ops::graph::ChangeType::Created => "created".to_string(),
+                                    crate::kernel::ops::graph::ChangeType::Modified => "modified".to_string(),
+                                    crate::kernel::ops::graph::ChangeType::Deleted => "deleted".to_string(),
+                                },
+                                timestamp_ms: c.timestamp_ms,
+                            }
+                        }).collect();
+                        let mut r = ApiResponse::ok();
+                        r.temporal_changes = Some(dtos);
+                        r
+                    }
+                    Err(e) => ApiResponse::error(e.to_string()),
+                }
+            }
         };
         self.maybe_persist_event_log();
         response
