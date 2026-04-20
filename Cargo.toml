@@ -7,6 +7,10 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/in12hacker/plico"
 readme = "README.md"
 
+[features]
+default = []
+ort-backend = ["ort", "tokenizers", "ndarray"]
+
 [dependencies]
 sha2 = "0.10"
 serde = { version = "1.0", features = ["derive"] }
@@ -32,6 +36,11 @@ futures = "0.3"
 rand = "0.8"
 edgevec = "0.9.0"
 subtle = "2.6.1"
+
+# ONNX Runtime embedding backend (optional)
+ort = { version = "2.0.0-rc.12", default-features = false, features = ["std", "ndarray", "tracing", "copy-dylibs", "api-24"], optional = true }
+tokenizers = { version = "0.22", optional = true, default-features = false, features = ["fancy-regex", "hf-hub", "http"] }
+ndarray = { version = "0.16", optional = true }
 
 [dev-dependencies]
 tempfile = "3.0"

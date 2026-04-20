@@ -6,7 +6,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::fs::{OllamaBackend, EmbeddingProvider, LocalEmbeddingBackend, StubEmbeddingProvider, EmbedError};
+use crate::fs::{OllamaBackend, EmbeddingProvider, LocalEmbeddingBackend, StubEmbeddingProvider, EmbedError, OrtEmbeddingBackend};
 use crate::llm::{LlmProvider, LlmError, OllamaProvider, StubProvider, OpenAICompatibleProvider};
 use crate::scheduler::Agent;
 use crate::scheduler::agent::Intent;
@@ -268,12 +268,31 @@ impl AIKernel {
 
 /// Create the embedding provider based on EMBEDDING_BACKEND env var.
 ///
-/// Priority: local → ollama → stub
+/// Priority when unset: local → ollama → stub
+/// Explicit values: "local" | "ollama" | "stub" | "ort"
 pub(crate) fn create_embedding_provider() -> Result<Arc<dyn EmbeddingProvider>, EmbedError> {
     let backend = std::env::var("EMBEDDING_BACKEND")
         .unwrap_or_else(|_| "local".to_string());
 
     match backend.as_str() {
+        "ort" => {
+            let model_dir = std::env::var("PLICO_MODEL_DIR")
+                .unwrap_or_else(|_| "./models/all-MiniLM-L6-v2".to_string());
+            match OrtEmbeddingBackend::new(std::path::Path::new(&model_dir)) {
+                Ok(b) => {
+                    tracing::info!("Embedding backend: ort ({})", model_dir);
+                    Ok(Arc::new(b) as Arc<dyn EmbeddingProvider>)
+                }
+                Err(EmbedError::ModelNotFound(msg)) => {
+                    tracing::warn!("OrtEmbeddingBackend model not found: {}. Falling back to stub.", msg);
+                    Ok(Arc::new(StubEmbeddingProvider::new()) as Arc<dyn EmbeddingProvider>)
+                }
+                Err(e) => {
+                    tracing::warn!("OrtEmbeddingBackend error: {}. Falling back to stub.", e);
+                    Ok(Arc::new(StubEmbeddingProvider::new()) as Arc<dyn EmbeddingProvider>)
+                }
+            }
+        }
         "local" => {
             let model_id = std::env::var("EMBEDDING_MODEL_ID")
                 .unwrap_or_else(|_| "BAAI/bge-small-en-v1.5".to_string());
