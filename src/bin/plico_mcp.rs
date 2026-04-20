@@ -73,6 +73,8 @@ fn main() {
             "initialize" => handle_initialize(id),
             "tools/list" => handle_tools_list(id),
             "tools/call" => handle_tools_call(id, &msg["params"], &kernel),
+            "resources/list" => handle_resources_list(id, &kernel),
+            "resources/read" => handle_resources_read(id, &msg["params"], &kernel),
             "ping" => make_result(id, serde_json::json!({})),
             _ => make_error_response(id, -32601, &format!("unknown method: {method}")),
         };
@@ -86,7 +88,8 @@ fn handle_initialize(id: Value) -> Value {
     make_result(id, serde_json::json!({
         "protocolVersion": PROTOCOL_VERSION,
         "capabilities": {
-            "tools": {}
+            "tools": {},
+            "resources": {}
         },
         "serverInfo": {
             "name": SERVER_NAME,
@@ -113,6 +116,71 @@ fn handle_tools_call(id: Value, params: &Value, kernel: &AIKernel) -> Value {
             "isError": true
         })),
     }
+}
+
+/// MCP Resources definitions: URI, name, mimeType
+const RESOURCES: &[(&str, &str, &str)] = &[
+    ("plico://status", "System health and active sessions", "application/json"),
+    ("plico://delta", "Changes since last session", "application/json"),
+    ("plico://skills", "Available skills", "application/json"),
+];
+
+fn handle_resources_list(id: Value, _kernel: &AIKernel) -> Value {
+    let resources: Vec<Value> = RESOURCES.iter().map(|(uri, name, mime)| {
+        serde_json::json!({
+            "uri": uri,
+            "name": name,
+            "mimeType": mime,
+        })
+    }).collect();
+    make_result(id, serde_json::json!({ "resources": resources }))
+}
+
+fn handle_resources_read(id: Value, params: &Value, kernel: &AIKernel) -> Value {
+    let uri = params.get("uri")
+        .and_then(|u| u.as_str())
+        .unwrap_or("");
+
+    let (contents, mime) = match uri {
+        "plico://status" => {
+            let resp = kernel.handle_api_request(ApiRequest::SystemStatus);
+            let json = serde_json::to_value(&resp).unwrap_or(serde_json::Value::Null);
+            (serde_json::to_string_pretty(&json).unwrap_or_default(), "application/json")
+        }
+        "plico://delta" => {
+            // Delta is stored as a snapshot - for now return placeholder
+            // Full implementation would read from last session_end snapshot
+            (serde_json::to_string_pretty(&serde_json::json!({
+                "delta_since_last": Value::Null,
+                "note": "Delta snapshot populated after first session_end"
+            })).unwrap_or_default(), "application/json")
+        }
+        "plico://skills" => {
+            let entries = kernel.recall_procedural(DEFAULT_AGENT, "default", None);
+            let skills: Vec<Value> = entries.iter().filter_map(|e| {
+                if let plico::memory::MemoryContent::Procedure(p) = &e.content {
+                    Some(serde_json::json!({
+                        "name": p.name,
+                        "description": p.description,
+                    }))
+                } else {
+                    None
+                }
+            }).collect();
+            (serde_json::to_string_pretty(&serde_json::json!({ "skills": skills })).unwrap_or_default(), "application/json")
+        }
+        _ => {
+            return make_error_response(id, -32602, &format!("unknown resource: {uri}"));
+        }
+    };
+
+    make_result(id, serde_json::json!({
+        "contents": [{
+            "uri": uri,
+            "mimeType": mime,
+            "text": contents,
+        }]
+    }))
 }
 
 fn dispatch_tool(name: &str, args: &Value, kernel: &AIKernel) -> Result<String, String> {
@@ -1521,5 +1589,80 @@ mod tests {
         let keys: Vec<String> = result_obj.as_object().unwrap().keys().cloned().collect();
         assert!(keys.iter().all(|k| k == "cid" || k == "score"),
             "Expected only cid and score, got: {:?}", keys);
+    }
+
+    #[test]
+    fn resources_list_returns_all_resources() {
+        let kernel = make_test_kernel();
+        let resp = handle_resources_list(serde_json::json!(1), &kernel);
+        let resources = resp["result"]["resources"].as_array().unwrap();
+        assert_eq!(resources.len(), 3);
+        let uris: Vec<&str> = resources.iter().map(|r| r["uri"].as_str().unwrap()).collect();
+        assert!(uris.contains(&"plico://status"));
+        assert!(uris.contains(&"plico://delta"));
+        assert!(uris.contains(&"plico://skills"));
+    }
+
+    #[test]
+    fn resources_read_status_returns_json() {
+        let kernel = make_test_kernel();
+        let resp = handle_resources_read(
+            serde_json::json!(1),
+            &serde_json::json!({"uri": "plico://status"}),
+            &kernel,
+        );
+        assert!(resp["result"]["contents"].is_array());
+        let contents = resp["result"]["contents"][0].as_object().unwrap();
+        assert_eq!(contents["mimeType"], "application/json");
+        assert!(!contents["text"].as_str().unwrap().is_empty());
+    }
+
+    #[test]
+    fn resources_read_delta_returns_placeholder() {
+        let kernel = make_test_kernel();
+        let resp = handle_resources_read(
+            serde_json::json!(1),
+            &serde_json::json!({"uri": "plico://delta"}),
+            &kernel,
+        );
+        assert!(resp["result"]["contents"].is_array());
+        let contents = resp["result"]["contents"][0].as_object().unwrap();
+        assert_eq!(contents["mimeType"], "application/json");
+        let text = contents["text"].as_str().unwrap();
+        assert!(text.contains("delta_since_last") || text.contains("note"));
+    }
+
+    #[test]
+    fn resources_read_skills_returns_skills_list() {
+        let kernel = make_test_kernel();
+        let resp = handle_resources_read(
+            serde_json::json!(1),
+            &serde_json::json!({"uri": "plico://skills"}),
+            &kernel,
+        );
+        assert!(resp["result"]["contents"].is_array());
+        let contents = resp["result"]["contents"][0].as_object().unwrap();
+        assert_eq!(contents["mimeType"], "application/json");
+        let text = contents["text"].as_str().unwrap();
+        assert!(text.contains("skills"));
+    }
+
+    #[test]
+    fn resources_read_unknown_returns_error() {
+        let kernel = make_test_kernel();
+        let resp = handle_resources_read(
+            serde_json::json!(1),
+            &serde_json::json!({"uri": "plico://unknown"}),
+            &kernel,
+        );
+        assert!(resp["error"].is_object());
+        assert_eq!(resp["error"]["code"], -32602);
+    }
+
+    #[test]
+    fn initialize_advertises_resources_capability() {
+        let resp = handle_initialize(serde_json::json!(1));
+        assert!(resp["result"]["capabilities"]["resources"].is_object(),
+            "initialize should advertise resources capability");
     }
 }
