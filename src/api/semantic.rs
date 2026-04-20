@@ -272,6 +272,7 @@ fn default_k() -> usize { 10 }
 fn default_priority() -> String { "medium".to_string() }
 fn default_budget_tokens() -> usize { 4096 }
 fn default_auto_checkpoint() -> bool { true }
+fn default_max_results() -> usize { 10 }
 
 /// DTO for procedure steps in API requests.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1234,6 +1235,59 @@ pub enum ApiRequest {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         tenant_id: Option<String>,
     },
+
+    // ── Knowledge Discovery (F-16) ──────────────────────────────────
+
+    /// Discover shared knowledge from other agents.
+    #[serde(rename = "discover_knowledge")]
+    DiscoverKnowledge {
+        /// Semantic search query.
+        query: String,
+        /// Scope of the discovery search.
+        #[serde(default)]
+        scope: DiscoveryScope,
+        /// Filter by knowledge types (empty = all types).
+        #[serde(default)]
+        knowledge_types: Vec<KnowledgeType>,
+        /// Maximum number of results to return.
+        #[serde(default = "default_max_results")]
+        max_results: usize,
+        /// Optional token budget limit.
+        #[serde(default)]
+        token_budget: Option<usize>,
+        /// Agent performing the discovery.
+        agent_id: String,
+    },
+}
+
+/// Scope of knowledge discovery.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum DiscoveryScope {
+    /// Search only entries with scope=Shared.
+    Shared,
+    /// Search only entries with scope=Group(id).
+    Group(String),
+    /// Search all accessible entries.
+    AllAccessible,
+}
+
+impl Default for DiscoveryScope {
+    fn default() -> Self {
+        DiscoveryScope::AllAccessible
+    }
+}
+
+/// Type of knowledge to filter by in discovery.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum KnowledgeType {
+    /// Text memory entries.
+    Memory,
+    /// Procedural memory entries (learned skills/workflows).
+    Procedure,
+    /// Factual knowledge entries (KnowledgePiece).
+    Knowledge,
 }
 
 /// An item within a BatchCreate request.
@@ -1470,6 +1524,9 @@ pub struct ApiResponse {
     /// Memory stats (F-17).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub memory_stats: Option<MemoryStatsResult>,
+    /// Knowledge discovery result (F-16).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub discovery_result: Option<DiscoveryResult>,
 }
 
 /// Response for a successful model switch operation (v18.0).
@@ -1958,6 +2015,38 @@ pub struct MemoryStatsResult {
     pub about_to_expire_count: usize,
 }
 
+// ── Knowledge Discovery (F-16) ─────────────────────────────────────
+
+/// A single hit returned by knowledge discovery.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiscoveryHit {
+    /// Content identifier of the discovered knowledge.
+    pub cid: String,
+    /// Agent that shared this knowledge.
+    pub source_agent: String,
+    /// When the knowledge was shared (Unix ms).
+    pub shared_at: u64,
+    /// Semantic tags associated with the knowledge.
+    pub tags: Vec<String>,
+    /// Content preview (first 200 chars).
+    pub preview: String,
+    /// Relevance score [0, 1] based on query match.
+    pub relevance_score: f32,
+    /// Number of times other agents have used this knowledge.
+    pub usage_count: u64,
+}
+
+/// Result of a knowledge discovery query.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiscoveryResult {
+    /// Discovered knowledge items.
+    pub items: Vec<DiscoveryHit>,
+    /// Estimated token count for transmitting all items.
+    pub token_estimate: usize,
+    /// Total number of accessible items matching the query (may be greater than items returned).
+    pub total_available: usize,
+}
+
 /// Agent resource usage and quota snapshot.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentUsageDto {
@@ -2037,6 +2126,7 @@ impl ApiResponse {
             growth_report: None,
             task_result: None,
             memory_stats: None,
+            discovery_result: None,
         }
     }
 
@@ -2126,6 +2216,7 @@ impl ApiResponse {
             growth_report: None,
             task_result: None,
             memory_stats: None,
+            discovery_result: None,
         }
     }
 

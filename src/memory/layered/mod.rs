@@ -629,6 +629,70 @@ impl LayeredMemory {
         visible
     }
 
+    /// Retrieve all Shared-scope entries across all agents from all tiers.
+    pub fn get_shared_entries_all_agents(&self) -> Vec<MemoryEntry> {
+        let mut results = Vec::new();
+        for tier in [MemoryTier::Ephemeral, MemoryTier::Working, MemoryTier::LongTerm, MemoryTier::Procedural] {
+            let map = match tier {
+                MemoryTier::Ephemeral => self.ephemeral.read().unwrap(),
+                MemoryTier::Working => self.working.read().unwrap(),
+                MemoryTier::LongTerm => self.long_term.read().unwrap(),
+                MemoryTier::Procedural => self.procedural.read().unwrap(),
+            };
+            for entries in map.values() {
+                for entry in entries {
+                    if entry.scope == MemoryScope::Shared {
+                        results.push(entry.clone());
+                    }
+                }
+            }
+        }
+        results
+    }
+
+    /// Retrieve all Group-scope entries for a specific group across all agents from all tiers.
+    pub fn get_group_entries_all_agents(&self, group_id: &str) -> Vec<MemoryEntry> {
+        let mut results = Vec::new();
+        for tier in [MemoryTier::Ephemeral, MemoryTier::Working, MemoryTier::LongTerm, MemoryTier::Procedural] {
+            let map = match tier {
+                MemoryTier::Ephemeral => self.ephemeral.read().unwrap(),
+                MemoryTier::Working => self.working.read().unwrap(),
+                MemoryTier::LongTerm => self.long_term.read().unwrap(),
+                MemoryTier::Procedural => self.procedural.read().unwrap(),
+            };
+            for entries in map.values() {
+                for entry in entries {
+                    if matches!(&entry.scope, MemoryScope::Group(g) if g == group_id) {
+                        results.push(entry.clone());
+                    }
+                }
+            }
+        }
+        results
+    }
+
+    /// Retrieve all entries across all agents and all tiers (AllAccessible scope).
+    pub fn get_all_entries_all_agents(&self) -> Vec<MemoryEntry> {
+        let mut results = Vec::new();
+        for tier in [MemoryTier::Ephemeral, MemoryTier::Working, MemoryTier::LongTerm, MemoryTier::Procedural] {
+            let map = match tier {
+                MemoryTier::Ephemeral => self.ephemeral.read().unwrap(),
+                MemoryTier::Working => self.working.read().unwrap(),
+                MemoryTier::LongTerm => self.long_term.read().unwrap(),
+                MemoryTier::Procedural => self.procedural.read().unwrap(),
+            };
+            for entries in map.values() {
+                for entry in entries {
+                    // Include Shared and Group entries, but not Private
+                    if matches!(&entry.scope, MemoryScope::Shared | MemoryScope::Group(_)) {
+                        results.push(entry.clone());
+                    }
+                }
+            }
+        }
+        results
+    }
+
     /// Retrieve all memories with access tracking.
     ///
     /// Unlike `get_all()`, this updates `access_count` and `last_accessed`

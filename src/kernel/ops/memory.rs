@@ -503,3 +503,115 @@ impl crate::kernel::AIKernel {
         }
     }
 }
+
+/// Discover shared knowledge from other agents based on query and scope (F-16).
+pub fn discover_knowledge(
+    memory: &crate::memory::LayeredMemory,
+    query: &str,
+    scope: &crate::api::semantic::DiscoveryScope,
+    knowledge_types: &[crate::api::semantic::KnowledgeType],
+    max_results: usize,
+    _token_budget: Option<usize>,
+) -> crate::api::semantic::DiscoveryResult {
+    use crate::api::semantic::{DiscoveryHit, DiscoveryResult, KnowledgeType};
+    use crate::memory::MemoryContent;
+
+    // 1. Get entries based on scope
+    let entries = match scope {
+        crate::api::semantic::DiscoveryScope::Shared => {
+            // Get all entries with scope=Shared across all agents
+            memory.get_shared_entries_all_agents()
+        }
+        crate::api::semantic::DiscoveryScope::Group(group_id) => {
+            // Get entries with scope=Group(id) across all agents
+            memory.get_group_entries_all_agents(group_id)
+        }
+        crate::api::semantic::DiscoveryScope::AllAccessible => {
+            // Get all accessible entries across all agents
+            memory.get_all_entries_all_agents()
+        }
+    };
+
+    // 2. Filter by knowledge type
+    let filtered: Vec<_> = entries.into_iter().filter(|e| {
+        if knowledge_types.is_empty() {
+            return true;
+        }
+        match &e.content {
+            MemoryContent::Text(_) => knowledge_types.contains(&KnowledgeType::Memory),
+            MemoryContent::Procedure(_) => knowledge_types.contains(&KnowledgeType::Procedure),
+            MemoryContent::Knowledge(_) | MemoryContent::ObjectRef(_) | MemoryContent::Structured(_) => {
+                knowledge_types.contains(&KnowledgeType::Knowledge)
+            }
+        }
+    }).collect();
+
+    // 3. Generate preview and build discovery hits
+    // Simple text-based relevance scoring based on query keyword match
+    let query_lower = query.to_lowercase();
+    let query_terms: Vec<&str> = query_lower.split_whitespace().collect();
+
+    let mut hits: Vec<DiscoveryHit> = filtered.into_iter().map(|e| {
+        let preview: String = match &e.content {
+            MemoryContent::Text(t) => t.chars().take(200).collect::<String>(),
+            MemoryContent::Procedure(p) => p.description.chars().take(200).collect::<String>(),
+            MemoryContent::Knowledge(kp) => kp.statement.chars().take(200).collect::<String>(),
+            MemoryContent::ObjectRef(cid) => format!("<object: {}>", cid).chars().take(200).collect::<String>(),
+            MemoryContent::Structured(s) => serde_json::to_string(s).unwrap_or_default().chars().take(200).collect::<String>(),
+        };
+
+        // Calculate simple relevance score based on tag/content matching
+        let relevance_score = calculate_relevance(&e.tags, &preview, &query_terms);
+
+        DiscoveryHit {
+            cid: e.id.clone(),
+            source_agent: e.agent_id.clone(),
+            shared_at: e.created_at,
+            tags: e.tags.clone(),
+            preview,
+            relevance_score,
+            usage_count: e.access_count as u64,
+        }
+    }).collect();
+
+    // Sort by relevance score descending
+    hits.sort_by(|a, b| b.relevance_score.partial_cmp(&a.relevance_score).unwrap_or(std::cmp::Ordering::Equal));
+
+    // Apply max_results limit
+    let total_available = hits.len();
+    hits.truncate(max_results);
+
+    let token_estimate = hits.iter()
+        .map(|i| i.preview.len() / 4)  // rough token estimate
+        .sum();
+
+    DiscoveryResult {
+        items: hits,
+        token_estimate,
+        total_available,
+    }
+}
+
+/// Calculate a simple relevance score based on tag and content matching.
+fn calculate_relevance(tags: &[String], content: &str, query_terms: &[&str]) -> f32 {
+    use std::collections::HashSet;
+
+    let content_lower = content.to_lowercase();
+    let tag_set: HashSet<&str> = tags.iter().map(|t| t.as_str()).collect();
+
+    let mut score = 0.0f32;
+
+    // Each query term found in content adds 0.1
+    for term in query_terms {
+        if content_lower.contains(term) {
+            score += 0.1;
+        }
+        // Exact tag match adds 0.2
+        if tag_set.contains(term) {
+            score += 0.2;
+        }
+    }
+
+    // Normalize to [0, 1] range (max possible score is 1.0 if all terms match)
+    score.min(1.0)
+}

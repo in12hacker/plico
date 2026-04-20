@@ -1632,6 +1632,22 @@ impl AIKernel {
                 r.memory_stats = Some(stats);
                 r
             }
+
+            // ── Knowledge Discovery (F-16) ──────────────────────────────────
+
+            ApiRequest::DiscoverKnowledge { query, scope, knowledge_types, max_results, token_budget, agent_id: _ } => {
+                let result = ops::memory::discover_knowledge(
+                    &self.memory,
+                    &query,
+                    &scope,
+                    &knowledge_types,
+                    max_results,
+                    token_budget,
+                );
+                let mut r = ApiResponse::ok();
+                r.discovery_result = Some(result);
+                r
+            }
         };
         self.maybe_persist_event_log();
         // Token cost transparency (F-8): calculate estimate for every response
