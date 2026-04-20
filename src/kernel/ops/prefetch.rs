@@ -668,6 +668,17 @@ impl IntentPrefetcher {
             assemblies.insert(assembly_id.clone(), assembly);
         }
 
+        // F-15: Build feedback boost map from historical usage before spawning thread
+        let feedback_boost: HashMap<String, f32> =
+            if let Some((used, unused)) = self.get_similar_feedback(intent) {
+                let mut boost = HashMap::new();
+                for cid in used   { boost.insert(cid, 1.5); } // boost historically used
+                for cid in unused { boost.insert(cid, 0.3); } // demote historically unused
+                boost
+            } else {
+                HashMap::new()
+            };
+
         // Kick off background prefetch — clone refs for the async task
         let assemblies = Arc::clone(&self.assemblies);
         let search = Arc::clone(&self.search);
@@ -695,7 +706,7 @@ impl IntentPrefetcher {
                 Self::run_prefetch(
                     assemblies, search, kg, memory, event_bus, embedding, ctx_loader,
                     assembly_id_clone, intent_clone, related_cids_clone, budget_tokens, max_age,
-                    Some(intent_cache),
+                    Some(intent_cache), feedback_boost,
                 ).await;
             });
         });
@@ -918,6 +929,7 @@ impl IntentPrefetcher {
         budget_tokens: usize,
         _max_age_ms: u64,
         intent_cache: Option<Arc<IntentAssemblyCache>>,
+        feedback_boost: HashMap<String, f32>,
     ) {
         let result = Self::multi_path_recall_async(
             &search, &kg, &memory, &event_bus, &embedding,
@@ -929,7 +941,25 @@ impl IntentPrefetcher {
         let entry = assemblies_guard.get_mut(&assembly_id);
 
         match (result, entry) {
-            (Ok(candidates), Some(a)) => {
+            (Ok(mut candidates), Some(a)) => {
+                // F-15: Apply adaptive feedback boost to candidate relevance scores.
+                // CIDs historically used by this intent get a 1.5x boost;
+                // CIDs historically unused get a 0.3x demotion.
+                // Falls back to no-op when feedback_boost is empty.
+                if !feedback_boost.is_empty() {
+                    for c in &mut candidates {
+                        if let Some(&factor) = feedback_boost.get(&c.cid) {
+                            c.relevance = (c.relevance * factor).min(1.0);
+                        }
+                    }
+                    candidates.sort_by(|a, b| {
+                        b.relevance.partial_cmp(&a.relevance).unwrap_or(std::cmp::Ordering::Equal)
+                    });
+                    tracing::debug!(
+                        "F-15: applied feedback boost ({} boosted/demoted) for intent '{}'",
+                        feedback_boost.len(), intent
+                    );
+                }
                 let allocation = context_budget::assemble(&ctx_loader, &candidates, budget_tokens);
 
                 // F-9: Store in intent cache for future hits
