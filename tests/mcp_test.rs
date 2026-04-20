@@ -229,15 +229,27 @@ fn mcp_e2e_session_lifecycle() {
         start_resp["ok"].as_bool().unwrap(),
         "session_start should succeed"
     );
-    // Should have session_started with delta info
+    // Should have session_started with delta info (acceptance criteria: delta + assembly_id)
     assert!(
         start_resp["session_started"].is_object(),
         "should have session_started"
     );
-    let session_id = start_resp["session_started"]["session_id"]
-        .as_str()
-        .unwrap()
-        .to_string();
+    let session_started = &start_resp["session_started"];
+    // Verify session_id exists
+    assert!(
+        session_started["session_id"].is_string(),
+        "session_started should have session_id"
+    );
+    // With intent_hint, should have changes_since_last (delta) and warm_context (assembly_id)
+    assert!(
+        session_started["changes_since_last"].is_array(),
+        "session_started should have changes_since_last (delta) when intent_hint provided"
+    );
+    assert!(
+        session_started["warm_context"].is_string() || session_started["warm_context"].is_null(),
+        "session_started should have warm_context (assembly_id) when intent_hint provided"
+    );
+    let session_id = session_started["session_id"].as_str().unwrap().to_string();
 
     // 2. intent_declare (SubmitIntent)
     let resp = send_and_recv(
