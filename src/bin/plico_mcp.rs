@@ -14,7 +14,7 @@ use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use plico::api::semantic::{ApiRequest, ApiResponse, ProcedureStepDto};
+use plico::api::semantic::{ApiRequest, ApiResponse, DiscoveryScope, KnowledgeType, ProcedureStepDto};
 use plico::kernel::AIKernel;
 use serde_json::Value;
 
@@ -148,25 +148,35 @@ fn handle_resources_read(id: Value, params: &Value, kernel: &AIKernel) -> Value 
             (serde_json::to_string_pretty(&json).unwrap_or_default(), "application/json")
         }
         "plico://delta" => {
-            // Delta is stored as a snapshot - for now return placeholder
-            // Full implementation would read from last session_end snapshot
-            (serde_json::to_string_pretty(&serde_json::json!({
-                "delta_since_last": Value::Null,
-                "note": "Delta snapshot populated after first session_end"
-            })).unwrap_or_default(), "application/json")
+            // Fix: query real delta events from the EventBus
+            let resp = kernel.handle_api_request(ApiRequest::DeltaSince {
+                agent_id: DEFAULT_AGENT.to_string(),
+                since_seq: 0,
+                watch_cids: vec![],
+                watch_tags: vec![],
+                limit: Some(20),
+            });
+            let delta_json: Value = serde_json::to_value(&resp.delta_result).unwrap_or(Value::Null);
+            (serde_json::to_string_pretty(&delta_json).unwrap_or_default(), "application/json")
         }
         "plico://skills" => {
-            let entries = kernel.recall_procedural(DEFAULT_AGENT, "default", None);
-            let skills: Vec<Value> = entries.iter().filter_map(|e| {
+            // Fix: query both shared (system) and private (agent) procedural layers
+            let shared_entries = kernel.recall_shared_procedural(None);
+            let private_entries = kernel.recall_procedural(DEFAULT_AGENT, "default", None);
+
+            // Combine and deduplicate by name (shared takes precedence for same name)
+            let mut skills_map: std::collections::HashMap<String, Value> = std::collections::HashMap::new();
+            for e in shared_entries.iter().chain(private_entries.iter()) {
                 if let plico::memory::MemoryContent::Procedure(p) = &e.content {
-                    Some(serde_json::json!({
-                        "name": p.name,
-                        "description": p.description,
-                    }))
-                } else {
-                    None
+                    skills_map.entry(p.name.clone()).or_insert_with(|| {
+                        serde_json::json!({
+                            "name": p.name,
+                            "description": p.description,
+                        })
+                    });
                 }
-            }).collect();
+            }
+            let skills: Vec<Value> = skills_map.into_values().collect();
             (serde_json::to_string_pretty(&serde_json::json!({ "skills": skills })).unwrap_or_default(), "application/json")
         }
         _ => {
@@ -448,6 +458,41 @@ fn dispatch_plico_action(action: &str, args: &Value, kernel: &AIKernel) -> Resul
 
         "status" => {
             let req = ApiRequest::SystemStatus;
+            format_plico_response(kernel.handle_api_request(req), args)
+        }
+
+        "discover" => {
+            let scope = args.get("scope").and_then(|s| s.as_str()).unwrap_or("shared");
+            let knowledge_types = args.get("knowledge_types").and_then(|kt| kt.as_array())
+                .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>())
+                .unwrap_or_default();
+            let req = ApiRequest::DiscoverKnowledge {
+                query: args.get("query").and_then(|q| q.as_str()).unwrap_or("").to_string(),
+                scope: match scope {
+                    "shared" => DiscoveryScope::Shared,
+                    "all" => DiscoveryScope::AllAccessible,
+                    _ => DiscoveryScope::Shared,
+                },
+                knowledge_types: knowledge_types.iter().map(|kt| match *kt {
+                    "memory" => KnowledgeType::Memory,
+                    "procedure" => KnowledgeType::Procedure,
+                    "knowledge" => KnowledgeType::Knowledge,
+                    _ => KnowledgeType::Memory,
+                }).collect(),
+                max_results: args.get("max_results").and_then(|v| v.as_u64()).unwrap_or(10) as usize,
+                token_budget: args.get("token_budget").and_then(|v| v.as_u64()).map(|t| t as usize),
+                agent_id: agent.to_string(),
+            };
+            format_plico_response(kernel.handle_api_request(req), args)
+        }
+
+        "memory_stats" => {
+            let tier = args.get("tier").and_then(|t| t.as_str()).map(String::from);
+            let req = ApiRequest::MemoryStats {
+                agent_id: agent.to_string(),
+                tier,
+                tenant_id: None,
+            };
             format_plico_response(kernel.handle_api_request(req), args)
         }
 
@@ -1131,7 +1176,8 @@ fn tool_definitions() -> Vec<Value> {
                     "action": {
                         "type": "string",
                         "enum": ["session_start","session_end","remember","recall","recall_semantic",
-                                 "search","hybrid","intent_declare","intent_fetch","delta","growth","status"],
+                                 "search","hybrid","intent_declare","intent_fetch","delta","growth","status",
+                                 "discover","memory_stats"],
                         "description": "Single operation mode"
                     },
                     "pipeline": {
@@ -1646,7 +1692,7 @@ mod tests {
     }
 
     #[test]
-    fn resources_read_delta_returns_placeholder() {
+    fn resources_read_delta_returns_delta_result() {
         let kernel = make_test_kernel();
         let resp = handle_resources_read(
             serde_json::json!(1),
@@ -1656,8 +1702,11 @@ mod tests {
         assert!(resp["result"]["contents"].is_array());
         let contents = resp["result"]["contents"][0].as_object().unwrap();
         assert_eq!(contents["mimeType"], "application/json");
+        // After fix, plico://delta returns a real DeltaResult (empty in fresh kernel)
         let text = contents["text"].as_str().unwrap();
-        assert!(text.contains("delta_since_last") || text.contains("note"));
+        // Should contain delta result fields (from_seq, to_seq, changes)
+        assert!(text.contains("from_seq") || text.contains("changes") || text.is_empty(),
+            "Expected delta result fields, got: {}", text);
     }
 
     #[test]

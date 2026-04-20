@@ -15,9 +15,8 @@ impl crate::kernel::AIKernel {
             .map(|kg| kg.edge_count().unwrap_or(0))
             .unwrap_or(0);
 
-        let cas_object_count = self.cas.list_cids()
-            .map(|c| c.len())
-            .unwrap_or(0);
+        // Fix B7: query SemanticFS object count instead of kernel CAS count
+        let cas_object_count = self.fs.count_objects().unwrap_or(0);
 
         // Get cache statistics (v19.0)
         let cache_stats = self.cache_stats();

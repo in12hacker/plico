@@ -521,6 +521,11 @@ impl SemanticFS {
         self.audit_log.read().unwrap().clone()
     }
 
+    /// Total number of objects stored in this filesystem's CAS.
+    pub fn count_objects(&self) -> std::io::Result<usize> {
+        self.cas.list_cids().map(|c| c.len())
+    }
+
     // ─── Internal helpers ────────────────────────────────────────────────
 
     const SIMILARITY_THRESHOLD: f32 = 0.5;
