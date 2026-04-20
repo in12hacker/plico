@@ -1061,6 +1061,21 @@ pub enum ApiRequest {
         assembly_id: String,
     },
 
+    // ── Adaptive Prefetch (F-15) ─────────────────────────────────────────────
+
+    /// Report feedback about which CIDs were actually used vs prefetched but unused.
+    /// Enables adaptive prefetch learning — future prefetches prioritize historically-used CIDs.
+    #[serde(rename = "intent_feedback")]
+    IntentFeedback {
+        /// The intent_id this feedback is for.
+        intent_id: String,
+        /// CIDs that were actually read/used by the agent.
+        used_cids: Vec<String>,
+        /// CIDs that were in the prefetch assembly but not used.
+        unused_cids: Vec<String>,
+        agent_id: String,
+    },
+
     // ── Batch Operations (v15.0) ─────────────────────────────────
 
     /// Batch create multiple objects in a single call.

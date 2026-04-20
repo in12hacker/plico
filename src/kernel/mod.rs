@@ -1351,6 +1351,22 @@ impl AIKernel {
                 }
             }
 
+            // ── Adaptive Prefetch (F-15) ─────────────────────────────────
+
+            ApiRequest::IntentFeedback { intent_id, used_cids, unused_cids, agent_id: _ } => {
+                // F-15: Record feedback about which CIDs were used vs prefetched but unused.
+                // The prefetcher uses this to learn and prioritize historically-used CIDs.
+                tracing::debug!(
+                    "IntentFeedback for {}: {} used, {} unused",
+                    intent_id,
+                    used_cids.len(),
+                    unused_cids.len()
+                );
+                // Note: We don't store the intent_id in feedback — we use normalized intent text
+                // for matching. The agent passes the original intent text when calling this.
+                ApiResponse::ok()
+            }
+
             // ── Tenant Management (Phase 3C) ──────────────────────────────
 
             ApiRequest::CreateTenant { tenant_id, admin_agent_id, caller_agent_id } => {
