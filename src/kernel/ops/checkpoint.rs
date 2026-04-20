@@ -150,6 +150,7 @@ impl CheckpointMemory {
             tags: self.tags.clone(),
             embedding: None,
             ttl_ms: None,
+            original_ttl_ms: None,
             scope,
         }
     }
@@ -208,6 +209,7 @@ impl AgentCheckpoint {
             tags: vec![CHECKPOINT_TAG.to_string()],
             embedding: None,
             ttl_ms: None,
+            original_ttl_ms: None,
             scope: MemoryScope::Private,
         }
     }
@@ -418,6 +420,7 @@ mod tests {
             tags: vec!["test".to_string()],
             embedding: None,
             ttl_ms: None,
+            original_ttl_ms: None,
             scope: MemoryScope::Private,
         };
 

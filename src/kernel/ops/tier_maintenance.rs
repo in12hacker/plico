@@ -141,6 +141,7 @@ mod tests {
             tags: Vec::new(),
             embedding: None,
             ttl_ms: None,
+            original_ttl_ms: None,
             scope: crate::memory::MemoryScope::Private,
         }
     }

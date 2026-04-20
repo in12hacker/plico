@@ -1617,6 +1617,21 @@ impl AIKernel {
                 r.growth_report = Some(report);
                 r
             }
+            ApiRequest::MemoryStats { agent_id, tier, tenant_id: _ } => {
+                let tier_filter = tier.as_ref().and_then(|t| {
+                    match t.as_str() {
+                        "ephemeral" => Some(crate::memory::MemoryTier::Ephemeral),
+                        "working" => Some(crate::memory::MemoryTier::Working),
+                        "long_term" => Some(crate::memory::MemoryTier::LongTerm),
+                        "procedural" => Some(crate::memory::MemoryTier::Procedural),
+                        _ => None,
+                    }
+                });
+                let stats = self.memory_stats(&agent_id, tier_filter.as_ref());
+                let mut r = ApiResponse::ok();
+                r.memory_stats = Some(stats);
+                r
+            }
         };
         self.maybe_persist_event_log();
         // Token cost transparency (F-8): calculate estimate for every response

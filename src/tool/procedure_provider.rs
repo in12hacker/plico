@@ -166,6 +166,7 @@ mod tests {
             tags: vec!["verified".into(), "auto-learned".into()],
             embedding: None,
             ttl_ms: None,
+            original_ttl_ms: None,
             scope: MemoryScope::Shared,
         }
     }

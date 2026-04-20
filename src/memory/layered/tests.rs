@@ -82,6 +82,7 @@ fn test_private_memory_invisible_to_other_agents() {
         tags: vec![],
         embedding: None,
         ttl_ms: None,
+        original_ttl_ms: None,
         scope: MemoryScope::Private,
     };
     mem.store(entry);
@@ -110,6 +111,7 @@ fn test_shared_memory_visible_to_all() {
         tags: vec!["policy".into()],
         embedding: None,
         ttl_ms: None,
+        original_ttl_ms: None,
         scope: MemoryScope::Shared,
     };
     mem.store(entry);
@@ -140,6 +142,7 @@ fn test_group_memory_visible_to_group_members() {
         tags: vec![],
         embedding: None,
         ttl_ms: None,
+        original_ttl_ms: None,
         scope: MemoryScope::Group("engineering".into()),
     };
     mem.store(entry);
@@ -166,7 +169,7 @@ fn test_get_shared_returns_only_shared_scope() {
         tier: MemoryTier::Working,
         content: MemoryContent::Text("private".into()),
         importance: 50, access_count: 0, last_accessed: now_ms(), created_at: now_ms(),
-        tags: vec![], embedding: None, ttl_ms: None,
+        tags: vec![], embedding: None, ttl_ms: None, original_ttl_ms: None,
         scope: MemoryScope::Private,
     });
     mem.store(MemoryEntry {
@@ -176,7 +179,7 @@ fn test_get_shared_returns_only_shared_scope() {
         tier: MemoryTier::Working,
         content: MemoryContent::Text("shared knowledge".into()),
         importance: 50, access_count: 0, last_accessed: now_ms(), created_at: now_ms(),
-        tags: vec![], embedding: None, ttl_ms: None,
+        tags: vec![], embedding: None, ttl_ms: None, original_ttl_ms: None,
         scope: MemoryScope::Shared,
     });
     mem.store(MemoryEntry {
@@ -186,7 +189,7 @@ fn test_get_shared_returns_only_shared_scope() {
         tier: MemoryTier::Working,
         content: MemoryContent::Text("group data".into()),
         importance: 50, access_count: 0, last_accessed: now_ms(), created_at: now_ms(),
-        tags: vec![], embedding: None, ttl_ms: None,
+        tags: vec![], embedding: None, ttl_ms: None, original_ttl_ms: None,
         scope: MemoryScope::Group("team".into()),
     });
 
@@ -206,7 +209,7 @@ fn test_get_by_group_returns_only_matching_group() {
         tier: MemoryTier::Procedural,
         content: MemoryContent::Text("eng procedure".into()),
         importance: 50, access_count: 0, last_accessed: now_ms(), created_at: now_ms(),
-        tags: vec![], embedding: None, ttl_ms: None,
+        tags: vec![], embedding: None, ttl_ms: None, original_ttl_ms: None,
         scope: MemoryScope::Group("engineering".into()),
     });
     mem.store(MemoryEntry {
@@ -216,7 +219,7 @@ fn test_get_by_group_returns_only_matching_group() {
         tier: MemoryTier::Procedural,
         content: MemoryContent::Text("marketing procedure".into()),
         importance: 50, access_count: 0, last_accessed: now_ms(), created_at: now_ms(),
-        tags: vec![], embedding: None, ttl_ms: None,
+        tags: vec![], embedding: None, ttl_ms: None, original_ttl_ms: None,
         scope: MemoryScope::Group("marketing".into()),
     });
 
@@ -240,7 +243,7 @@ fn test_recall_visible_combines_private_shared_group() {
         tier: MemoryTier::Working,
         content: MemoryContent::Text("my secret".into()),
         importance: 50, access_count: 0, last_accessed: now_ms(), created_at: now_ms(),
-        tags: vec![], embedding: None, ttl_ms: None,
+        tags: vec![], embedding: None, ttl_ms: None, original_ttl_ms: None,
         scope: MemoryScope::Private,
     });
     mem.store(MemoryEntry {
@@ -250,7 +253,7 @@ fn test_recall_visible_combines_private_shared_group() {
         tier: MemoryTier::Working,
         content: MemoryContent::Text("b secret".into()),
         importance: 50, access_count: 0, last_accessed: now_ms(), created_at: now_ms(),
-        tags: vec![], embedding: None, ttl_ms: None,
+        tags: vec![], embedding: None, ttl_ms: None, original_ttl_ms: None,
         scope: MemoryScope::Private,
     });
     mem.store(MemoryEntry {
@@ -260,7 +263,7 @@ fn test_recall_visible_combines_private_shared_group() {
         tier: MemoryTier::LongTerm,
         content: MemoryContent::Text("public knowledge".into()),
         importance: 80, access_count: 0, last_accessed: now_ms(), created_at: now_ms(),
-        tags: vec![], embedding: None, ttl_ms: None,
+        tags: vec![], embedding: None, ttl_ms: None, original_ttl_ms: None,
         scope: MemoryScope::Shared,
     });
     mem.store(MemoryEntry {
@@ -270,7 +273,7 @@ fn test_recall_visible_combines_private_shared_group() {
         tier: MemoryTier::Procedural,
         content: MemoryContent::Text("team procedure".into()),
         importance: 90, access_count: 0, last_accessed: now_ms(), created_at: now_ms(),
-        tags: vec![], embedding: None, ttl_ms: None,
+        tags: vec![], embedding: None, ttl_ms: None, original_ttl_ms: None,
         scope: MemoryScope::Group("devs".into()),
     });
 
@@ -310,13 +313,13 @@ fn test_clear_agent_removes_all_tiers() {
         id: "w-1".into(), agent_id: agent.into(), tenant_id: "default".to_string(), tier: MemoryTier::Working,
         content: MemoryContent::Text("working note".into()),
         importance: 50, access_count: 0, last_accessed: now_ms(), created_at: now_ms(),
-        tags: vec![], embedding: None, ttl_ms: None, scope: MemoryScope::Private,
+        tags: vec![], embedding: None, ttl_ms: None, original_ttl_ms: None, scope: MemoryScope::Private,
     });
     mem.store(MemoryEntry {
         id: "lt-1".into(), agent_id: agent.into(), tenant_id: "default".to_string(), tier: MemoryTier::LongTerm,
         content: MemoryContent::Text("long-term note".into()),
         importance: 80, access_count: 0, last_accessed: now_ms(), created_at: now_ms(),
-        tags: vec![], embedding: None, ttl_ms: None, scope: MemoryScope::Private,
+        tags: vec![], embedding: None, ttl_ms: None, original_ttl_ms: None, scope: MemoryScope::Private,
     });
 
     assert_eq!(mem.get_all(agent).len(), 3);

@@ -102,6 +102,7 @@ impl crate::kernel::AIKernel {
             tags: tags.clone(),
             embedding: None,
             ttl_ms: None,
+            original_ttl_ms: None,
             scope,
         };
         let quota = self.agent_memory_quota(agent_id);
@@ -239,6 +240,7 @@ impl crate::kernel::AIKernel {
             tags: tags.clone(),
             embedding,
             ttl_ms: None,
+            original_ttl_ms: None,
             scope: scope.clone(),
         };
         let quota = self.agent_memory_quota(agent_id);
@@ -381,6 +383,7 @@ impl crate::kernel::AIKernel {
             tags,
             embedding: None,
             ttl_ms: None,
+            original_ttl_ms: None,
             scope,
         };
         let quota = self.agent_memory_quota(agent_id);
@@ -423,6 +426,80 @@ impl crate::kernel::AIKernel {
             Some(name) => entries.into_iter().filter(|e| {
                 matches!(&e.content, MemoryContent::Procedure(p) if p.name == name)
             }).collect(),
+        }
+    }
+
+    /// Compute memory usage statistics for an agent's tier(s).
+    ///
+    /// If `tier` is Some, stats are computed only for that tier.
+    /// If `tier` is None, stats aggregate all tiers.
+    pub fn memory_stats(&self, agent_id: &str, tier: Option<&MemoryTier>) -> crate::api::semantic::MemoryStatsResult {
+        use crate::api::semantic::MemoryStatsResult;
+        use crate::memory::layered::now_ms;
+
+        let now = now_ms();
+        let tiers: Vec<MemoryTier> = match tier {
+            Some(t) => vec![*t],
+            None => vec![
+                MemoryTier::Ephemeral,
+                MemoryTier::Working,
+                MemoryTier::LongTerm,
+                MemoryTier::Procedural,
+            ],
+        };
+
+        let mut total_entries = 0;
+        let mut total_bytes = 0usize;
+        let mut oldest_entry_age_ms = u64::MAX;
+        let mut total_access_count = 0u64;
+        let mut never_accessed_count = 0;
+        let mut about_to_expire_count = 0;
+
+        for t in &tiers {
+            let entries = self.memory.get_tier(agent_id, *t);
+            for entry in entries {
+                total_entries += 1;
+                total_bytes += entry.content.display().len(); // rough byte estimate
+
+                let age_ms = now.saturating_sub(entry.created_at);
+                if age_ms < oldest_entry_age_ms {
+                    oldest_entry_age_ms = age_ms;
+                }
+
+                total_access_count += entry.access_count as u64;
+                if entry.access_count == 0 {
+                    never_accessed_count += 1;
+                }
+
+                // Check if entry is about to expire (within 10% of TTL)
+                if let Some(ttl) = entry.ttl_ms {
+                    let remaining = entry.created_at.saturating_add(ttl).saturating_sub(now);
+                    if ttl > 0 && remaining < ttl / 10 {
+                        about_to_expire_count += 1;
+                    }
+                }
+            }
+        }
+
+        let avg_access_count = if total_entries > 0 {
+            total_access_count as f32 / total_entries as f32
+        } else {
+            0.0
+        };
+
+        if oldest_entry_age_ms == u64::MAX {
+            oldest_entry_age_ms = 0;
+        }
+
+        MemoryStatsResult {
+            agent_id: agent_id.to_string(),
+            tier: tier.map(|t| t.name().to_string()).unwrap_or_default(),
+            total_entries,
+            total_bytes,
+            oldest_entry_age_ms,
+            avg_access_count,
+            never_accessed_count,
+            about_to_expire_count,
         }
     }
 }

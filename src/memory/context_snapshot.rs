@@ -41,6 +41,7 @@ impl ContextSnapshot {
             tags: vec![SNAPSHOT_TAG.to_string()],
             embedding: None,
             ttl_ms: None,
+            original_ttl_ms: None,
             scope: crate::memory::layered::MemoryScope::Private,
         }
     }

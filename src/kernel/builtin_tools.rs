@@ -327,6 +327,7 @@ impl AIKernel {
                         entry.tier = crate::memory::MemoryTier::Working;
                         entry.importance = importance;
                         entry.ttl_ms = ttl_ms;
+                        entry.original_ttl_ms = ttl_ms;
                         let id = entry.id.clone();
                         match self.memory.store_checked(entry, quota) {
                             Ok(()) => ToolResult::ok(json!({"id": id, "tier": "working"})),
@@ -337,6 +338,7 @@ impl AIKernel {
                         let mut entry = MemoryEntry::ephemeral(agent_id, content);
                         entry.importance = importance;
                         entry.ttl_ms = ttl_ms;
+                        entry.original_ttl_ms = ttl_ms;
                         if !tags.is_empty() {
                             entry.tags = tags;
                         }

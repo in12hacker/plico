@@ -1220,6 +1220,20 @@ pub enum ApiRequest {
         /// Time period for the report.
         period: GrowthPeriod,
     },
+
+    // ── Memory Stats (F-17) ───────────────────────────────────────────
+
+    /// Query memory usage statistics for an agent's tier.
+    #[serde(rename = "memory_stats")]
+    MemoryStats {
+        /// Agent to query stats for.
+        agent_id: String,
+        /// Memory tier to query (defaults to all tiers if omitted).
+        #[serde(default)]
+        tier: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tenant_id: Option<String>,
+    },
 }
 
 /// An item within a BatchCreate request.
@@ -1453,6 +1467,9 @@ pub struct ApiResponse {
     /// Task result for delegation queries (F-14).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub task_result: Option<TaskResult>,
+    /// Memory stats (F-17).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub memory_stats: Option<MemoryStatsResult>,
 }
 
 /// Response for a successful model switch operation (v18.0).
@@ -1917,6 +1934,30 @@ pub struct TaskResult {
     pub updated_at_ms: u64,
 }
 
+// ── Memory Stats (F-17) ─────────────────────────────────────────────
+
+/// Memory usage statistics for an agent's tier or all tiers.
+/// Queried via `ApiRequest::MemoryStats`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemoryStatsResult {
+    /// Agent this stats report is for.
+    pub agent_id: String,
+    /// Tier this stats report covers (empty string = all tiers).
+    pub tier: String,
+    /// Total number of memory entries.
+    pub total_entries: usize,
+    /// Total approximate memory size in bytes (estimated from content).
+    pub total_bytes: usize,
+    /// Age of the oldest entry in milliseconds (0 if no entries).
+    pub oldest_entry_age_ms: u64,
+    /// Average access count across all entries (0 if no entries).
+    pub avg_access_count: f32,
+    /// Number of entries that have never been accessed (access_count == 0).
+    pub never_accessed_count: usize,
+    /// Number of entries approaching expiration (within 10% of TTL remaining).
+    pub about_to_expire_count: usize,
+}
+
 /// Agent resource usage and quota snapshot.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentUsageDto {
@@ -1995,6 +2036,7 @@ impl ApiResponse {
             hybrid_result: None,
             growth_report: None,
             task_result: None,
+            memory_stats: None,
         }
     }
 
@@ -2083,6 +2125,7 @@ impl ApiResponse {
             hybrid_result: None,
             growth_report: None,
             task_result: None,
+            memory_stats: None,
         }
     }
 

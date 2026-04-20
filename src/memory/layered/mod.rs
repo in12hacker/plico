@@ -110,6 +110,11 @@ pub struct MemoryEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ttl_ms: Option<u64>,
 
+    /// Original TTL set at creation time — used to compute TTL refresh on access.
+    /// Stored separately so refresh doesn't compound exponentially.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original_ttl_ms: Option<u64>,
+
     /// Visibility scope — Private (default), Shared, or Group.
     #[serde(default)]
     pub scope: MemoryScope,
@@ -200,6 +205,7 @@ impl MemoryEntry {
             tags: Vec::new(),
             embedding: None,
             ttl_ms: None,
+            original_ttl_ms: None,
             scope: MemoryScope::Private,
         }
     }
@@ -224,16 +230,29 @@ impl MemoryEntry {
             tags,
             embedding: None,
             ttl_ms: None,
+            original_ttl_ms: None,
             scope: MemoryScope::Private,
         }
     }
 
-    /// Record an access to this entry.
-    pub fn access(&mut self) {
+    /// Record an access to this entry and refresh its TTL.
+    ///
+    /// TTL extension = original_ttl_ms * min(access_count, 5), capped at 5x original.
+    /// This implements F-17: Access-Frequency TTL refresh.
+    pub fn on_memory_access(&mut self) {
         self.access_count += 1;
         self.last_accessed = now_ms();
+
+        // Refresh TTL if entry has one
+        if let Some(original) = self.original_ttl_ms {
+            let multiplier = std::cmp::min(self.access_count, 5) as u64;
+            let new_ttl = original.saturating_mul(multiplier);
+            self.ttl_ms = Some(new_ttl);
+        }
     }
 }
+
+/// Global memory manager
 
 /// Global memory manager — holds all agents' memory tiers.
 ///
@@ -615,7 +634,6 @@ impl LayeredMemory {
     /// Unlike `get_all()`, this updates `access_count` and `last_accessed`
     /// on every returned entry, then checks for tier promotion.
     pub fn recall_with_tracking(&self, agent_id: &str) -> Vec<MemoryEntry> {
-        let now = now_ms();
         let mut all = Vec::new();
 
         for tier in [MemoryTier::Ephemeral, MemoryTier::Working, MemoryTier::LongTerm, MemoryTier::Procedural] {
@@ -627,8 +645,7 @@ impl LayeredMemory {
             };
             if let Some(entries) = map.write().unwrap().get_mut(agent_id) {
                 for entry in entries.iter_mut() {
-                    entry.access_count += 1;
-                    entry.last_accessed = now;
+                    entry.on_memory_access();
                 }
                 all.extend(entries.iter().cloned());
             }
@@ -789,26 +806,33 @@ impl LayeredMemory {
     }
 
     /// Retrieve long-term memories most semantically similar to a query embedding.
+    /// Also refreshes TTL for entries that are hit (F-17).
     pub fn recall_semantic(
         &self,
         agent_id: &str,
         query_embedding: &[f32],
         k: usize,
     ) -> Vec<(MemoryEntry, f32)> {
-        let lt = self.long_term.read().unwrap();
-        let entries = match lt.get(agent_id) {
+        let mut lt = self.long_term.write().unwrap();
+        let entries = match lt.get_mut(agent_id) {
             Some(e) => e,
             None => return Vec::new(),
         };
 
-        let mut scored: Vec<(MemoryEntry, f32)> = entries.iter()
-            .filter_map(|e| {
-                e.embedding.as_ref().map(|emb| {
-                    let sim = cosine_similarity(query_embedding, emb);
-                    (e.clone(), sim)
-                })
-            })
-            .collect();
+        // Compute similarities and update access tracking for all entries with embeddings.
+        // We do this in two passes to avoid borrowing issues: first collect similarities,
+        // then sort and truncate.
+        let mut scored: Vec<(MemoryEntry, f32)> = Vec::new();
+        for entry in entries.iter_mut() {
+            if let Some(emb) = entry.embedding.as_ref() {
+                let sim = cosine_similarity(query_embedding, emb);
+                if sim > 0.0 {
+                    // F-17: refresh TTL on access hit
+                    entry.on_memory_access();
+                    scored.push((entry.clone(), sim));
+                }
+            }
+        }
 
         scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         scored.truncate(k);
