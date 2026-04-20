@@ -716,6 +716,33 @@ fn build_cold_request(method: &str, params: &serde_json::Map<String, Value>, age
                 tenant_id: None,
             })
         }
+        "discover_knowledge" => {
+            let query = params.get("query").and_then(|v| v.as_str()).unwrap_or("");
+            let scope = params.get("scope").and_then(|v| v.as_str()).unwrap_or("shared");
+            let scope_enum = match scope {
+                "shared" => plico::api::semantic::DiscoveryScope::Shared,
+                "all" => plico::api::semantic::DiscoveryScope::AllAccessible,
+                _ => plico::api::semantic::DiscoveryScope::Shared,
+            };
+            let knowledge_types = params.get("knowledge_types").and_then(|v| v.as_array())
+                .map(|a| a.iter().filter_map(|t| {
+                    match t.as_str()? {
+                        "memory" => Some(plico::api::semantic::KnowledgeType::Memory),
+                        "procedure" => Some(plico::api::semantic::KnowledgeType::Procedure),
+                        "knowledge" => Some(plico::api::semantic::KnowledgeType::Knowledge),
+                        _ => None,
+                    }
+                }).collect())
+                .unwrap_or_default();
+            Ok(ApiRequest::DiscoverKnowledge {
+                query: query.to_string(),
+                scope: scope_enum,
+                knowledge_types,
+                max_results: params.get("max_results").and_then(|v| v.as_u64()).unwrap_or(10) as usize,
+                token_budget: params.get("token_budget").and_then(|v| v.as_u64()).map(|t| t as usize),
+                agent_id: agent.to_string(),
+            })
+        }
         _ => Err(format!("unknown cold method: {method}")),
     }
 }
@@ -745,6 +772,7 @@ fn enhance_cold_error(method: &str, error: &str) -> String {
         "storage_stats" => "{method:'storage_stats', agent_id:'your-agent'}",
         "object_usage" => "{method:'object_usage', cid:'<cid>', agent_id:'your-agent'}",
         "evict_expired" => "{method:'evict_expired', agent_id:'your-agent'}",
+        "discover_knowledge" => "{method:'discover_knowledge', query:'search terms', scope:'shared', knowledge_types:['memory','procedure']}",
         _ => return error.to_string(),
     };
 
