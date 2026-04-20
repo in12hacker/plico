@@ -889,6 +889,10 @@ mod tests {
             growth_report: None,
             task_result: None,
             memory_stats: None,
+            discovery_result: None,
+            object_usage: None,
+            storage_stats: None,
+            evict_result: None,
         }
     }
 
