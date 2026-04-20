@@ -888,6 +888,7 @@ mod tests {
             hybrid_result: None,
             growth_report: None,
             task_result: None,
+            memory_stats: None,
         }
     }
 

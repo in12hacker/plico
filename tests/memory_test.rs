@@ -23,6 +23,7 @@ fn make_entry(agent: &str, tier: MemoryTier, importance: u8, text: &str) -> Memo
         tags: Vec::new(),
         embedding: None,
         ttl_ms: None,
+        original_ttl_ms: None,
         scope: plico::memory::MemoryScope::Private,
     }
 }
@@ -171,12 +172,12 @@ fn test_memory_entry_access() {
     let mut entry = MemoryEntry::ephemeral("agent1", "original text");
     assert_eq!(entry.access_count, 0);
 
-    entry.access();
+    entry.on_memory_access();
     assert_eq!(entry.access_count, 1);
-    entry.access();
+    entry.on_memory_access();
     assert_eq!(entry.access_count, 2);
 
-    // First access was before the access() call, so now it's been accessed 3 times total
+    // First access was before the on_memory_access() call, so now it's been accessed 3 times total
     // (0 initial + 2 explicit accesses = but initial is 0, so 2)
     assert_eq!(entry.access_count, 2);
 }
@@ -277,6 +278,7 @@ fn test_promotion_ephemeral_to_working() {
         tags: Vec::new(),
         embedding: None,
         ttl_ms: None,
+        original_ttl_ms: None,
         scope: plico::memory::MemoryScope::Private,
     };
     mem.store(entry);
@@ -315,6 +317,7 @@ fn test_promotion_working_to_longterm() {
         tags: Vec::new(),
         embedding: None,
         ttl_ms: None,
+        original_ttl_ms: None,
         scope: plico::memory::MemoryScope::Private,
     };
     mem.store(entry);
@@ -352,6 +355,7 @@ fn test_no_promotion_below_threshold() {
         tags: Vec::new(),
         embedding: None,
         ttl_ms: None,
+        original_ttl_ms: None,
         scope: plico::memory::MemoryScope::Private,
     };
     mem.store(entry);
@@ -388,6 +392,7 @@ fn test_no_promotion_working_low_importance() {
         tags: Vec::new(),
         embedding: None,
         ttl_ms: None,
+        original_ttl_ms: None,
         scope: plico::memory::MemoryScope::Private,
     };
     mem.store(entry);
@@ -465,6 +470,7 @@ fn test_longterm_entries_not_promoted() {
         tags: Vec::new(),
         embedding: None,
         ttl_ms: None,
+        original_ttl_ms: None,
         scope: plico::memory::MemoryScope::Private,
     };
     mem.store(lt_entry);
@@ -488,6 +494,7 @@ fn test_longterm_entries_not_promoted() {
         tags: Vec::new(),
         embedding: None,
         ttl_ms: None,
+        original_ttl_ms: None,
         scope: plico::memory::MemoryScope::Private,
     };
     mem.store(proc_entry);
