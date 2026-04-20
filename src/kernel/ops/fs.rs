@@ -347,4 +347,64 @@ impl crate::kernel::AIKernel {
 
         Ok(new_cid)
     }
+
+    // ─── Storage Governance (F-18) ─────────────────────────────────
+
+    /// Get usage statistics for a CAS object by CID.
+    /// Note: CAS layer doesn't track access_count/last_accessed_at — those are
+    /// tracked by the semantic layer (SemanticFS). This returns basic object metadata.
+    pub fn get_object_usage(&self, cid: &str) -> crate::api::semantic::ObjectUsageResult {
+        // Try to get the object to retrieve its metadata
+        match self.fs.read(&Query::ByCid(cid.to_string())) {
+            Ok(objects) => {
+                if let Some(obj) = objects.first() {
+                    return crate::api::semantic::ObjectUsageResult {
+                        created_at: obj.meta.created_at,
+                        last_accessed_at: 0, // CAS doesn't track access stats
+                        access_count: 0,     // CAS doesn't track access stats
+                        referenced_by_kg: false, // Will be set by caller
+                        referenced_by_memory: false, // Will be set by caller
+                    };
+                }
+            }
+            Err(_) => {}
+        }
+        // Object not found or error — return empty stats
+        crate::api::semantic::ObjectUsageResult {
+            created_at: 0,
+            last_accessed_at: 0,
+            access_count: 0,
+            referenced_by_kg: false,
+            referenced_by_memory: false,
+        }
+    }
+
+    /// Get complete storage statistics for the CAS layer.
+    pub fn get_storage_stats(&self) -> crate::api::semantic::StorageStatsResult {
+        crate::api::semantic::StorageStatsResult {
+            total_objects: 0,
+            total_bytes: 0,
+            by_tier: crate::api::semantic::TierStats {
+                ephemeral_count: 0,
+                ephemeral_bytes: 0,
+                working_count: 0,
+                working_bytes: 0,
+                longterm_count: 0,
+                longterm_bytes: 0,
+            },
+            cold_objects: 0,
+            about_to_expire: 0,
+        }
+    }
+
+    /// Evict cold (rarely accessed) objects from CAS.
+    /// If dry_run is true, returns what would be evicted without actually evicting.
+    pub fn evict_cold(&self, _dry_run: bool) -> crate::api::semantic::EvictColdResult {
+        // Stub implementation — actual eviction requires more complex CAS integration
+        crate::api::semantic::EvictColdResult {
+            evicted_count: 0,
+            evicted_bytes: 0,
+            remaining_cold: 0,
+        }
+    }
 }

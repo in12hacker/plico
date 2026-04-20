@@ -926,6 +926,232 @@ impl LayeredMemory {
         );
         selected.into_iter().map(|(entry, _score)| entry).collect()
     }
+
+    // ─── Storage Governance (F-18) ─────────────────────────────────
+
+    /// Check if a CID is referenced by any memory entry.
+    /// Returns true if any memory entry has an ObjectRef content referencing this CID.
+    pub fn is_cid_referenced(&self, cid: &str) -> bool {
+        // Check Ephemeral tier
+        {
+            let map = self.ephemeral.read().unwrap();
+            for entries in map.values() {
+                for entry in entries {
+                    if let MemoryContent::ObjectRef(ref entry_cid) = entry.content {
+                        if entry_cid == cid {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        // Check Working tier
+        {
+            let map = self.working.read().unwrap();
+            for entries in map.values() {
+                for entry in entries {
+                    if let MemoryContent::ObjectRef(ref entry_cid) = entry.content {
+                        if entry_cid == cid {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        // Check LongTerm tier
+        {
+            let map = self.long_term.read().unwrap();
+            for entries in map.values() {
+                for entry in entries {
+                    if let MemoryContent::ObjectRef(ref entry_cid) = entry.content {
+                        if entry_cid == cid {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        // Check Procedural tier
+        {
+            let map = self.procedural.read().unwrap();
+            for entries in map.values() {
+                for entry in entries {
+                    if let MemoryContent::ObjectRef(ref entry_cid) = entry.content {
+                        if entry_cid == cid {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    /// Get memory statistics for observability (F-17/F-18).
+    /// Returns counts per tier and aggregate stats.
+    pub fn get_stats(&self) -> MemoryStats {
+        let now = now_ms();
+        let mut total_entries = 0;
+        let mut total_bytes = 0;
+        let mut never_accessed_count = 0;
+        let mut about_to_expire_count = 0;
+        let mut oldest_entry_age_ms = u64::MAX;
+        let mut total_access_count = 0u64;
+
+        let ephemeral_entries: usize;
+        let working_entries: usize;
+        let longterm_entries: usize;
+
+        // Process Ephemeral tier
+        {
+            let map = self.ephemeral.read().unwrap();
+            let entries: Vec<_> = map.values().flat_map(|v| v.iter()).collect();
+            ephemeral_entries = entries.len();
+            total_entries += ephemeral_entries;
+            for entry in entries {
+                let entry_bytes = entry.content.display().len();
+                total_bytes += entry_bytes;
+                total_access_count += entry.access_count as u64;
+                if entry.access_count == 0 {
+                    never_accessed_count += 1;
+                }
+                if let Some(ttl_ms) = entry.ttl_ms {
+                    if let Some(original) = entry.original_ttl_ms {
+                        let elapsed = now.saturating_sub(entry.created_at);
+                        let remaining = ttl_ms.saturating_sub(elapsed);
+                        let ten_percent = original / 10;
+                        if remaining <= ten_percent {
+                            about_to_expire_count += 1;
+                        }
+                    }
+                }
+                let age = now.saturating_sub(entry.created_at);
+                if age < oldest_entry_age_ms {
+                    oldest_entry_age_ms = age;
+                }
+            }
+        }
+
+        // Process Working tier
+        {
+            let map = self.working.read().unwrap();
+            let entries: Vec<_> = map.values().flat_map(|v| v.iter()).collect();
+            working_entries = entries.len();
+            total_entries += working_entries;
+            for entry in entries {
+                let entry_bytes = entry.content.display().len();
+                total_bytes += entry_bytes;
+                total_access_count += entry.access_count as u64;
+                if entry.access_count == 0 {
+                    never_accessed_count += 1;
+                }
+                if let Some(ttl_ms) = entry.ttl_ms {
+                    if let Some(original) = entry.original_ttl_ms {
+                        let elapsed = now.saturating_sub(entry.created_at);
+                        let remaining = ttl_ms.saturating_sub(elapsed);
+                        let ten_percent = original / 10;
+                        if remaining <= ten_percent {
+                            about_to_expire_count += 1;
+                        }
+                    }
+                }
+                let age = now.saturating_sub(entry.created_at);
+                if age < oldest_entry_age_ms {
+                    oldest_entry_age_ms = age;
+                }
+            }
+        }
+
+        // Process LongTerm tier
+        {
+            let map = self.long_term.read().unwrap();
+            let entries: Vec<_> = map.values().flat_map(|v| v.iter()).collect();
+            longterm_entries = entries.len();
+            total_entries += longterm_entries;
+            for entry in entries {
+                let entry_bytes = entry.content.display().len();
+                total_bytes += entry_bytes;
+                total_access_count += entry.access_count as u64;
+                if entry.access_count == 0 {
+                    never_accessed_count += 1;
+                }
+                if let Some(ttl_ms) = entry.ttl_ms {
+                    if let Some(original) = entry.original_ttl_ms {
+                        let elapsed = now.saturating_sub(entry.created_at);
+                        let remaining = ttl_ms.saturating_sub(elapsed);
+                        let ten_percent = original / 10;
+                        if remaining <= ten_percent {
+                            about_to_expire_count += 1;
+                        }
+                    }
+                }
+                let age = now.saturating_sub(entry.created_at);
+                if age < oldest_entry_age_ms {
+                    oldest_entry_age_ms = age;
+                }
+            }
+        }
+
+        // Process Procedural tier (only used for never_accessed_count/about_to_expire_count)
+        {
+            let map = self.procedural.read().unwrap();
+            let entries: Vec<_> = map.values().flat_map(|v| v.iter()).collect();
+            for entry in entries {
+                total_access_count += entry.access_count as u64;
+                if entry.access_count == 0 {
+                    never_accessed_count += 1;
+                }
+                if let Some(ttl_ms) = entry.ttl_ms {
+                    if let Some(original) = entry.original_ttl_ms {
+                        let elapsed = now.saturating_sub(entry.created_at);
+                        let remaining = ttl_ms.saturating_sub(elapsed);
+                        let ten_percent = original / 10;
+                        if remaining <= ten_percent {
+                            about_to_expire_count += 1;
+                        }
+                    }
+                }
+                let age = now.saturating_sub(entry.created_at);
+                if age < oldest_entry_age_ms {
+                    oldest_entry_age_ms = age;
+                }
+            }
+        }
+
+        if oldest_entry_age_ms == u64::MAX {
+            oldest_entry_age_ms = 0;
+        }
+
+        MemoryStats {
+            total_entries,
+            total_bytes,
+            oldest_entry_age_ms,
+            avg_access_count: if total_entries > 0 {
+                total_access_count as f32 / total_entries as f32
+            } else {
+                0.0
+            },
+            never_accessed_count,
+            about_to_expire_count,
+            ephemeral_entries,
+            working_entries,
+            longterm_entries,
+        }
+    }
+}
+
+/// Memory statistics for observability (F-17/F-18).
+#[derive(Debug, Clone)]
+pub struct MemoryStats {
+    pub total_entries: usize,
+    pub total_bytes: usize,
+    pub oldest_entry_age_ms: u64,
+    pub avg_access_count: f32,
+    pub never_accessed_count: usize,
+    pub about_to_expire_count: usize,
+    pub ephemeral_entries: usize,
+    pub working_entries: usize,
+    pub longterm_entries: usize,
 }
 
 impl Default for LayeredMemory {

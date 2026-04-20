@@ -1258,6 +1258,29 @@ pub enum ApiRequest {
         /// Agent performing the discovery.
         agent_id: String,
     },
+
+    // ── Storage Governance (F-18) ──────────────────────────────────
+
+    /// Query CAS object usage statistics for a CID.
+    #[serde(rename = "object_usage")]
+    ObjectUsage {
+        cid: String,
+        agent_id: String,
+    },
+
+    /// Query complete storage statistics.
+    #[serde(rename = "storage_stats")]
+    StorageStats {
+        agent_id: String,
+    },
+
+    /// Evict cold (unused) objects from CAS.
+    #[serde(rename = "evict_cold")]
+    EvictCold {
+        agent_id: String,
+        #[serde(default)]
+        dry_run: bool,
+    },
 }
 
 /// Scope of knowledge discovery.
@@ -1527,6 +1550,15 @@ pub struct ApiResponse {
     /// Knowledge discovery result (F-16).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub discovery_result: Option<DiscoveryResult>,
+    /// Object usage stats (F-18).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub object_usage: Option<ObjectUsageResult>,
+    /// Storage statistics (F-18).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub storage_stats: Option<StorageStatsResult>,
+    /// Evict cold result (F-18).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub evict_result: Option<EvictColdResult>,
 }
 
 /// Response for a successful model switch operation (v18.0).
@@ -1752,6 +1784,43 @@ pub struct SystemStatus {
     pub kg_edge_count: usize,
     /// Edge cache statistics (v19.0)
     pub cache_stats: Option<CacheStatsDto>,
+    /// Health indicators (F-19)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub health: Option<HealthIndicators>,
+}
+
+/// Health indicators for system observability (F-19).
+/// Provides a quick snapshot of system health across memory, cache, eventbus, and scheduler.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HealthIndicators {
+    /// True if memory usage is below the healthy threshold (90%).
+    pub memory_healthy: bool,
+    /// Estimated memory usage as a percentage of total system memory [0.0, 100.0].
+    pub memory_usage_percent: f64,
+    /// Total physical memory in bytes (0 if unavailable).
+    pub memory_total_bytes: u64,
+    /// Used memory in bytes (0 if unavailable).
+    pub memory_used_bytes: u64,
+    /// True if cache hit rate is above the minimum healthy threshold (30%).
+    pub cache_healthy: bool,
+    /// Average cache hit rate across all cache tiers [0.0, 100.0].
+    pub cache_hit_rate_percent: f64,
+    /// True if EventBus queue depth is below the healthy threshold (1000).
+    pub eventbus_healthy: bool,
+    /// Number of events currently buffered in the EventBus.
+    pub eventbus_queue_depth: usize,
+    /// Number of active EventBus subscriptions.
+    pub eventbus_subscriber_count: usize,
+    /// True if the scheduler has fewer than 100 active agents.
+    pub scheduler_healthy: bool,
+    /// Number of currently active agents.
+    pub scheduler_active_agents: usize,
+    /// Number of pending intents in the scheduler queue.
+    pub scheduler_pending_intents: usize,
+    /// True if all subsystems are healthy.
+    pub overall_healthy: bool,
+    /// Overall health score [0.0, 1.0], where 1.0 means fully healthy.
+    pub health_score: f64,
 }
 
 /// Cache statistics for observability (v19.0).
@@ -2047,6 +2116,60 @@ pub struct DiscoveryResult {
     pub total_available: usize,
 }
 
+// ── Storage Governance (F-18) ─────────────────────────────────────
+
+/// Object usage statistics returned by object_usage query.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ObjectUsageResult {
+    /// When the object was created (Unix ms).
+    pub created_at: u64,
+    /// When the object was last accessed (Unix ms).
+    pub last_accessed_at: u64,
+    /// Number of times the object has been accessed.
+    pub access_count: u64,
+    /// True if the object is referenced by the knowledge graph.
+    pub referenced_by_kg: bool,
+    /// True if the object is referenced by memory.
+    pub referenced_by_memory: bool,
+}
+
+/// Storage statistics for the CAS layer.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StorageStatsResult {
+    /// Total number of objects in CAS.
+    pub total_objects: usize,
+    /// Total size in bytes.
+    pub total_bytes: usize,
+    /// Per-tier breakdown of objects and bytes.
+    pub by_tier: TierStats,
+    /// Number of cold (rarely accessed) objects.
+    pub cold_objects: usize,
+    /// Number of objects approaching expiration.
+    pub about_to_expire: usize,
+}
+
+/// Per-tier storage statistics.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TierStats {
+    pub ephemeral_count: usize,
+    pub ephemeral_bytes: usize,
+    pub working_count: usize,
+    pub working_bytes: usize,
+    pub longterm_count: usize,
+    pub longterm_bytes: usize,
+}
+
+/// Result of evict_cold operation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EvictColdResult {
+    /// Number of objects evicted.
+    pub evicted_count: usize,
+    /// Number of bytes freed.
+    pub evicted_bytes: usize,
+    /// Number of cold objects remaining after eviction.
+    pub remaining_cold: usize,
+}
+
 /// Agent resource usage and quota snapshot.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentUsageDto {
@@ -2127,6 +2250,9 @@ impl ApiResponse {
             task_result: None,
             memory_stats: None,
             discovery_result: None,
+            object_usage: None,
+            storage_stats: None,
+            evict_result: None,
         }
     }
 
@@ -2217,6 +2343,9 @@ impl ApiResponse {
             task_result: None,
             memory_stats: None,
             discovery_result: None,
+            object_usage: None,
+            storage_stats: None,
+            evict_result: None,
         }
     }
 

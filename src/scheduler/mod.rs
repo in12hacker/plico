@@ -188,6 +188,11 @@ impl AgentScheduler {
             queue.push(intent);
         }
     }
+
+    /// Number of pending intents in the scheduler queue.
+    pub fn pending_intent_count(&self) -> usize {
+        self.queue.read().unwrap().len()
+    }
 }
 
 impl Default for AgentScheduler {
