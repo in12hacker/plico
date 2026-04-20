@@ -5,6 +5,7 @@
 //! never decides what to do with events (that's upper-layer policy).
 
 use std::collections::{HashMap, VecDeque};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, RwLock};
 use serde::{Deserialize, Serialize};
@@ -216,6 +217,9 @@ pub struct EventBus {
     next_sub_id: AtomicU64,
     event_log: RwLock<RingEventLog>,
     next_seq: AtomicU64,
+    /// Optional path for JSONL event log persistence. When set, each emit
+    /// appends to this file for crash-safe durability.
+    event_log_path: Option<PathBuf>,
 }
 
 fn now_ms() -> u64 {
@@ -234,7 +238,38 @@ impl EventBus {
             next_sub_id: AtomicU64::new(1),
             event_log: RwLock::new(RingEventLog::new(DEFAULT_EVENT_LOG_CAPACITY)),
             next_seq: AtomicU64::new(1),
+            event_log_path: None,
         }
+    }
+
+    /// Create an EventBus that persists events to the given JSONL path on each emit.
+    pub fn with_persistence(path: PathBuf) -> Self {
+        let (sender, _) = broadcast::channel(DEFAULT_BROADCAST_CAPACITY);
+        Self {
+            sender,
+            subscriptions: RwLock::new(HashMap::new()),
+            next_sub_id: AtomicU64::new(1),
+            event_log: RwLock::new(RingEventLog::new(DEFAULT_EVENT_LOG_CAPACITY)),
+            next_seq: AtomicU64::new(1),
+            event_log_path: Some(path),
+        }
+    }
+
+    /// Append a sequenced event to the JSONL log file.
+    fn append_to_log(&self, entry: &SequencedEvent) -> Result<(), std::io::Error> {
+        let Some(ref path) = self.event_log_path else {
+            return Ok(());
+        };
+        use std::io::Write;
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)?;
+        let json = serde_json::to_string(entry).map_err(|e| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, e)
+        })?;
+        writeln!(file, "{}", json)?;
+        Ok(())
     }
 
     pub fn emit(&self, event: KernelEvent) {
@@ -244,8 +279,12 @@ impl EventBus {
             timestamp_ms: now_ms(),
             event: event.clone(),
         };
-        self.event_log.write().unwrap().push(sequenced);
+        self.event_log.write().unwrap().push(sequenced.clone());
         let _ = self.sender.send(event);
+        // Persist to JSONL immediately for crash-safe durability
+        if let Err(e) = self.append_to_log(&sequenced) {
+            tracing::warn!("Failed to append event to log: {}", e);
+        }
     }
 
     pub fn events_since(&self, since_seq: u64) -> Vec<SequencedEvent> {
@@ -281,6 +320,28 @@ impl EventBus {
         let max_seq = events.iter().map(|e| e.seq).max().unwrap_or(0);
         self.event_log.write().unwrap().restore(events);
         self.next_seq.store(max_seq + 1, Ordering::Relaxed);
+    }
+
+    /// Load events from a JSONL file on disk.
+    pub fn load_event_log(path: &std::path::Path) -> Result<Vec<SequencedEvent>, std::io::Error> {
+        use std::io::{BufRead, BufReader};
+        if !path.exists() {
+            return Ok(Vec::new());
+        }
+        let file = std::fs::OpenOptions::new().read(true).open(path)?;
+        let reader = BufReader::new(file);
+        let mut events = Vec::new();
+        for line in reader.lines() {
+            let line = line?;
+            if line.trim().is_empty() {
+                continue;
+            }
+            match serde_json::from_str::<SequencedEvent>(&line) {
+                Ok(event) => events.push(event),
+                Err(e) => tracing::warn!("Skipping malformed event line: {}", e),
+            }
+        }
+        Ok(events)
     }
 
     pub fn subscribe(&self) -> String {

@@ -179,12 +179,29 @@ impl AIKernel {
     // ─── Event Log Persistence ──────────────────────────────────────
 
     fn event_log_path(&self) -> PathBuf {
-        self.root.join("event_log.json")
+        self.root.join("event_log.jsonl")
     }
 
     pub fn persist_event_log(&self) {
+        // JSONL persistence is handled inline on each emit() call in EventBus.
+        // This method is kept for backwards compatibility and manual snapshot saves.
         let events = self.event_bus.snapshot_events();
-        atomic_write_json(&self.event_log_path(), &events);
+        if events.is_empty() {
+            return;
+        }
+        let path = self.event_log_path();
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+        {
+            use std::io::Write;
+            for event in &events {
+                if let Ok(json) = serde_json::to_string(event) {
+                    let _ = writeln!(file, "{}", json);
+                }
+            }
+        }
     }
 
     pub(crate) fn restore_event_log(&self) {
@@ -192,18 +209,15 @@ impl AIKernel {
         if !path.exists() {
             return;
         }
-        match std::fs::read_to_string(&path) {
-            Ok(json) => match serde_json::from_str::<Vec<super::event_bus::SequencedEvent>>(&json) {
-                Ok(events) => {
-                    let count = events.len();
-                    self.event_bus.restore_events(events);
-                    if count > 0 {
-                        tracing::info!("Restored {count} events from persistent event log");
-                    }
+        match super::event_bus::EventBus::load_event_log(&path) {
+            Ok(events) => {
+                let count = events.len();
+                self.event_bus.restore_events(events);
+                if count > 0 {
+                    tracing::info!("Restored {count} events from persistent event log");
                 }
-                Err(e) => tracing::warn!("Failed to parse event log: {e}"),
-            },
-            Err(e) => tracing::warn!("Failed to read event log: {e}"),
+            }
+            Err(e) => tracing::warn!("Failed to read event log: {}", e),
         }
     }
 

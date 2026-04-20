@@ -108,19 +108,21 @@ impl crate::kernel::AIKernel {
         };
 
         let results = self.fs.search_with_filter(query, limit * 2, filter);
-        // Filter by tenant isolation AND ownership
+        // Filter by tenant isolation
+        // CAS objects are shared by default within tenant (C-2: Shared Visibility fix)
         Ok(results.into_iter()
             .filter(|r| {
-                // Tenant isolation: must match tenant_id or have CrossTenant permission
+                // Tenant isolation: must match tenant_id
                 if r.meta.tenant_id != tenant_id {
                     return false;
                 }
-                // Ownership check
+                // can_read_any = privileged agents (e.g., admin) can read across agents
                 if can_read_any {
-                    true
-                } else {
-                    r.meta.created_by == agent_id
+                    return true;
                 }
+                // CAS objects are shared by default within tenant
+                // Memory objects are filtered separately by MemoryScope in recall operations
+                true
             })
             .take(limit)
             .collect())

@@ -163,7 +163,8 @@ impl AIKernel {
 
         let tool_registry = Arc::new(ToolRegistry::new());
         let message_bus = Arc::new(MessageBus::new());
-        let event_bus = Arc::new(EventBus::new());
+        let event_log_path = root.join("event_log.jsonl");
+        let event_bus = Arc::new(EventBus::with_persistence(event_log_path));
 
         // Proactive context assembly (semantic prefetch)
         let prefetch = Arc::new(IntentPrefetcher::new(
