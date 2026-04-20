@@ -62,6 +62,11 @@ pub fn execute_local(kernel: &AIKernel, args: &[String]) -> ApiResponse {
         Some("quota") => cmd_quota(kernel, args),
         Some("discover") => cmd_discover(kernel, args),
         Some("delegate") => cmd_delegate(kernel, args),
+        Some("session-start") => cmd_session_start(kernel, args),
+        Some("session-end") => cmd_session_end(kernel, args),
+        Some("delta") => cmd_delta(kernel, args),
+        Some("growth") => cmd_growth(kernel, args),
+        Some("hybrid") => cmd_hybrid(kernel, args),
         Some("system-status") => {
             let status = kernel.system_status();
             let mut r = ApiResponse::ok();
@@ -345,6 +350,52 @@ pub fn print_result(response: &ApiResponse) {
                 }
             }
         }
+    }
+    if let Some(ss) = &response.session_started {
+        println!("Session started: {}", ss.session_id);
+        if let Some(ref wc) = ss.warm_context {
+            println!("  Warm context: {}", wc);
+        }
+        if let Some(ref cp) = ss.restored_checkpoint {
+            println!("  Restored checkpoint: {}", cp.checkpoint_id);
+        }
+        println!("  Changes since last: {} (est. {} tokens)", ss.changes_since_last.len(), ss.token_estimate);
+    }
+    if let Some(se) = &response.session_ended {
+        println!("Session ended");
+        if let Some(ref cid) = se.checkpoint_id {
+            println!("  Checkpoint: {}", cid);
+        }
+        println!("  Last seq: {}", se.last_seq);
+    }
+    if let Some(delta) = &response.delta_result {
+        if delta.changes.is_empty() {
+            println!("No changes since seq {}", delta.from_seq);
+        } else {
+            println!("Changes ({} found, seq {} → {}, est. {} tokens):",
+                delta.changes.len(), delta.from_seq, delta.to_seq, delta.token_estimate);
+            for c in &delta.changes {
+                println!("  [seq={}] {} — {}", c.seq, c.change_type, c.summary);
+            }
+        }
+    }
+    if let Some(hr) = &response.hybrid_result {
+        println!("Hybrid search results ({} items, {} vector, {} graph, {} paths, est. {} tokens):",
+            hr.items.len(), hr.vector_hits, hr.graph_hits, hr.paths_found, hr.token_estimate);
+        for (i, hit) in hr.items.iter().enumerate() {
+            println!("  {}. [combined={:.2}] {}", i + 1, hit.combined_score, hit.cid);
+            println!("     preview: {}", &hit.content_preview[..hit.content_preview.len().min(80)]);
+            println!("     vector={:.2} graph={:.2}", hit.vector_score, hit.graph_score);
+        }
+    }
+    if let Some(gr) = &response.growth_report {
+        println!("Growth report for {} (period: {:?})", gr.agent_id, gr.period);
+        println!("  Sessions: {}", gr.sessions_total);
+        println!("  Token efficiency: {:.2} (first_5 avg vs last_5 avg)", gr.token_efficiency_ratio);
+        println!("  Intent cache hit rate: {:.2}", gr.intent_cache_hit_rate);
+        println!("  Memories: stored={}, shared={}", gr.memories_stored, gr.memories_shared);
+        println!("  Procedures learned: {}", gr.procedures_learned);
+        println!("  KG nodes/edges created: {}/{}", gr.kg_nodes_created, gr.kg_edges_created);
     }
     if !response.ok {
         if let Some(e) = &response.error {

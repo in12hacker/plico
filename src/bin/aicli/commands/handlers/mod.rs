@@ -14,6 +14,9 @@ pub mod tool;
 pub mod events;
 pub mod context;
 pub mod skills;
+pub mod session;
+pub mod delta;
+pub mod hybrid;
 
 // Re-export shared utilities for handler submodules.
 // Re-export shared utilities for handler submodules (defined in parent commands/mod.rs).
@@ -46,3 +49,6 @@ pub use tool::cmd_tool;
 pub use events::cmd_events;
 pub use context::cmd_context;
 pub use skills::cmd_skills;
+pub use session::{cmd_session_start, cmd_session_end, cmd_growth};
+pub use delta::cmd_delta;
+pub use hybrid::cmd_hybrid;

@@ -322,6 +322,61 @@ fn build_request(args: &[String]) -> Option<ApiRequest> {
                 }
             }
         }
+        Some("session-start") => {
+            let agent_id = commands::extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
+            let intent_hint = commands::extract_arg(args, "--intent");
+            let last_seen_seq = commands::extract_arg(args, "--last-seq").and_then(|s| s.parse().ok());
+            Some(ApiRequest::StartSession { agent_id, agent_token: None, intent_hint, load_tiers: vec![], last_seen_seq })
+        }
+        Some("session-end") => {
+            let agent_id = commands::extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
+            let session_id = commands::extract_arg(args, "--session").unwrap_or_default();
+            let auto_checkpoint = !args.iter().any(|a| a == "--no-checkpoint");
+            Some(ApiRequest::EndSession { agent_id, session_id, auto_checkpoint })
+        }
+        Some("delta") => {
+            let agent_id = commands::extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
+            let since_seq = commands::extract_arg(args, "--since").and_then(|s| s.parse().ok()).unwrap_or(0);
+            let watch_cids: Vec<String> = commands::extract_arg(args, "--watch-cids")
+                .map(|s| s.split(',').map(String::from).collect())
+                .unwrap_or_default();
+            let watch_tags: Vec<String> = commands::extract_arg(args, "--watch-tags")
+                .map(|s| s.split(',').map(String::from).collect())
+                .unwrap_or_default();
+            let limit = commands::extract_arg(args, "--limit").and_then(|s| s.parse().ok());
+            Some(ApiRequest::DeltaSince { agent_id, since_seq, watch_cids, watch_tags, limit })
+        }
+        Some("growth") => {
+            let agent_id = commands::extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
+            let period_str = commands::extract_arg(args, "--period").unwrap_or_else(|| "last7days".to_string());
+            let period = match period_str.to_lowercase().as_str() {
+                "last7days" | "7d" => plico::api::semantic::GrowthPeriod::Last7Days,
+                "last30days" | "30d" => plico::api::semantic::GrowthPeriod::Last30Days,
+                "alltime" | "all" => plico::api::semantic::GrowthPeriod::AllTime,
+                _ => return None,
+            };
+            Some(ApiRequest::QueryGrowthReport { agent_id, period })
+        }
+        Some("hybrid") => {
+            let query_text = commands::extract_arg(args, "--query")
+                .or_else(|| args.get(1).cloned())
+                .unwrap_or_default();
+            let agent_id = commands::extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
+            let seed_tags: Vec<String> = commands::extract_arg(args, "--seed-tags")
+                .map(|s| s.split(',').map(String::from).collect())
+                .unwrap_or_default();
+            let graph_depth = commands::extract_arg(args, "--depth")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(2);
+            let edge_types: Vec<String> = commands::extract_arg(args, "--edge-types")
+                .map(|s| s.split(',').map(String::from).collect())
+                .unwrap_or_default();
+            let max_results = commands::extract_arg(args, "--limit")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(20);
+            let token_budget = commands::extract_arg(args, "--budget").and_then(|s| s.parse().ok());
+            Some(ApiRequest::HybridRetrieve { query_text, seed_tags, graph_depth, edge_types, max_results, token_budget, agent_id, tenant_id: None })
+        }
         _ => None,
     }
 }
@@ -433,6 +488,37 @@ COMMANDS:
   tool list     List all available tools
   tool describe NAME  Describe a specific tool's schema
   tool call NAME --params JSON  Call a tool with JSON parameters
+    --agent ID       Agent ID
+
+  session-start  Start a new session (returns delta + warm_context)
+    --agent ID       Agent ID
+    --intent TEXT    Optional intent hint for prefetch
+    --last-seq N     Last seen sequence number
+
+  session-end    End an active session (auto-checkpoint)
+    --agent ID       Agent ID
+    --session ID     Session ID to end
+    --no-checkpoint   Skip auto-checkpoint
+
+  delta         Query changes since a sequence number
+    --since SEQ      Sequence number to query from (default: 0)
+    --watch-cids IDS Filter by CIDs (comma-separated)
+    --watch-tags TAGS Filter by tags (comma-separated)
+    --limit N        Maximum changes to return
+    --agent ID       Agent ID
+
+  growth        Query agent growth statistics
+    --agent ID       Agent ID
+    --period P       Period: last7days, last30days, alltime (default: last7days)
+
+  hybrid        Graph-RAG hybrid retrieval
+    <query>          Query text (positional)
+    --query TEXT     Query text (alternative to positional)
+    --depth N        Graph traversal depth (default: 2)
+    --edge-types T   Edge types to traverse (comma-separated)
+    --seed-tags T    KG seed tags (comma-separated)
+    --limit N        Max results (default: 20)
+    --budget N       Token budget limit
     --agent ID       Agent ID
 
 NOTES:
