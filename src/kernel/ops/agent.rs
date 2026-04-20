@@ -9,6 +9,23 @@ fn transition_err(e: TransitionError) -> std::io::Error {
 }
 
 impl crate::kernel::AIKernel {
+    /// Ensure an agent is registered, creating a minimal registration if needed.
+    /// This enables lazy agent registration on first API call.
+    pub fn ensure_agent_registered(&self, agent_id: &str) {
+        let aid = AgentId(agent_id.to_string());
+        if !self.scheduler.has_agent(&aid) {
+            let _ = self.register_agent_internal(agent_id);
+        }
+    }
+
+    /// Internal agent registration (used for lazy registration).
+    fn register_agent_internal(&self, name: &str) -> String {
+        let agent = Agent::new(name.to_string());
+        let id = agent.id().to_string();
+        self.scheduler.register(agent);
+        id
+    }
+
     pub fn register_agent(&self, name: String) -> String {
         let agent = Agent::new(name);
         let id = agent.id().to_string();

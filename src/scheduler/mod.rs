@@ -110,6 +110,11 @@ impl AgentScheduler {
         self.agents.read().unwrap().get(agent_id).cloned()
     }
 
+    /// Check if an agent exists.
+    pub fn has_agent(&self, agent_id: &AgentId) -> bool {
+        self.agents.read().unwrap().contains_key(agent_id)
+    }
+
     /// Remove an agent.
     pub fn remove(&self, agent_id: &AgentId) {
         self.agents.write().unwrap().remove(agent_id);

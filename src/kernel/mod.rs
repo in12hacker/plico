@@ -304,6 +304,123 @@ impl AIKernel {
 
     // ─── API Request Handler ───────────────────────────────────────────
 
+    /// Extract the agent_id from an ApiRequest, if present.
+    fn extract_agent_id(req: &crate::api::semantic::ApiRequest) -> Option<String> {
+        use crate::api::semantic::ApiRequest;
+        match req {
+            // Variants with agent_id as a proper field
+            ApiRequest::Create { agent_id, .. } |
+            ApiRequest::Read { agent_id, .. } |
+            ApiRequest::Search { agent_id, .. } |
+            ApiRequest::Update { agent_id, .. } |
+            ApiRequest::Delete { agent_id, .. } |
+            ApiRequest::Remember { agent_id, .. } |
+            ApiRequest::Recall { agent_id } |
+            ApiRequest::RememberLongTerm { agent_id, .. } |
+            ApiRequest::RecallSemantic { agent_id, .. } |
+            ApiRequest::Explore { agent_id, .. } |
+            ApiRequest::ListDeleted { agent_id, .. } |
+            ApiRequest::Restore { agent_id, .. } |
+            ApiRequest::History { agent_id, .. } |
+            ApiRequest::Rollback { agent_id, .. } |
+            ApiRequest::CreateEvent { agent_id, .. } |
+            ApiRequest::EventAttach { agent_id, .. } |
+            ApiRequest::AddNode { agent_id, .. } |
+            ApiRequest::AddEdge { agent_id, .. } |
+            ApiRequest::ListNodes { agent_id, .. } |
+            ApiRequest::ListNodesAtTime { agent_id, .. } |
+            ApiRequest::SubmitIntent { agent_id, .. } |
+            ApiRequest::AgentStatus { agent_id } |
+            ApiRequest::AgentSuspend { agent_id } |
+            ApiRequest::AgentResume { agent_id } |
+            ApiRequest::AgentTerminate { agent_id } |
+            ApiRequest::ReadMessages { agent_id, .. } |
+            ApiRequest::AckMessage { agent_id, .. } |
+            ApiRequest::ToolCall { agent_id, .. } |
+            ApiRequest::RememberProcedural { agent_id, .. } |
+            ApiRequest::RecallProcedural { agent_id, .. } |
+            ApiRequest::RecallVisible { agent_id, .. } |
+            ApiRequest::AgentSetResources { agent_id, .. } |
+            ApiRequest::AgentCheckpoint { agent_id } |
+            ApiRequest::AgentRestore { agent_id, .. } |
+            ApiRequest::GetNode { agent_id, .. } |
+            ApiRequest::ListEdges { agent_id, .. } |
+            ApiRequest::RemoveNode { agent_id, .. } |
+            ApiRequest::RemoveEdge { agent_id, .. } |
+            ApiRequest::UpdateNode { agent_id, .. } |
+            ApiRequest::AgentComplete { agent_id } |
+            ApiRequest::AgentFail { agent_id, .. } |
+            ApiRequest::MemoryMove { agent_id, .. } |
+            ApiRequest::MemoryDeleteEntry { agent_id, .. } |
+            ApiRequest::EvictExpired { agent_id, .. } |
+            ApiRequest::LoadContext { agent_id, .. } |
+            ApiRequest::EdgeHistory { agent_id, .. } |
+            ApiRequest::ContextAssemble { agent_id, .. } |
+            ApiRequest::AgentUsage { agent_id } |
+            ApiRequest::TaskStart { agent_id, .. } |
+            ApiRequest::TaskComplete { agent_id, .. } |
+            ApiRequest::TaskFail { agent_id, .. } |
+            ApiRequest::StartSession { agent_id, .. } |
+            ApiRequest::EndSession { agent_id, .. } |
+            ApiRequest::RegisterSkill { agent_id, .. } |
+            ApiRequest::DeclareIntent { agent_id, .. } |
+            ApiRequest::FetchAssembledContext { agent_id, .. } |
+            ApiRequest::ListTenants { agent_id } |
+            ApiRequest::TenantShare { agent_id, .. } |
+            ApiRequest::BatchCreate { agent_id, .. } |
+            ApiRequest::BatchMemoryStore { agent_id, .. } |
+            ApiRequest::BatchSubmitIntent { agent_id, .. } |
+            ApiRequest::BatchQuery { agent_id, .. } |
+            ApiRequest::KGImpactAnalysis { agent_id, .. } |
+            ApiRequest::KGTemporalChanges { agent_id, .. } |
+            ApiRequest::QueryGrowthReport { agent_id, .. } |
+            ApiRequest::MemoryStats { agent_id, .. } => Some(agent_id.clone()),
+
+            // Variants where agent_id exists but is named differently or ignored
+            ApiRequest::ListEvents { .. } => None,
+            ApiRequest::ListEventsText { .. } => None,
+            ApiRequest::FindPaths { .. } => None,
+            ApiRequest::SendMessage { .. } => None,
+            ApiRequest::ToolList { .. } => None,
+            ApiRequest::ToolDescribe { .. } => None,
+            ApiRequest::DiscoverAgents { .. } => None,
+            ApiRequest::DelegateTask { .. } => None,
+            ApiRequest::QueryTaskStatus { .. } => None,
+            ApiRequest::EventHistory { .. } => None,
+            ApiRequest::DeltaSince { .. } => None,
+            ApiRequest::DiscoverSkills { .. } => None,
+            ApiRequest::IntentFeedback { .. } => None,
+            ApiRequest::CreateTenant { .. } => None,
+            ApiRequest::KGCausalPath { .. } => None,
+            ApiRequest::SwitchEmbeddingModel { .. } => None,
+            ApiRequest::SwitchLlmModel { .. } => None,
+            ApiRequest::CheckModelHealth { .. } => None,
+            ApiRequest::HybridRetrieve { .. } => None,
+            ApiRequest::DiscoverKnowledge { .. } => None,
+            ApiRequest::ObjectUsage { .. } => None,
+            ApiRequest::StorageStats { .. } => None,
+            ApiRequest::EvictCold { .. } => None,
+            ApiRequest::EventSubscribe { .. } => None,
+            ApiRequest::EventPoll { .. } => None,
+            ApiRequest::EventUnsubscribe { .. } => None,
+            ApiRequest::SystemStatus => None,
+            ApiRequest::CacheStats => None,
+            ApiRequest::CacheInvalidate => None,
+            ApiRequest::IntentCacheStats => None,
+            ApiRequest::ClusterStatus => None,
+            ApiRequest::ClusterJoin { .. } => None,
+            ApiRequest::ClusterLeave => None,
+            ApiRequest::NodePing { .. } => None,
+            ApiRequest::QueryTokenUsage { .. } => None,
+            ApiRequest::RegisterAgent { name } => Some(name.clone()),
+            ApiRequest::ListAgents => None,
+            ApiRequest::GrantPermission { agent_id, .. } => Some(agent_id.clone()),
+            ApiRequest::RevokePermission { agent_id, .. } => Some(agent_id.clone()),
+            ApiRequest::ListPermissions { agent_id } => Some(agent_id.clone()),
+            ApiRequest::CheckPermission { agent_id, .. } => Some(agent_id.clone()),
+        }
+    }
+
     pub fn handle_api_request(&self, req: crate::api::semantic::ApiRequest) -> crate::api::semantic::ApiResponse {
         use crate::api::semantic::{
             SearchResultDto, AgentDto, NeighborDto, DeletedDto,
@@ -326,6 +443,13 @@ impl AIKernel {
         }
 
         let _corr_id = correlation_id; // Used in tracing span above
+
+        // ── Lazy Agent Registration (C-3) ─────────────────────────────────────
+        // Auto-register agent on first API call so that agent persists across restarts.
+        if let Some(ref aid) = Self::extract_agent_id(&req) {
+            self.ensure_agent_registered(aid);
+        }
+
         let mut response = match req {
             ApiRequest::Create { content, content_encoding, tags, agent_id, agent_token, intent, .. } => {
                 // Verify token (Optional mode: allow no token)
