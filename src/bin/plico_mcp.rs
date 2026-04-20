@@ -17,6 +17,7 @@ use std::sync::Arc;
 use plico::api::semantic::{ApiRequest, ApiResponse, DiscoveryScope, KnowledgeType, ProcedureStepDto};
 use plico::kernel::AIKernel;
 use serde_json::Value;
+use tracing_subscriber::EnvFilter;
 
 const SERVER_NAME: &str = "plico-mcp";
 const SERVER_VERSION: &str = "1.0.0";
@@ -24,6 +25,11 @@ const PROTOCOL_VERSION: &str = "2024-11-05";
 const DEFAULT_AGENT: &str = "mcp-agent";
 
 fn main() {
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::from_default_env())
+        .with_writer(io::stderr)
+        .init();
+
     let root = std::env::var("PLICO_ROOT")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("/tmp/plico"));
@@ -788,7 +794,20 @@ fn build_cold_request(method: &str, params: &serde_json::Map<String, Value>, age
                 agent_id: agent.to_string(),
             })
         }
-        _ => Err(format!("unknown cold method: {method}")),
+        _ => {
+            let available = [
+                "add_node", "add_edge", "causal_path", "impact",
+                "delegate", "complete", "query_task", "batch_create",
+                "register", "checkpoint", "restore",
+                "subscribe", "poll", "unsubscribe",
+                "storage_stats", "object_usage", "evict_expired", "discover_knowledge",
+            ];
+            Err(format!(
+                "unknown cold method: '{}'. Available methods: {}",
+                method,
+                available.join(", ")
+            ))
+        }
     }
 }
 
