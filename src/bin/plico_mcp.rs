@@ -14,7 +14,7 @@ use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use plico::api::semantic::{ApiRequest, ApiResponse};
+use plico::api::semantic::{ApiRequest, ApiResponse, ProcedureStepDto};
 use plico::kernel::AIKernel;
 use serde_json::Value;
 
@@ -36,6 +36,9 @@ fn main() {
             std::process::exit(1);
         }
     };
+
+    // Seed 6 pre-installed skills on first MCP server start
+    ensure_builtin_skills(&kernel);
 
     let stdin = io::stdin().lock();
     let mut stdout = io::stdout().lock();
@@ -488,6 +491,103 @@ fn dispatch_plico_store(args: &Value, kernel: &AIKernel) -> Result<String, Strin
     }
 }
 
+/// Ensure 6 pre-installed skills exist in procedural memory.
+/// Called on first plico_skills list/run to seed builtins if empty.
+fn ensure_builtin_skills(kernel: &AIKernel) {
+    // Check if any builtin skills already exist
+    let existing = kernel.recall_shared_procedural(None);
+    let has_builtins = existing.iter().any(|e| {
+        e.tags.contains(&"plico:builtin".to_string())
+    });
+    if has_builtins {
+        return; // Already seeded
+    }
+
+    let builtins = [
+        (
+            "knowledge-graph",
+            "Build and query causal knowledge graphs in Plico",
+            vec![
+                ("Create an entity node", r#"plico(action="kg", params={"method": "add_node", "label": "<label>", "node_type": "entity"})"#, "returns node_id"),
+                ("Create a causal edge between nodes", r#"plico(action="kg", params={"method": "add_edge", "src_id": "<node_a>", "dst_id": "<node_b>", "edge_type": "causes"})"#, "returns edge confirmation"),
+                ("Query causal path between nodes", r#"plico(action="kg", params={"method": "causal_path", "from_id": "<node_a>", "to_id": "<node_b>"})"#, "returns path with intermediate nodes"),
+                ("Analyze impact of a node", r#"plico(action="kg", params={"method": "impact", "node_id": "<node>", "depth": 3})"#, "returns all affected nodes within 3 hops"),
+            ],
+        ),
+        (
+            "task-delegation",
+            "Delegate tasks to other agents and track completion",
+            vec![
+                ("Discover available agents", "plico(action=\"status\")", "returns list of active agents"),
+                ("Delegate a task", r#"plico(action="params", params={"method": "delegate", "task_description": "<description>", "to_agent": "<agent-name>"})"#, "returns task_id"),
+                ("Check task status", r#"plico(action="params", params={"method": "query_task", "task_id": "<task_id>"})"#, "returns status (pending/in_progress/completed/failed)"),
+                ("Mark task complete", r#"plico(action="params", params={"method": "complete", "task_id": "<task_id>"})"#, "returns confirmation"),
+            ],
+        ),
+        (
+            "batch-operations",
+            "Efficiently store and retrieve multiple items",
+            vec![
+                ("Store multiple content items at once", r#"plico(action="params", params={"method": "batch_create", "items": [{"content": "item1", "tags": ["tag1"]}, {"content": "item2", "tags": ["tag2"]}]})"#, "returns array of CIDs"),
+                ("Store multiple memories at once", r#"plico(action="params", params={"method": "batch_memory", "entries": [{"content": "remember X", "tier": "working"}, {"content": "remember Y", "tier": "long_term"}]})"#, "returns confirmation"),
+                ("Retrieve multiple items by CID", r#"plico(action="params", params={"method": "batch_read", "cids": ["<cid1>", "<cid2>"]})"#, "returns array of content items"),
+            ],
+        ),
+        (
+            "agent-lifecycle",
+            "Register agents, checkpoint, and restore state",
+            vec![
+                ("Register a new agent", r#"plico(action="params", params={"method": "register", "name": "<agent-name>"})"#, "returns agent_id"),
+                ("Create a checkpoint (save state)", r#"plico(action="params", params={"method": "checkpoint", "agent_id": "<agent-id>"})"#, "returns checkpoint_cid"),
+                ("Restore from checkpoint", r#"plico(action="params", params={"method": "restore", "agent_id": "<agent-id>", "checkpoint_cid": "<cid>"})"#, "returns restoration confirmation"),
+                ("Suspend agent (pause)", r#"plico(action="params", params={"method": "suspend", "agent_id": "<agent-id>"})"#, "returns confirmation"),
+                ("Resume agent", r#"plico(action="params", params={"method": "resume", "agent_id": "<agent-id>"})"#, "returns confirmation"),
+            ],
+        ),
+        (
+            "event-system",
+            "Subscribe to and poll for system events",
+            vec![
+                ("Subscribe to events", r#"plico(action="params", params={"method": "subscribe", "event_types": ["memory_stored", "agent_registered"]})"#, "returns subscription_id"),
+                ("Poll for new events", r#"plico(action="params", params={"method": "poll", "subscription_id": "<id>"})"#, "returns array of events since last poll"),
+                ("Unsubscribe when done", r#"plico(action="params", params={"method": "unsubscribe", "subscription_id": "<id>"})"#, "returns confirmation"),
+            ],
+        ),
+        (
+            "storage-governance",
+            "Monitor storage usage and evict cold data",
+            vec![
+                ("Get storage statistics", r#"plico(action="params", params={"method": "storage_stats"})"#, "returns total_size, object_count, tier_breakdown"),
+                ("Get per-object usage stats", r#"plico(action="params", params={"method": "object_usage", "cid": "<cid>"})"#, "returns access_count, last_access, tier"),
+                ("Evict expired/cold entries", r#"plico(action="params", params={"method": "evict_expired"})"#, "returns number of entries evicted"),
+                ("Move memory between tiers", r#"plico(action="params", params={"method": "memory_move", "entry_id": "<id>", "target_tier": "long_term"})"#, "returns confirmation"),
+            ],
+        ),
+    ];
+
+    for (name, description, steps) in builtins {
+        let proc_steps: Vec<ProcedureStepDto> = steps
+            .iter()
+            .map(|(desc, action, expected)| ProcedureStepDto {
+                description: desc.to_string(),
+                action: action.to_string(),
+                expected_outcome: Some(expected.to_string()),
+            })
+            .collect();
+
+        let req = ApiRequest::RememberProcedural {
+            agent_id: "system".to_string(),
+            name: name.to_string(),
+            description: description.to_string(),
+            steps: proc_steps,
+            learned_from: Some("Plico OS v5.0 builtin".to_string()),
+            tags: vec!["plico:skill".to_string(), "plico:builtin".to_string()],
+            scope: Some("shared".to_string()),
+        };
+        let _ = kernel.handle_api_request(req);
+    }
+}
+
 /// Dispatch plico_skills tool (list/run/create)
 fn dispatch_plico_skills(args: &Value, kernel: &AIKernel) -> Result<String, String> {
     let agent = args.get("agent_id").and_then(|a| a.as_str()).unwrap_or(DEFAULT_AGENT);
@@ -497,20 +597,25 @@ fn dispatch_plico_skills(args: &Value, kernel: &AIKernel) -> Result<String, Stri
 
     match skill_action {
         "list" => {
-            let entries = kernel.recall_procedural(agent, "default", None);
-            let skills: Vec<Value> = entries.iter().filter_map(|e| {
+            let private_entries = kernel.recall_procedural(agent, "default", None);
+            let shared_entries = kernel.recall_shared_procedural(None);
+
+            // Combine and deduplicate by name (shared takes precedence for same name)
+            let mut skills_map: std::collections::HashMap<String, Value> = std::collections::HashMap::new();
+            for e in private_entries.iter().chain(shared_entries.iter()) {
                 if let plico::memory::MemoryContent::Procedure(p) = &e.content {
-                    Some(serde_json::json!({
-                        "name": p.name,
-                        "description": p.description,
-                        "steps_count": p.steps.len(),
-                        "learned_from": p.learned_from,
-                        "tags": e.tags,
-                    }))
-                } else {
-                    None
+                    skills_map.entry(p.name.clone()).or_insert_with(|| {
+                        serde_json::json!({
+                            "name": p.name,
+                            "description": p.description,
+                            "steps_count": p.steps.len(),
+                            "learned_from": p.learned_from,
+                            "tags": e.tags,
+                        })
+                    });
                 }
-            }).collect();
+            }
+            let skills: Vec<Value> = skills_map.into_values().collect();
             Ok(serde_json::to_string_pretty(&serde_json::json!({
                 "skills": skills,
                 "count": skills.len(),
@@ -521,9 +626,14 @@ fn dispatch_plico_skills(args: &Value, kernel: &AIKernel) -> Result<String, Stri
             let name = args.get("name")
                 .and_then(|n| n.as_str())
                 .ok_or("run requires name")?;
-            let entries = kernel.recall_procedural(agent, "default", Some(name));
+
+            // Check private first, then shared
+            let mut entries = kernel.recall_procedural(agent, "default", Some(name));
             if entries.is_empty() {
-                return Err(format!("no skill named '{}' found for agent '{}'", name, agent));
+                entries = kernel.recall_shared_procedural(Some(name));
+            }
+            if entries.is_empty() {
+                return Err(format!("no skill named '{}' found", name));
             }
             let entry = &entries[0];
             if let plico::memory::MemoryContent::Procedure(p) = &entry.content {
