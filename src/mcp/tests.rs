@@ -35,27 +35,32 @@ mod test {
     fn client_discovers_tools() {
         let client = make_client();
         let tools = client.tools();
-        assert_eq!(tools.len(), 7);
+        assert_eq!(tools.len(), 3, "should have 3 tools: plico, plico_store, plico_skills");
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
-        assert!(names.contains(&"plico_search"));
-        assert!(names.contains(&"plico_put"));
-        assert!(names.contains(&"plico_skills_list"));
-        assert!(names.contains(&"plico_skills_run"));
+        assert!(names.contains(&"plico"));
+        assert!(names.contains(&"plico_store"));
+        assert!(names.contains(&"plico_skills"));
     }
 
     #[test]
     fn client_put_and_read_roundtrip() {
         let client = make_client();
-        let put_text = client.call_tool("plico_put", &serde_json::json!({
+        // Use plico_store put
+        let put_text = client.call_tool("plico_store", &serde_json::json!({
+            "action": "put",
             "content": "MCP client test content",
-            "tags": ["mcp-client-test"]
+            "tags": ["mcp-client-test"],
+            "agent_id": "test"
         })).unwrap();
         let put_resp: serde_json::Value = serde_json::from_str(&put_text).unwrap();
         assert!(put_resp["ok"].as_bool().unwrap());
         let cid = put_resp["cid"].as_str().unwrap();
 
-        let read_text = client.call_tool("plico_read", &serde_json::json!({
-            "cid": cid
+        // Use plico_store read
+        let read_text = client.call_tool("plico_store", &serde_json::json!({
+            "action": "read",
+            "cid": cid,
+            "agent_id": "test"
         })).unwrap();
         let read_resp: serde_json::Value = serde_json::from_str(&read_text).unwrap();
         assert_eq!(read_resp["data"].as_str().unwrap(), "MCP client test content");
@@ -64,12 +69,18 @@ mod test {
     #[test]
     fn client_search_finds_content() {
         let client = make_client();
-        client.call_tool("plico_put", &serde_json::json!({
+        // Store via plico_store
+        client.call_tool("plico_store", &serde_json::json!({
+            "action": "put",
             "content": "Dijkstra shortest path algorithm weighted graph",
-            "tags": ["plico:type:experience", "plico:module:graph"]
+            "tags": ["plico:type:experience", "plico:module:graph"],
+            "agent_id": "test"
         })).unwrap();
 
-        let text = client.call_tool("plico_search", &serde_json::json!({
+        // Search via plico action
+        let text = client.call_tool("plico", &serde_json::json!({
+            "action": "search",
+            "agent_id": "test",
             "query": "Dijkstra weighted path"
         })).unwrap();
         let resp: serde_json::Value = serde_json::from_str(&text).unwrap();
@@ -97,8 +108,8 @@ mod test {
         let client = make_client();
         let provider: &dyn ExternalToolProvider = &client;
         let tools = provider.discover_tools();
-        assert_eq!(tools.len(), 7);
-        assert!(tools.iter().any(|t| t.name == "plico_search"));
+        assert_eq!(tools.len(), 3);
+        assert!(tools.iter().any(|t| t.name == "plico"));
     }
 
     #[test]
@@ -106,9 +117,12 @@ mod test {
         let client = make_client();
         let provider: &dyn ExternalToolProvider = &client;
 
-        let put_result = provider.call_tool("plico_put", &serde_json::json!({
+        // Use plico_store put
+        let put_result = provider.call_tool("plico_store", &serde_json::json!({
+            "action": "put",
             "content": "trait test data",
-            "tags": ["trait-test"]
+            "tags": ["trait-test"],
+            "agent_id": "test"
         }));
         assert!(put_result.success, "ExternalToolProvider::call_tool failed: {:?}", put_result.error);
     }
@@ -124,17 +138,19 @@ mod test {
         };
 
         let names = kernel.add_tool_provider(provider, "ext");
-        assert_eq!(names.len(), 7);
-        assert!(names.contains(&"ext.plico_search".to_string()));
-        assert!(names.contains(&"ext.plico_put".to_string()));
+        assert_eq!(names.len(), 3);
+        assert!(names.contains(&"ext.plico".to_string()));
+        assert!(names.contains(&"ext.plico_store".to_string()));
 
         let tools = kernel.tool_registry.list();
-        assert!(tools.iter().any(|t| t.name == "ext.plico_search"));
+        assert!(tools.iter().any(|t| t.name == "ext.plico"));
 
-        let handler = kernel.tool_registry.get_handler("ext.plico_put").expect("handler should exist");
+        let handler = kernel.tool_registry.get_handler("ext.plico_store").expect("handler should exist");
         let result = handler.execute(&serde_json::json!({
+            "action": "put",
             "content": "kernel integration test",
-            "tags": ["kernel-test"]
+            "tags": ["kernel-test"],
+            "agent_id": "test-agent"
         }), "test-agent");
         assert!(result.success, "handler failed: {:?}", result.error);
     }

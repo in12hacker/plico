@@ -55,7 +55,7 @@ fn mcp_e2e_full_lifecycle() {
     writeln!(stdin, r#"{{"jsonrpc":"2.0","method":"notifications/initialized"}}"#).unwrap();
     stdin.flush().unwrap();
 
-    // 3. List tools
+    // 3. List tools - should be 3 tools now: plico, plico_store, plico_skills
     let resp = send_and_recv(&mut stdin, &mut stdout, &serde_json::json!({
         "jsonrpc": "2.0",
         "id": 2,
@@ -63,18 +63,20 @@ fn mcp_e2e_full_lifecycle() {
     }));
     assert_eq!(resp["id"], 2);
     let tools = resp["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 7);
+    assert_eq!(tools.len(), 3, "should have 3 tools: plico, plico_store, plico_skills");
 
-    // 4. Store content via plico_put
+    // 4. Store content via plico_store
     let resp = send_and_recv(&mut stdin, &mut stdout, &serde_json::json!({
         "jsonrpc": "2.0",
         "id": 3,
         "method": "tools/call",
         "params": {
-            "name": "plico_put",
+            "name": "plico_store",
             "arguments": {
+                "action": "put",
                 "content": "MCP E2E test: protocol adapter architecture",
-                "tags": ["plico:type:test", "plico:module:api"]
+                "tags": ["plico:type:test", "plico:module:api"],
+                "agent_id": "test"
             }
         }
     }));
@@ -84,28 +86,36 @@ fn mcp_e2e_full_lifecycle() {
     assert!(put_resp["ok"].as_bool().unwrap());
     let cid = put_resp["cid"].as_str().unwrap().to_string();
 
-    // 5. Read back via plico_read
+    // 5. Read back via plico_store
     let resp = send_and_recv(&mut stdin, &mut stdout, &serde_json::json!({
         "jsonrpc": "2.0",
         "id": 4,
         "method": "tools/call",
         "params": {
-            "name": "plico_read",
-            "arguments": { "cid": cid }
+            "name": "plico_store",
+            "arguments": {
+                "action": "read",
+                "cid": cid,
+                "agent_id": "test"
+            }
         }
     }));
     let text = resp["result"]["content"][0]["text"].as_str().unwrap();
     let read_resp: serde_json::Value = serde_json::from_str(text).unwrap();
     assert_eq!(read_resp["data"].as_str().unwrap(), "MCP E2E test: protocol adapter architecture");
 
-    // 6. Search for the stored content
+    // 6. Search for the stored content via plico action
     let resp = send_and_recv(&mut stdin, &mut stdout, &serde_json::json!({
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
         "params": {
-            "name": "plico_search",
-            "arguments": { "query": "protocol adapter architecture" }
+            "name": "plico",
+            "arguments": {
+                "action": "search",
+                "agent_id": "test",
+                "query": "protocol adapter architecture"
+            }
         }
     }));
     let text = resp["result"]["content"][0]["text"].as_str().unwrap();
@@ -113,31 +123,39 @@ fn mcp_e2e_full_lifecycle() {
     let results = search_resp["results"].as_array().unwrap();
     assert!(!results.is_empty(), "search should find stored content via BM25");
 
-    // 7. List tags
+    // 7. Get system status via plico action
     let resp = send_and_recv(&mut stdin, &mut stdout, &serde_json::json!({
         "jsonrpc": "2.0",
         "id": 6,
         "method": "tools/call",
         "params": {
-            "name": "plico_tags",
-            "arguments": {}
+            "name": "plico",
+            "arguments": {
+                "action": "status",
+                "agent_id": "test"
+            }
         }
     }));
     let text = resp["result"]["content"][0]["text"].as_str().unwrap();
-    let tags: Vec<String> = serde_json::from_str(text).unwrap();
-    assert!(tags.contains(&"plico:type:test".to_string()));
+    let status_resp: serde_json::Value = serde_json::from_str(text).unwrap();
+    assert!(status_resp["ok"].as_bool().unwrap());
 
-    // 8. List nodes (should succeed even if empty)
+    // 8. List skills via plico_skills
     let resp = send_and_recv(&mut stdin, &mut stdout, &serde_json::json!({
         "jsonrpc": "2.0",
         "id": 7,
         "method": "tools/call",
         "params": {
-            "name": "plico_nodes",
-            "arguments": {}
+            "name": "plico_skills",
+            "arguments": {
+                "action": "list",
+                "agent_id": "test"
+            }
         }
     }));
-    assert!(resp["result"]["content"][0]["text"].as_str().is_some());
+    let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+    let skills_resp: serde_json::Value = serde_json::from_str(text).unwrap();
+    assert!(skills_resp["count"].as_i64().unwrap() >= 0);
 
     // Clean up
     drop(stdin);
