@@ -528,6 +528,27 @@ impl SemanticFS {
         tags
     }
 
+    /// Direct tag-only search (A-8a: B25 fix).
+    pub fn search_by_tags(&self, tags: &[String], limit: usize) -> Vec<SearchResult> {
+        let index = self.tag_index.read().unwrap();
+        let mut results = Vec::new();
+
+        for tag in tags {
+            if let Some(cids) = index.get(tag) {
+                for cid in cids {
+                    if results.len() >= limit {
+                        break;
+                    }
+                    if let Ok(obj) = self.cas.get(cid) {
+                        let snippet = String::from_utf8_lossy(&obj.data[..std::cmp::min(200, obj.data.len())]).to_string();
+                        results.push(SearchResult { cid: cid.clone(), relevance: 0.8, meta: obj.meta, snippet });
+                    }
+                }
+            }
+        }
+        results
+    }
+
     pub fn audit_log(&self) -> Vec<AuditEntry> {
         self.audit_log.read().unwrap().clone()
     }

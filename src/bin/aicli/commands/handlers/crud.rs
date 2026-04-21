@@ -38,9 +38,15 @@ pub fn cmd_read(kernel: &AIKernel, args: &[String]) -> ApiResponse {
 }
 
 pub fn cmd_search(kernel: &AIKernel, args: &[String]) -> ApiResponse {
-    let query = extract_arg(args, "--query")
-        .or_else(|| args.get(1).cloned())
-        .unwrap_or_default();
+    let search_tags = extract_tags_opt(args, "--tags").unwrap_or_default();
+    // A-8a: if tags-only mode (no --query, no positional arg), skip text search
+    let query = if search_tags.is_empty() {
+        extract_arg(args, "--query")
+            .or_else(|| args.get(1).cloned())
+            .unwrap_or_default()
+    } else {
+        extract_arg(args, "--query").unwrap_or_default()
+    };
     let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
     let limit = extract_arg(args, "--limit")
         .and_then(|s| s.parse().ok())
@@ -51,6 +57,20 @@ pub fn cmd_search(kernel: &AIKernel, args: &[String]) -> ApiResponse {
     let exclude_tags = extract_tags_opt(args, "--exclude-tags").unwrap_or_default();
     let since = extract_arg(args, "--since").and_then(|s| s.parse::<i64>().ok());
     let until = extract_arg(args, "--until").and_then(|s| s.parse::<i64>().ok());
+
+    // A-8a: tag-only search when no query but tags provided
+    if query.is_empty() && !search_tags.is_empty() {
+        let results = kernel.search_by_tags(&search_tags, limit);
+        let dto: Vec<SearchResultDto> = results.into_iter().map(|r| SearchResultDto {
+            cid: r.cid, relevance: r.relevance, tags: r.meta.tags,
+            snippet: r.snippet.clone(),
+            content_type: r.meta.content_type.to_string(),
+            created_at: r.meta.created_at,
+        }).collect();
+        let mut r = ApiResponse::ok();
+        r.results = Some(dto);
+        return r;
+    }
 
     if query.is_empty() {
         eprintln!("Error: search requires a query. Use: search --query <text> or: search <text>");

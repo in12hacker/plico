@@ -128,6 +128,11 @@ impl crate::kernel::AIKernel {
             .collect())
     }
 
+    /// Direct tag-only search (A-8a: B25 fix).
+    pub fn search_by_tags(&self, tags: &[String], limit: usize) -> Vec<crate::fs::SearchResult> {
+        self.fs.search_by_tags(tags, limit)
+    }
+
     /// Semantic read with ownership and tenant isolation.
     pub fn semantic_read(&self, query: &Query, agent_id: &str, tenant_id: &str) -> std::io::Result<Vec<AIObject>> {
         let _timer = OperationTimer::new(&self.metrics, OpType::SemanticRead);
