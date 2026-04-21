@@ -53,14 +53,32 @@ impl crate::kernel::AIKernel {
     }
 
     /// Store a memory entry in the agent's ephemeral (L0) tier.
-    pub fn remember(&self, agent_id: &str, tenant_id: &str, content: String) -> Result<(), String> {
+    /// Returns the entry ID on success.
+    pub fn remember(&self, agent_id: &str, tenant_id: &str, content: String) -> Result<String, String> {
         let ctx = PermissionContext::new(agent_id.to_string(), tenant_id.to_string());
         self.permissions.check(&ctx, PermissionAction::Write).map_err(|e| e.to_string())?;
-        let mut entry = MemoryEntry::ephemeral(agent_id.to_string(), content);
-        entry.tenant_id = tenant_id.to_string();
+        let entry_id = uuid::Uuid::new_v4().to_string();
+        let now = crate::memory::layered::now_ms();
+        let entry = MemoryEntry {
+            id: entry_id.clone(),
+            agent_id: agent_id.to_string(),
+            tenant_id: tenant_id.to_string(),
+            tier: MemoryTier::Ephemeral,
+            content: MemoryContent::Text(content),
+            importance: 50,
+            access_count: 0,
+            last_accessed: now,
+            created_at: now,
+            tags: Vec::new(),
+            embedding: None,
+            ttl_ms: None,
+            original_ttl_ms: None,
+            scope: MemoryScope::Private,
+        };
         let quota = self.agent_memory_quota(agent_id);
         self.memory.store_checked(entry, quota)
-            .map_err(|e| e.to_string())
+            .map_err(|e| e.to_string())?;
+        Ok(entry_id)
     }
 
     /// Store a memory entry in the agent's working (L1) tier.
@@ -197,11 +215,12 @@ impl crate::kernel::AIKernel {
         content: String,
         tags: Vec<String>,
         importance: u8,
-    ) -> Result<(), String> {
+    ) -> Result<String, String> {
         self.remember_long_term_scoped(agent_id, tenant_id, content, tags, importance, MemoryScope::Private)
     }
 
     /// Store a long-term memory entry with explicit scope.
+    /// Returns the entry ID on success.
     pub fn remember_long_term_scoped(
         &self,
         agent_id: &str,
@@ -210,7 +229,7 @@ impl crate::kernel::AIKernel {
         tags: Vec<String>,
         importance: u8,
         scope: MemoryScope,
-    ) -> Result<(), String> {
+    ) -> Result<String, String> {
         let _timer = OperationTimer::new(&self.metrics, OpType::RememberLongTerm);
         let span = tracing::info_span!(
             "remember_long_term",
@@ -262,7 +281,7 @@ impl crate::kernel::AIKernel {
                     created_at
                 );
                 self.event_bus.emit(KernelEvent::KnowledgeShared {
-                    cid: entry_id,
+                    cid: entry_id.clone(),
                     agent_id: agent_id.to_string(),
                     scope: "shared".into(),
                     tags: tags_for_event,
@@ -277,7 +296,7 @@ impl crate::kernel::AIKernel {
                     created_at
                 );
                 self.event_bus.emit(KernelEvent::KnowledgeShared {
-                    cid: entry_id,
+                    cid: entry_id.clone(),
                     agent_id: agent_id.to_string(),
                     scope: format!("group:{}", group_id),
                     tags: tags_for_event,
@@ -289,7 +308,7 @@ impl crate::kernel::AIKernel {
 
         self.persist_memories();
         tracing::info!(tags = ?tags, importance = importance, "long-term memory stored");
-        Ok(())
+        Ok(entry_id)
     }
 
     /// Retrieve semantically relevant long-term memories for an agent.

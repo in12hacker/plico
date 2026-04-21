@@ -13,9 +13,9 @@ pub fn cmd_remember(kernel: &AIKernel, args: &[String]) -> ApiResponse {
         .map(|t| t.split(',').map(|s| s.trim().to_string()).collect())
         .unwrap_or_default();
     let result = match parse_memory_tier(&tier_str) {
-        MemoryTier::Working => kernel.remember_working(&agent_id, "default", content, tags),
-        MemoryTier::LongTerm => kernel.remember_long_term(&agent_id, "default", content, tags, 50),
-        _ => kernel.remember(&agent_id, "default", content),
+        MemoryTier::Working => kernel.remember_working(&agent_id, "default", content, tags).map(|_| ()),
+        MemoryTier::LongTerm => kernel.remember_long_term(&agent_id, "default", content, tags, 50).map(|_| ()),
+        _ => kernel.remember(&agent_id, "default", content).map(|_| ()),
     };
     match result {
         Ok(()) => ApiResponse::ok_with_message(format!("Memory stored for agent '{}'", agent_id)),
