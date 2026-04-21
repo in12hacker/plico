@@ -241,6 +241,11 @@ pub fn print_result(response: &ApiResponse) -> bool {
         println!("Tools ({} total):", tools.len());
         for t in tools {
             println!("  {} — {}", t.name, t.description);
+            if let Some(schema) = t.schema.as_object() {
+                if !schema.is_empty() {
+                    println!("  Parameters: {}", serde_json::to_string_pretty(&t.schema).unwrap_or_default());
+                }
+            }
         }
     }
     if let Some(result) = &response.tool_result {
