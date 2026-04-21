@@ -866,6 +866,18 @@ impl LayeredMemory {
         count
     }
 
+    /// Remove ephemeral (L0) memory entries for an agent.
+    /// Used during Memory Consolidation Cycle (A-5) to clear short-term
+    /// memories while preserving working/long-term memories across sessions.
+    pub fn clear_ephemeral(&self, agent_id: &str) -> usize {
+        let mut map = self.ephemeral.write().unwrap();
+        if let Some(entries) = map.remove(agent_id) {
+            entries.len()
+        } else {
+            0
+        }
+    }
+
     /// Retrieve long-term memories most semantically similar to a query embedding.
     /// Also refreshes TTL for entries that are hit (F-17).
     pub fn recall_semantic(

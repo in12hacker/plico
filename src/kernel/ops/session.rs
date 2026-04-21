@@ -11,6 +11,7 @@ use std::time::Duration;
 use crate::api::semantic::{ChangeEntry, CheckpointSummaryDto};
 use crate::kernel::event_bus::EventBus;
 use crate::kernel::ops::delta::handle_delta_since;
+use crate::kernel::ops::tier_maintenance::TierMaintenance;
 use crate::memory::layered::{LayeredMemory, MemoryTier};
 
 // ── F-10: Agent Profile & Intent Key Strategy ─────────────────────────────────
@@ -520,11 +521,21 @@ pub fn end_session_orchestrate(
         None
     };
 
-    // 3. Clear ephemeral tier on EndSession
-    // Note: clear_agent clears all tiers. For selective tier clearing,
-    // we'd need memory.clear_tier(agent_id, MemoryTier::Ephemeral).
-    // For now, we skip explicit clear since checkpoint preserves what matters.
-    let _ = memory.clear_agent(agent_id);
+    // 3. A-5 Memory Consolidation Cycle: run tier maintenance then clear only ephemeral
+    // Run tier maintenance to promote important ephemeral memories to working/long-term
+    let maintenance = TierMaintenance::new();
+    let stats = maintenance.run_maintenance_cycle(memory, agent_id);
+    tracing::debug!(
+        ephemeral_before = stats.ephemeral_before,
+        ephemeral_after = stats.ephemeral_after,
+        working_before = stats.working_before,
+        working_after = stats.working_after,
+        promoted = stats.promoted_count,
+        evicted = stats.evicted_count,
+        "Memory Consolidation Cycle completed",
+    );
+    // Clear only the ephemeral tier — preserve working and long-term memories
+    let _cleared = memory.clear_ephemeral(agent_id);
 
     // 4. Remove session from store (tokens_used = None for now, will enhance later)
     session_store.end_session(session_id, None);
