@@ -7,7 +7,9 @@ use super::extract_arg;
 use super::extract_tags;
 
 pub fn cmd_events(kernel: &AIKernel, args: &[String]) -> ApiResponse {
-    let agent_id = extract_arg(args, "--agent");
+    // A-8b: accept both --agent and --agent-filter for compatibility
+    let agent_id = extract_arg(args, "--agent")
+        .or_else(|| extract_arg(args, "--agent-filter"));
     let tags = extract_tags(args, "--tags");
 
     match args.get(1).map(|s| s.as_str()) {
