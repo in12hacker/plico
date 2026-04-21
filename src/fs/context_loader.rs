@@ -71,7 +71,18 @@ pub struct LoadedContext {
     pub layer: ContextLayer,
     pub content: String,
     pub tokens_estimate: usize,
+    /// A-6: Actual layer returned (may differ from requested if degraded).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actual_layer: Option<ContextLayer>,
+    /// A-6: Whether content was degraded from requested layer.
+    #[serde(default, skip_serializing_if = "not_false")]
+    pub degraded: bool,
+    /// A-6: Reason for degradation if applicable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub degradation_reason: Option<String>,
 }
+
+fn not_false(b: &bool) -> bool { !*b }
 
 /// Context loader — manages L0/L1/L2 summaries for stored objects.
 pub struct ContextLoader {
@@ -153,6 +164,17 @@ impl ContextLoader {
         format!("{} ... {}", first, last)
     }
 
+    /// Heuristic L0 summary (first+last 10 words) — used as fallback when no LLM.
+    fn heuristic_summary(content: &str) -> String {
+        let words: Vec<&str> = content.split_whitespace().collect();
+        if words.len() <= 20 {
+            return content.to_string();
+        }
+        let first = words[..10].join(" ");
+        let last = words[words.len() - 10..].join(" ");
+        format!("{} ... {}", first, last)
+    }
+
     fn load_l0(&self, cid: &str) -> std::io::Result<LoadedContext> {
         // Check cache first
         if let Some(content) = self.l0_cache.read().unwrap().get(cid).cloned() {
@@ -162,19 +184,41 @@ impl ContextLoader {
                 layer: ContextLayer::L0,
                 content,
                 tokens_estimate,
+                actual_layer: Some(ContextLayer::L0),
+                degraded: false,
+                degradation_reason: None,
             });
         }
 
         // Load from disk; if not found, compute on demand from CAS content.
         let path = self.l0_path(cid);
-        let content = match fs::read_to_string(&path) {
-            Ok(s) => s,
+        let (content, actual_layer, degraded, reason) = match fs::read_to_string(&path) {
+            Ok(s) => (s, ContextLayer::L0, false, None),
             Err(_) => {
                 // Compute L0 from CAS full content (handles LLM + heuristic fallback).
                 let raw = self.cas.get(cid)
                     .map(|obj| String::from_utf8_lossy(&obj.data).into_owned())
                     .unwrap_or_default();
-                self.compute_l0(&raw)
+                let words: Vec<&str> = raw.split_whitespace().collect();
+
+                if words.len() <= 20 {
+                    // Short content: return full text as L2 (degraded)
+                    (raw.clone(), ContextLayer::L2, true,
+                     Some("Content too short for summarization; returning full text".into()))
+                } else if let Some(ref summarizer) = self.summarizer {
+                    match summarizer.summarize(&raw, SummaryLayer::L0) {
+                        Ok(summary) => (summary, ContextLayer::L0, false, None),
+                        Err(e) => {
+                            let heuristic = Self::heuristic_summary(&raw);
+                            (heuristic, ContextLayer::L0, true,
+                             Some(format!("LLM summarizer failed: {}; using heuristic", e)))
+                        }
+                    }
+                } else {
+                    let heuristic = Self::heuristic_summary(&raw);
+                    (heuristic, ContextLayer::L0, true,
+                     Some("No LLM summarizer available; using heuristic (first+last 10 words)".into()))
+                }
             }
         };
         let tokens_estimate = content.split_whitespace().count() * 3 / 4;
@@ -190,6 +234,9 @@ impl ContextLoader {
             layer: ContextLayer::L0,
             content,
             tokens_estimate,
+            actual_layer: Some(actual_layer),
+            degraded,
+            degradation_reason: reason,
         })
     }
 
@@ -237,6 +284,9 @@ impl ContextLoader {
             layer: ContextLayer::L1,
             content,
             tokens_estimate,
+            actual_layer: Some(ContextLayer::L1),
+            degraded: false,
+            degradation_reason: None,
         })
     }
 
@@ -256,6 +306,9 @@ impl ContextLoader {
             layer: ContextLayer::L2,
             content,
             tokens_estimate,
+            actual_layer: Some(ContextLayer::L2),
+            degraded: false,
+            degradation_reason: None,
         })
     }
 
