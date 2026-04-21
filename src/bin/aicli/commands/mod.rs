@@ -106,6 +106,14 @@ pub fn print_result(response: &ApiResponse) -> bool {
         return response.ok;
     }
 
+    // A-8d: Check tool_result success first for tool call failure
+    if let Some(ref result) = response.tool_result {
+        if !result.success {
+            eprintln!("Tool error: {}", result.error.clone().unwrap_or_default());
+            return false;
+        }
+    }
+
     // Human-readable output
     if let Some(cid) = &response.cid {
         println!("CID: {}", cid);
