@@ -45,7 +45,7 @@ pub fn cmd_add_edge(kernel: &AIKernel, args: &[String]) -> ApiResponse {
     let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
 
     match kernel.kg_add_edge(&src, &dst, edge_type, weight, &agent_id, "default") {
-        Ok(()) => ApiResponse::ok(),
+        Ok(()) => ApiResponse::ok_with_message(format!("Edge created: {} --[{:?}]--> {}", src, edge_type, dst)),
         Err(e) => ApiResponse::error(e.to_string()),
     }
 }
@@ -149,7 +149,7 @@ pub fn cmd_rm_node(kernel: &AIKernel, args: &[String]) -> ApiResponse {
     let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
 
     match kernel.kg_remove_node(&node_id, &agent_id, "default") {
-        Ok(()) => ApiResponse::ok(),
+        Ok(()) => ApiResponse::ok_with_message(format!("Node removed: {}", node_id)),
         Err(e) => ApiResponse::error(e.to_string()),
     }
 }
@@ -161,7 +161,7 @@ pub fn cmd_rm_edge(kernel: &AIKernel, args: &[String]) -> ApiResponse {
     let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
 
     match kernel.kg_remove_edge(&src, &dst, edge_type, &agent_id, "default") {
-        Ok(()) => ApiResponse::ok(),
+        Ok(()) => ApiResponse::ok_with_message(format!("Edge removed: {} --> {}", src, dst)),
         Err(e) => ApiResponse::error(e.to_string()),
     }
 }
@@ -174,7 +174,7 @@ pub fn cmd_update_node(kernel: &AIKernel, args: &[String]) -> ApiResponse {
     let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
 
     match kernel.kg_update_node(&node_id, label.as_deref(), properties, &agent_id, "default") {
-        Ok(()) => ApiResponse::ok(),
+        Ok(()) => ApiResponse::ok_with_message(format!("Node updated: {}", node_id)),
         Err(e) => ApiResponse::error(e.to_string()),
     }
 }

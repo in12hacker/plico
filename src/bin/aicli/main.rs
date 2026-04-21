@@ -39,11 +39,11 @@ fn main() {
         })
         .unwrap_or(Mode::Local);
 
-    match mode {
+    let exit_ok = match mode {
         Mode::Local => run_local(&args),
         Mode::Tcp(addr) => run_tcp(&args, &addr),
-    }
-    std::process::exit(0);
+    };
+    std::process::exit(if exit_ok { 0 } else { 1 });
 }
 
 enum Mode {
@@ -51,7 +51,7 @@ enum Mode {
     Tcp(String),
 }
 
-fn run_local(args: &[String]) {
+fn run_local(args: &[String]) -> bool {
     let mut filtered = Vec::with_capacity(args.len());
     let mut i = 0;
     let mut root = PathBuf::from("/tmp/plico");
@@ -72,10 +72,10 @@ fn run_local(args: &[String]) {
 
     let kernel = AIKernel::new(root).expect("Failed to initialize kernel");
     let result = commands::execute_local(&kernel, &filtered);
-    commands::print_result(&result);
+    commands::print_result(&result)
 }
 
-fn run_tcp(args: &[String], addr: &str) {
+fn run_tcp(args: &[String], addr: &str) -> bool {
     let mut i = 0;
     let mut filtered = Vec::with_capacity(args.len());
     while i < args.len() {
@@ -108,7 +108,7 @@ fn run_tcp(args: &[String], addr: &str) {
     let line = line.trim();
 
     let response: ApiResponse = serde_json::from_str(line).expect("Failed to parse response");
-    commands::print_result(&response);
+    commands::print_result(&response)
 }
 
 fn build_request(args: &[String]) -> Option<ApiRequest> {

@@ -299,6 +299,25 @@ impl SessionStore {
         sessions.values().cloned().collect()
     }
 
+    /// Get active session count for a specific agent (L-5).
+    pub fn active_session_count(&self, agent_id: &str) -> usize {
+        let sessions = self.sessions.read().unwrap();
+        sessions.values().filter(|s| s.agent_id == agent_id).count()
+    }
+
+    /// Get active sessions for an agent within a time period (L-5).
+    pub fn get_active_sessions(&self, agent_id: &str, cutoff_ms: Option<u64>) -> Vec<ActiveSession> {
+        let sessions = self.sessions.read().unwrap();
+        sessions
+            .values()
+            .filter(|s| {
+                s.agent_id == agent_id
+                && cutoff_ms.map(|c| s.created_at_ms >= c).unwrap_or(true)
+            })
+            .cloned()
+            .collect()
+    }
+
     /// Find all expired sessions (for timeout scanning).
     pub fn expired_sessions(&self) -> Vec<ActiveSession> {
         let sessions = self.sessions.read().unwrap();

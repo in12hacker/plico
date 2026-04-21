@@ -1512,7 +1512,7 @@ async fn test_result_consumer_captures_dispatch_outcomes() {
 
     dispatch.shutdown();
 
-    let events = kernel.list_events(None, None, &["dispatch".to_string()], None);
+    let events = kernel.list_events(None, None, &["dispatch".to_string()], None, None);
     assert!(!events.is_empty(), "result consumer should emit dispatch events. Found {} events", events.len());
 }
 

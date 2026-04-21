@@ -686,8 +686,8 @@ impl AIKernel {
                     Err(e) => ApiResponse::error(e.to_string()),
                 }
             }
-            ApiRequest::ListEvents { since, until, tags, event_type, agent_id: _, limit, offset } => {
-                let all_events = self.list_events(since, until, &tags, event_type);
+            ApiRequest::ListEvents { since, until, tags, event_type, agent_id, limit, offset } => {
+                let all_events = self.list_events(since, until, &tags, event_type, if agent_id.is_empty() { None } else { Some(&agent_id) });
                 let total = all_events.len();
                 let off = offset.unwrap_or(0);
                 let lim = limit.unwrap_or(total);
@@ -697,8 +697,8 @@ impl AIKernel {
                 r.has_more = Some(off + page.len() < total);
                 r
             }
-            ApiRequest::ListEventsText { time_expression, tags, event_type, agent_id: _ } => {
-                match self.list_events_text(&time_expression, &tags, event_type) {
+            ApiRequest::ListEventsText { time_expression, tags, event_type, agent_id } => {
+                match self.list_events_text(&time_expression, &tags, event_type, if agent_id.is_empty() { None } else { Some(&agent_id) }) {
                     Ok(events) => ApiResponse::with_events(events),
                     Err(e) => ApiResponse::error(e.to_string()),
                 }

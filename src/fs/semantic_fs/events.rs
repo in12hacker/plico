@@ -81,6 +81,7 @@ impl SemanticFS {
         until: Option<u64>,
         tags: &[String],
         event_type: Option<EventType>,
+        agent_id: Option<&str>,
     ) -> Result<Vec<EventSummary>, FSError> {
         let kg = match self.knowledge_graph.as_ref() {
             Some(g) => g,
@@ -112,6 +113,14 @@ impl SemanticFS {
                 _ => continue,
             };
             if node.node_type != KGNodeType::Entity { continue; }
+
+            // L-2 / B14: Filter by agent_id if specified
+            if let Some(aid) = agent_id {
+                if node.agent_id != aid {
+                    continue;
+                }
+            }
+
             let meta: EventMeta = match serde_json::from_value(node.properties.clone()) {
                 Ok(m) => m,
                 Err(_) => continue,
@@ -127,6 +136,7 @@ impl SemanticFS {
                 start_time: meta.start_time,
                 attendee_count: meta.participant_ids.len(),
                 related_count: meta.related_cids.len(),
+                agent_id: Some(node.agent_id.clone()),
             });
         }
 
@@ -141,6 +151,7 @@ impl SemanticFS {
         tags: &[String],
         event_type: Option<EventType>,
         resolver: &dyn TemporalResolver,
+        agent_id: Option<&str>,
     ) -> Result<Vec<EventSummary>, FSError> {
         let range = resolver.resolve(time_expression, None)
             .ok_or_else(|| {
@@ -151,7 +162,7 @@ impl SemanticFS {
             })?;
         let since = if range.since >= 0 { Some(range.since as u64) } else { None };
         let until = Some(range.until as u64);
-        self.list_events(since, until, tags, event_type)
+        self.list_events(since, until, tags, event_type, agent_id)
     }
 
     /// Attach a target to an event via a typed edge.

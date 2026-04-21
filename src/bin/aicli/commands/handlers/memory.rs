@@ -18,7 +18,7 @@ pub fn cmd_remember(kernel: &AIKernel, args: &[String]) -> ApiResponse {
         _ => kernel.remember(&agent_id, "default", content),
     };
     match result {
-        Ok(()) => ApiResponse::ok(),
+        Ok(()) => ApiResponse::ok_with_message(format!("Memory stored for agent '{}'", agent_id)),
         Err(e) => ApiResponse::error(e),
     }
 }
@@ -51,7 +51,7 @@ pub fn cmd_memmove(kernel: &AIKernel, args: &[String]) -> ApiResponse {
     let tier_str = extract_arg(args, "--tier").unwrap_or_default();
     let tier = parse_memory_tier(&tier_str);
     if kernel.memory_move(&agent_id, "default", &entry_id, tier) {
-        ApiResponse::ok()
+        ApiResponse::ok_with_message(format!("Memory entry {} moved to {:?}", entry_id, tier))
     } else {
         ApiResponse::error(format!("Memory entry not found: {}", entry_id))
     }
@@ -67,7 +67,7 @@ pub fn cmd_memdelete(kernel: &AIKernel, args: &[String]) -> ApiResponse {
         }
     };
     if kernel.memory_delete(&agent_id, "default", &entry_id) {
-        ApiResponse::ok()
+        ApiResponse::ok_with_message(format!("Memory entry {} deleted", entry_id))
     } else {
         ApiResponse::error(format!("Memory entry not found: {}", entry_id))
     }

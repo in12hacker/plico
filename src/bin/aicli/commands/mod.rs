@@ -99,10 +99,11 @@ pub fn extract_tags_opt(args: &[String], flag: &str) -> Option<Vec<String>> {
 // ─── Output Formatting ──────────────────────────────────────────────
 
 /// If AICLI_OUTPUT=json, print ApiResponse as JSON; otherwise human-readable.
-pub fn print_result(response: &ApiResponse) {
+/// Returns true if the command succeeded (ok), false if it failed.
+pub fn print_result(response: &ApiResponse) -> bool {
     if std::env::var("AICLI_OUTPUT").as_deref().ok() == Some("json") {
         println!("{}", serde_json::to_string_pretty(response).unwrap_or_default());
-        return;
+        return response.ok;
     }
 
     // Human-readable output
@@ -397,11 +398,6 @@ pub fn print_result(response: &ApiResponse) {
         println!("  Procedures learned: {}", gr.procedures_learned);
         println!("  KG nodes/edges created: {}/{}", gr.kg_nodes_created, gr.kg_edges_created);
     }
-    if !response.ok {
-        if let Some(e) = &response.error {
-            eprintln!("Error: {}", e);
-        }
-    }
     if let Some(total) = response.total_count {
         let shown = response.results.as_ref().map(|r| r.len())
             .or(response.nodes.as_ref().map(|n| n.len()))
@@ -413,4 +409,19 @@ pub fn print_result(response: &ApiResponse) {
             println!("Showing {}/{} (use --offset/--limit for pagination)", shown, total);
         }
     }
+
+    // Handle operation feedback message (L-1/F-47)
+    if let Some(ref msg) = response.message {
+        println!("{}", msg);
+    }
+
+    // Error path: stderr + non-zero exit
+    if !response.ok {
+        if let Some(e) = &response.error {
+            eprintln!("Error: {}", e);
+        }
+        return false;
+    }
+
+    response.ok
 }

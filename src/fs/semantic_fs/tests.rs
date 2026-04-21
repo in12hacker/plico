@@ -159,10 +159,10 @@ fn event_meta_in_range_filters_correctly() {
     let fs = make_fs_with_kg(&dir);
     let now = chrono::Utc::now().timestamp_millis() as u64;
     let _id = fs.create_event("recent-meeting", EventType::Task, Some(now - 3_600_000), None, None, vec![], "a").unwrap();
-    let events = fs.list_events(Some(now - 86_400_000), Some(now), &[], None).unwrap();
+    let events = fs.list_events(Some(now - 86_400_000), Some(now), &[], None, None).unwrap();
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].label, "recent-meeting");
-    let events = fs.list_events(Some(now - 3_600_000_000), Some(now - 86_400_000), &[], None).unwrap();
+    let events = fs.list_events(Some(now - 3_600_000_000), Some(now - 86_400_000), &[], None, None).unwrap();
     assert_eq!(events.len(), 0);
 }
 
@@ -195,11 +195,11 @@ fn create_and_list_event_with_kg() {
     let dir = TempDir::new().unwrap();
     let fs = make_fs_with_kg(&dir);
     let _id = fs.create_event("team-sync", EventType::Task, None, None, None, vec!["sync".to_string()], "a").unwrap();
-    let events = fs.list_events(None, None, &[], None).unwrap();
+    let events = fs.list_events(None, None, &[], None, None).unwrap();
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].label, "team-sync");
-    assert_eq!(fs.list_events(None, None, &["sync".to_string()], None).unwrap().len(), 1);
-    assert_eq!(fs.list_events(None, None, &["missing".to_string()], None).unwrap().len(), 0);
+    assert_eq!(fs.list_events(None, None, &["sync".to_string()], None, None).unwrap().len(), 1);
+    assert_eq!(fs.list_events(None, None, &["missing".to_string()], None, None).unwrap().len(), 0);
 }
 
 #[test]
@@ -208,7 +208,7 @@ fn list_events_by_time_range() {
     let fs = make_fs_with_kg(&dir);
     let now = chrono::Utc::now().timestamp_millis() as u64;
     fs.create_event("today", EventType::Task, Some(now - 3_600_000), None, None, vec![], "a").unwrap();
-    let events = fs.list_events_by_time("几天前", &[], None, &crate::temporal::RULE_BASED_RESOLVER).unwrap();
+    let events = fs.list_events_by_time("几天前", &[], None, &crate::temporal::RULE_BASED_RESOLVER, None).unwrap();
     assert_eq!(events.len(), 1);
 }
 
@@ -217,9 +217,9 @@ fn list_events_by_tag_intersection() {
     let dir = TempDir::new().unwrap();
     let fs = make_fs_with_kg(&dir);
     fs.create_event("multi-tag", EventType::Task, None, None, None, vec!["a".to_string(), "b".to_string()], "a").unwrap();
-    assert_eq!(fs.list_events(None, None, &["a".to_string()], None).unwrap().len(), 1);
-    assert_eq!(fs.list_events(None, None, &["a".to_string(), "b".to_string()], None).unwrap().len(), 1);
-    assert_eq!(fs.list_events(None, None, &["a".to_string(), "c".to_string()], None).unwrap().len(), 0);
+    assert_eq!(fs.list_events(None, None, &["a".to_string()], None, None).unwrap().len(), 1);
+    assert_eq!(fs.list_events(None, None, &["a".to_string(), "b".to_string()], None, None).unwrap().len(), 1);
+    assert_eq!(fs.list_events(None, None, &["a".to_string(), "c".to_string()], None, None).unwrap().len(), 0);
 }
 
 #[test]
@@ -229,10 +229,10 @@ fn event_attach_updates_meta_and_edge() {
     let event_id = fs.create_event("batch-indexing", EventType::Task, None, None, None, vec![], "a").unwrap();
     let person_id = "agent:worker-01";
     fs.event_attach(&event_id, person_id, EventRelation::Participant, "a").unwrap();
-    let events = fs.list_events(None, None, &[], None).unwrap();
+    let events = fs.list_events(None, None, &[], None, None).unwrap();
     assert_eq!(events[0].attendee_count, 1);
     fs.event_attach(&event_id, "QmAABBCC", EventRelation::Artifact, "a").unwrap();
-    let events = fs.list_events(None, None, &[], None).unwrap();
+    let events = fs.list_events(None, None, &[], None, None).unwrap();
     assert_eq!(events[0].related_count, 1);
 }
 
@@ -240,7 +240,7 @@ fn event_attach_updates_meta_and_edge() {
 fn list_events_returns_empty_without_kg() {
     let (fs, _dir) = make_fs();
     fs.create_event("test", EventType::Task, None, None, None, vec![], "a").unwrap();
-    assert!(fs.list_events(None, None, &[], None).unwrap().is_empty());
+    assert!(fs.list_events(None, None, &[], None, None).unwrap().is_empty());
 }
 
 #[test]
@@ -261,7 +261,7 @@ fn list_events_by_time_resolves_expression() {
         .and_utc()
         .timestamp_millis() as u64;
     fs.create_event("past-indexing-run", EventType::Task, Some(three_days_ago), None, None, vec!["indexing".to_string()], "a").unwrap();
-    let events = fs.list_events_by_time("几天前", &["indexing".to_string()], None, &RULE_BASED_RESOLVER).unwrap();
+    let events = fs.list_events_by_time("几天前", &["indexing".to_string()], None, &RULE_BASED_RESOLVER, None).unwrap();
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].label, "past-indexing-run");
 }
@@ -270,7 +270,7 @@ fn list_events_by_time_resolves_expression() {
 fn list_events_by_time_unknown_expression_returns_error() {
     let (fs, _dir) = make_fs();
     let resolver = crate::temporal::StubTemporalResolver;
-    assert!(fs.list_events_by_time("当我还是个孩子的时候", &[], None, &resolver).is_err());
+    assert!(fs.list_events_by_time("当我还是个孩子的时候", &[], None, &resolver, None).is_err());
 }
 
 #[test]

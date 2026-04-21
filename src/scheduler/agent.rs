@@ -60,12 +60,12 @@ impl AgentState {
         use AgentState::*;
         matches!(
             (self, to),
-            (Created, Waiting) | (Created, Running) | (Created, Terminated)
+            (Created, Waiting) | (Created, Running) | (Created, Suspended) | (Created, Terminated)
             | (Waiting, Running) | (Waiting, Suspended) | (Waiting, Completed)
             | (Waiting, Failed) | (Waiting, Terminated)
             | (Running, Waiting) | (Running, Suspended) | (Running, Completed)
             | (Running, Failed) | (Running, Terminated)
-            | (Suspended, Waiting) | (Suspended, Terminated)
+            | (Suspended, Waiting) | (Suspended, Running) | (Suspended, Terminated)
         )
     }
 }

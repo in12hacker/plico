@@ -7,7 +7,7 @@ use super::extract_arg;
 use super::extract_tags;
 
 pub fn cmd_events(kernel: &AIKernel, args: &[String]) -> ApiResponse {
-    let _agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
+    let agent_id = extract_arg(args, "--agent");
     let tags = extract_tags(args, "--tags");
 
     match args.get(1).map(|s| s.as_str()) {
@@ -16,7 +16,7 @@ pub fn cmd_events(kernel: &AIKernel, args: &[String]) -> ApiResponse {
                 .and_then(|s| s.parse().ok());
             let until = extract_arg(args, "--until")
                 .and_then(|s| s.parse().ok());
-            let events = kernel.list_events(since, until, &tags, None);
+            let events = kernel.list_events(since, until, &tags, None, agent_id.as_deref());
             ApiResponse::with_events(events)
         }
         Some("by-time") | Some("text") => {
@@ -27,7 +27,7 @@ pub fn cmd_events(kernel: &AIKernel, args: &[String]) -> ApiResponse {
                 eprintln!("Usage: events by-time \"last week\" [--tags TAGS]");
                 return ApiResponse::error("Missing time expression".to_string());
             }
-            match kernel.list_events_text(&time_expression, &tags, None) {
+            match kernel.list_events_text(&time_expression, &tags, None, agent_id.as_deref()) {
                 Ok(events) => ApiResponse::with_events(events),
                 Err(e) => ApiResponse::error(e.to_string()),
             }

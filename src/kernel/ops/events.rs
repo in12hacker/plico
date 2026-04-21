@@ -37,8 +37,9 @@ impl crate::kernel::AIKernel {
         until: Option<u64>,
         tags: &[String],
         event_type: Option<EventType>,
+        agent_id: Option<&str>,
     ) -> Vec<EventSummary> {
-        self.fs.list_events(since, until, tags, event_type).unwrap_or_default()
+        self.fs.list_events(since, until, tags, event_type, agent_id).unwrap_or_default()
     }
 
     /// List events by natural-language time expression (e.g. "几天前", "上周").
@@ -47,9 +48,10 @@ impl crate::kernel::AIKernel {
         time_expression: &str,
         tags: &[String],
         event_type: Option<EventType>,
+        agent_id: Option<&str>,
     ) -> std::io::Result<Vec<EventSummary>> {
         let resolver: &dyn TemporalResolver = &RULE_BASED_RESOLVER;
-        self.fs.list_events_by_time(time_expression, tags, event_type, resolver)
+        self.fs.list_events_by_time(time_expression, tags, event_type, resolver, agent_id)
             .map_err(|e| std::io::Error::other(e.to_string()))
     }
 

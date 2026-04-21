@@ -602,9 +602,11 @@ pub fn handle_query_growth_report(
 
     // 1. Session statistics
     let completed_sessions = session_store.get_completed_sessions(agent_id, period_ms);
-    let sessions_total = completed_sessions.len() as u64;
+    // L-5: Also count active sessions (not just completed) for accurate growth reporting
+    let active_sessions = session_store.get_active_sessions(agent_id, cutoff_ms);
+    let sessions_total = (completed_sessions.len() + active_sessions.len()) as u64;
 
-    // Calculate average tokens per session for first 5 and last 5
+    // Calculate average tokens per session for first 5 and last 5 (from completed only)
     let token_averages = calculate_token_averages(&completed_sessions);
 
     // 2. Intent cache hit rate

@@ -154,6 +154,8 @@ pub struct EventSummary {
     pub start_time: Option<u64>,
     pub attendee_count: usize,
     pub related_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<String>,
 }
 
 // ── Audit & Recycle ───────────────────────────────────────────────────────────

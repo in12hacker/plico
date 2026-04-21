@@ -12,7 +12,7 @@ pub fn cmd_send_message(kernel: &AIKernel, args: &[String]) -> ApiResponse {
 
     match kernel.send_message(&from, &to, payload) {
         Ok(msg_id) => {
-            let mut r = ApiResponse::ok();
+            let mut r = ApiResponse::ok_with_message(format!("Message sent to '{}'", to));
             r.data = Some(msg_id);
             r
         }
@@ -35,7 +35,7 @@ pub fn cmd_ack_message(kernel: &AIKernel, args: &[String]) -> ApiResponse {
     let message_id = args.get(1).cloned().unwrap_or_default();
 
     if kernel.ack_message(&agent_id, &message_id) {
-        ApiResponse::ok()
+        ApiResponse::ok_with_message(format!("Message {} acknowledged", message_id))
     } else {
         ApiResponse::error(format!("Message not found: {}", message_id))
     }
