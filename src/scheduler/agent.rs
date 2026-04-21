@@ -89,6 +89,12 @@ impl std::error::Error for TransitionError {}
 pub struct Agent {
     id: AgentId,
     pub name: String,
+    /// Human-readable description of this agent's purpose.
+    #[serde(default)]
+    pub description: String,
+    /// Timestamp when agent was created (milliseconds since epoch).
+    #[serde(default)]
+    created_at_ms: u64,
     state: AgentState,
     /// Current intent being executed (not serialized — transient).
     #[serde(skip)]
@@ -119,6 +125,20 @@ impl Agent {
         Self {
             id: AgentId::new(),
             name,
+            description: String::new(),
+            created_at_ms: now_ms(),
+            state: AgentState::Created,
+            current_intent: None,
+            resources: AgentResources::default(),
+        }
+    }
+
+    pub fn with_description(name: String, description: String) -> Self {
+        Self {
+            id: AgentId::new(),
+            name,
+            description,
+            created_at_ms: now_ms(),
             state: AgentState::Created,
             current_intent: None,
             resources: AgentResources::default(),
@@ -154,6 +174,14 @@ impl Agent {
 
     pub fn set_resources(&mut self, resources: AgentResources) {
         self.resources = resources;
+    }
+
+    pub fn description(&self) -> &str {
+        &self.description
+    }
+
+    pub fn created_at_ms(&self) -> u64 {
+        self.created_at_ms
     }
 }
 

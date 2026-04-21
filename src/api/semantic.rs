@@ -2199,15 +2199,38 @@ pub struct AgentUsageDto {
 
 /// Agent capability card — what an agent can do and its current state.
 /// Enables peer discovery: agents find collaborators by capability match.
+/// A2A-compliant (RFC draft 2025).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentCardDto {
+    /// Unique agent identifier (UUID).
     pub agent_id: String,
+    /// Human-readable agent name.
     pub name: String,
+    /// Human-readable description of agent's purpose/capabilities.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
+    /// Agent version string (semver).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub version: String,
+    /// Current lifecycle state.
     pub state: String,
+    /// Memory resource quota (0 = unlimited).
+    #[serde(default)]
+    pub memory_quota: u64,
+    /// CPU time quota per intent (ms, 0 = unlimited).
+    #[serde(default)]
+    pub cpu_time_quota: u64,
+    /// Available tools (empty = all tools allowed).
     pub tools: Vec<String>,
+    /// Number of memories stored for this agent.
     pub memory_entries: usize,
+    /// Total tool calls executed by this agent.
     pub tool_call_count: u64,
+    /// When agent was last active (ms since epoch, 0 = never).
     pub last_active_ms: u64,
+    /// When agent was registered (ms since epoch).
+    #[serde(default)]
+    pub created_at_ms: u64,
 }
 
 /// Result of a delegation operation.

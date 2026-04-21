@@ -383,13 +383,18 @@ impl crate::kernel::AIKernel {
                 }
 
                 Some(AgentCardDto {
-                    agent_id: h.id,
-                    name: h.name,
+                    agent_id: h.id.clone(),
+                    name: h.name.clone(),
+                    description: h.description.clone(),
+                    version: String::new(), // Not yet configurable
                     state: format!("{:?}", h.state),
+                    memory_quota: resources.memory_quota,
+                    cpu_time_quota: resources.cpu_time_quota,
                     tools,
                     memory_entries,
                     tool_call_count: usage.tool_call_count,
                     last_active_ms: usage.last_active_ms,
+                    created_at_ms: h.created_at_ms,
                 })
             })
             .collect()

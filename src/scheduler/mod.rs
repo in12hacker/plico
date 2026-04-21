@@ -28,6 +28,7 @@ pub use dispatch::{DispatchHandle, AgentExecutor, LocalExecutor, KernelExecutor,
 
 use serde::{Deserialize, Serialize};
 use std::sync::RwLock;
+use agent::now_ms;
 
 /// The scheduler — global agent lifecycle manager.
 pub struct AgentScheduler {
@@ -49,6 +50,8 @@ pub struct AgentScheduler {
 pub struct AgentHandle {
     pub id: String,
     pub name: String,
+    pub description: String,
+    pub created_at_ms: u64,
     pub state: AgentState,
 }
 
@@ -57,12 +60,13 @@ impl AgentHandle {
         Self {
             id: agent.id().to_string(),
             name: agent.name.clone(),
+            description: agent.description.clone(),
+            created_at_ms: agent.created_at_ms(),
             state: agent.state(),
         }
     }
 }
 
-use agent::now_ms;
 use std::collections::HashMap;
 
 impl AgentScheduler {
