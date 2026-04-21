@@ -1453,6 +1453,18 @@ pub struct ApiResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Human-readable operation confirmation message (F-47).
+    pub message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Machine-readable error code for diagnostics (F-48).
+    pub error_code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Suggested fix for error recovery (F-48).
+    pub fix_hint: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Suggested next actions for error recovery (F-48).
+    pub next_actions: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub total_count: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub has_more: Option<bool>,
@@ -2220,7 +2232,7 @@ impl ApiResponse {
             agent_state: None,
             pending_intents: None, tools: None, tool_result: None,
             resolved_intents: None, messages: None, context_data: None,
-            error: None, total_count: None, has_more: None,
+            error: None, message: None, error_code: None, fix_hint: None, next_actions: None, total_count: None, has_more: None,
             subscription_id: None, kernel_events: None,
             system_status: None,
             context_assembly: None,
@@ -2312,8 +2324,7 @@ impl ApiResponse {
             agent_state: None,
             pending_intents: None, tools: None, tool_result: None,
             resolved_intents: None, messages: None, context_data: None,
-            error: Some(msg.into()),
-            total_count: None, has_more: None,
+            error: Some(msg.into()), message: None, error_code: None, fix_hint: None, next_actions: None, total_count: None, has_more: None,
             subscription_id: None, kernel_events: None,
             system_status: None,
             context_assembly: None,
@@ -2350,6 +2361,27 @@ impl ApiResponse {
             storage_stats: None,
             evict_result: None,
         }
+    }
+
+    /// Create an ok response with a human-readable confirmation message (F-47).
+    pub fn ok_with_message(msg: impl Into<String>) -> Self {
+        let mut r = Self::ok();
+        r.message = Some(msg.into());
+        r
+    }
+
+    /// Create an error response with structured diagnostics (F-48).
+    pub fn error_with_diagnosis(
+        msg: impl Into<String>,
+        code: impl Into<String>,
+        fix: impl Into<String>,
+        next_actions: Vec<String>,
+    ) -> Self {
+        let mut r = Self::error(msg);
+        r.error_code = Some(code.into());
+        r.fix_hint = Some(fix.into());
+        r.next_actions = Some(next_actions);
+        r
     }
 
     /// Add a correlation ID to this response (for distributed tracing).

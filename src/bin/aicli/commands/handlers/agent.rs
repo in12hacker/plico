@@ -50,24 +50,39 @@ pub fn cmd_agent_status(kernel: &AIKernel, args: &[String]) -> ApiResponse {
 pub fn cmd_agent_suspend(kernel: &AIKernel, args: &[String]) -> ApiResponse {
     let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
     match kernel.agent_suspend(&agent_id) {
-        Ok(()) => ApiResponse::ok(),
-        Err(e) => ApiResponse::error(e.to_string()),
+        Ok(()) => ApiResponse::ok_with_message(format!("Agent '{}' suspended", agent_id)),
+        Err(e) => ApiResponse::error_with_diagnosis(
+            e.to_string(),
+            "AGENT_OPERATION_FAILED",
+            "Check agent ID and try again",
+            vec![format!("plico(agent=\"list\")")],
+        ),
     }
 }
 
 pub fn cmd_agent_resume(kernel: &AIKernel, args: &[String]) -> ApiResponse {
     let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
     match kernel.agent_resume(&agent_id) {
-        Ok(()) => ApiResponse::ok(),
-        Err(e) => ApiResponse::error(e.to_string()),
+        Ok(()) => ApiResponse::ok_with_message(format!("Agent '{}' resumed", agent_id)),
+        Err(e) => ApiResponse::error_with_diagnosis(
+            e.to_string(),
+            "AGENT_OPERATION_FAILED",
+            "Check agent ID and try again",
+            vec![format!("plico(agent=\"list\")")],
+        ),
     }
 }
 
 pub fn cmd_agent_terminate(kernel: &AIKernel, args: &[String]) -> ApiResponse {
     let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
     match kernel.agent_terminate(&agent_id) {
-        Ok(()) => ApiResponse::ok(),
-        Err(e) => ApiResponse::error(e.to_string()),
+        Ok(()) => ApiResponse::ok_with_message(format!("Agent '{}' terminated", agent_id)),
+        Err(e) => ApiResponse::error_with_diagnosis(
+            e.to_string(),
+            "AGENT_OPERATION_FAILED",
+            "Check agent ID and try again",
+            vec![format!("plico(agent=\"list\")")],
+        ),
     }
 }
 

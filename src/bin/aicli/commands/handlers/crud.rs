@@ -92,8 +92,13 @@ pub fn cmd_delete(kernel: &AIKernel, args: &[String]) -> ApiResponse {
     let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
 
     match kernel.semantic_delete(&cid, &agent_id, "default") {
-        Ok(()) => ApiResponse::ok(),
-        Err(e) => ApiResponse::error(e.to_string()),
+        Ok(()) => ApiResponse::ok_with_message(format!("Deleted: {} → recycle bin", cid)),
+        Err(e) => ApiResponse::error_with_diagnosis(
+            e.to_string(),
+            "DELETE_FAILED",
+            "Check CID validity and permissions",
+            vec!["plico(action=\"search\", query=\"...\")".to_string()],
+        ),
     }
 }
 

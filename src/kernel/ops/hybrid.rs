@@ -54,21 +54,33 @@ impl AIKernel {
         );
         let _guard = span.enter();
 
-        // Step 1: Vector search
+        // Step 1: Vector search (may return 0 under stub embedding)
         let vector_results = self.vector_search(query_text, max_results * 2);
         tracing::debug!(vector_hits = vector_results.len(), "Vector search completed");
 
-        // Step 2: KG seed expansion — build set of seed CIDs/nodes from vector results
+        // Step 1b: BM25 search (always available, even with stub embedding) — F-44
+        let bm25_results: Vec<(String, f32)> = self.fs.bm25_search(query_text, max_results * 2);
+
+        // Step 2: KG seed expansion — from vector OR bm25 results (F-44 fallback)
         let mut graph_seeds: Vec<(String, f32)> = Vec::new();
         if let Some(ref kg) = self.knowledge_graph {
+            // Primary: vector results
             for hit in &vector_results {
-                // Try to find a KG node linked to this CID
                 if let Ok(Some(node)) = kg.get_node(&hit.cid) {
                     graph_seeds.push((node.id.clone(), hit.score));
                 }
             }
+            // Fallback: BM25 results (when vector yields nothing or sparse)
+            if graph_seeds.len() < 2 && !bm25_results.is_empty() {
+                tracing::debug!("F-44: vector seeds sparse ({}), using BM25 fallback", graph_seeds.len());
+                for (cid, score) in &bm25_results {
+                    if let Ok(Some(node)) = kg.get_node(cid) {
+                        graph_seeds.push((node.id.clone(), *score));
+                    }
+                }
+            }
         }
-        tracing::debug!(seed_nodes = graph_seeds.len(), "KG seeds from vector results");
+        tracing::debug!(seed_nodes = graph_seeds.len(), "KG seeds populated");
 
         // Step 3: Graph traversal from seeds
         let (graph_hits, path_count) = self.graph_traverse(&graph_seeds, edge_types, graph_depth);

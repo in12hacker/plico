@@ -64,15 +64,6 @@ impl SemanticFS {
         let recycle_bin_path = root_path.join("recycle_bin.json");
         let cas = Arc::new(CASStorage::new(root_path.join("objects"))?);
 
-        let tag_index = if tag_index_path.exists() {
-            Self::load_tag_index(&tag_index_path).unwrap_or_else(|e| {
-                tracing::warn!("Failed to load tag index, rebuilding from CAS: {}", e);
-                Self::rebuild_tag_index(&cas)
-            })
-        } else {
-            Self::rebuild_tag_index(&cas)
-        };
-
         let recycle_bin = if recycle_bin_path.exists() {
             Self::load_recycle_bin(&recycle_bin_path).unwrap_or_else(|e| {
                 tracing::warn!("Failed to load recycle bin: {}", e);
@@ -80,6 +71,15 @@ impl SemanticFS {
             })
         } else {
             HashMap::new()
+        };
+
+        let tag_index = if tag_index_path.exists() {
+            Self::load_tag_index(&tag_index_path).unwrap_or_else(|e| {
+                tracing::warn!("Failed to load tag index, rebuilding from CAS: {}", e);
+                Self::rebuild_tag_index(&cas, &recycle_bin)
+            })
+        } else {
+            Self::rebuild_tag_index(&cas, &recycle_bin)
         };
 
         let fs = Self {
@@ -112,8 +112,10 @@ impl SemanticFS {
         tracing::info!("Rebuilding vector index for {} objects…", cids.len());
         let mut indexed = 0usize;
         let mut embed_available = true;
+        let recycle_bin = self.recycle_bin.read().unwrap();
 
         for cid in &cids {
+            if recycle_bin.contains_key(cid) { continue; } // F-43: skip soft-deleted
             let obj = match self.cas.get_raw(cid) {
                 Ok(o) => o,
                 Err(_) => continue,
@@ -423,6 +425,11 @@ impl SemanticFS {
         self.search_with_filter(query, limit, SearchFilter::default())
     }
 
+    /// Direct BM25 search (exposes raw BM25 results for hybrid retrieval F-44 fallback).
+    pub fn bm25_search(&self, query: &str, limit: usize) -> Vec<(String, f32)> {
+        self.bm25_index.search(query, limit)
+    }
+
     pub fn search_with_filter(&self, query: &str, limit: usize, filter: SearchFilter) -> Vec<SearchResult> {
         let query_emb = self.embedding.embed(query).ok();
 
@@ -636,10 +643,11 @@ impl SemanticFS {
         serde_json::from_slice(&json).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
     }
 
-    fn rebuild_tag_index(cas: &CASStorage) -> HashMap<String, Vec<String>> {
+    fn rebuild_tag_index(cas: &CASStorage, recycle_bin: &HashMap<String, RecycleEntry>) -> HashMap<String, Vec<String>> {
         let mut index: HashMap<String, Vec<String>> = HashMap::new();
         if let Ok(cids) = cas.list_cids() {
             for cid in cids {
+                if recycle_bin.contains_key(&cid) { continue; } // F-43: skip soft-deleted
                 if let Ok(obj) = cas.get_raw(&cid) {
                     for tag in &obj.meta.tags {
                         index.entry(tag.clone()).or_default().push(cid.clone());

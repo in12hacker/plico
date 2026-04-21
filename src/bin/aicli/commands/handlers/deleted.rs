@@ -20,7 +20,12 @@ pub fn cmd_restore(kernel: &AIKernel, args: &[String]) -> ApiResponse {
     let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
 
     match kernel.restore_deleted(&cid, &agent_id) {
-        Ok(()) => ApiResponse::ok(),
-        Err(e) => ApiResponse::error(e.to_string()),
+        Ok(()) => ApiResponse::ok_with_message(format!("Restored: {} from recycle bin", cid)),
+        Err(e) => ApiResponse::error_with_diagnosis(
+            e.to_string(),
+            "RESTORE_FAILED",
+            "Check CID and try again",
+            vec!["plico(action=\"deleted\")".to_string()],
+        ),
     }
 }
