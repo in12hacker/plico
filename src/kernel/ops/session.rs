@@ -4,6 +4,7 @@
 //! to provide StartSession and EndSession APIs with automatic timeout cleanup.
 
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
@@ -156,7 +157,7 @@ const SESSION_SCAN_INTERVAL_SECS: u64 = 60;
 const MAX_COMPLETED_SESSIONS_PER_AGENT: usize = 100;
 
 /// An active session tracked by SessionStore.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ActiveSession {
     pub session_id: String,
     pub agent_id: String,
@@ -188,7 +189,7 @@ impl ActiveSession {
 }
 
 /// A completed session record for growth reporting.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct CompletedSession {
     pub session_id: String,
     pub agent_id: String,
@@ -328,9 +329,73 @@ impl SessionStore {
             .collect()
     }
 
-    /// Get the TTL in milliseconds.
+/// Get the TTL in milliseconds.
     pub fn ttl_ms(&self) -> u64 {
         self.ttl_ms
+    }
+
+    /// Path to the active sessions persistence file.
+    fn sessions_path(root: &Path) -> PathBuf {
+        root.join("sessions.json")
+    }
+
+    /// Path to the completed sessions persistence file.
+    fn completed_sessions_path(root: &Path) -> PathBuf {
+        root.join("completed_sessions.json")
+    }
+
+    /// Persist active and completed sessions to disk (A-1).
+    pub fn persist(&self, root: &Path) -> std::io::Result<()> {
+        // Persist active sessions
+        let sessions = self.sessions.read().unwrap();
+        let sessions_data = serde_json::to_string_pretty(&*sessions)
+            .map_err(|e| std::io::Error::other(e.to_string()))?;
+        let sessions_path = Self::sessions_path(root);
+        let tmp = sessions_path.with_extension("json.tmp");
+        std::fs::write(&tmp, &sessions_data)?;
+        std::fs::rename(&tmp, &sessions_path)?;
+
+        // Persist completed sessions
+        drop(sessions);
+        let completed = self.completed_sessions.read().unwrap();
+        let completed_data = serde_json::to_string_pretty(&*completed)
+            .map_err(|e| std::io::Error::other(e.to_string()))?;
+        let completed_path = Self::completed_sessions_path(root);
+        let tmp = completed_path.with_extension("json.tmp");
+        std::fs::write(&tmp, &completed_data)?;
+        std::fs::rename(&tmp, &completed_path)?;
+
+        Ok(())
+    }
+
+    /// Restore sessions from disk (A-1).
+    pub fn restore(root: &Path) -> Self {
+        let store = Self::new();
+
+        // Restore active sessions
+        let sessions_path = Self::sessions_path(root);
+        if sessions_path.exists() {
+            if let Ok(data) = std::fs::read_to_string(&sessions_path) {
+                if let Ok(sessions) = serde_json::from_str::<HashMap<String, ActiveSession>>(&data) {
+                    *store.sessions.write().unwrap() = sessions;
+                    tracing::info!("Restored {} active sessions from {}",
+                        store.sessions.read().unwrap().len(), sessions_path.display());
+                }
+            }
+        }
+
+        // Restore completed sessions
+        let completed_path = Self::completed_sessions_path(root);
+        if completed_path.exists() {
+            if let Ok(data) = std::fs::read_to_string(&completed_path) {
+                if let Ok(completed) = serde_json::from_str::<HashMap<String, Vec<CompletedSession>>>(&data) {
+                    *store.completed_sessions.write().unwrap() = completed;
+                    tracing::info!("Restored completed sessions from {}", completed_path.display());
+                }
+            }
+        }
+
+        store
     }
 }
 
@@ -350,6 +415,7 @@ pub fn start_session_orchestrate(
     event_bus: &Arc<EventBus>,
     _memory: &Arc<LayeredMemory>,
     prefetch: &crate::kernel::ops::prefetch::IntentPrefetcher,
+    root: &Path,
 ) -> Result<StartSessionResult, String> {
     // 1. Get current event seq for this session's start point
     let current_seq = event_bus.current_seq();
@@ -366,6 +432,11 @@ pub fn start_session_orchestrate(
 
     // 4. Touch session immediately after creation
     session_store.touch(&session_id);
+
+    // 5. Persist immediately (A-1)
+    if let Err(e) = session_store.persist(root) {
+        tracing::warn!("Failed to persist session start: {}", e);
+    }
 
     // 5. Restore from latest checkpoint if exists
     // (checkpoint_agent stores via semantic_create which persists to CAS)
@@ -425,6 +496,7 @@ pub fn end_session_orchestrate(
     auto_checkpoint: bool,
     session_store: &SessionStore,
     memory: &Arc<LayeredMemory>,
+    root: &Path,
 ) -> Result<EndSessionResult, String> {
     // 1. Validate session exists
     let session = session_store.get(session_id)
@@ -457,7 +529,12 @@ pub fn end_session_orchestrate(
     // 4. Remove session from store (tokens_used = None for now, will enhance later)
     session_store.end_session(session_id, None);
 
-    // 5. Return last_seq — this is the current event count at EndSession time
+    // 5. Persist immediately (A-1)
+    if let Err(e) = session_store.persist(root) {
+        tracing::warn!("Failed to persist session end: {}", e);
+    }
+
+    // 6. Return last_seq — this is the current event count at EndSession time
     // The client will receive this and pass it back as last_seen_seq in next StartSession
     let last_seq = session.start_seq; // Use session's start_seq as the baseline
 
@@ -489,7 +566,9 @@ pub struct EndSessionResult {
 pub fn spawn_session_timeout_scanner(
     session_store: Arc<SessionStore>,
     memory: Arc<LayeredMemory>,
+    root: PathBuf,
 ) {
+    let root_clone = root.clone();
     std::thread::spawn(move || {
         loop {
             std::thread::sleep(Duration::from_secs(SESSION_SCAN_INTERVAL_SECS));
@@ -510,6 +589,7 @@ pub fn spawn_session_timeout_scanner(
                     true, // auto_checkpoint
                     &session_store,
                     &memory,
+                    &root_clone,
                 );
             }
         }

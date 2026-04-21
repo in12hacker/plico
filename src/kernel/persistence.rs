@@ -64,7 +64,14 @@ impl AIKernel {
         self.persist_task_store();
         self.persist_tenants();
         self.persist_key_store();
+        self.persist_sessions();
         tracing::info!("All kernel state persisted to disk");
+    }
+
+    pub fn persist_sessions(&self) {
+        if let Err(e) = self.session_store.persist(&self.root) {
+            tracing::warn!("Failed to persist sessions: {}", e);
+        }
     }
 
     // ─── Agent Persistence ──────────────────────────────────────────────

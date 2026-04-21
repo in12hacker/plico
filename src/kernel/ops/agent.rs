@@ -88,36 +88,36 @@ impl crate::kernel::AIKernel {
         Ok(id)
     }
 
-    pub fn agent_status(&self, agent_id: &str) -> Option<(String, String, usize)> {
-        let agent = self.scheduler.get(&AgentId(agent_id.to_string()))?;
+    pub fn agent_status(&self, name_or_id: &str) -> Option<(String, String, usize)> {
+        let aid = self.scheduler.resolve(name_or_id)?;
+        let agent = self.scheduler.get(&aid)?;
         let pending = self.scheduler.snapshot_intents()
             .iter()
-            .filter(|i| i.agent_id.as_ref().map(|a| a.0.as_str()) == Some(agent_id))
+            .filter(|i| i.agent_id.as_ref().map(|a| a.0.as_str()) == Some(&aid.0))
             .count();
         Some((agent.id().to_string(), format!("{:?}", agent.state()), pending))
     }
 
-    pub fn agent_suspend(&self, agent_id: &str) -> std::io::Result<()> {
-        let aid = AgentId(agent_id.to_string());
-        let agent = self.scheduler.get(&aid).ok_or_else(|| {
-            std::io::Error::new(std::io::ErrorKind::NotFound, format!("Agent not found: {}", agent_id))
+    pub fn agent_suspend(&self, name_or_id: &str) -> std::io::Result<()> {
+        let aid = self.scheduler.resolve(name_or_id).ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::NotFound, format!("Agent not found: {}", name_or_id))
         })?;
 
         // Auto-checkpoint to CAS before suspend (best-effort)
-        let checkpoint_cid = self.checkpoint_agent(agent_id).ok();
+        let checkpoint_cid = self.checkpoint_agent(&aid.0).ok();
 
-        let state_before = format!("{:?}", agent.state());
-        let memories = self.memory.get_all(agent_id);
+        let state_before = format!("{:?}", self.scheduler.get(&aid).map(|a| a.state()).unwrap_or(AgentState::Created));
+        let memories = self.memory.get_all(&aid.0);
         let pending = self.scheduler.snapshot_intents()
             .iter()
-            .filter(|i| i.agent_id.as_ref().map(|a| a.0.as_str()) == Some(agent_id))
+            .filter(|i| i.agent_id.as_ref().map(|a| a.0.as_str()) == Some(&aid.0))
             .count();
         let last_intent = self.scheduler.snapshot_intents()
-            .iter().rfind(|i| i.agent_id.as_ref().map(|a| a.0.as_str()) == Some(agent_id))
+            .iter().rfind(|i| i.agent_id.as_ref().map(|a| a.0.as_str()) == Some(&aid.0))
             .map(|i| i.description.clone());
 
         let snapshot = crate::memory::context_snapshot::ContextSnapshot {
-            agent_id: agent_id.to_string(),
+            agent_id: aid.0.clone(),
             timestamp_ms: crate::memory::layered::now_ms(),
             state_before_suspend: state_before.clone(),
             pending_intents: pending,
@@ -133,7 +133,7 @@ impl crate::kernel::AIKernel {
 
         self.scheduler.update_state(&aid, AgentState::Suspended).map_err(transition_err)?;
         self.event_bus.emit(KernelEvent::AgentStateChanged {
-            agent_id: agent_id.to_string(),
+            agent_id: aid.0.clone(),
             old_state: state_before.clone(),
             new_state: "Suspended".into(),
         });
@@ -141,13 +141,12 @@ impl crate::kernel::AIKernel {
         Ok(())
     }
 
-    pub fn agent_resume(&self, agent_id: &str) -> std::io::Result<()> {
-        let aid = AgentId(agent_id.to_string());
-        let _agent = self.scheduler.get(&aid).ok_or_else(|| {
-            std::io::Error::new(std::io::ErrorKind::NotFound, format!("Agent not found: {}", agent_id))
+    pub fn agent_resume(&self, name_or_id: &str) -> std::io::Result<()> {
+        let aid = self.scheduler.resolve(name_or_id).ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::NotFound, format!("Agent not found: {}", name_or_id))
         })?;
 
-        let memories = self.memory.get_all(agent_id);
+        let memories = self.memory.get_all(&aid.0);
 
         // Extract context summary BEFORE any restore (snapshot may be cleared by restore)
         let ctx_summary = crate::memory::context_snapshot::find_latest_snapshot(&memories)
@@ -164,23 +163,23 @@ impl crate::kernel::AIKernel {
             });
 
         if let Some(ref cid) = checkpoint_cid {
-            if let Ok(count) = self.restore_agent_checkpoint(agent_id, cid) {
+            if let Ok(count) = self.restore_agent_checkpoint(&aid.0, cid) {
                 tracing::info!(
                     "Agent {} auto-restored from checkpoint {} ({} entries)",
-                    agent_id, cid, count
+                    aid.0, cid, count
                 );
             }
         }
 
         // Inject context summary for cognitive continuity
         if let Some(ctx_text) = ctx_summary {
-            let entry = crate::memory::MemoryEntry::ephemeral(agent_id, ctx_text);
+            let entry = crate::memory::MemoryEntry::ephemeral(&aid.0, ctx_text);
             self.memory.store(entry);
         }
 
         self.scheduler.update_state(&aid, AgentState::Waiting).map_err(transition_err)?;
         self.event_bus.emit(KernelEvent::AgentStateChanged {
-            agent_id: agent_id.to_string(),
+            agent_id: aid.0.clone(),
             old_state: "Suspended".into(),
             new_state: "Waiting".into(),
         });
@@ -188,15 +187,14 @@ impl crate::kernel::AIKernel {
         Ok(())
     }
 
-    pub fn agent_terminate(&self, agent_id: &str) -> std::io::Result<()> {
-        let aid = AgentId(agent_id.to_string());
-        let agent = self.scheduler.get(&aid).ok_or_else(|| {
-            std::io::Error::new(std::io::ErrorKind::NotFound, format!("Agent not found: {}", agent_id))
+    pub fn agent_terminate(&self, name_or_id: &str) -> std::io::Result<()> {
+        let aid = self.scheduler.resolve(name_or_id).ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::NotFound, format!("Agent not found: {}", name_or_id))
         })?;
-        let old_state = format!("{:?}", agent.state());
+        let old_state = format!("{:?}", self.scheduler.get(&aid).map(|a| a.state()).unwrap_or(AgentState::Created));
         self.scheduler.update_state(&aid, AgentState::Terminated).map_err(transition_err)?;
         self.event_bus.emit(KernelEvent::AgentStateChanged {
-            agent_id: agent_id.to_string(),
+            agent_id: aid.0.clone(),
             old_state,
             new_state: "Terminated".into(),
         });

@@ -39,6 +39,9 @@ pub struct AgentScheduler {
 
     /// Per-agent runtime usage counters.
     usage: RwLock<HashMap<AgentId, AgentUsage>>,
+
+    /// Name → AgentId index for name-based lookup (A-2, B21 fix).
+    name_index: RwLock<HashMap<String, AgentId>>,
 }
 
 /// Lightweight agent reference for cross-module communication.
@@ -68,15 +71,36 @@ impl AgentScheduler {
             agents: RwLock::new(HashMap::new()),
             queue: RwLock::new(SchedulerQueue::new()),
             usage: RwLock::new(HashMap::new()),
+            name_index: RwLock::new(HashMap::new()),
         }
     }
 
     /// Register a new agent with the scheduler.
     pub fn register(&self, agent: Agent) -> AgentId {
         let id = agent.id().clone();
+        let name = agent.name.clone();
         let mut agents = self.agents.write().unwrap();
         agents.insert(id.clone(), agent);
+        drop(agents);
+        // Update name index (A-2)
+        if !name.is_empty() {
+            if let Ok(mut index) = self.name_index.write() {
+                index.insert(name, id.clone());
+            }
+        }
         id
+    }
+
+    /// Resolve name or UUID to AgentId.
+    /// Returns AgentId if found via direct UUID lookup or name lookup.
+    pub fn resolve(&self, name_or_id: &str) -> Option<AgentId> {
+        // Try direct UUID lookup first
+        let aid = AgentId(name_or_id.to_string());
+        if self.agents.read().unwrap().contains_key(&aid) {
+            return Some(aid);
+        }
+        // Fall back to name lookup
+        self.name_index.read().unwrap().get(name_or_id).cloned()
     }
 
     /// Submit an intent to the scheduler queue.
@@ -129,15 +153,30 @@ impl AgentScheduler {
     /// Replaces any existing agents with the same ID.
     pub fn restore_agents(&self, agents: Vec<Agent>) {
         let mut map = self.agents.write().unwrap();
+        let mut index = self.name_index.write().unwrap();
+        index.clear();
         for agent in agents {
-            map.insert(agent.id().clone(), agent);
+            let id = agent.id().clone();
+            let name = agent.name.clone();
+            map.insert(id.clone(), agent);
+            if !name.is_empty() {
+                index.insert(name, id);
+            }
         }
     }
 
     /// Re-register an already-constructed Agent (e.g. deserialized from CAS).
     pub fn register_existing(&self, agent: Agent) {
+        let id = agent.id().clone();
+        let name = agent.name.clone();
         let mut agents = self.agents.write().unwrap();
-        agents.insert(agent.id().clone(), agent);
+        agents.insert(id.clone(), agent);
+        drop(agents);
+        if !name.is_empty() {
+            if let Ok(mut index) = self.name_index.write() {
+                index.insert(name, id);
+            }
+        }
     }
 
     /// Get an agent's resource limits.

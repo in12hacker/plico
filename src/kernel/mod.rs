@@ -206,13 +206,15 @@ impl AIKernel {
         ));
 
         // Session lifecycle store — manages StartSession/EndSession state and timeout (F-6)
-        let session_store = Arc::new(ops::session::SessionStore::new());
+        // A-1: Restore from disk if exists, otherwise create fresh
+        let session_store = Arc::new(ops::session::SessionStore::restore(&root));
 
         // Spawn background timeout scanner for expired sessions
         let timeout_session_store = Arc::clone(&session_store);
         let timeout_memory = memory.clone();
+        let timeout_root = root.clone();
         std::thread::spawn(move || {
-            ops::session::spawn_session_timeout_scanner(timeout_session_store, timeout_memory);
+            ops::session::spawn_session_timeout_scanner(timeout_session_store, timeout_memory, timeout_root);
         });
 
         // Checkpoint store — persists agent checkpoints to CAS (P-2)
@@ -1397,6 +1399,7 @@ impl AIKernel {
                     &self.event_bus,
                     &self.memory,
                     &self.prefetch,
+                    &self.root,
                 ) {
                     Ok(result) => {
                         let mut r = ApiResponse::ok();
@@ -1424,6 +1427,7 @@ impl AIKernel {
                     auto_checkpoint,
                     &self.session_store,
                     &self.memory,
+                    &self.root,
                 ) {
                     Ok(result) => {
                         let mut r = ApiResponse::ok();
