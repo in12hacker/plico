@@ -70,16 +70,29 @@ src/
 │   ├── event_bus.rs     # EventBus — typed pub/sub, kernel events, persisted log
 │   ├── ops/             # Operation groups (keeps mod.rs manageable)
 │   │   ├── mod.rs       # Re-exports
-│   │   ├── fs.rs        # FS-related kernel operations
-│   │   ├── agent.rs     # Agent lifecycle operations
-│   │   ├── memory.rs    # Memory tier operations
+│   │   ├── fs.rs        # FS-related kernel operations (search, CRUD, stats, evict)
+│   │   ├── agent.rs     # Agent lifecycle (register, ensure_registered, suspend, resume)
+│   │   ├── memory.rs    # Memory tier operations (recall, store, promote, compress)
 │   │   ├── events.rs    # Event bus + event log operations
-│   │   ├── graph.rs     # Knowledge graph operations
+│   │   ├── graph.rs     # Knowledge graph operations (CRUD, traverse, impact, causal)
 │   │   ├── dispatch.rs  # Dispatch loop + result consumer
 │   │   ├── messaging.rs # Inter-agent messaging
-│   │   ├── dashboard.rs # SystemStatus (was dashboard, now semantic-only)
+│   │   ├── dashboard.rs # SystemStatus, health_indicators
 │   │   ├── permission.rs # Permission delegation
-│   │   └── tools_external.rs # External tool provider integration (MCP)
+│   │   ├── tools_external.rs # External tool provider integration (MCP)
+│   │   ├── session.rs   # Session lifecycle (start, end, orchestrate, compound response)
+│   │   ├── delta.rs     # Delta tracking (changes since seq, watch CIDs/tags)
+│   │   ├── prefetch.rs  # ⚠ 1842 lines — Intent prefetcher + feedback + async assembly
+│   │   ├── hybrid.rs    # Graph-RAG hybrid retrieval (vector + KG)
+│   │   ├── model.rs     # LLM model management (hot-swap, list providers)
+│   │   ├── cache.rs     # Multi-layer caching (intent, search, embedding)
+│   │   ├── batch.rs     # Batch operations (multi-object CRUD)
+│   │   ├── checkpoint.rs # Agent state checkpoint / restore
+│   │   ├── tenant.rs    # Tenant isolation operations
+│   │   ├── task.rs      # Task delegation between agents
+│   │   ├── observability.rs # Metrics, telemetry, performance counters
+│   │   ├── tier_maintenance.rs # Memory tier maintenance (TTL, promotion)
+│   │   └── distributed.rs # Distributed operation stubs
 │   └── INDEX.md
 ├── api/                 # API layer — permission guardrails + semantic JSON protocol
 │   ├── semantic.rs      # ApiRequest, ApiResponse, SystemStatus, protocol types
@@ -124,12 +137,16 @@ src/
 │               ├── tool.rs      # tool list/describe/call
 │               ├── events.rs    # events list/by-time
 │               ├── context.rs   # context assembly
-│               └── skills.rs    # skills register/discover
+│               ├── skills.rs    # skills register/discover
+│               ├── session.rs   # session-start/session-end/growth
+│               ├── delta.rs     # delta change tracking
+│               └── hybrid.rs    # hybrid Graph-RAG retrieval
 ├── lib.rs               # Crate root: pub mod declarations + PlicoError + re-exports
 └── main.rs              # Stub — directs to plicod/aicli/plico-mcp
 
-tests/                   # Integration tests
+tests/                   # Integration tests (28 files)
 ├── kernel_test.rs       # AIKernel full integration (agents, CRUD, tools, events, dispatch, status)
+├── ai_experience_test.rs # C-6: Multi-session AI agent workflow (cross-agent search, auto-reg)
 ├── fs_test.rs           # SemanticFS CRUD + event tests
 ├── cli_test.rs          # CLI binary tests
 ├── memory_test.rs       # Layered memory tests
@@ -139,7 +156,18 @@ tests/                   # Integration tests
 ├── permission_test.rs   # Permission guard tests
 ├── intent_test.rs       # Intent router tests
 ├── mcp_test.rs          # MCP server tests
-└── integration_demo_test.rs # E2E demo scenario
+├── batch_ops_test.rs    # Batch operation tests
+├── kg_causal_test.rs    # Knowledge graph causal reasoning
+├── observability_test.rs # Metrics and observability
+├── node4_hybrid.rs      # Node 4 hybrid retrieval tests
+├── node4_knowledge_event.rs # Node 4 knowledge events
+├── node4_task.rs        # Node 4 task delegation
+├── node4_crash_recovery.rs # Node 4 crash recovery
+├── node5_self_evolving_test.rs # Node 5 self-evolving skills
+├── api_version_test.rs  # API versioning tests
+├── model_hot_swap_test.rs # Model hot-swap tests
+├── integration_demo_test.rs # E2E demo scenario
+└── ...                  # + benchmark/metrics tests (v9, v11, v22)
 
 Cargo.toml               # Rust crate definition (3 binaries: plicod, aicli, plico-mcp)
 CLAUDE.md                # AI guidance (soul document reference)
@@ -161,12 +189,11 @@ docs/                    # Tier B — iteration-end human docs (not maintained p
 | API layer | `src/api/INDEX.md` | Permission guard, semantic JSON protocol |
 | Tool system | `src/tool/INDEX.md` | ToolRegistry, ToolDescriptor, execute_tool — "Everything is a Tool" |
 | Temporal | `src/temporal/INDEX.md` | Time expression → Unix ms range resolution |
-| LLM providers | `src/llm/mod.rs` | LlmProvider trait, Ollama/OpenAI/Stub backends |
-| MCP client | `src/mcp/mod.rs` | External tool integration via MCP protocol |
+| LLM providers | `src/llm/INDEX.md` | LlmProvider trait, Ollama/OpenAI/Stub backends |
+| MCP client | `src/mcp/INDEX.md` | External tool integration via MCP protocol |
 | Event bus | `src/kernel/event_bus.rs` | Kernel pub/sub, persisted event log |
-| TCP daemon | `src/bin/plicod.rs` | JSON API server on port 7878 (TCP only, no HTTP) |
-| MCP server | `src/bin/plico_mcp.rs` | JSON-RPC 2.0 stdio server for editors/agents |
-| CLI tool | `src/bin/aicli/main.rs` | Semantic CLI — `put`, `get`, `search`, `node`, `edge`, `tool`, `intent`, `system-status`, etc. |
+| Kernel ops | `src/kernel/ops/INDEX.md` | 24 operation files (session, delta, prefetch, hybrid, etc.) |
+| Binaries | `src/bin/INDEX.md` | plicod (TCP), plico-mcp (MCP stdio), aicli (CLI) |
 | Milestone plans | `docs/plans/INDEX.md` | v0.5+ roadmap copies for Git; sync at iteration end |
 
 ## Build & Test

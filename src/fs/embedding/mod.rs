@@ -2,6 +2,7 @@
 //!
 //! Re-exports all embedding backends.
 
+pub mod circuit_breaker;
 pub mod json_rpc;
 pub mod local;
 pub mod ollama;
@@ -9,6 +10,7 @@ pub mod ort_backend;
 pub mod stub;
 pub mod types;
 
+pub use circuit_breaker::EmbeddingCircuitBreaker;
 pub use ollama::OllamaBackend;
 pub use local::LocalEmbeddingBackend;
 pub use ort_backend::OrtEmbeddingBackend;

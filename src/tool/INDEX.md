@@ -46,8 +46,9 @@ None — tool module defines types only. Depends on `serde`, `serde_json` (exter
 
 | File | Lines | Purpose |
 |------|-------|---------|
-| `mod.rs` | ~91 | ToolResult, ToolSchema, ToolDescriptor types + tests |
-| `registry.rs` | ~100 | ToolRegistry — register/get/list/unregister/contains |
+| `mod.rs` | ~130 | ToolResult, ToolSchema, ToolDescriptor types + tests |
+| `registry.rs` | ~186 | ToolRegistry — register/get/list/unregister/contains |
+| `procedure_provider.rs` | ~232 | Procedural memory → tool bridge (skills as callable tools) |
 
 ## Tests
 

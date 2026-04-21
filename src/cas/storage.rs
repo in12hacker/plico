@@ -18,18 +18,41 @@
 //! - CID prefix sharding: prevents >10k files per directory (filesystem limit).
 //! - Atomic writes: write to temp file, then rename to prevent partial writes.
 
+use std::collections::HashMap;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::RwLock;
 
 use crate::cas::object::AIObject;
 
 #[cfg(test)]
 use crate::cas::AIObjectMeta;
 
+// ── F-22: Access tracking ──
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct AccessEntry {
+    pub first_accessed_at: u64,
+    pub last_accessed_at: u64,
+    pub access_count: u64,
+}
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
 #[derive(Debug)]
 pub struct CASStorage {
     root: PathBuf,
+    access_log: RwLock<HashMap<String, AccessEntry>>,
+    // F-42: Lazy persistence state
+    access_count_total: AtomicU64,
+    last_persist_ms: AtomicU64,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -63,7 +86,14 @@ impl CASStorage {
     /// ```
     pub fn new(root_path: PathBuf) -> io::Result<Self> {
         fs::create_dir_all(&root_path)?;
-        Ok(CASStorage { root: root_path })
+        let access_log = Self::load_access_log(&root_path).unwrap_or_default();
+        let initial_count = access_log.values().map(|e| e.access_count).sum();
+        Ok(CASStorage {
+            root: root_path,
+            access_log: RwLock::new(access_log),
+            access_count_total: AtomicU64::new(initial_count),
+            last_persist_ms: AtomicU64::new(now_ms()),
+        })
     }
 
     /// Store an object. Returns the CID.
@@ -103,6 +133,13 @@ impl CASStorage {
     /// - `CASError::NotFound` if CID does not exist
     /// - `CASError::IntegrityFailed` if stored content doesn't match CID
     pub fn get(&self, cid: &str) -> Result<AIObject, CASError> {
+        let obj = self.get_raw(cid)?;
+        self.record_access(cid);
+        Ok(obj)
+    }
+
+    /// Read without recording access (used by metadata queries).
+    pub fn get_raw(&self, cid: &str) -> Result<AIObject, CASError> {
         let obj_path = self.object_path(cid);
 
         if !obj_path.exists() {
@@ -112,7 +149,6 @@ impl CASStorage {
         let json = fs::read(&obj_path)?;
         let obj: AIObject = serde_json::from_slice(&json)?;
 
-        // Verify integrity on read
         if obj.cid != cid || !obj.verify_integrity() {
             return Err(CASError::IntegrityFailed {
                 cid: cid.to_string(),
@@ -193,6 +229,91 @@ impl CASStorage {
     /// Returns true if no objects are stored.
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    // ── F-22: Access tracking methods ──
+    // ── F-42: Lazy persist implementation ──
+
+    fn record_access(&self, cid: &str) {
+        let now = now_ms();
+        let should_persist;
+
+        {
+            let mut log = self.access_log.write().unwrap();
+            log.entry(cid.to_string())
+                .and_modify(|e| { e.last_accessed_at = now; e.access_count += 1; })
+                .or_insert(AccessEntry { first_accessed_at: now, last_accessed_at: now, access_count: 1 });
+
+            // F-42: Update counters for lazy persist trigger
+            let new_total = self.access_count_total.fetch_add(1, Ordering::Relaxed) + 1;
+            should_persist = new_total.is_multiple_of(100);
+        }
+
+        // F-42: Trigger lazy persist if threshold reached
+        if should_persist {
+            let _ = self.persist_access_log();
+        }
+    }
+
+    /// F-42: Check if periodic persist is needed and execute if so.
+    /// Called on each public API entry point for low-overhead check.
+    pub fn maybe_persist_access_log(&self) {
+        let elapsed = now_ms().saturating_sub(self.last_persist_ms.load(Ordering::Relaxed));
+        if elapsed >= 60_000 && self.persist_access_log().is_ok() {
+            self.last_persist_ms.store(now_ms(), Ordering::Relaxed);
+        }
+    }
+
+    /// Get access statistics for a CID. Returns None if never accessed.
+    pub fn object_usage(&self, cid: &str) -> Option<AccessEntry> {
+        self.access_log.read().unwrap().get(cid).cloned()
+    }
+
+    /// List CIDs not accessed within `threshold_ms` milliseconds.
+    pub fn cold_objects(&self, threshold_ms: u64) -> Vec<String> {
+        let now = now_ms();
+        let log = self.access_log.read().unwrap();
+
+        let tracked: HashMap<&String, &AccessEntry> = log.iter().collect();
+        let mut cold = Vec::new();
+
+        if let Ok(cids) = self.list_cids() {
+            for cid in cids {
+                let is_cold = match tracked.get(&cid) {
+                    Some(entry) => now.saturating_sub(entry.last_accessed_at) > threshold_ms,
+                    None => true, // never accessed = cold
+                };
+                if is_cold { cold.push(cid); }
+            }
+        }
+        cold
+    }
+
+    /// Total disk bytes occupied by CAS objects.
+    pub fn total_bytes(&self) -> u64 {
+        self.list_cids().unwrap_or_default().iter()
+            .map(|cid| fs::metadata(self.object_path(cid)).map(|m| m.len()).unwrap_or(0))
+            .sum()
+    }
+
+    /// Persist access log to disk.
+    pub fn persist_access_log(&self) -> io::Result<()> {
+        let log = self.access_log.read().unwrap();
+        let json = serde_json::to_vec(&*log)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        let path = self.root.join("_access_log.json");
+        let tmp = self.root.join("_access_log.json.tmp");
+        fs::write(&tmp, json)?;
+        fs::rename(&tmp, &path)?;
+        Ok(())
+    }
+
+    fn load_access_log(root: &Path) -> io::Result<HashMap<String, AccessEntry>> {
+        let path = root.join("_access_log.json");
+        if !path.exists() { return Ok(HashMap::new()); }
+        let json = fs::read(&path)?;
+        serde_json::from_slice(&json)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
     }
 
     /// Compute shard directory for a CID.

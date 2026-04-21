@@ -13,6 +13,8 @@
 use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use plico::api::semantic::{ApiRequest, ApiResponse, DiscoveryScope, KnowledgeType, ProcedureStepDto};
 use plico::kernel::AIKernel;
@@ -23,6 +25,39 @@ const SERVER_NAME: &str = "plico-mcp";
 const SERVER_VERSION: &str = "1.0.0";
 const PROTOCOL_VERSION: &str = "2024-11-05";
 const DEFAULT_AGENT: &str = "mcp-agent";
+
+// ── F-32: Rate limiter (sliding window, atomic) ──
+
+static RATE_WINDOW_START: AtomicU64 = AtomicU64::new(0);
+static RATE_WINDOW_COUNT: AtomicU64 = AtomicU64::new(0);
+
+fn rate_limit_max() -> u64 {
+    std::env::var("PLICO_RATE_LIMIT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(60) // default 60 req/min
+}
+
+fn check_rate_limit() -> Result<(), String> {
+    let max = rate_limit_max();
+    if max == 0 { return Ok(()); } // 0 = unlimited
+
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+    let window = RATE_WINDOW_START.load(Ordering::Relaxed);
+
+    if now - window >= 60 {
+        RATE_WINDOW_START.store(now, Ordering::Relaxed);
+        RATE_WINDOW_COUNT.store(1, Ordering::Relaxed);
+        return Ok(());
+    }
+
+    let count = RATE_WINDOW_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+    if count > max {
+        Err(format!("rate_limit: {count}/{max} requests in current minute. Retry after window resets."))
+    } else {
+        Ok(())
+    }
+}
 
 fn main() {
     tracing_subscriber::fmt()
@@ -81,6 +116,8 @@ fn main() {
             "tools/call" => handle_tools_call(id, &msg["params"], &kernel),
             "resources/list" => handle_resources_list(id, &kernel),
             "resources/read" => handle_resources_read(id, &msg["params"], &kernel),
+            "prompts/list" => handle_prompts_list(id),
+            "prompts/get" => handle_prompts_get(id, &msg["params"]),
             "ping" => make_result(id, serde_json::json!({})),
             _ => make_error_response(id, -32601, &format!("unknown method: {method}")),
         };
@@ -95,13 +132,106 @@ fn handle_initialize(id: Value) -> Value {
         "protocolVersion": PROTOCOL_VERSION,
         "capabilities": {
             "tools": {},
-            "resources": {}
+            "resources": {},
+            "prompts": {}
         },
         "serverInfo": {
             "name": SERVER_NAME,
             "version": SERVER_VERSION
         }
     }))
+}
+
+// ── F-35: MCP Prompts — Skills as prompt templates ──
+
+const MCP_PROMPTS: &[(&str, &str, &[(&str, &str, bool)])] = &[
+    ("debug-issue", "Search related memories + causal chain + propose solution",
+     &[("issue", "Description of the issue to debug", true)]),
+    ("store-experience", "Store an experience with context: put + remember + causal link",
+     &[("content", "What you learned", true), ("tags", "Comma-separated tags", false)]),
+    ("project-review", "Start session + growth report + recent delta for project overview",
+     &[("period", "Time period: 7d, 30d, or all", false)]),
+    ("handover", "Generate a handover summary for the next agent session",
+     &[("intent", "What the next session should focus on", false)]),
+];
+
+fn handle_prompts_list(id: Value) -> Value {
+    let prompts: Vec<Value> = MCP_PROMPTS.iter().map(|(name, desc, args)| {
+        let arguments: Vec<Value> = args.iter().map(|(aname, adesc, required)| {
+            serde_json::json!({ "name": aname, "description": adesc, "required": required })
+        }).collect();
+        serde_json::json!({ "name": name, "description": desc, "arguments": arguments })
+    }).collect();
+    make_result(id, serde_json::json!({ "prompts": prompts }))
+}
+
+fn handle_prompts_get(id: Value, params: &Value) -> Value {
+    let name = params.get("name").and_then(|n| n.as_str()).unwrap_or("");
+    let args = params.get("arguments").cloned().unwrap_or(serde_json::json!({}));
+
+    let messages = match name {
+        "debug-issue" => {
+            let issue = args.get("issue").and_then(|v| v.as_str()).unwrap_or("unknown issue");
+            vec![serde_json::json!({
+                "role": "user",
+                "content": { "type": "text", "text": format!(
+                    "I need to debug: {issue}\n\n\
+                    Steps:\n\
+                    1. plico(action=\"search\", query=\"{issue}\", agent_id=\"debug\") — find related memories\n\
+                    2. plico_cold(method=\"causal_path\", params={{\"from\":\"<relevant_node>\",\"to\":\"<issue_node>\"}}) — trace cause\n\
+                    3. Based on findings, propose a fix and store the experience:\n\
+                       plico(action=\"remember\", content=\"<solution>\", agent_id=\"debug\")"
+                )}
+            })]
+        }
+        "store-experience" => {
+            let content = args.get("content").and_then(|v| v.as_str()).unwrap_or("");
+            let tags = args.get("tags").and_then(|v| v.as_str()).unwrap_or("experience");
+            let tag_list: Vec<String> = tags.split(',').map(|t| format!("\"{}\"", t.trim())).collect();
+            vec![serde_json::json!({
+                "role": "user",
+                "content": { "type": "text", "text": format!(
+                    "Store this experience in Plico:\n\n\
+                    Content: {content}\n\
+                    Tags: {tags}\n\n\
+                    Execute:\n\
+                    1. plico(action=\"put\", content=\"{content}\", tags=[{tag_csv}], agent_id=\"experience\")\n\
+                    2. plico(action=\"remember\", content=\"{content}\", agent_id=\"experience\", scope=\"shared\")",
+                    tag_csv = tag_list.join(",")
+                )}
+            })]
+        }
+        "project-review" => {
+            let period = args.get("period").and_then(|v| v.as_str()).unwrap_or("7d");
+            vec![serde_json::json!({
+                "role": "user",
+                "content": { "type": "text", "text": format!(
+                    "Give me a project review using Plico:\n\n\
+                    1. plico(action=\"session_start\", agent_id=\"reviewer\", handover_mode=\"full\")\n\
+                    2. plico(action=\"growth\", agent_id=\"reviewer\", period=\"{period}\")\n\
+                    3. plico(action=\"delta\", agent_id=\"reviewer\")\n\
+                    4. Summarize: what changed, what's healthy, what needs attention"
+                )}
+            })]
+        }
+        "handover" => {
+            let intent = args.get("intent").and_then(|v| v.as_str()).unwrap_or("continue work");
+            vec![serde_json::json!({
+                "role": "user",
+                "content": { "type": "text", "text": format!(
+                    "Generate a handover for the next agent:\n\n\
+                    1. plico(action=\"session_start\", agent_id=\"handover\", handover_mode=\"full\", intent_hint=\"{intent}\")\n\
+                    2. Review the handover.recent_objects and handover.kg_causal_edges\n\
+                    3. Summarize: what was done, what's pending, key decisions, known issues"
+                )}
+            })]
+        }
+        _ => {
+            return make_error_response(id, -32602, &format!("unknown prompt: {name}"));
+        }
+    };
+
+    make_result(id, serde_json::json!({ "messages": messages }))
 }
 
 fn handle_tools_list(id: Value) -> Value {
@@ -129,6 +259,9 @@ const RESOURCES: &[(&str, &str, &str)] = &[
     ("plico://status", "System health and active sessions", "application/json"),
     ("plico://delta", "Changes since last session", "application/json"),
     ("plico://skills", "Available skills", "application/json"),
+    ("plico://instructions", "How to use Plico (read first)", "text/plain"),
+    ("plico://profile", "Content profile — what Plico contains", "application/json"),
+    ("plico://actions", "All available actions with params (zero round-trip)", "application/json"),
 ];
 
 fn handle_resources_list(id: Value, _kernel: &AIKernel) -> Value {
@@ -185,6 +318,16 @@ fn handle_resources_read(id: Value, params: &Value, kernel: &AIKernel) -> Value 
             let skills: Vec<Value> = skills_map.into_values().collect();
             (serde_json::to_string_pretty(&serde_json::json!({ "skills": skills })).unwrap_or_default(), "application/json")
         }
+        "plico://instructions" => {
+            (generate_instructions(), "text/plain")
+        }
+        "plico://profile" => {
+            let profile = generate_content_profile(kernel);
+            (serde_json::to_string_pretty(&profile).unwrap_or_default(), "application/json")
+        }
+        "plico://actions" => {
+            (generate_help_response(), "application/json")
+        }
         _ => {
             return make_error_response(id, -32602, &format!("unknown resource: {uri}"));
         }
@@ -200,6 +343,7 @@ fn handle_resources_read(id: Value, params: &Value, kernel: &AIKernel) -> Value 
 }
 
 fn dispatch_tool(name: &str, args: &Value, kernel: &AIKernel) -> Result<String, String> {
+    check_rate_limit()?;
     match name {
         "plico" => dispatch_plico(args, kernel),
         "plico_store" => dispatch_plico_store(args, kernel),
@@ -273,17 +417,179 @@ fn substitute_pipeline_vars(step: &Value, context: &std::collections::HashMap<St
     serde_json::from_str(&result).map_err(|e| e.to_string())
 }
 
+// ── F-31: ActionRegistry — data-driven action metadata ──
+
+struct ActionMeta {
+    name: &'static str,
+    description: &'static str,
+    params: &'static [(&'static str, &'static str, bool)], // (name, desc, required)
+    is_write: bool,
+}
+
+const PLICO_ACTIONS: &[ActionMeta] = &[
+    ActionMeta { name: "session_start", description: "Begin a work session with optional handover context", params: &[("agent_id", "Agent identifier", true), ("intent_hint", "What you plan to do", false), ("last_seen_seq", "Resume from event seq", false), ("handover_mode", "full|compact|none — context assembly for session recovery", false)], is_write: true },
+    ActionMeta { name: "session_end", description: "End session, auto-checkpoint state", params: &[("agent_id", "Agent identifier", true), ("session_id", "Session to end", true)], is_write: true },
+    ActionMeta { name: "put", description: "Store content to CAS, returns CID", params: &[("content", "Content to store", true), ("tags", "Classification tags", false), ("agent_id", "Agent identifier", true)], is_write: true },
+    ActionMeta { name: "get", description: "Retrieve content by CID", params: &[("cid", "Content ID", true), ("agent_id", "Agent identifier", true)], is_write: false },
+    ActionMeta { name: "search", description: "Semantic + keyword search", params: &[("query", "Search query", true), ("agent_id", "Agent identifier", true), ("tags", "Filter by tags", false), ("limit", "Max results", false), ("select", "Field projection", false), ("preview", "Preview char count", false)], is_write: false },
+    ActionMeta { name: "hybrid", description: "Graph-RAG hybrid retrieval", params: &[("query", "Search query", true), ("agent_id", "Agent identifier", true), ("seed_tags", "Graph walk start tags", false), ("depth", "Graph walk depth", false)], is_write: false },
+    ActionMeta { name: "remember", description: "Store to layered memory", params: &[("content", "Memory content", true), ("agent_id", "Agent identifier", true), ("scope", "private|shared", false)], is_write: true },
+    ActionMeta { name: "recall", description: "Retrieve memories", params: &[("agent_id", "Agent identifier", true), ("tier", "working|long_term", false)], is_write: false },
+    ActionMeta { name: "recall_semantic", description: "Semantic memory search", params: &[("query", "Search query", true), ("agent_id", "Agent identifier", true), ("limit", "Max results", false)], is_write: false },
+    ActionMeta { name: "pipeline", description: "Batch sequential operations", params: &[("pipeline", "Array of {step,action,...}", true)], is_write: true },
+    ActionMeta { name: "delta", description: "Changes since event seq N", params: &[("since_seq", "Starting sequence number", false), ("agent_id", "Agent identifier", true)], is_write: false },
+    ActionMeta { name: "growth", description: "Agent growth/activity report", params: &[("agent_id", "Agent identifier", true), ("period", "7d|30d|all", false)], is_write: false },
+    ActionMeta { name: "status", description: "System health status", params: &[], is_write: false },
+    ActionMeta { name: "discover", description: "Browse shared knowledge", params: &[("scope", "shared|private", false), ("knowledge_types", "Filter types", false)], is_write: false },
+    ActionMeta { name: "memory_stats", description: "Memory tier statistics", params: &[("agent_id", "Agent identifier", true)], is_write: false },
+    ActionMeta { name: "intent_declare", description: "Declare intent for context prefetch", params: &[("content", "Intent description", true), ("agent_id", "Agent identifier", true), ("token_budget", "Max tokens", false)], is_write: true },
+    ActionMeta { name: "intent_fetch", description: "Fetch prefetched context", params: &[("intent_id", "Assembly ID from intent_declare", true), ("agent_id", "Agent identifier", true)], is_write: false },
+    ActionMeta { name: "because", description: "Create a causal edge between two CIDs (one-step causality)", params: &[("cause_cid", "Source CID that caused the effect", true), ("effect_cid", "Target CID that was caused", true), ("reason", "Optional description of the causal relationship", false)], is_write: true },
+    ActionMeta { name: "help", description: "List all available actions with parameters", params: &[], is_write: false },
+];
+
+const STORE_WRITE_ACTIONS: &[&str] = &["put"];
+
+fn is_read_only_mode() -> bool {
+    std::env::var("PLICO_READ_ONLY").map(|v| v == "true" || v == "1").unwrap_or(false)
+}
+
+fn check_read_only(action: &str, registry: &[ActionMeta]) -> Result<(), String> {
+    if !is_read_only_mode() { return Ok(()); }
+    if let Some(meta) = registry.iter().find(|m| m.name == action) {
+        if meta.is_write {
+            return Err(format!("read_only: action '{}' is a write operation. Set PLICO_READ_ONLY=false to allow writes.", action));
+        }
+    }
+    Ok(())
+}
+
+fn generate_help_response() -> String {
+    let actions: Vec<Value> = PLICO_ACTIONS.iter().map(|m| {
+        let params: Vec<Value> = m.params.iter().map(|(name, desc, required)| {
+            serde_json::json!({"name": name, "description": desc, "required": required})
+        }).collect();
+        serde_json::json!({
+            "name": m.name,
+            "description": m.description,
+            "params": params,
+            "is_write": m.is_write,
+        })
+    }).collect();
+    serde_json::to_string_pretty(&serde_json::json!({"actions": actions})).unwrap_or_default()
+}
+
+// ── F-30: Smart Handover — assemble recovery context on session start ──
+
+fn assemble_handover(kernel: &AIKernel, mode: &str) -> Value {
+    let tags = kernel.list_tags();
+    let status = kernel.system_status();
+
+    let max_results = match mode { "compact" => 3, _ => 10 };
+    let tag_limit = match mode { "compact" => 10, _ => 20 };
+
+    let resp = kernel.handle_api_request(ApiRequest::Search {
+        query: String::new(),
+        agent_id: "system".to_string(),
+        tenant_id: None,
+        agent_token: None,
+        limit: Some(max_results),
+        offset: None,
+        require_tags: vec![],
+        exclude_tags: vec![],
+        since: None,
+        until: None,
+    });
+
+    let recent: Vec<Value> = resp.results.unwrap_or_default().into_iter().map(|h| {
+        serde_json::json!({ "cid": h.cid, "tags": h.tags, "relevance": h.relevance })
+    }).collect();
+
+    let active_tags: Vec<&String> = tags.iter().take(tag_limit).collect();
+
+    // KG causal edges for handover context
+    let kg_causal: Vec<Value> = if mode != "compact" {
+        kernel.knowledge_graph()
+            .and_then(|kg| kg.get_valid_edges_at(u64::MAX).ok())
+            .map(|edges| {
+                edges.into_iter()
+                    .filter(|e| !matches!(e.edge_type, plico::fs::graph::types::KGEdgeType::AssociatesWith))
+                    .take(5)
+                    .map(|e| serde_json::json!({
+                        "src": e.src, "dst": e.dst,
+                        "type": format!("{:?}", e.edge_type),
+                        "weight": e.weight,
+                    }))
+                    .collect()
+            })
+            .unwrap_or_default()
+    } else {
+        vec![]
+    };
+
+    serde_json::json!({
+        "mode": mode,
+        "recent_objects": recent,
+        "active_tags": active_tags,
+        "kg_causal_edges": kg_causal,
+        "summary": {
+            "total_objects": status.cas_object_count,
+            "total_tags": tags.len(),
+            "agents": status.agent_count,
+        }
+    })
+}
+
 /// Dispatch individual plico actions to kernel API requests
 fn dispatch_plico_action(action: &str, args: &Value, kernel: &AIKernel) -> Result<String, String> {
+    check_read_only(action, PLICO_ACTIONS)?;
+
     let agent = args.get("agent_id").and_then(|a| a.as_str()).unwrap_or(DEFAULT_AGENT);
 
     match action {
+        "help" => Ok(generate_help_response()),
+
         "plico" => {
-            // Cold-layer params routing with teaching errors
             return dispatch_cold_layer(args, kernel);
         }
 
+        "put" => {
+            let content = args.get("content")
+                .and_then(|c| c.as_str())
+                .ok_or("put requires content")?;
+            let tags: Vec<String> = args.get("tags")
+                .and_then(|t| t.as_array())
+                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                .unwrap_or_default();
+            let req = ApiRequest::Create {
+                api_version: None,
+                content: content.to_string(),
+                content_encoding: Default::default(),
+                tags,
+                agent_id: agent.to_string(),
+                tenant_id: None,
+                agent_token: None,
+                intent: None,
+            };
+            format_plico_response(kernel.handle_api_request(req), args)
+        }
+
+        "get" => {
+            let cid = args.get("cid")
+                .and_then(|c| c.as_str())
+                .ok_or("get requires cid")?;
+            let req = ApiRequest::Read {
+                cid: cid.to_string(),
+                agent_id: agent.to_string(),
+                tenant_id: None,
+                agent_token: None,
+            };
+            format_plico_response(kernel.handle_api_request(req), args)
+        }
+
         "session_start" => {
+            let handover_mode = args.get("handover_mode").and_then(|v| v.as_str());
+
             let req = ApiRequest::StartSession {
                 agent_id: agent.to_string(),
                 agent_token: args.get("agent_token").and_then(|v| v.as_str()).map(String::from),
@@ -291,7 +597,35 @@ fn dispatch_plico_action(action: &str, args: &Value, kernel: &AIKernel) -> Resul
                 load_tiers: vec![],
                 last_seen_seq: args.get("last_seen_seq").and_then(|v| v.as_u64()),
             };
-            format_plico_response(kernel.handle_api_request(req), args)
+            let resp = kernel.handle_api_request(req);
+            let mut json_str = format_plico_response(resp, args)?;
+
+            if let Some(mode) = handover_mode {
+                if mode != "none" {
+                    let handover = assemble_handover(kernel, mode);
+                    if let Ok(parsed) = serde_json::from_str::<Value>(&json_str) {
+                        // F-34: Lost in the Middle — important fields first and last.
+                        // LLMs attend most to start/end of context.
+                        // Order: handover (most important) → session_started → health (least) → ok (anchor)
+                        let mut ordered = serde_json::Map::new();
+                        ordered.insert("handover".to_string(), handover);
+                        if let Some(ss) = parsed.get("session_started") {
+                            ordered.insert("session_started".to_string(), ss.clone());
+                        }
+                        // Middle: less important metadata
+                        for (k, v) in parsed.as_object().into_iter().flatten() {
+                            if k != "session_started" && k != "ok" {
+                                ordered.entry(k.clone()).or_insert_with(|| v.clone());
+                            }
+                        }
+                        ordered.insert("ok".to_string(), Value::Bool(true));
+                        json_str = serde_json::to_string_pretty(&Value::Object(ordered))
+                            .unwrap_or(json_str);
+                    }
+                }
+            }
+
+            Ok(json_str)
         }
 
         "session_end" => {
@@ -317,6 +651,40 @@ fn dispatch_plico_action(action: &str, args: &Value, kernel: &AIKernel) -> Resul
                 tenant_id: None,
             };
             format_plico_response(kernel.handle_api_request(req), args)
+        }
+
+        "because" => {
+            let cause_cid = args.get("cause_cid")
+                .and_then(|c| c.as_str())
+                .ok_or("because requires cause_cid")?;
+            let effect_cid = args.get("effect_cid")
+                .and_then(|c| c.as_str())
+                .ok_or("because requires effect_cid")?;
+            let reason = args.get("reason").and_then(|r| r.as_str()).unwrap_or("");
+
+            let kg = kernel.knowledge_graph()
+                .ok_or("knowledge graph not available")?;
+            kg.upsert_document(cause_cid, &[], agent)
+                .map_err(|e| format!("failed to upsert cause node: {e}"))?;
+            kg.upsert_document(effect_cid, &[], agent)
+                .map_err(|e| format!("failed to upsert effect node: {e}"))?;
+
+            kernel.kg_add_edge(
+                cause_cid, effect_cid,
+                plico::fs::graph::types::KGEdgeType::Causes,
+                Some(0.9),
+                agent,
+                "default",
+            ).map_err(|e| format!("failed to add causal edge: {e}"))?;
+
+            let mut resp = serde_json::json!({
+                "ok": true,
+                "edge": { "src": cause_cid, "dst": effect_cid, "type": "Causes" }
+            });
+            if !reason.is_empty() {
+                resp["edge"]["reason"] = serde_json::Value::String(reason.to_string());
+            }
+            Ok(serde_json::to_string_pretty(&resp).unwrap_or_default())
         }
 
         "recall" => {
@@ -844,6 +1212,112 @@ fn enhance_cold_error(method: &str, error: &str) -> String {
 }
 
 /// Apply select (field projection) and preview (truncation) to search/hybrid results
+// ── F-28: Consumer instructions (<60 lines, per Harness Engineering research) ──
+
+fn generate_instructions() -> String {
+    r#"# Plico — AI Agent Memory & Knowledge OS
+
+## Three Tools
+- plico(action, ...) — main gateway: session, memory, search, pipeline
+- plico_cold(method, ...) — advanced: KG, storage stats, cold-layer ops
+- plico_skills(action, ...) — skill lifecycle: list, execute, register
+
+## Core Actions (plico tool)
+| Action | Purpose | Key Params |
+|--------|---------|------------|
+| session_start | Begin work session | agent, intent_hint, last_seen_seq |
+| session_end | End session + checkpoint | agent, session_id |
+| put | Store content | content, tags |
+| get | Retrieve by CID | cid |
+| search | Semantic + keyword search | query, tags, limit |
+| remember | Store to memory tier | content, tier, scope |
+| recall | Retrieve memories | tier, scope, query |
+| recall_semantic | Semantic memory search | query, limit |
+| pipeline | Batch sequential ops | pipeline=[{step,action,...}] |
+| delta | Changes since seq N | since, watch_tags |
+| growth | Agent growth report | period (7d/30d/all) |
+| hybrid | Graph-RAG retrieval | query, seed_tags, depth |
+| discover | Browse shared knowledge | scope, knowledge_types |
+| memory_stats | Memory tier statistics | tier |
+| intent_declare | Prefetch context | intent, token_budget |
+| intent_fetch | Get prefetched context | assembly_id |
+
+## Scoping Model
+- agent: your agent ID (auto-registered on first call)
+- tenant_id: isolation boundary (default: "default")
+- CAS objects visible to all agents within same tenant
+
+## Best Patterns
+1. Start with session_start(intent_hint="your goal") — gets delta + prefetch
+2. Search before put — avoid storing duplicates
+3. Use pipeline for batch ops — saves round-trips
+4. Use select/preview on search — reduces token cost
+5. End with session_end — auto-checkpoints your state
+6. Use remember(scope="shared") for team-visible knowledge
+
+## Token Saving
+- select:["cid","tags","summary"] — field projection on search results
+- preview:200 — truncate content to N chars
+- token_budget:2000 — cap context assembly size
+- limit:5 — fewer results = fewer tokens"#
+        .to_string()
+}
+
+// ── F-29: Content profile — zero round-trip "what's inside Plico" ──
+
+fn generate_content_profile(kernel: &AIKernel) -> Value {
+    let status = kernel.system_status();
+    let tags = kernel.list_tags();
+
+    let mut tag_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for tag in &tags {
+        let prefix = tag.split(':').take(2).collect::<Vec<&str>>().join(":");
+        *tag_counts.entry(prefix).or_default() += 1;
+    }
+    let mut sorted_tags: Vec<_> = tag_counts.into_iter().collect();
+    sorted_tags.sort_by(|a, b| b.1.cmp(&a.1));
+    sorted_tags.truncate(20);
+
+    let agents = kernel.list_agents();
+    let agent_list: Vec<Value> = agents.iter().map(|a| {
+        serde_json::json!({
+            "id": a.name,
+            "state": format!("{:?}", a.state),
+        })
+    }).collect();
+
+    // KG edge type distribution
+    let kg_summary = if let Some(kg) = kernel.knowledge_graph() {
+        let mut edge_types: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        if let Ok(edges) = kg.get_valid_edges_at(u64::MAX) {
+            for e in &edges {
+                *edge_types.entry(format!("{:?}", e.edge_type)).or_default() += 1;
+            }
+        }
+        serde_json::json!({
+            "nodes": status.kg_node_count,
+            "edges": status.kg_edge_count,
+            "edge_types": edge_types,
+        })
+    } else {
+        serde_json::json!({ "nodes": 0, "edges": 0, "edge_types": {} })
+    };
+
+    serde_json::json!({
+        "summary": {
+            "cas_objects": status.cas_object_count,
+            "agents": status.agent_count,
+            "unique_tags": tags.len(),
+            "kg_nodes": status.kg_node_count,
+            "kg_edges": status.kg_edge_count,
+        },
+        "top_tags": sorted_tags.iter().map(|(k, v)| serde_json::json!({"tag": k, "count": v})).collect::<Vec<_>>(),
+        "agents": agent_list,
+        "kg_summary": kg_summary,
+        "health": status.health,
+    })
+}
+
 fn apply_response_shaping(response_json: &mut Value, args: &Value) {
     // Apply preview for truncation first (applies to entire response)
     if let Some(preview) = args.get("preview").and_then(|p| p.as_u64()) {
@@ -911,6 +1385,10 @@ fn dispatch_plico_store(args: &Value, kernel: &AIKernel) -> Result<String, Strin
     let store_action = args.get("action")
         .and_then(|a| a.as_str())
         .ok_or("plico_store requires action")?;
+
+    if is_read_only_mode() && STORE_WRITE_ACTIONS.contains(&store_action) {
+        return Err(format!("read_only: action '{}' is a write operation. Set PLICO_READ_ONLY=false to allow writes.", store_action));
+    }
 
     match store_action {
         "put" => {
@@ -1194,9 +1672,9 @@ fn tool_definitions() -> Vec<Value> {
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": ["session_start","session_end","remember","recall","recall_semantic",
+                        "enum": ["session_start","session_end","put","get","remember","recall","recall_semantic",
                                  "search","hybrid","intent_declare","intent_fetch","delta","growth","status",
-                                 "discover","memory_stats"],
+                                 "discover","memory_stats","help"],
                         "description": "Single operation mode"
                     },
                     "pipeline": {
@@ -1211,7 +1689,9 @@ fn tool_definitions() -> Vec<Value> {
                     "scope": { "type": "string", "enum": ["private","shared"], "description": "For remember" },
                     "token_budget": { "type": "number", "description": "Max tokens for context (intent_fetch)" },
                     "intent_hint": { "type": "string", "description": "For session_start: triggers delta+prefetch" },
+                    "handover_mode": { "type": "string", "enum": ["full", "compact", "none"], "description": "For session_start: context assembly mode for session recovery" },
                     "session_id": { "type": "string", "description": "For session_end" },
+                    "cid": { "type": "string", "description": "For get: content ID to retrieve" },
                     "intent_id": { "type": "string", "description": "For intent_fetch" },
                     "since_seq": { "type": "number", "description": "For delta" },
                     "tags": { "type": "array", "items": { "type": "string" } },
@@ -1689,11 +2169,14 @@ mod tests {
         let kernel = make_test_kernel();
         let resp = handle_resources_list(serde_json::json!(1), &kernel);
         let resources = resp["result"]["resources"].as_array().unwrap();
-        assert_eq!(resources.len(), 3);
+        assert_eq!(resources.len(), 6);
         let uris: Vec<&str> = resources.iter().map(|r| r["uri"].as_str().unwrap()).collect();
         assert!(uris.contains(&"plico://status"));
         assert!(uris.contains(&"plico://delta"));
         assert!(uris.contains(&"plico://skills"));
+        assert!(uris.contains(&"plico://instructions"));
+        assert!(uris.contains(&"plico://profile"));
+        assert!(uris.contains(&"plico://actions"));
     }
 
     #[test]

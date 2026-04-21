@@ -233,6 +233,10 @@ impl crate::kernel::AIKernel {
         self.fs.list_tags()
     }
 
+    pub fn knowledge_graph(&self) -> Option<&std::sync::Arc<dyn crate::fs::graph::KnowledgeGraph>> {
+        self.knowledge_graph.as_ref()
+    }
+
     /// List soft-deleted objects in the recycle bin.
     pub fn list_deleted(&self, agent_id: &str) -> Vec<crate::fs::RecycleEntry> {
         let _ctx = PermissionContext::new(agent_id.to_string(), "default".to_string());
@@ -352,40 +356,33 @@ impl crate::kernel::AIKernel {
 
     // ─── Storage Governance (F-18) ─────────────────────────────────
 
-    /// Get usage statistics for a CAS object by CID.
-    /// Note: CAS layer doesn't track access_count/last_accessed_at — those are
-    /// tracked by the semantic layer (SemanticFS). This returns basic object metadata.
+    /// Get usage statistics for a CAS object by CID (F-22: real access tracking).
+    /// Uses get_raw to avoid inflating the access counter.
     pub fn get_object_usage(&self, cid: &str) -> crate::api::semantic::ObjectUsageResult {
-        // Try to get the object to retrieve its metadata
-        match self.fs.read(&Query::ByCid(cid.to_string())) {
-            Ok(objects) => {
-                if let Some(obj) = objects.first() {
-                    return crate::api::semantic::ObjectUsageResult {
-                        created_at: obj.meta.created_at,
-                        last_accessed_at: 0, // CAS doesn't track access stats
-                        access_count: 0,     // CAS doesn't track access stats
-                        referenced_by_kg: false, // Will be set by caller
-                        referenced_by_memory: false, // Will be set by caller
-                    };
-                }
-            }
-            Err(_) => {}
-        }
-        // Object not found or error — return empty stats
+        let access = self.fs.cas().object_usage(cid);
+        let created_at = self.fs.cas().get_raw(cid)
+            .map(|obj| obj.meta.created_at)
+            .unwrap_or(0);
+
         crate::api::semantic::ObjectUsageResult {
-            created_at: 0,
-            last_accessed_at: 0,
-            access_count: 0,
+            created_at,
+            last_accessed_at: access.as_ref().map(|a| a.last_accessed_at).unwrap_or(0),
+            access_count: access.as_ref().map(|a| a.access_count).unwrap_or(0),
             referenced_by_kg: false,
             referenced_by_memory: false,
         }
     }
 
-    /// Get complete storage statistics for the CAS layer.
+    /// Get complete storage statistics (F-23: real CAS + memory data).
     pub fn get_storage_stats(&self) -> crate::api::semantic::StorageStatsResult {
+        let total_objects = self.fs.count_objects().unwrap_or(0);
+        let total_bytes = self.fs.cas().total_bytes() as usize;
+        let cold_threshold = 30 * 24 * 3600 * 1000_u64; // 30 days
+        let cold_objects = self.fs.cas().cold_objects(cold_threshold).len();
+
         crate::api::semantic::StorageStatsResult {
-            total_objects: 0,
-            total_bytes: 0,
+            total_objects,
+            total_bytes,
             by_tier: crate::api::semantic::TierStats {
                 ephemeral_count: 0,
                 ephemeral_bytes: 0,
@@ -394,19 +391,45 @@ impl crate::kernel::AIKernel {
                 longterm_count: 0,
                 longterm_bytes: 0,
             },
-            cold_objects: 0,
+            cold_objects,
             about_to_expire: 0,
         }
     }
 
-    /// Evict cold (rarely accessed) objects from CAS.
-    /// If dry_run is true, returns what would be evicted without actually evicting.
-    pub fn evict_cold(&self, _dry_run: bool) -> crate::api::semantic::EvictColdResult {
-        // Stub implementation — actual eviction requires more complex CAS integration
+    /// Evict cold objects from CAS (F-24: real eviction via soft-delete).
+    /// `dry_run=true` returns what would be evicted without acting.
+    pub fn evict_cold(&self, dry_run: bool) -> crate::api::semantic::EvictColdResult {
+        let cold_threshold = 30 * 24 * 3600 * 1000_u64;
+        let cold_cids = self.fs.cas().cold_objects(cold_threshold);
+        let evicted_count = cold_cids.len();
+
+        if dry_run || cold_cids.is_empty() {
+            return crate::api::semantic::EvictColdResult {
+                evicted_count,
+                evicted_bytes: 0,
+                remaining_cold: 0,
+            };
+        }
+
+        let mut evicted_bytes = 0usize;
+        for cid in &cold_cids {
+            if let Ok(meta) = std::fs::metadata(self.fs.cas().root().join(&cid[..2]).join(&cid[2..])) {
+                evicted_bytes += meta.len() as usize;
+            }
+            let _ = self.fs.delete(cid, "system".to_string());
+        }
+
+        let _ = self.fs.cas().persist_access_log();
+
         crate::api::semantic::EvictColdResult {
-            evicted_count: 0,
-            evicted_bytes: 0,
+            evicted_count,
+            evicted_bytes,
             remaining_cold: 0,
         }
+    }
+
+    /// Persist CAS access log (called on shutdown/checkpoint).
+    pub fn persist_cas_access_log(&self) -> std::io::Result<()> {
+        self.fs.cas().persist_access_log()
     }
 }

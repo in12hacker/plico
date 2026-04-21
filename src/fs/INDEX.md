@@ -6,64 +6,68 @@ Status: active | Fan-in: 2 | Fan-out: 2
 
 ## Dependents (Fan-in: 2)
 
-- `src/kernel/mod.rs` → SemanticFS, Query, SearchResult, EmbeddingProvider, SemanticSearch, Summarizer, KnowledgeGraph, PetgraphBackend, InMemoryBackend, OllamaBackend, LocalEmbeddingBackend, StubEmbeddingProvider, EventType, EventRelation, EventSummary
-- `src/api/semantic.rs` → EventType, EventRelation, EventSummary, UserFact, ActionSuggestion (type re-exports for API layer)
+- `src/kernel/mod.rs` → SemanticFS, Query, SearchResult, EmbeddingProvider, SemanticSearch, Summarizer, KnowledgeGraph, PetgraphBackend, InMemoryBackend, HnswBackend, Bm25Index, OllamaBackend, LocalEmbeddingBackend, StubEmbeddingProvider, EventType, EventRelation, EventSummary
+- `src/api/semantic.rs` → EventType, EventRelation, EventSummary (type re-exports for API layer)
 
 ## Modification Risk
 
 - Change `Query` variants → BREAKING, update kernel dispatch + CLI
 - Change `SearchResult` fields → BREAKING, update API response mapping
-- Change `EmbeddingProvider` trait → BREAKING, update all 3 backends
-- Change `SemanticSearch` trait → BREAKING, update InMemoryBackend
+- Change `EmbeddingProvider` trait → BREAKING, update all 4 backends
+- Change `SemanticSearch` trait → BREAKING, update InMemoryBackend + HnswBackend
 - Change `KnowledgeGraph` trait → BREAKING, update PetgraphBackend + kernel
 - Add `KGEdgeType` variant → update Display impl + all match arms
 - Add `KGNodeType` variant → update Display impl + all match arms
 
 ## Task Routing
 
-- Fix vector search → modify `src/fs/search.rs` InMemoryBackend
-- Add embedding backend → modify `src/fs/embedding.rs`, add new impl of EmbeddingProvider
-- Fix KG persistence → modify `src/fs/graph.rs` PetgraphBackend::save_to_disk/load_from_disk
-- Change context layer logic → modify `src/fs/context_loader.rs` ContextLoader
-- Change summarizer → modify `src/fs/summarizer.rs`
-- Add CRUD operation → modify `src/fs/semantic_fs.rs` SemanticFS
-- Change event system → modify `src/fs/semantic_fs.rs` (⚠ soul violation area)
-- Change behavioral pipeline → modify `src/fs/semantic_fs.rs` (⚠ soul violation area)
+- Fix vector search → `search/memory.rs` (InMemoryBackend) or `search/hnsw.rs` (HnswBackend)
+- Add embedding backend → `embedding/` subdir, add new impl of EmbeddingProvider
+- Fix KG persistence → `graph/backend.rs` PetgraphBackend::save_to_disk/load_from_disk
+- Change context layer logic → `context_loader.rs` ContextLoader
+- Change context budget → `context_budget.rs`
+- Change summarizer → `summarizer.rs`
+- Add CRUD operation → `semantic_fs/mod.rs` SemanticFS
+- Change event operations → `semantic_fs/events.rs`
 
 ## Public API
 
-### Core CRUD (soul-aligned)
+### Core CRUD
 
 | Export | File | Description |
 |--------|------|-------------|
-| `SemanticFS` | `semantic_fs.rs` | Semantic filesystem — CAS-backed, tag-indexed, vector-searchable |
-| `Query` | `semantic_fs.rs` | Search query enum (ByCid/ByTags/Semantic/ByType/Hybrid) |
-| `SearchResult` | `semantic_fs.rs` | Result with CID, relevance score, metadata |
-| `FSError` | `semantic_fs.rs` | Typed filesystem errors |
+| `SemanticFS` | `semantic_fs/mod.rs` | Semantic filesystem — CAS-backed, tag-indexed, vector-searchable |
+| `Query` | `semantic_fs/mod.rs` | Search query enum (ByCid/ByTags/Semantic/ByType/Hybrid) |
+| `SearchResult` | `semantic_fs/mod.rs` | Result with CID, relevance score, metadata |
+| `FSError` | `semantic_fs/mod.rs` | Typed filesystem errors |
+| `EventType` | `semantic_fs/events.rs` | Event types for structured event storage |
+| `EventRelation` | `semantic_fs/events.rs` | Event relation types |
+| `EventSummary` | `semantic_fs/events.rs` | Event summary struct |
 
 ### Embedding & Search
 
 | Export | File | Description |
 |--------|------|-------------|
-| `EmbeddingProvider` | `embedding.rs` | Trait: text → vector embedding |
-| `OllamaBackend` | `embedding.rs` | Ollama HTTP embedding backend |
-| `LocalEmbeddingBackend` | `embedding.rs` | Python subprocess ONNX backend |
-| `StubEmbeddingProvider` | `embedding.rs` | Error stub (tag-only search) |
-| `SemanticSearch` | `search.rs` | Trait: vector similarity search |
-| `InMemoryBackend` | `search.rs` | Pure Rust brute-force cosine similarity |
-| `Bm25Index` | `search.rs` | BM25 keyword search index |
-| `SearchFilter` | `search.rs` | Tag/type/time filter for search |
+| `EmbeddingProvider` | `embedding/mod.rs` | Trait: text → vector embedding |
+| `OllamaBackend` | `embedding/ollama.rs` | Ollama HTTP embedding backend |
+| `LocalEmbeddingBackend` | `embedding/local.rs` | Python subprocess ONNX backend |
+| `StubEmbeddingProvider` | `embedding/stub.rs` | Zero-vector stub (tag-only search) |
+| `SemanticSearch` | `search/mod.rs` | Trait: vector similarity search |
+| `InMemoryBackend` | `search/memory.rs` | Brute-force cosine similarity |
+| `HnswBackend` | `search/hnsw.rs` | HNSW approximate nearest neighbor |
+| `Bm25Index` | `search/bm25.rs` | BM25 keyword search index |
+| `SearchFilter` | `search/mod.rs` | Tag/type/time filter for search |
 
 ### Knowledge Graph
 
 | Export | File | Description |
 |--------|------|-------------|
-| `KnowledgeGraph` | `graph.rs` | Trait: typed node/edge graph operations |
-| `PetgraphBackend` | `graph.rs` | HashMap-based directed graph with disk persistence |
-| `KGNode` | `graph.rs` | Graph node (Entity/Fact/Document/Agent/Memory) |
-| `KGEdge` | `graph.rs` | Typed weighted edge with episode provenance |
-| `KGNodeType` | `graph.rs` | Node type enum (⚠ includes Iteration/Plan/DesignDoc — should be Entity + tags) |
-| `KGEdgeType` | `graph.rs` | Edge type enum |
+| `KnowledgeGraph` | `graph/mod.rs` | Trait: typed node/edge graph operations |
+| `PetgraphBackend` | `graph/backend.rs` | Directed graph with disk persistence |
+| `KGNode` | `graph/types.rs` | Graph node (Entity/Fact/Document/Agent/Memory) |
+| `KGEdge` | `graph/types.rs` | Typed weighted edge with episode provenance |
+| `KGNodeType` | `graph/types.rs` | Node type enum |
+| `KGEdgeType` | `graph/types.rs` | Edge type enum |
 
 ### Context Loading & Summarization
 
@@ -71,30 +75,56 @@ Status: active | Fan-in: 2 | Fan-out: 2
 |--------|------|-------------|
 | `ContextLoader` | `context_loader.rs` | L0/L1/L2 layered context loading |
 | `Summarizer` | `summarizer.rs` | Trait: text → compressed summary |
-| `OllamaSummarizer` | `summarizer.rs` | Ollama LLM summarizer |
-
-### ⚠ Soul Violations (application-layer logic in filesystem)
-
-| Export | File | Description |
-|--------|------|-------------|
-| `EventType` | `semantic_fs.rs` | ⚠ Hardcoded human activity types (Meeting/Travel/etc.) |
-| `EventRelation` | `semantic_fs.rs` | ⚠ Hardcoded relation types (Attendee/Document/etc.) |
-| `BehavioralObservation` | `semantic_fs.rs` | ⚠ Hardcoded "order_food"/"at_dinner" scenarios |
-| `UserFact` | `semantic_fs.rs` | ⚠ Hardcoded "wine"/"white_congee" preferences |
-| `ActionSuggestion` | `semantic_fs.rs` | ⚠ Hardcoded "提醒带红酒" action strings |
-| `PatternExtractor` | `semantic_fs.rs` | ⚠ Hardcoded action_for_fact() with food/drink mapping |
+| `LlmSummarizer` | `summarizer.rs` | LLM-backed summarizer |
 
 ## Files
 
+### `semantic_fs/` — Core CRUD + Events
+
 | File | Lines | Purpose |
 |------|-------|---------|
-| `semantic_fs.rs` | ⚠ ~3164 | SemanticFS CRUD + event/behavioral pipeline — **needs major split** |
-| `graph.rs` | ⚠ ~1475 | KnowledgeGraph trait + PetgraphBackend — needs split |
-| `embedding.rs` | ~735 | EmbeddingProvider + 3 backends |
-| `search.rs` | ~471 | SemanticSearch + InMemoryBackend + BM25 |
-| `summarizer.rs` | ~283 | Summarizer trait + OllamaSummarizer |
-| `context_loader.rs` | ~231 | L0/L1/L2 context loading |
-| `mod.rs` | ~44 | Re-exports |
+| `mod.rs` | ~679 | SemanticFS CRUD + search + tag index + recycle bin |
+| `events.rs` | ~205 | Event types, event operations |
+| `tests.rs` | (co-located) | Unit tests |
+
+### `embedding/` — Vector Embedding Backends
+
+| File | Lines | Purpose |
+|------|-------|---------|
+| `mod.rs` | ~32 | EmbeddingProvider trait + re-exports |
+| `types.rs` | ~69 | Shared embedding types (Embedding, EmbedError, EmbeddingMeta) |
+| `ollama.rs` | ~278 | OllamaBackend (HTTP API) |
+| `local.rs` | ~230 | LocalEmbeddingBackend (Python ONNX subprocess) |
+| `stub.rs` | ~36 | StubEmbeddingProvider (testing) |
+| `json_rpc.rs` | ~30 | JSON-RPC embedding adapter |
+
+### `search/` — Vector + Keyword Search
+
+| File | Lines | Purpose |
+|------|-------|---------|
+| `mod.rs` | ~147 | SemanticSearch trait, SearchFilter, re-exports |
+| `memory.rs` | ~332 | InMemoryBackend (brute-force cosine) |
+| `hnsw.rs` | ~573 | HnswBackend (approximate NN via hnsw_rs) |
+| `bm25.rs` | ~52 | BM25 keyword search index |
+
+### `graph/` — Knowledge Graph
+
+| File | Lines | Purpose |
+|------|-------|---------|
+| `mod.rs` | ~70 | KnowledgeGraph trait, ExploreDirection, re-exports |
+| `types.rs` | ~325 | KGNode, KGEdge, KGNodeType, KGEdgeType, DiskGraph |
+| `backend.rs` | ~749 | PetgraphBackend — directed graph + disk persistence |
+| `tests.rs` | (co-located) | Unit tests |
+
+### Root-level
+
+| File | Lines | Purpose |
+|------|-------|---------|
+| `context_loader.rs` | ~271 | L0/L1/L2 layered context loading |
+| `context_budget.rs` | ~253 | Context budget engine — adaptive multi-object assembly |
+| `summarizer.rs` | ~166 | Summarizer trait, LlmSummarizer |
+| `types.rs` | ~196 | Shared FS types |
+| `mod.rs` | ~46 | Re-exports |
 
 ## Dependencies (Fan-out: 2)
 
@@ -113,6 +143,6 @@ Status: active | Fan-in: 2 | Fan-out: 2
 
 ## Tests
 
-- Unit: `src/fs/semantic_fs.rs` mod tests (extensive — event, behavioral, conflict)
+- Unit: `src/fs/semantic_fs/tests.rs`, `src/fs/graph/tests.rs`
 - Integration: `tests/fs_test.rs`, `tests/semantic_search_test.rs`, `tests/embedding_test.rs`
 - Critical: CRUD tests, `test_search_with_filter`, `test_hybrid_search_rrf`

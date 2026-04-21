@@ -264,7 +264,7 @@ pub fn decode_content(content: &str, encoding: &ContentEncoding) -> Result<Vec<u
 pub fn estimate_tokens(text: &str) -> usize {
     let ascii = text.chars().filter(|c| c.is_ascii()).count();
     let non_ascii = text.chars().filter(|c| !c.is_ascii()).count();
-    (ascii + 3) / 4 + (non_ascii + 1) / 2
+    ascii.div_ceil(4) + non_ascii.div_ceil(2)
 }
 
 fn default_importance() -> u8 { 50 }
@@ -1286,20 +1286,17 @@ pub enum ApiRequest {
 /// Scope of knowledge discovery.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum DiscoveryScope {
     /// Search only entries with scope=Shared.
     Shared,
     /// Search only entries with scope=Group(id).
     Group(String),
     /// Search all accessible entries.
+    #[default]
     AllAccessible,
 }
 
-impl Default for DiscoveryScope {
-    fn default() -> Self {
-        DiscoveryScope::AllAccessible
-    }
-}
 
 /// Type of knowledge to filter by in discovery.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1594,6 +1591,12 @@ pub struct SearchResultDto {
     pub cid: String,
     pub relevance: f32,
     pub tags: Vec<String>,
+    /// Content preview — first 200 characters (F-37).
+    pub snippet: String,
+    /// MIME content type (F-37).
+    pub content_type: String,
+    /// Creation timestamp in Unix ms (F-37).
+    pub created_at: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -66,6 +66,9 @@ pub fn cmd_search(kernel: &AIKernel, args: &[String]) -> ApiResponse {
 
     let dto: Vec<SearchResultDto> = results.into_iter().map(|r| SearchResultDto {
         cid: r.cid, relevance: r.relevance, tags: r.meta.tags,
+        snippet: r.snippet.clone(),
+        content_type: r.meta.content_type.to_string(),
+        created_at: r.meta.created_at,
     }).collect();
     let mut r = ApiResponse::ok();
     r.results = Some(dto);

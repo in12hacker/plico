@@ -29,18 +29,15 @@ type HmacSha256 = Hmac<Sha256>;
 
 /// Agent authentication mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default)]
 pub enum AgentAuthMode {
     /// Token optional — backward compatible, no token requests allowed.
+    #[default]
     Optional,
     /// Token required — all requests with agent_id must carry valid token.
     Required,
 }
 
-impl Default for AgentAuthMode {
-    fn default() -> Self {
-        Self::Optional
-    }
-}
 
 /// Agent token issued by the kernel on registration.
 #[derive(Debug, Clone, Serialize, Deserialize)]

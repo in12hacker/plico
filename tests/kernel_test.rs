@@ -3252,10 +3252,13 @@ fn test_event_log_explicit_persist() {
 
     kernel.persist_event_log();
 
-    let path = _dir.path().join("event_log.json");
-    assert!(path.exists(), "event_log.json should exist after persist");
+    let path = _dir.path().join("event_log.jsonl");
+    assert!(path.exists(), "event_log.jsonl should exist after persist");
     let json = std::fs::read_to_string(&path).unwrap();
-    let events: Vec<plico::kernel::event_bus::SequencedEvent> = serde_json::from_str(&json).unwrap();
+    let events: Vec<plico::kernel::event_bus::SequencedEvent> = json.lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
     assert!(!events.is_empty());
 }
 

@@ -23,6 +23,7 @@ impl CorrelationId {
     }
 
     /// Parse from a string slice (for incoming requests).
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Self {
         Self(s.to_string())
     }

@@ -363,6 +363,7 @@ struct IntentFeedbackEntry {
     used_cids: Vec<String>,
     /// CIDs that were prefetched but not used.
     unused_cids: Vec<String>,
+    #[allow(dead_code)]
     recorded_at_ms: u64,
 }
 
@@ -634,7 +635,7 @@ impl IntentPrefetcher {
         let now = crate::memory::layered::now_ms();
 
         // F-9: Try to get embedding and check cache first
-        let intent_embedding: Option<Vec<f32>> = self.embedding.embed(intent).ok().map(|e| e.into());
+        let intent_embedding: Option<Vec<f32>> = self.embedding.embed(intent).ok();
 
         if let Some(cached_allocation) = self.intent_cache.lookup(intent, &intent_embedding) {
             // Cache hit! Store directly as Ready assembly
@@ -831,7 +832,7 @@ impl IntentPrefetcher {
 
         // Check if this is already being prefetched or cached
         // Skip if already in cache (F-9 would handle it)
-        let intent_embedding: Option<Vec<f32>> = self.embedding.embed(&predicted_intent).ok().map(|e| e.into());
+        let intent_embedding: Option<Vec<f32>> = self.embedding.embed(&predicted_intent).ok();
         if self.intent_cache.lookup(&predicted_intent, &intent_embedding).is_some() {
             tracing::debug!("F-10: predicted intent already cached, skipping prefetch");
             return None;
@@ -967,8 +968,7 @@ impl IntentPrefetcher {
                     // Get embedding for cache storage (Path A)
                     let intent_embedding: Option<Vec<f32>> = embedding
                         .embed(&intent)
-                        .ok()
-                        .map(|e| e.into());
+                        .ok();
                     cache.store(intent, intent_embedding, allocation.clone(), related_cids);
                 }
 
@@ -1002,7 +1002,7 @@ impl IntentPrefetcher {
         // Step 1: Embed the intent
         let intent_emb = embedding.embed(intent)
             .map_err(|e| format!("failed to embed intent: {}", e))?;
-        let emb_slice: Vec<f32> = intent_emb.into();
+        let emb_slice: Vec<f32> = intent_emb;
 
         // Step 2: Four-path recall
         // Path A: semantic search
@@ -1038,7 +1038,7 @@ impl IntentPrefetcher {
         }).await
         .map_err(|e| format!("embed task panicked: {}", e))?
         .map_err(|e| format!("failed to embed intent: {}", e))?;
-        let emb_slice: Vec<f32> = emb.into();
+        let emb_slice: Vec<f32> = emb;
 
         // Clone data needed for async tasks
         let related_cids_owned = related_cids.to_vec();

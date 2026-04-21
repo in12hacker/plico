@@ -6,7 +6,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::fs::{OllamaBackend, EmbeddingProvider, LocalEmbeddingBackend, StubEmbeddingProvider, EmbedError, OrtEmbeddingBackend};
+use crate::fs::{OllamaBackend, EmbeddingProvider, LocalEmbeddingBackend, StubEmbeddingProvider, EmbedError, OrtEmbeddingBackend, EmbeddingCircuitBreaker};
 use crate::llm::{LlmProvider, LlmError, OllamaProvider, StubProvider, OpenAICompatibleProvider};
 use crate::scheduler::Agent;
 use crate::scheduler::agent::Intent;
@@ -274,22 +274,23 @@ pub(crate) fn create_embedding_provider() -> Result<Arc<dyn EmbeddingProvider>, 
     let backend = std::env::var("EMBEDDING_BACKEND")
         .unwrap_or_else(|_| "local".to_string());
 
-    match backend.as_str() {
+    // Create the base provider (potentially with fallback to stub on error)
+    let base_provider: Arc<dyn EmbeddingProvider> = match backend.as_str() {
         "ort" => {
             let model_dir = std::env::var("PLICO_MODEL_DIR")
                 .unwrap_or_else(|_| "./models/all-MiniLM-L6-v2".to_string());
             match OrtEmbeddingBackend::new(std::path::Path::new(&model_dir)) {
                 Ok(b) => {
                     tracing::info!("Embedding backend: ort ({})", model_dir);
-                    Ok(Arc::new(b) as Arc<dyn EmbeddingProvider>)
+                    Arc::new(b) as Arc<dyn EmbeddingProvider>
                 }
                 Err(EmbedError::ModelNotFound(msg)) => {
                     tracing::warn!("OrtEmbeddingBackend model not found: {}. Falling back to stub.", msg);
-                    Ok(Arc::new(StubEmbeddingProvider::new()) as Arc<dyn EmbeddingProvider>)
+                    Arc::new(StubEmbeddingProvider::new()) as Arc<dyn EmbeddingProvider>
                 }
                 Err(e) => {
                     tracing::warn!("OrtEmbeddingBackend error: {}. Falling back to stub.", e);
-                    Ok(Arc::new(StubEmbeddingProvider::new()) as Arc<dyn EmbeddingProvider>)
+                    Arc::new(StubEmbeddingProvider::new()) as Arc<dyn EmbeddingProvider>
                 }
             }
         }
@@ -301,31 +302,56 @@ pub(crate) fn create_embedding_provider() -> Result<Arc<dyn EmbeddingProvider>, 
             match LocalEmbeddingBackend::new(&model_id, &python) {
                 Ok(b) => {
                     tracing::info!("Embedding backend: local ({})", model_id);
-                    Ok(Arc::new(b) as Arc<dyn EmbeddingProvider>)
+                    Arc::new(b) as Arc<dyn EmbeddingProvider>
                 }
                 Err(EmbedError::SubprocessUnavailable) => {
                     tracing::warn!(
                         "LocalEmbeddingBackend unavailable (python3 not found or pip deps missing). \
                         Install: pip install transformers huggingface_hub onnxruntime"
                     );
-                    try_ollama()
+                    return try_ollama_circuitbreaker();
                 }
                 Err(e) => {
                     tracing::warn!("LocalEmbeddingBackend error: {e}. Falling back.");
-                    try_ollama()
+                    return try_ollama_circuitbreaker();
                 }
             }
         }
-        "ollama" => try_ollama(),
+        "ollama" => return try_ollama_circuitbreaker(),
         "stub" => {
             tracing::info!("Embedding backend: stub (tag-only search)");
-            Ok(Arc::new(StubEmbeddingProvider::new()) as Arc<dyn EmbeddingProvider>)
+            Arc::new(StubEmbeddingProvider::new()) as Arc<dyn EmbeddingProvider>
         }
         _ => {
             tracing::warn!("Unknown EMBEDDING_BACKEND={}, trying local", backend);
-            try_ollama()
+            return try_ollama_circuitbreaker();
         }
-    }
+    };
+
+    // F-38: Wrap in circuit breaker — 3 failures → open → 30s cooldown → half-open probe
+    let threshold: u32 = std::env::var("EMBEDDING_CB_THRESHOLD")
+        .unwrap_or_else(|_| "3".to_string())
+        .parse()
+        .unwrap_or(3);
+    let cooldown_ms: u64 = std::env::var("EMBEDDING_CB_COOLDOWN_MS")
+        .unwrap_or_else(|_| "30000".to_string())
+        .parse()
+        .unwrap_or(30000);
+
+    Ok(Arc::new(EmbeddingCircuitBreaker::new(base_provider, threshold, cooldown_ms)))
+}
+
+fn try_ollama_circuitbreaker() -> Result<Arc<dyn EmbeddingProvider>, EmbedError> {
+    let inner = try_ollama()?;
+    let threshold: u32 = std::env::var("EMBEDDING_CB_THRESHOLD")
+        .unwrap_or_else(|_| "3".to_string())
+        .parse()
+        .unwrap_or(3);
+    let cooldown_ms: u64 = std::env::var("EMBEDDING_CB_COOLDOWN_MS")
+        .unwrap_or_else(|_| "30000".to_string())
+        .parse()
+        .unwrap_or(30000);
+    Ok(Arc::new(EmbeddingCircuitBreaker::new(inner, threshold, cooldown_ms)))
 }
 
 fn try_ollama() -> Result<Arc<dyn EmbeddingProvider>, EmbedError> {

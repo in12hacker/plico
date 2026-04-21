@@ -13,8 +13,10 @@ pub mod tests;
 
 /// Memory visibility scope — controls cross-agent access.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Default)]
 pub enum MemoryScope {
     /// Only the owning agent can read/write.
+    #[default]
     Private,
     /// Any agent can read; only the owner can write.
     Shared,
@@ -22,11 +24,6 @@ pub enum MemoryScope {
     Group(String),
 }
 
-impl Default for MemoryScope {
-    fn default() -> Self {
-        MemoryScope::Private
-    }
-}
 
 /// Memory tier classification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -253,7 +250,7 @@ impl MemoryEntry {
 }
 
 /// Global memory manager
-
+///
 /// Global memory manager — holds all agents' memory tiers.
 ///
 /// Can optionally be paired with a [`MemoryPersister`] for L1/L2 persistence

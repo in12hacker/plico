@@ -190,7 +190,7 @@ impl AIKernel {
     fn vector_search(&self, query_text: &str, limit: usize) -> Vec<SearchHit> {
         // Get embedding for the query
         let embedding: Vec<f32> = match self.embedding.embed(query_text) {
-            Ok(e) => e.into(),
+            Ok(e) => e,
             Err(e) => {
                 tracing::warn!("embedding failed: {}", e);
                 return Vec::new();
@@ -297,7 +297,7 @@ impl AIKernel {
 /// Estimate token count for a single HybridHit (rough approximation).
 fn estimate_tokens_for_hit(hit: &HybridHit) -> usize {
     // Rough estimate: content_preview / 4 + overhead for metadata
-    let preview_tokens = (hit.content_preview.len() + 3) / 4;
+    let preview_tokens = hit.content_preview.len().div_ceil(4);
     let provenance_tokens = hit.provenance.len() * 20; // ~20 tokens per step
     preview_tokens + provenance_tokens + 50 // base overhead
 }

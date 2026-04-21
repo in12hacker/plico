@@ -63,8 +63,20 @@ impl CheckpointMemory {
             MemoryContent::Text(s) => serde_json::json!({ "type": "text", "content": s }),
             MemoryContent::ObjectRef(cid) => serde_json::json!({ "type": "object_ref", "cid": cid }),
             MemoryContent::Structured(v) => v.clone(),
-            MemoryContent::Procedure(p) => serde_json::json!({ "type": "procedure", "name": p.name, "description": p.description }),
-            MemoryContent::Knowledge(k) => serde_json::json!({ "type": "knowledge", "statement": k.statement }),
+            MemoryContent::Procedure(p) => serde_json::json!({
+                "type": "procedure",
+                "name": p.name,
+                "description": p.description,
+                "steps": p.steps,
+                "learned_from": p.learned_from,
+            }),
+            MemoryContent::Knowledge(k) => serde_json::json!({
+                "type": "knowledge",
+                "subject": k.subject,
+                "statement": k.statement,
+                "confidence": k.confidence,
+                "source": k.source,
+            }),
         };
 
         Self {
@@ -105,30 +117,45 @@ impl CheckpointMemory {
         let content = if self.content_json.is_empty() {
             MemoryContent::Text(String::new())
         } else if let Ok(v) = serde_json::from_str::<serde_json::Value>(&self.content_json) {
-            // Determine content type from the value
             if let Some(obj) = v.as_object() {
-                if let Some(type_val) = obj.get("type") {
-                    match type_val.as_str().unwrap_or("") {
-                        "text" => {
-                            if let Some(c) = obj.get("content") {
-                                MemoryContent::Text(c.as_str().unwrap_or("").to_string())
-                            } else {
-                                MemoryContent::Text(String::new())
-                            }
-                        }
-                        "object_ref" => {
-                            if let Some(cid) = obj.get("cid") {
-                                MemoryContent::ObjectRef(cid.as_str().unwrap_or("").to_string())
-                            } else {
-                                MemoryContent::Text(String::new())
-                            }
-                        }
-                        "procedure" => MemoryContent::Structured(v),
-                        "knowledge" => MemoryContent::Structured(v),
-                        _ => MemoryContent::Structured(v),
+                match obj.get("type").and_then(|t| t.as_str()).unwrap_or("") {
+                    "text" => {
+                        let c = obj.get("content").and_then(|c| c.as_str()).unwrap_or("");
+                        MemoryContent::Text(c.to_string())
                     }
-                } else {
-                    MemoryContent::Structured(v)
+                    "object_ref" => {
+                        let cid = obj.get("cid").and_then(|c| c.as_str()).unwrap_or("");
+                        MemoryContent::ObjectRef(cid.to_string())
+                    }
+                    "procedure" => {
+                        // F-39: Restore as proper Procedure type, not Structured.
+                        if let Ok(proc) = serde_json::from_value::<crate::memory::layered::Procedure>(v.clone()) {
+                            MemoryContent::Procedure(proc)
+                        } else {
+                            // Fallback: construct from available fields.
+                            MemoryContent::Procedure(crate::memory::layered::Procedure {
+                                name: obj.get("name").and_then(|n| n.as_str()).unwrap_or("").to_string(),
+                                description: obj.get("description").and_then(|d| d.as_str()).unwrap_or("").to_string(),
+                                steps: obj.get("steps").and_then(|s| serde_json::from_value(s.clone()).ok()).unwrap_or_default(),
+                                learned_from: obj.get("learned_from").and_then(|l| l.as_str()).unwrap_or("").to_string(),
+                            })
+                        }
+                    }
+                    "knowledge" => {
+                        // F-39: Restore as proper KnowledgePiece type, not Structured.
+                        if let Ok(k) = serde_json::from_value::<crate::memory::layered::KnowledgePiece>(v.clone()) {
+                            MemoryContent::Knowledge(k)
+                        } else {
+                            // Fallback: construct from available fields.
+                            MemoryContent::Knowledge(crate::memory::layered::KnowledgePiece {
+                                subject: obj.get("subject").and_then(|s| s.as_str()).unwrap_or("").to_string(),
+                                statement: obj.get("statement").and_then(|s| s.as_str()).unwrap_or("").to_string(),
+                                confidence: obj.get("confidence").and_then(|c| c.as_f64()).unwrap_or(1.0) as f32,
+                                source: obj.get("source").and_then(|s| s.as_str()).unwrap_or("").to_string(),
+                            })
+                        }
+                    }
+                    _ => MemoryContent::Structured(v),
                 }
             } else {
                 MemoryContent::Structured(v)

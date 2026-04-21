@@ -2,13 +2,14 @@
 
 AI-friendly semantic API — permission guardrails + JSON protocol types for TCP daemon and CLI.
 
-Status: stable | Fan-in: 3 | Fan-out: 1
+Status: stable | Fan-in: 4 | Fan-out: 1
 
-## Dependents (Fan-in: 3)
+## Dependents (Fan-in: 4)
 
-- `src/kernel/mod.rs` → PermissionGuard, PermissionContext, PermissionAction; DashboardStatus and related types
-- `src/bin/plicod.rs` → ApiRequest, ApiResponse, SearchResultDto, AgentDto, NeighborDto, decode_content
-- `src/bin/aicli.rs` → ApiRequest, ApiResponse, SearchResultDto (TCP mode)
+- `src/kernel/mod.rs` → PermissionGuard, PermissionContext, PermissionAction, ApiRequest, ApiResponse
+- `src/bin/plicod.rs` → ApiRequest, ApiResponse, SearchResultDto, decode_content
+- `src/bin/plico_mcp.rs` → ApiRequest, ApiResponse (MCP dispatch)
+- `src/bin/aicli/` → ApiRequest, ApiResponse, GrowthPeriod (CLI dispatch)
 
 ## Modification Risk
 
@@ -44,19 +45,18 @@ Status: stable | Fan-in: 3 | Fan-out: 1
 | `ContentEncoding` | `semantic.rs` | UTF-8 or Base64 encoding for binary payloads |
 | `decode_content` | `semantic.rs` | Decode content string by encoding type |
 | `SearchResultDto` | `semantic.rs` | Search result DTO for API responses |
-| `DashboardStatus` | `semantic.rs` | ⚠ Development dashboard types (soul violation) |
 
 ## Files
 
 | File | Lines | Purpose |
 |------|-------|---------|
-| `permission.rs` | ~229 | PermissionGuard, fine-grained access control |
-| `semantic.rs` | ~654 | ApiRequest/ApiResponse, protocol types, dashboard types |
+| `permission.rs` | ~439 | PermissionGuard, fine-grained access control |
+| `semantic.rs` | ⚠ ~2600 | ApiRequest/ApiResponse, all protocol types — needs split |
 | `mod.rs` | ~7 | Re-exports |
 
 ## Dependencies (Fan-out: 1)
 
-- `src/fs/` — imports EventType, EventRelation, EventSummary, UserFact, ActionSuggestion for API type definitions
+- `src/fs/` — imports EventType, EventRelation, EventSummary, KGNodeType, KGEdgeType for API type definitions
 
 ## Interface Contract
 

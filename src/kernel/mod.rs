@@ -493,8 +493,16 @@ impl AIKernel {
                 let total = results.len();
                 let off = offset.unwrap_or(0);
                 let lim = limit.unwrap_or(10);
-                let page: Vec<SearchResultDto> = results.into_iter().skip(off).take(lim).map(|r| SearchResultDto {
-                    cid: r.cid, relevance: r.relevance, tags: r.meta.tags,
+                let page: Vec<SearchResultDto> = results.into_iter().skip(off).take(lim).map(|r| {
+                    let snippet = r.snippet.clone();
+                    SearchResultDto {
+                        cid: r.cid,
+                        relevance: r.relevance,
+                        tags: r.meta.tags.clone(),
+                        snippet,
+                        content_type: r.meta.content_type.to_string(),
+                        created_at: r.meta.created_at,
+                    }
                 }).collect();
                 let mut r = ApiResponse::ok();
                 r.total_count = Some(total);

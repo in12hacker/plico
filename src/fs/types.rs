@@ -36,6 +36,8 @@ pub struct SearchResult {
     pub cid: String,
     pub relevance: f32,
     pub meta: crate::cas::AIObjectMeta,
+    /// Content preview for search results (F-37).
+    pub snippet: String,
 }
 
 // ── Event types ───────────────────────────────────────────────────────────────

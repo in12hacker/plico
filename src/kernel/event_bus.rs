@@ -220,6 +220,12 @@ pub struct EventBus {
     /// Optional path for JSONL event log persistence. When set, each emit
     /// appends to this file for crash-safe durability.
     event_log_path: Option<PathBuf>,
+    /// F-25: Segment rotation — start timestamp of current segment (ms).
+    segment_start_ms: AtomicU64,
+    /// F-25: Rotation interval in ms (default 7 days).
+    rotation_interval_ms: u64,
+    /// F-25: Max archive segments to retain (default 4 = ~1 month).
+    retention_segments: usize,
 }
 
 fn now_ms() -> u64 {
@@ -227,6 +233,15 @@ fn now_ms() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64
+}
+
+const DEFAULT_ROTATION_INTERVAL_MS: u64 = 7 * 24 * 3600 * 1000; // 7 days
+const DEFAULT_RETENTION_SEGMENTS: usize = 4;
+
+impl Default for EventBus {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl EventBus {
@@ -239,6 +254,9 @@ impl EventBus {
             event_log: RwLock::new(RingEventLog::new(DEFAULT_EVENT_LOG_CAPACITY)),
             next_seq: AtomicU64::new(1),
             event_log_path: None,
+            segment_start_ms: AtomicU64::new(now_ms()),
+            rotation_interval_ms: DEFAULT_ROTATION_INTERVAL_MS,
+            retention_segments: DEFAULT_RETENTION_SEGMENTS,
         }
     }
 
@@ -252,6 +270,25 @@ impl EventBus {
             event_log: RwLock::new(RingEventLog::new(DEFAULT_EVENT_LOG_CAPACITY)),
             next_seq: AtomicU64::new(1),
             event_log_path: Some(path),
+            segment_start_ms: AtomicU64::new(now_ms()),
+            rotation_interval_ms: DEFAULT_ROTATION_INTERVAL_MS,
+            retention_segments: DEFAULT_RETENTION_SEGMENTS,
+        }
+    }
+
+    /// Create an EventBus with custom rotation parameters (F-25).
+    pub fn with_rotation(path: PathBuf, rotation_interval_ms: u64, retention_segments: usize) -> Self {
+        let (sender, _) = broadcast::channel(DEFAULT_BROADCAST_CAPACITY);
+        Self {
+            sender,
+            subscriptions: RwLock::new(HashMap::new()),
+            next_sub_id: AtomicU64::new(1),
+            event_log: RwLock::new(RingEventLog::new(DEFAULT_EVENT_LOG_CAPACITY)),
+            next_seq: AtomicU64::new(1),
+            event_log_path: Some(path),
+            segment_start_ms: AtomicU64::new(now_ms()),
+            rotation_interval_ms,
+            retention_segments,
         }
     }
 
@@ -272,6 +309,76 @@ impl EventBus {
         Ok(())
     }
 
+    // ── F-25: Segment rotation ──
+
+    fn should_rotate(&self) -> bool {
+        let start = self.segment_start_ms.load(Ordering::Relaxed);
+        start > 0 && now_ms().saturating_sub(start) >= self.rotation_interval_ms
+    }
+
+    /// Rotate the current segment to an archive file and start a fresh segment.
+    /// Returns Ok(Some(archive_path)) on successful rotation, Ok(None) if skipped.
+    pub fn rotate_segment(&self) -> Result<Option<PathBuf>, std::io::Error> {
+        let Some(ref current_path) = self.event_log_path else {
+            return Ok(None);
+        };
+        if !current_path.exists() {
+            return Ok(None);
+        }
+
+        let archive_dir = current_path.parent()
+            .unwrap_or_else(|| std::path::Path::new("."))
+            .join("event_archive");
+        std::fs::create_dir_all(&archive_dir)?;
+
+        let seg_start = self.segment_start_ms.load(Ordering::Relaxed);
+        let archive_name = format!("events_{}.jsonl", seg_start);
+        let archive_path = archive_dir.join(&archive_name);
+
+        std::fs::rename(current_path, &archive_path)?;
+
+        // Reset segment start
+        self.segment_start_ms.store(now_ms(), Ordering::Relaxed);
+
+        self.cleanup_old_archives(&archive_dir)?;
+        Ok(Some(archive_path))
+    }
+
+    fn cleanup_old_archives(&self, archive_dir: &std::path::Path) -> Result<(), std::io::Error> {
+        let mut archives: Vec<_> = std::fs::read_dir(archive_dir)?
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().starts_with("events_"))
+            .collect();
+        archives.sort_by_key(|e| e.file_name());
+
+        if archives.len() > self.retention_segments {
+            let to_remove = archives.len() - self.retention_segments;
+            for entry in &archives[..to_remove] {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+        Ok(())
+    }
+
+    /// List archive segment paths in chronological order.
+    pub fn list_archive_segments(&self) -> Vec<PathBuf> {
+        let Some(ref current_path) = self.event_log_path else { return vec![]; };
+        let archive_dir = current_path.parent()
+            .unwrap_or_else(|| std::path::Path::new("."))
+            .join("event_archive");
+        if !archive_dir.exists() { return vec![]; }
+
+        let mut segments: Vec<PathBuf> = std::fs::read_dir(&archive_dir)
+            .into_iter()
+            .flatten()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().starts_with("events_"))
+            .map(|e| e.path())
+            .collect();
+        segments.sort();
+        segments
+    }
+
     pub fn emit(&self, event: KernelEvent) {
         let seq = self.next_seq.fetch_add(1, Ordering::Relaxed);
         let sequenced = SequencedEvent {
@@ -281,7 +388,14 @@ impl EventBus {
         };
         self.event_log.write().unwrap().push(sequenced.clone());
         let _ = self.sender.send(event);
-        // Persist to JSONL immediately for crash-safe durability
+
+        // F-25: rotate before appending if interval exceeded
+        if self.should_rotate() {
+            if let Err(e) = self.rotate_segment() {
+                tracing::warn!("Failed to rotate event log segment: {}", e);
+            }
+        }
+
         if let Err(e) = self.append_to_log(&sequenced) {
             tracing::warn!("Failed to append event to log: {}", e);
         }
@@ -371,7 +485,7 @@ impl EventBus {
         loop {
             match rx.try_recv() {
                 Ok(event) => {
-                    if sub.filter.as_ref().map_or(true, |f| f.matches(&event)) {
+                    if sub.filter.as_ref().is_none_or(|f| f.matches(&event)) {
                         events.push(event);
                     }
                 }
@@ -385,7 +499,7 @@ impl EventBus {
                     let last_seq = sub.last_seen_seq.load(Ordering::Relaxed);
                     let recovered = self.event_log.read().unwrap().events_since(last_seq);
                     for se in recovered {
-                        if sub.filter.as_ref().map_or(true, |f| f.matches(&se.event)) {
+                        if sub.filter.as_ref().is_none_or(|f| f.matches(&se.event)) {
                             events.push(se.event);
                         }
                     }

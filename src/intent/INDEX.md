@@ -55,4 +55,11 @@ v3+（正确）:    用户 NL → aicli IntentRouter → ApiRequest → 内核
 |------|---------|-------|
 | `mod.rs` | IntentRouter trait, ChainRouter, types | ~130 |
 | `heuristic.rs` | HeuristicRouter keyword matching | ~330 |
-| `llm.rs` | LlmRouter Ollama integration | ~130 | |
+| `llm.rs` | LlmRouter Ollama integration | ~130 |
+| `execution.rs` | execute_sync — NL→execute→learn loop | ~265 |
+
+## Tests
+
+- Unit: `src/intent/heuristic.rs` mod tests
+- Integration: `tests/intent_test.rs`
+- Critical: `test_heuristic_search`, `test_chain_router_fallback`

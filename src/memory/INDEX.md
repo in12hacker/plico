@@ -44,10 +44,11 @@ Status: stable | Fan-in: 2 | Fan-out: 1
 
 | File | Lines | Purpose |
 |------|-------|---------|
-| `layered.rs` | ⚠ ~482 | LayeredMemory, `store_checked` (per-agent entry quota), eviction |
-| `persist.rs` | ~384 | CASPersister, MemoryLoader, PersistenceIndex |
-| `relevance.rs` | ~253 | Relevance scoring utilities |
-| `context_snapshot.rs` | ~143 | Context snapshot types |
+| `layered/mod.rs` | ⚠ ~1182 | LayeredMemory, store_checked, eviction, cognitive methods — needs split |
+| `layered/tests.rs` | (co-located) | Unit tests |
+| `persist.rs` | ~388 | CASPersister, MemoryLoader, PersistenceIndex |
+| `relevance.rs` | ~340 | Relevance scoring, budget selection, TTL, promotion |
+| `context_snapshot.rs` | ~146 | Context snapshot types (suspend/resume) |
 | `mod.rs` | ~46 | MemoryQuery, MemoryResult, re-exports |
 
 ## Dependencies (Fan-out: 1)

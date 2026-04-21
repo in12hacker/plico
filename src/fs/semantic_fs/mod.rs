@@ -114,7 +114,7 @@ impl SemanticFS {
         let mut embed_available = true;
 
         for cid in &cids {
-            let obj = match self.cas.get(cid) {
+            let obj = match self.cas.get_raw(cid) {
                 Ok(o) => o,
                 Err(_) => continue,
             };
@@ -450,7 +450,7 @@ impl SemanticFS {
             bm25_hits.iter().map(|(c, _)| c.clone()).collect();
 
         for (rank, (cid, _bm25_score)) in bm25_hits.iter().enumerate() {
-            if let Ok(obj) = self.cas.get(cid) {
+            if let Ok(obj) = self.cas.get_raw(cid) {
                 let meta_for_filter = SearchIndexMeta {
                     cid: cid.clone(),
                     tags: obj.meta.tags.clone(),
@@ -480,7 +480,10 @@ impl SemanticFS {
         sorted
             .into_iter()
             .filter_map(|(cid, relevance)| {
-                self.cas.get(&cid).ok().map(|obj| SearchResult { cid, relevance, meta: obj.meta })
+                self.cas.get(&cid).ok().map(|obj| {
+                    let snippet = String::from_utf8_lossy(&obj.data[..std::cmp::min(200, obj.data.len())]).to_string();
+                    SearchResult { cid, relevance, meta: obj.meta, snippet }
+                })
             })
             .collect()
     }
@@ -501,7 +504,8 @@ impl SemanticFS {
                             content_type: format!("{}", obj.meta.content_type),
                             created_at: obj.meta.created_at,
                         }) {
-                            results.push(SearchResult { cid: cid.clone(), relevance: 0.8, meta: obj.meta });
+                            let snippet = String::from_utf8_lossy(&obj.data[..std::cmp::min(200, obj.data.len())]).to_string();
+                            results.push(SearchResult { cid: cid.clone(), relevance: 0.8, meta: obj.meta, snippet });
                         }
                     }
                 }
@@ -524,6 +528,10 @@ impl SemanticFS {
     /// Total number of objects stored in this filesystem's CAS.
     pub fn count_objects(&self) -> std::io::Result<usize> {
         self.cas.list_cids().map(|c| c.len())
+    }
+
+    pub fn cas(&self) -> &CASStorage {
+        &self.cas
     }
 
     // ─── Internal helpers ────────────────────────────────────────────────
@@ -632,7 +640,7 @@ impl SemanticFS {
         let mut index: HashMap<String, Vec<String>> = HashMap::new();
         if let Ok(cids) = cas.list_cids() {
             for cid in cids {
-                if let Ok(obj) = cas.get(&cid) {
+                if let Ok(obj) = cas.get_raw(&cid) {
                     for tag in &obj.meta.tags {
                         index.entry(tag.clone()).or_default().push(cid.clone());
                     }

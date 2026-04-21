@@ -251,7 +251,7 @@ impl SessionStore {
         };
 
         let mut completed_map = self.completed_sessions.write().unwrap();
-        let sessions = completed_map.entry(session.agent_id).or_insert_with(Vec::new);
+        let sessions = completed_map.entry(session.agent_id).or_default();
         sessions.push(completed);
 
         // Limit stored completed sessions per agent
