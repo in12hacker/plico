@@ -32,7 +32,7 @@ use crate::cas::CASStorage;
 use crate::memory::{LayeredMemory, MemoryScope, CASPersister, MemoryPersister};
 use crate::scheduler::{AgentScheduler, IntentPriority};
 use crate::scheduler::messaging::MessageBus;
-use crate::fs::{SemanticFS, InMemoryBackend, HnswBackend, EmbeddingProvider, SemanticSearch, LlmSummarizer, Summarizer, KnowledgeGraph, PetgraphBackend, StubEmbeddingProvider, KGNodeType, KGEdgeType};
+use crate::fs::{SemanticFS, InMemoryBackend, HnswBackend, EmbeddingProvider, SemanticSearch, LlmSummarizer, Summarizer, KnowledgeGraph, PetgraphBackend, StubEmbeddingProvider, KGNodeType};
 use crate::llm::LlmProvider;
 use crate::api::permission::PermissionGuard;
 use crate::tool::ToolRegistry;
