@@ -98,6 +98,12 @@ impl crate::kernel::AIKernel {
         Some((agent.id().to_string(), format!("{:?}", agent.state()), pending))
     }
 
+    /// Resolve name or UUID to AgentId string.
+    /// B21 fix: enables name-based lookup for quota/status commands.
+    pub fn resolve_agent(&self, name_or_id: &str) -> Option<String> {
+        self.scheduler.resolve(name_or_id).map(|a| a.0)
+    }
+
     pub fn agent_suspend(&self, name_or_id: &str) -> std::io::Result<()> {
         let aid = self.scheduler.resolve(name_or_id).ok_or_else(|| {
             std::io::Error::new(std::io::ErrorKind::NotFound, format!("Agent not found: {}", name_or_id))

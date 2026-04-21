@@ -132,14 +132,19 @@ pub fn cmd_agent_restore(kernel: &AIKernel, args: &[String]) -> ApiResponse {
 }
 
 pub fn cmd_quota(kernel: &AIKernel, args: &[String]) -> ApiResponse {
-    let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
-    match kernel.agent_usage(&agent_id) {
+    let name_or_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
+    // B21 fix: resolve name to UUID before calling agent_usage
+    let resolved_id = match kernel.resolve_agent(&name_or_id) {
+        Some(id) => id,
+        None => return ApiResponse::error(format!("Agent not found: {}", name_or_id)),
+    };
+    match kernel.agent_usage(&resolved_id) {
         Some(usage) => {
             let mut r = ApiResponse::ok();
             r.agent_usage = Some(usage);
             r
         }
-        None => ApiResponse::error(format!("Agent not found: {}", agent_id)),
+        None => ApiResponse::error(format!("Agent not found: {}", name_or_id)),
     }
 }
 
