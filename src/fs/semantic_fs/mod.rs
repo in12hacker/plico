@@ -41,6 +41,8 @@ pub struct SemanticFS {
     summarizer: Option<Arc<dyn Summarizer>>,
     knowledge_graph: Option<Arc<dyn KnowledgeGraph>>,
     bm25_index: Arc<Bm25Index>,
+    // F-5: Soul alignment — env var disables auto-summarize to prevent OS policy leakage
+    disable_auto_summarize: bool,
 }
 
 impl SemanticFS {
@@ -96,6 +98,9 @@ impl SemanticFS {
             summarizer,
             knowledge_graph,
             bm25_index: Arc::new(Bm25Index::new()),
+            // F-5: Soul alignment — auto-summarize disabled by default (V-06 fix)
+            // Set PLICO_AUTO_SUMMARIZE=1 to re-enable (not recommended — soul violation)
+            disable_auto_summarize: std::env::var("PLICO_AUTO_SUMMARIZE").as_deref() != Ok("1"),
         };
 
         fs.rebuild_vector_index();
@@ -195,19 +200,23 @@ impl SemanticFS {
             }
         }
 
-        if let Some(ref summarizer) = self.summarizer {
-            let text = match std::str::from_utf8(&content) {
-                Ok(s) if !s.trim().is_empty() => s.to_string(),
-                _ => String::new(),
-            };
-            if !text.is_empty() {
-                match summarizer.summarize(&text, crate::fs::summarizer::SummaryLayer::L0) {
-                    Ok(summary) => {
-                        if let Err(e) = self.ctx_loader.store_l0(&cid, summary) {
-                            tracing::warn!("Failed to store L0 summary for {}: {}", &cid[..8], e);
+        // F-5: Only summarize when PLICO_AUTO_SUMMARIZE=1 is set (V-06 soul alignment)
+        // By default disabled — OS should not silently invoke LLM summarization
+        if !self.disable_auto_summarize {
+            if let Some(ref summarizer) = self.summarizer {
+                let text = match std::str::from_utf8(&content) {
+                    Ok(s) if !s.trim().is_empty() => s.to_string(),
+                    _ => String::new(),
+                };
+                if !text.is_empty() {
+                    match summarizer.summarize(&text, crate::fs::summarizer::SummaryLayer::L0) {
+                        Ok(summary) => {
+                            if let Err(e) = self.ctx_loader.store_l0(&cid, summary) {
+                                tracing::warn!("Failed to store L0 summary for {}: {}", &cid[..8], e);
+                            }
                         }
+                        Err(e) => { tracing::warn!("L0 summarization failed for {}: {}", &cid[..8], e); }
                     }
-                    Err(e) => { tracing::warn!("L0 summarization failed for {}: {}", &cid[..8], e); }
                 }
             }
         }
