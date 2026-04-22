@@ -3,7 +3,6 @@
 //! Registers all kernel capabilities as discoverable tools ("Everything is a Tool")
 //! and dispatches tool calls to the appropriate kernel methods.
 
-use crate::memory::MemoryEntry;
 use crate::fs::{KGNodeType, KGEdgeType};
 use crate::tool::{ToolDescriptor, ToolResult};
 
@@ -43,12 +42,12 @@ impl AIKernel {
         reg.register(ToolDescriptor {
             name: "memory.store".into(),
             description: "Store a memory entry for an agent".into(),
-            schema: json!({"type":"object","properties":{"content":{"type":"string"},"tier":{"type":"string","enum":["ephemeral","working"]},"tags":{"type":"array","items":{"type":"string"}},"importance":{"type":"number"},"ttl_ms":{"type":"integer"}},"required":["content"]}),
+            schema: json!({"type":"object","properties":{"content":{"type":"string"},"tier":{"type":"string","description":"Tier: ephemeral/working/long-term/procedural (default: working)"},"tags":{"type":"array","items":{"type":"string"}},"importance":{"type":"number"}},"required":["content"]}),
         });
         reg.register(ToolDescriptor {
             name: "memory.recall".into(),
             description: "Retrieve all memories for an agent".into(),
-            schema: json!({"type":"object","properties":{"tier":{"type":"string"},"limit":{"type":"integer"}}}),
+            schema: json!({"type":"object","properties":{"agent_id":{"type":"string","description":"Agent ID to query (defaults to calling agent)"},"tier":{"type":"string","description":"Filter by tier: ephemeral/working/long-term/procedural"},"limit":{"type":"integer"}}}),
         });
         reg.register(ToolDescriptor {
             name: "memory.forget".into(),
@@ -309,55 +308,102 @@ impl AIKernel {
                 }
             }
             "memory.store" => {
+                // F-3/F-8: Route through kernel tier methods for proper persistence
                 let content = params.get("content").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                let tier = params.get("tier").and_then(|v| v.as_str()).unwrap_or("ephemeral");
+                let tier = params.get("tier").and_then(|v| v.as_str()).unwrap_or("working");
                 let tags: Vec<String> = params.get("tags")
                     .and_then(|v| v.as_array())
                     .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
                     .unwrap_or_default();
                 let importance = params.get("importance").and_then(|v| v.as_u64()).unwrap_or(50) as u8;
-                let ttl_ms = params.get("ttl_ms").and_then(|v| v.as_u64());
-
-                let quota = self.scheduler.get_resources(&aid)
-                    .map(|r| r.memory_quota)
-                    .unwrap_or(0);
 
                 match tier {
                     "working" => {
-                        let mut entry = MemoryEntry::long_term(
-                            agent_id,
-                            crate::memory::MemoryContent::Text(content),
-                            tags,
-                        );
-                        entry.tier = crate::memory::MemoryTier::Working;
-                        entry.importance = importance;
-                        entry.ttl_ms = ttl_ms;
-                        entry.original_ttl_ms = ttl_ms;
-                        let id = entry.id.clone();
-                        match self.memory.store_checked(entry, quota) {
-                            Ok(()) => ToolResult::ok(json!({"id": id, "tier": "working"})),
+                        match self.remember_working(agent_id, "default", content, tags) {
+                            Ok(()) => ToolResult::ok(json!({"id": "", "tier": "working"})),
+                            Err(e) => ToolResult::error(e.to_string()),
+                        }
+                    }
+                    "long-term" => {
+                        match self.remember_long_term(agent_id, "default", content, tags.clone(), importance) {
+                            Ok(id) => {
+                                self.link_memory_to_kg(&id, agent_id, "default", &tags);
+                                ToolResult::ok(json!({"id": id, "tier": "long-term"}))
+                            }
+                            Err(e) => ToolResult::error(e.to_string()),
+                        }
+                    }
+                    "procedural" => {
+                        let steps = vec![crate::memory::layered::ProcedureStep {
+                            step_number: 0,
+                            description: content.clone(),
+                            action: content.clone(),
+                            expected_outcome: String::new(),
+                        }];
+                        match self.remember_procedural(agent_id, "default", "tool-procedure".into(), content, steps, "tool".into(), tags.clone()) {
+                            Ok(id) => {
+                                self.link_memory_to_kg(&id, agent_id, "default", &tags);
+                                ToolResult::ok(json!({"id": id, "tier": "procedural"}))
+                            }
                             Err(e) => ToolResult::error(e.to_string()),
                         }
                     }
                     _ => {
-                        let mut entry = MemoryEntry::ephemeral(agent_id, content);
-                        entry.importance = importance;
-                        entry.ttl_ms = ttl_ms;
-                        entry.original_ttl_ms = ttl_ms;
-                        if !tags.is_empty() {
-                            entry.tags = tags;
-                        }
-                        let id = entry.id.clone();
+                        // Ephemeral: support TTL via direct entry creation
+                        let ttl_ms = params.get("ttl_ms").and_then(|v| v.as_u64());
+                        let entry_id = uuid::Uuid::new_v4().to_string();
+                        let now = crate::memory::layered::now_ms();
+                        let entry = crate::memory::MemoryEntry {
+                            id: entry_id.clone(),
+                            agent_id: agent_id.to_string(),
+                            tenant_id: "default".to_string(),
+                            tier: crate::memory::MemoryTier::Ephemeral,
+                            content: crate::memory::MemoryContent::Text(content),
+                            importance,
+                            access_count: 0,
+                            last_accessed: now,
+                            created_at: now,
+                            tags: tags.clone(),
+                            embedding: None,
+                            ttl_ms,
+                            original_ttl_ms: ttl_ms,
+                            scope: crate::memory::MemoryScope::Private,
+                        };
+                        let quota = self.scheduler.get_resources(&aid)
+                            .map(|r| r.memory_quota)
+                            .unwrap_or(0);
                         match self.memory.store_checked(entry, quota) {
-                            Ok(()) => ToolResult::ok(json!({"id": id, "tier": "ephemeral"})),
+                            Ok(()) => {
+                                self.persist_memories();
+                                ToolResult::ok(json!({"id": entry_id, "tier": "ephemeral"}))
+                            }
                             Err(e) => ToolResult::error(e.to_string()),
                         }
                     }
                 }
             }
             "memory.recall" => {
-                let memories = self.recall(agent_id, "default");
-                let dto: Vec<serde_json::Value> = memories.into_iter().map(|m| json!({
+                // F-3: Allow agent_id override from params
+                let effective_agent = params.get("agent_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(agent_id);
+                let tier_filter = params.get("tier").and_then(|v| v.as_str());
+                let memories = self.recall(effective_agent, "default");
+                // F-2: Filter by tier if specified
+                let filtered: Vec<_> = match tier_filter {
+Some(t) => {
+                        let tier = match t.to_lowercase().replace(['-', '_'], "").as_str() {
+                            "ephemeral" | "l0" | "ephem" => crate::memory::MemoryTier::Ephemeral,
+                            "working" | "l1" | "wk" => crate::memory::MemoryTier::Working,
+                            "longterm" | "l2" | "lt" | "long" => crate::memory::MemoryTier::LongTerm,
+                            "procedural" | "l3" | "proc" => crate::memory::MemoryTier::Procedural,
+                            _ => return ToolResult::error(format!("Unknown tier: {}", t)),
+                        };
+                        memories.into_iter().filter(|m| m.tier == tier).collect()
+                    }
+                    None => memories,
+                };
+                let dto: Vec<serde_json::Value> = filtered.into_iter().map(|m| json!({
                     "id": m.id,
                     "tier": m.tier.name(),
                     "content": m.content.display(),
