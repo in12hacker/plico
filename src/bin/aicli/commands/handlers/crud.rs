@@ -39,10 +39,9 @@ pub fn cmd_read(kernel: &AIKernel, args: &[String]) -> ApiResponse {
 
 pub fn cmd_search(kernel: &AIKernel, args: &[String]) -> ApiResponse {
     let search_tags = extract_tags_opt(args, "--tags").unwrap_or_default();
-    // A-8a: if tags-only mode (no --query, no positional arg), skip text search
-let mut query = if search_tags.is_empty() {
+    let mut query = if search_tags.is_empty() {
         extract_arg(args, "--query")
-            .or_else(|| args.get(1).cloned())
+            .or_else(|| args.get(1).cloned().filter(|a| !a.starts_with("--")))
             .unwrap_or_default()
     } else {
         extract_arg(args, "--query").unwrap_or_default()
@@ -60,13 +59,10 @@ let mut query = if search_tags.is_empty() {
 
 // A-8a/F-4: tag-only search — handle require_tags AND semantics
     // Trigger when: no query text, but have search_tags OR require_tags
-    if query.is_empty() && (search_tags.is_empty() && require_tags.is_empty()) {
+    // Only use positional arg as query if both tag sources are empty
+    if query.is_empty() && search_tags.is_empty() && require_tags.is_empty() {
         // No tags at all — check if positional arg looks like a tag (starts with --)
-        let positional = args.get(1).cloned().unwrap_or_default();
-        if !positional.starts_with("--") {
-            query = positional;
-        }
-    }
+        let positional = args.get(1).cloned
     if query.is_empty() && (!search_tags.is_empty() || !require_tags.is_empty()) {
         // F-4: require_tags uses AND semantics (all tags must match)
         let results = if !require_tags.is_empty() {

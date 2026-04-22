@@ -562,13 +562,13 @@ impl SemanticFS {
                     Some(existing) => {
                         *existing = existing.intersection(&set).cloned().collect();
                         if existing.is_empty() {
-                            return Vec::new(); // early exit: no common CIDs
+                            return Vec::new();
                         }
                     }
                     None => { candidates = Some(set); }
                 }
             } else {
-                return Vec::new(); // tag not indexed at all
+                return Vec::new();
             }
         }
 
@@ -578,7 +578,7 @@ impl SemanticFS {
                 if results.len() >= limit {
                     break;
                 }
-if let Ok(obj) = self.cas.get(&cid) {
+                if let Ok(obj) = self.cas.get(&cid) {
                     let snippet = String::from_utf8_lossy(&obj.data[..std::cmp::min(200, obj.data.len())]).to_string();
                     results.push(SearchResult { cid: cid.clone(), relevance: 0.9, meta: obj.meta, snippet });
                 }
