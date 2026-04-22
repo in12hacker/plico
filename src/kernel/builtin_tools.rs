@@ -383,19 +383,24 @@ impl AIKernel {
                 }
             }
             "memory.recall" => {
-                // F-3: Allow agent_id override from params
+                // F-3: Allow agent_id override from params (name or UUID)
                 let param_agent_id = params.get("agent_id").and_then(|v| v.as_str());
-                let effective_agent = param_agent_id.unwrap_or(agent_id);
-                // INV-2: Validate explicit agent_id override exists
-                if param_agent_id.is_some() && !self.scheduler.has_agent(&crate::scheduler::AgentId(effective_agent.to_string())) {
-                    let available: Vec<String> = self.scheduler.list_agents().into_iter().map(|h| h.name).collect();
-                    return ToolResult::error(format!(
-                        "Contract violation: agent_id '{}' not found. Available agents: {:?}",
-                        effective_agent, available
-                    ));
-                }
+                let effective_agent = if let Some(name_or_id) = param_agent_id {
+                    match self.resolve_agent(name_or_id) {
+                        Some(id) => id,
+                        None => {
+                            let available: Vec<String> = self.scheduler.list_agents().into_iter().map(|h| h.name).collect();
+                            return ToolResult::error(format!(
+                                "Contract violation: agent '{}' not found. Available agents: {:?}",
+                                name_or_id, available
+                            ));
+                        }
+                    }
+                } else {
+                    agent_id.to_string()
+                };
                 let tier_filter = params.get("tier").and_then(|v| v.as_str());
-                let memories = self.recall(effective_agent, "default");
+                let memories = self.recall(&effective_agent, "default");
                 // F-2: Filter by tier if specified
                 let filtered: Vec<_> = match tier_filter {
 Some(t) => {

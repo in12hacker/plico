@@ -129,7 +129,13 @@ pub fn cmd_update(kernel: &AIKernel, args: &[String]) -> ApiResponse {
 }
 
 pub fn cmd_delete(kernel: &AIKernel, args: &[String]) -> ApiResponse {
-    let cid = extract_arg(args, "--cid").unwrap_or_default();
+    // F-1: Support both positional CID and --cid flag
+    let cid = extract_arg(args, "--cid")
+        .or_else(|| args.get(1).cloned().filter(|a| !a.starts_with("--")))
+        .unwrap_or_default();
+    if cid.is_empty() {
+        return ApiResponse::error("delete requires a CID: delete <CID> or delete --cid <CID>");
+    }
     let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
 
     match kernel.semantic_delete(&cid, &agent_id, "default") {

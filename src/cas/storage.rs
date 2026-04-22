@@ -68,6 +68,32 @@ pub enum CASError {
 
     #[error("Integrity check failed for CID={cid}")]
     IntegrityFailed { cid: String },
+
+    // F-1: Invalid CID format (too short or non-hex)
+    #[error("Invalid CID format: '{cid}' — must be at least 2 hex characters")]
+    InvalidCid { cid: String },
+}
+
+impl From<CASError> for io::Error {
+    fn from(e: CASError) -> io::Error {
+        match e {
+            CASError::Io(e) => e,
+            CASError::NotFound { cid: _ } => io::Error::new(io::ErrorKind::NotFound, e.to_string()),
+            CASError::InvalidCid { cid: _ } => io::Error::new(io::ErrorKind::InvalidInput, e.to_string()),
+            CASError::IntegrityFailed { cid: _ } => io::Error::new(io::ErrorKind::InvalidData, e.to_string()),
+            CASError::Serialization(e) => io::Error::new(io::ErrorKind::InvalidData, e.to_string()),
+        }
+    }
+}
+
+fn validate_cid(cid: &str) -> Result<(), CASError> {
+    if cid.len() < 2 {
+        return Err(CASError::InvalidCid { cid: cid.to_string() });
+    }
+    if !cid.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(CASError::InvalidCid { cid: cid.to_string() });
+    }
+    Ok(())
 }
 
 impl CASStorage {
@@ -108,8 +134,8 @@ impl CASStorage {
             ));
         }
 
-        let shard_dir = self.shard_dir(&obj.cid);
-        let obj_path = self.object_path(&obj.cid);
+        let shard_dir = self.shard_dir(&obj.cid)?;
+        let obj_path = self.object_path(&obj.cid)?;
 
         // If already exists (deduplication), return early
         if obj_path.exists() {
@@ -140,7 +166,7 @@ impl CASStorage {
 
     /// Read without recording access (used by metadata queries).
     pub fn get_raw(&self, cid: &str) -> Result<AIObject, CASError> {
-        let obj_path = self.object_path(cid);
+        let obj_path = self.object_path(cid)?;
 
         if !obj_path.exists() {
             return Err(CASError::NotFound { cid: cid.to_string() });
@@ -160,7 +186,7 @@ impl CASStorage {
 
     /// Check if an object exists.
     pub fn exists(&self, cid: &str) -> bool {
-        self.object_path(cid).exists()
+        self.object_path(cid).map(|p| p.exists()).unwrap_or(false)
     }
 
     /// List all CIDs stored in this CAS.
@@ -201,7 +227,12 @@ impl CASStorage {
     /// Delete an object by CID (physical delete).
     /// WARNING: this is irreversible. Consider logical delete via the semantic FS layer.
     pub fn delete(&self, cid: &str) -> io::Result<()> {
-        let obj_path = self.object_path(cid);
+        let obj_path = match self.object_path(cid) {
+            Ok(p) => p,
+            // Invalid CID or not found → no-op (graceful deletion)
+            Err(CASError::NotFound { .. }) | Err(CASError::InvalidCid { .. }) => return Ok(()),
+            Err(e) => return Err(io::Error::new(io::ErrorKind::InvalidInput, e.to_string())),
+        };
         if obj_path.exists() {
             fs::remove_file(obj_path)?;
         }
@@ -292,7 +323,11 @@ impl CASStorage {
     /// Total disk bytes occupied by CAS objects.
     pub fn total_bytes(&self) -> u64 {
         self.list_cids().unwrap_or_default().iter()
-            .map(|cid| fs::metadata(self.object_path(cid)).map(|m| m.len()).unwrap_or(0))
+            .filter_map(|cid| {
+                let p = self.object_path(cid).ok()?;
+                let m = fs::metadata(&p).ok()?;
+                Some(m.len())
+            })
             .sum()
     }
 
@@ -317,15 +352,17 @@ impl CASStorage {
     }
 
     /// Compute shard directory for a CID.
-    fn shard_dir(&self, cid: &str) -> PathBuf {
+    fn shard_dir(&self, cid: &str) -> Result<PathBuf, CASError> {
+        validate_cid(cid)?;
         let (prefix, _) = cid.split_at(2);
-        self.root.join(prefix)
+        Ok(self.root.join(prefix))
     }
 
     /// Compute object file path for a CID.
-    fn object_path(&self, cid: &str) -> PathBuf {
+    fn object_path(&self, cid: &str) -> Result<PathBuf, CASError> {
+        validate_cid(cid)?;
         let (prefix, rest) = cid.split_at(2);
-        self.root.join(prefix).join(rest)
+        Ok(self.root.join(prefix).join(rest))
     }
 }
 
@@ -376,5 +413,43 @@ mod tests {
 
         let result = storage.get("0000000000000000000000000000000000000000000000000000000000000000");
         assert!(matches!(result, Err(CASError::NotFound { .. })));
+    }
+
+    // F-1: CID validation tests
+    #[test]
+    fn test_get_empty_cid_returns_error() {
+        let dir = tempdir().unwrap();
+        let storage = CASStorage::new(dir.path().to_path_buf()).unwrap();
+
+        let result = storage.get("");
+        assert!(matches!(result, Err(CASError::InvalidCid { cid }) if cid.is_empty()));
+    }
+
+    #[test]
+    fn test_get_single_char_cid_returns_error() {
+        let dir = tempdir().unwrap();
+        let storage = CASStorage::new(dir.path().to_path_buf()).unwrap();
+
+        let result = storage.get("a");
+        assert!(matches!(result, Err(CASError::InvalidCid { cid }) if cid == "a"));
+    }
+
+    #[test]
+    fn test_exists_empty_cid_returns_false() {
+        let dir = tempdir().unwrap();
+        let storage = CASStorage::new(dir.path().to_path_buf()).unwrap();
+
+        assert!(!storage.exists(""));
+        assert!(!storage.exists("x"));
+    }
+
+    #[test]
+    fn test_delete_empty_cid_is_ok() {
+        let dir = tempdir().unwrap();
+        let storage = CASStorage::new(dir.path().to_path_buf()).unwrap();
+
+        // delete with invalid CID is a no-op (graceful handling)
+        assert!(storage.delete("").is_ok());
+        assert!(storage.delete("x").is_ok());
     }
 }

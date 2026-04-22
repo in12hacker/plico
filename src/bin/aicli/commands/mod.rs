@@ -103,6 +103,13 @@ pub fn extract_tags_opt(args: &[String], flag: &str) -> Option<Vec<String>> {
         .map(|s| s.split(',').map(String::from).collect())
 }
 
+// F-2: Unified agent ID extraction — reads --agent or --from
+pub fn extract_agent_id(args: &[String]) -> String {
+    extract_arg(args, "--agent")
+        .or_else(|| extract_arg(args, "--from"))
+        .unwrap_or_else(|| "cli".to_string())
+}
+
 // ─── Output Formatting ──────────────────────────────────────────────
 
 /// If AICLI_OUTPUT=json, print ApiResponse as JSON; otherwise human-readable.

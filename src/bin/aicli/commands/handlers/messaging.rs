@@ -2,10 +2,10 @@
 
 use plico::kernel::AIKernel;
 use plico::api::semantic::ApiResponse;
-use super::extract_arg;
+use super::{extract_arg, extract_agent_id};
 
 pub fn cmd_send_message(kernel: &AIKernel, args: &[String]) -> ApiResponse {
-    let from = extract_arg(args, "--from").unwrap_or_else(|| "cli".to_string());
+    let from = extract_agent_id(args); // F-2: reads --agent or --from
     let to = extract_arg(args, "--to").unwrap_or_default();
     let payload_str = extract_arg(args, "--payload").unwrap_or_else(|| "{}".to_string());
     let payload: serde_json::Value = serde_json::from_str(&payload_str).unwrap_or_default();

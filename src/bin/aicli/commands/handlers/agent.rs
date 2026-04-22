@@ -17,7 +17,7 @@ pub fn cmd_agent(kernel: &AIKernel, args: &[String]) -> ApiResponse {
         };
     }
 
-    let name = extract_arg(args, "--register").unwrap_or_else(|| "unnamed".to_string());
+    let name = extract_arg(args, "--name").unwrap_or_else(|| "unnamed".to_string());
     let id = kernel.register_agent(name);
     let mut r = ApiResponse::ok();
     r.agent_id = Some(id);
