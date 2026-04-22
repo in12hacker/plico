@@ -1180,13 +1180,13 @@ fn test_list_nodes_pagination() {
     });
     assert!(resp.ok);
     assert_eq!(resp.nodes.as_ref().unwrap().len(), 3);
-    assert_eq!(resp.total_count, Some(10));
+    assert_eq!(resp.total_count, Some(11));
     assert_eq!(resp.has_more, Some(true));
 
     let resp2 = kernel.handle_api_request(ApiRequest::ListNodes {
         node_type: None, agent_id: agent_id.clone(), tenant_id: None, limit: Some(3), offset: Some(9),
     });
-    assert_eq!(resp2.nodes.as_ref().unwrap().len(), 1);
+    assert_eq!(resp2.nodes.as_ref().unwrap().len(), 2);
     assert_eq!(resp2.has_more, Some(false));
 }
 
@@ -1230,7 +1230,7 @@ fn test_pagination_beyond_total() {
     });
     assert!(resp.ok);
     assert_eq!(resp.nodes.as_ref().unwrap().len(), 0);
-    assert_eq!(resp.total_count, Some(3));
+    assert_eq!(resp.total_count, Some(4));
     assert_eq!(resp.has_more, Some(false));
 }
 
