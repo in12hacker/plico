@@ -14,6 +14,8 @@ pub fn cmd_remember(kernel: &AIKernel, args: &[String]) -> ApiResponse {
         .unwrap_or_default();
     match parse_memory_tier(&tier_str) {
         MemoryTier::Ephemeral => {
+            // INV-1: Warn about CLI ephemeral persistence limitation
+            eprintln!("Warning: ephemeral memory is stored in-process only and will not persist across CLI command boundaries. Use --tier working or --tier long-term for persistence.");
             match kernel.remember(&agent_id, "default", content) {
                 Ok(_) => ApiResponse::ok_with_message(format!("Memory stored for agent '{}'", agent_id)),
                 Err(e) => ApiResponse::error(e),

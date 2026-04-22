@@ -75,11 +75,15 @@ let mut query = if search_tags.is_empty() {
             kernel.search_by_tags(&search_tags, limit)
         };
         let dto: Vec<SearchResultDto> = results.into_iter().map(|r| SearchResultDto {
-            cid: r.cid, relevance: r.relevance, tags: r.meta.tags,
+            cid: r.cid, relevance: r.relevance, tags: r.meta.tags.clone(),
             snippet: r.snippet.clone(),
             content_type: r.meta.content_type.to_string(),
             created_at: r.meta.created_at,
         }).collect();
+        // INV-4: Postcondition assertion — all results must contain ALL require_tags
+        debug_assert!(require_tags.is_empty() || dto.iter().all(|r|
+            require_tags.iter().all(|t| r.tags.contains(t))
+        ), "Contract violation: result missing required tag(s)");
         let mut r = ApiResponse::ok();
         r.results = Some(dto);
         return r;
@@ -91,18 +95,22 @@ let mut query = if search_tags.is_empty() {
     }
 
     let results = match kernel.semantic_search_with_time(
-        &query, &agent_id, "default", limit, require_tags, exclude_tags, since, until,
+        &query, &agent_id, "default", limit, require_tags.clone(), exclude_tags, since, until,
     ) {
         Ok(r) => r,
         Err(e) => return ApiResponse::error(e.to_string()),
     };
 
     let dto: Vec<SearchResultDto> = results.into_iter().map(|r| SearchResultDto {
-        cid: r.cid, relevance: r.relevance, tags: r.meta.tags,
+        cid: r.cid, relevance: r.relevance, tags: r.meta.tags.clone(),
         snippet: r.snippet.clone(),
         content_type: r.meta.content_type.to_string(),
         created_at: r.meta.created_at,
     }).collect();
+    // INV-4: Postcondition assertion — all results must contain ALL require_tags
+    debug_assert!(require_tags.is_empty() || dto.iter().all(|r|
+        require_tags.iter().all(|t| r.tags.contains(t))
+    ), "Contract violation: result missing required tag(s) in semantic search");
     let mut r = ApiResponse::ok();
     r.results = Some(dto);
     r
