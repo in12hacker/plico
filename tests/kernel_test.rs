@@ -612,7 +612,7 @@ fn test_kernel_handle_api_request_create_and_read() {
     };
     let resp = kernel.handle_api_request(read_req);
     assert!(resp.ok);
-    assert_eq!(resp.data.unwrap(), "Hello from KernelExecutor");
+    assert_eq!(resp.data.as_ref().unwrap(), "Hello from KernelExecutor");
 }
 
 #[test]
@@ -2520,7 +2520,7 @@ fn test_checkpoint_via_api() {
         agent_id: agent_id.clone(),
     });
     assert!(resp.ok, "API checkpoint should succeed: {:?}", resp.error);
-    let cid = resp.data.unwrap();
+    let cid = resp.data.as_ref().map(|s| s.as_str()).unwrap_or("").to_string();
     assert!(!cid.is_empty());
 
     // Restore via API
@@ -2529,7 +2529,7 @@ fn test_checkpoint_via_api() {
         checkpoint_cid: cid,
     });
     assert!(resp2.ok, "API restore should succeed: {:?}", resp2.error);
-    assert!(resp2.data.unwrap().contains("1 entries restored"));
+    assert!(resp2.data.as_ref().is_some_and(|d| d.contains("1 entries restored")));
 }
 
 #[test]
@@ -3615,4 +3615,442 @@ fn test_discover_skills_cross_agent() {
     assert!(skills.len() >= 2);
     assert!(skills.iter().any(|s| s.name == "alpha-skill"));
     assert!(skills.iter().any(|s| s.name == "beta-skill"));
+}
+
+// ─── F-4 Part 2: kernel/ops/fs.rs tests ───────────────────────────────────────
+
+#[test]
+fn test_kernel_semantic_create_and_search() {
+    let (kernel, _dir) = make_kernel();
+
+    kernel.semantic_create(b"rust async programming".to_vec(), vec!["rust".into(), "async".into()], "test", None).expect("create1");
+    kernel.semantic_create(b"python asyncio".to_vec(), vec!["python".into(), "async".into()], "test", None).expect("create2");
+    kernel.semantic_create(b"go channels".to_vec(), vec!["go".into(), "concurrency".into()], "test", None).expect("create3");
+
+    // Use tag search since stub embedding doesn't support full-text search
+    let results = kernel.search_by_tags(&["async".into()], 10);
+    assert!(results.len() >= 2);
+}
+
+#[test]
+fn test_kernel_semantic_create_and_search_with_require_tags() {
+    let (kernel, _dir) = make_kernel();
+
+    kernel.semantic_create(b"doc1".to_vec(), vec!["rust".into()], "test", None).ok();
+    kernel.semantic_create(b"doc2".to_vec(), vec!["rust".into(), "async".into()], "test", None).ok();
+    kernel.semantic_create(b"doc3".to_vec(), vec!["async".into()], "test", None).ok();
+
+    let results = kernel.semantic_search("doc", "test", "default", 10, vec!["rust".into()], vec![]).expect("search failed");
+    // Only doc2 has rust tag
+    assert!(results.iter().all(|r| r.meta.tags.contains(&"rust".into())));
+}
+
+#[test]
+fn test_kernel_search_by_tags() {
+    let (kernel, _dir) = make_kernel();
+
+    kernel.semantic_create(b"rust doc".to_vec(), vec!["rust".into(), "docs".into()], "test", None).ok();
+    kernel.semantic_create(b"python doc".to_vec(), vec!["python".into(), "docs".into()], "test", None).ok();
+
+    let results = kernel.search_by_tags(&["docs".into()], 10);
+    assert!(results.len() >= 2);
+}
+
+#[test]
+fn test_kernel_search_by_tags_intersection() {
+    let (kernel, _dir) = make_kernel();
+
+    kernel.semantic_create(b"doc1".to_vec(), vec!["rust".into()], "test", None).ok();
+    kernel.semantic_create(b"doc2".to_vec(), vec!["rust".into(), "async".into()], "test", None).ok();
+    kernel.semantic_create(b"doc3".to_vec(), vec!["async".into()], "test", None).ok();
+
+    // B25 fix: AND semantics (all tags must match)
+    let results = kernel.search_by_tags_intersection(&["rust".into(), "async".into()], 10);
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].meta.tags, vec!["rust", "async"]);
+}
+
+#[test]
+fn test_kernel_context_load() {
+    let (kernel, _dir) = make_kernel();
+
+    let cid = kernel.semantic_create(b"full document content here".to_vec(), vec!["doc".into()], "test", None).expect("create");
+
+    let loaded = kernel.context_load(&cid, plico::fs::ContextLayer::L0, "test").expect("load L0");
+    assert_eq!(loaded.cid, cid);
+    assert_eq!(loaded.layer.name(), "L0");
+
+    let loaded2 = kernel.context_load(&cid, plico::fs::ContextLayer::L2, "test").expect("load L2");
+    assert_eq!(loaded2.layer.name(), "L2");
+}
+
+#[test]
+fn test_kernel_version_history() {
+    let (kernel, _dir) = make_kernel();
+
+    let cid1 = kernel.semantic_create(b"v1".to_vec(), vec!["ver".into()], "test", None).expect("v1");
+    let cid2 = kernel.semantic_update(&cid1, b"v2".to_vec(), None, "test", "default").expect("v2");
+    let cid3 = kernel.semantic_update(&cid2, b"v3".to_vec(), None, "test", "default").expect("v3");
+
+    let history = kernel.version_history(&cid3, "test");
+    assert!(history.len() >= 3);
+    assert_eq!(history[0], cid3);
+}
+
+#[test]
+fn test_kernel_list_deleted_and_restore() {
+    let (kernel, _dir) = make_kernel();
+
+    kernel.permission_grant("test", plico::api::permission::PermissionAction::Delete, None, None);
+
+    let cid = kernel.semantic_create(b"to delete".to_vec(), vec!["temp".into()], "test", None).expect("create");
+    kernel.semantic_delete(&cid, "test", "default").expect("delete");
+
+    let deleted = kernel.list_deleted("test");
+    assert!(!deleted.is_empty());
+
+    kernel.restore_deleted(&cid, "test").expect("restore");
+}
+
+#[test]
+fn test_kernel_get_object_usage() {
+    let (kernel, _dir) = make_kernel();
+
+    let cid = kernel.semantic_create(b"test content".to_vec(), vec![], "test", None).expect("create");
+    let _ = kernel.get_object(&cid, "test", "default"); // access it
+
+    let usage = kernel.get_object_usage(&cid);
+    // created_at should be a valid timestamp (positive value from kernel boot)
+    assert!(usage.created_at > 0);
+    // access_count should be at least 1 after the get_object call
+    assert!(usage.access_count >= 1);
+}
+
+#[test]
+fn test_kernel_storage_stats() {
+    let (kernel, _dir) = make_kernel();
+
+    kernel.semantic_create(b"doc1".to_vec(), vec![], "test", None).ok();
+    kernel.semantic_create(b"doc2".to_vec(), vec![], "test", None).ok();
+
+    let stats = kernel.get_storage_stats();
+    assert!(stats.total_objects >= 2);
+}
+
+#[test]
+fn test_kernel_semantic_update() {
+    let (kernel, _dir) = make_kernel();
+
+    let cid = kernel.semantic_create(b"original".to_vec(), vec!["v1".into()], "test", None).expect("create");
+    let new_cid = kernel.semantic_update(&cid, b"updated".to_vec(), Some(vec!["v2".into()]), "test", "default").expect("update");
+
+    assert_ne!(cid, new_cid);
+    let obj = kernel.get_object(&new_cid, "test", "default").expect("get updated");
+    assert_eq!(obj.data, b"updated");
+}
+
+// ─── F-4 Part 2: kernel/ops/graph.rs tests ────────────────────────────────────
+
+#[test]
+fn test_kernel_kg_add_node() {
+    let (kernel, _dir) = make_kernel();
+
+    let node_id = kernel.kg_add_node(
+        "TestNode",
+        plico::fs::KGNodeType::Entity,
+        serde_json::json!({"key": "value"}),
+        "test",
+        "default",
+    ).expect("add_node");
+
+    assert!(!node_id.is_empty());
+}
+
+#[test]
+fn test_kernel_kg_add_edge() {
+    let (kernel, _dir) = make_kernel();
+
+    let node1 = kernel.kg_add_node("Node1", plico::fs::KGNodeType::Entity, serde_json::json!({}), "test", "default").expect("node1");
+    let node2 = kernel.kg_add_node("Node2", plico::fs::KGNodeType::Entity, serde_json::json!({}), "test", "default").expect("node2");
+
+    kernel.kg_add_edge(&node1, &node2, plico::fs::KGEdgeType::RelatedTo, Some(0.8), "test", "default").expect("add_edge");
+
+    let edges = kernel.kg_list_edges("test", "default", None).expect("list edges");
+    assert!(edges.iter().any(|e| e.src == node1 && e.dst == node2));
+}
+
+#[test]
+fn test_kernel_kg_list_nodes() {
+    let (kernel, _dir) = make_kernel();
+
+    kernel.kg_add_node("NodeA", plico::fs::KGNodeType::Entity, serde_json::json!({}), "test", "default").ok();
+    kernel.kg_add_node("NodeB", plico::fs::KGNodeType::Fact, serde_json::json!({}), "test", "default").ok();
+
+    let nodes = kernel.kg_list_nodes(None, "test", "default").expect("list nodes");
+    assert!(nodes.len() >= 2);
+}
+
+#[test]
+fn test_kernel_kg_get_node() {
+    let (kernel, _dir) = make_kernel();
+
+    let node_id = kernel.kg_add_node("FindMe", plico::fs::KGNodeType::Entity, serde_json::json!({}), "test", "default").expect("add");
+
+    let node = kernel.kg_get_node(&node_id, "test", "default").expect("get node");
+    assert!(node.is_some());
+    assert_eq!(node.unwrap().label, "FindMe");
+}
+
+#[test]
+fn test_kernel_kg_find_paths() {
+    let (kernel, _dir) = make_kernel();
+
+    let n1 = kernel.kg_add_node("N1", plico::fs::KGNodeType::Entity, serde_json::json!({}), "test", "default").expect("n1");
+    let n2 = kernel.kg_add_node("N2", plico::fs::KGNodeType::Entity, serde_json::json!({}), "test", "default").expect("n2");
+    let n3 = kernel.kg_add_node("N3", plico::fs::KGNodeType::Entity, serde_json::json!({}), "test", "default").expect("n3");
+
+    kernel.kg_add_edge(&n1, &n2, plico::fs::KGEdgeType::RelatedTo, None, "test", "default").ok();
+    kernel.kg_add_edge(&n2, &n3, plico::fs::KGEdgeType::RelatedTo, None, "test", "default").ok();
+
+    let paths = kernel.kg_find_paths(&n1, &n3, 5);
+    assert!(!paths.is_empty());
+}
+
+#[test]
+fn test_kernel_kg_find_weighted_path() {
+    let (kernel, _dir) = make_kernel();
+
+    let n1 = kernel.kg_add_node("W1", plico::fs::KGNodeType::Entity, serde_json::json!({}), "test", "default").expect("w1");
+    let n2 = kernel.kg_add_node("W2", plico::fs::KGNodeType::Entity, serde_json::json!({}), "test", "default").expect("w2");
+    let n3 = kernel.kg_add_node("W3", plico::fs::KGNodeType::Entity, serde_json::json!({}), "test", "default").expect("w3");
+
+    kernel.kg_add_edge(&n1, &n2, plico::fs::KGEdgeType::RelatedTo, Some(0.5), "test", "default").ok();
+    kernel.kg_add_edge(&n1, &n3, plico::fs::KGEdgeType::RelatedTo, Some(0.9), "test", "default").ok();
+    kernel.kg_add_edge(&n2, &n3, plico::fs::KGEdgeType::RelatedTo, Some(0.3), "test", "default").ok();
+
+    let path = kernel.kg_find_weighted_path(&n1, &n3, 3);
+    assert!(path.is_some());
+    let nodes = path.unwrap();
+    assert!(nodes.len() >= 2);
+}
+
+#[test]
+fn test_kernel_kg_remove_edge() {
+    let (kernel, _dir) = make_kernel();
+
+    kernel.permission_grant("test", plico::api::permission::PermissionAction::Delete, None, None);
+
+    let n1 = kernel.kg_add_node("R1", plico::fs::KGNodeType::Entity, serde_json::json!({}), "test", "default").expect("r1");
+    let n2 = kernel.kg_add_node("R2", plico::fs::KGNodeType::Entity, serde_json::json!({}), "test", "default").expect("r2");
+
+    kernel.kg_add_edge(&n1, &n2, plico::fs::KGEdgeType::RelatedTo, None, "test", "default").ok();
+    kernel.kg_remove_edge(&n1, &n2, None, "test", "default").expect("remove edge");
+
+    let edges = kernel.kg_list_edges("test", "default", None).expect("list");
+    assert!(!edges.iter().any(|e| e.src == n1 && e.dst == n2));
+}
+
+#[test]
+fn test_kernel_kg_update_node() {
+    let (kernel, _dir) = make_kernel();
+
+    let node_id = kernel.kg_add_node("OldLabel", plico::fs::KGNodeType::Entity, serde_json::json!({}), "test", "default").expect("add");
+
+    kernel.kg_update_node(&node_id, Some("NewLabel"), Some(serde_json::json!({"updated": true})), "test", "default").expect("update");
+
+    let node = kernel.kg_get_node(&node_id, "test", "default").expect("get").unwrap();
+    assert_eq!(node.label, "NewLabel");
+}
+
+// ─── F-4 Part 2: kernel/builtin_tools.rs tests ───────────────────────────────
+
+#[test]
+fn test_kernel_execute_tool_cas_create() {
+    let (kernel, _dir) = make_kernel();
+
+    let params = serde_json::json!({
+        "content": "hello world",
+        "tags": ["greeting", "test"]
+    });
+    let result = kernel.execute_tool("cas.create", &params, "test");
+
+    assert!(result.is_ok());
+    let val = result.unwrap();
+    assert!(val.get("cid").is_some());
+}
+
+#[test]
+fn test_kernel_execute_tool_cas_search() {
+    let (kernel, _dir) = make_kernel();
+
+    // Create some content first
+    kernel.semantic_create(b"rust async programming".to_vec(), vec!["rust".into()], "test", None).ok();
+    kernel.semantic_create(b"python asyncio".to_vec(), vec!["python".into()], "test", None).ok();
+
+    let params = serde_json::json!({
+        "query": "programming",
+        "limit": 10
+    });
+    let result = kernel.execute_tool("cas.search", &params, "test");
+
+    assert!(result.is_ok());
+    let data = result.unwrap();
+    assert!(data.get("results").is_some());
+}
+
+#[test]
+fn test_kernel_execute_tool_memory_store_and_recall() {
+    let (kernel, _dir) = make_kernel();
+
+    // Store in working memory
+    let store_params = serde_json::json!({
+        "content": "remember this",
+        "tier": "working",
+        "tags": ["test"]
+    });
+    let store_result = kernel.execute_tool("memory.store", &store_params, "test");
+    assert!(store_result.is_ok());
+
+    // Recall memories
+    let recall_params = serde_json::json!({});
+    let recall_result = kernel.execute_tool("memory.recall", &recall_params, "test");
+    assert!(recall_result.is_ok());
+    let data = recall_result.unwrap();
+    let memories = data.get("memories").unwrap().as_array().unwrap();
+    assert!(!memories.is_empty());
+}
+
+#[test]
+fn test_kernel_execute_tool_memory_store_longterm() {
+    let (kernel, _dir) = make_kernel();
+
+    let params = serde_json::json!({
+        "content": "important fact",
+        "tier": "long-term",
+        "tags": ["fact", "important"]
+    });
+    let result = kernel.execute_tool("memory.store", &params, "test");
+    assert!(result.is_ok());
+}
+
+#[test]
+fn test_kernel_execute_tool_unknown_tool() {
+    let (kernel, _dir) = make_kernel();
+
+    let params = serde_json::json!({});
+    let result = kernel.execute_tool("nonexistent.tool", &params, "test");
+
+    assert!(result.is_err());
+    assert!(result.unwrap_err().contains("unknown tool"));
+}
+
+#[test]
+fn test_kernel_tool_count() {
+    let (kernel, _dir) = make_kernel();
+
+    let count = kernel.tool_count();
+    assert!(count > 20); // Should have many built-in tools
+}
+
+#[test]
+fn test_kernel_execute_tool_tools_list() {
+    let (kernel, _dir) = make_kernel();
+
+    let result = kernel.execute_tool("tools.list", &serde_json::json!({}), "test");
+    assert!(result.is_ok());
+}
+
+#[test]
+fn test_kernel_execute_tool_tools_describe() {
+    let (kernel, _dir) = make_kernel();
+
+    let params = serde_json::json!({"name": "cas.create"});
+    let result = kernel.execute_tool("tools.describe", &params, "test");
+
+    assert!(result.is_ok());
+    let data = result.unwrap();
+    assert_eq!(data.get("name").unwrap().as_str().unwrap(), "cas.create");
+}
+
+#[test]
+fn test_kernel_execute_tool_kg_add_node() {
+    let (kernel, _dir) = make_kernel();
+
+    let params = serde_json::json!({
+        "label": "TestKGNode",
+        "type": "entity",
+        "properties": {"key": "value"}
+    });
+    let result = kernel.execute_tool("kg.add_node", &params, "test");
+    assert!(result.is_ok());
+}
+
+#[test]
+fn test_kernel_execute_tool_agent_register_and_status() {
+    let (kernel, _dir) = make_kernel();
+
+    let params = serde_json::json!({"name": "TestAgent"});
+    let result = kernel.execute_tool("agent.register", &params, "cli");
+    assert!(result.is_ok());
+    let data = result.unwrap();
+    let agent_id = data.get("agent_id").unwrap().as_str().unwrap();
+
+    let status_params = serde_json::json!({"agent_id": agent_id});
+    let status_result = kernel.execute_tool("agent.status", &status_params, "cli");
+    assert!(status_result.is_ok());
+}
+
+#[test]
+fn test_kernel_execute_tool_agent_suspend_resume() {
+    let (kernel, _dir) = make_kernel();
+
+    let agent_id = kernel.register_agent("suspend-test".into());
+
+    let suspend_params = serde_json::json!({"agent_id": agent_id});
+    let suspend_result = kernel.execute_tool("agent.suspend", &suspend_params, "cli");
+    assert!(suspend_result.is_ok());
+
+    let resume_params = serde_json::json!({"agent_id": agent_id});
+    let resume_result = kernel.execute_tool("agent.resume", &resume_params, "cli");
+    assert!(resume_result.is_ok());
+}
+
+#[test]
+fn test_kernel_execute_tool_context_load() {
+    let (kernel, _dir) = make_kernel();
+
+    let cid = kernel.semantic_create(b"test context".to_vec(), vec!["ctx".into()], "test", None).expect("create");
+
+    let params = serde_json::json!({"cid": cid, "layer": "L1"});
+    let result = kernel.execute_tool("context.load", &params, "test");
+    assert!(result.is_ok());
+    let data = result.unwrap();
+    assert_eq!(data.get("layer").unwrap().as_str().unwrap(), "L1");
+}
+
+#[test]
+fn test_kernel_execute_tool_permission_check() {
+    let (kernel, _dir) = make_kernel();
+
+    let params = serde_json::json!({"agent_id": "test", "action": "Read"});
+    let result = kernel.execute_tool("permission.check", &params, "test");
+    assert!(result.is_ok());
+    let data = result.unwrap();
+    assert!(data.get("allowed").is_some());
+}
+
+#[test]
+fn test_kernel_execute_tool_message_send() {
+    let (kernel, _dir) = make_kernel();
+
+    kernel.permission_grant("cli", plico::api::permission::PermissionAction::SendMessage, None, None);
+
+    let to_agent = kernel.register_agent("recipient".into());
+
+    let params = serde_json::json!({
+        "to": to_agent,
+        "payload": {"msg": "hello"}
+    });
+    let result = kernel.execute_tool("message.send", &params, "cli");
+    assert!(result.is_ok());
 }

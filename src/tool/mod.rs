@@ -45,6 +45,30 @@ impl ToolResult {
     pub fn error(msg: impl Into<String>) -> Self {
         Self { success: false, output: serde_json::Value::Null, error: Some(msg.into()) }
     }
+
+    pub fn is_ok(&self) -> bool {
+        self.success
+    }
+
+    pub fn is_err(&self) -> bool {
+        !self.success
+    }
+
+    pub fn unwrap(self) -> serde_json::Value {
+        if self.success {
+            self.output
+        } else {
+            panic!("ToolResult::unwrap called on error: {:?}", self.error)
+        }
+    }
+
+    pub fn unwrap_err(self) -> String {
+        if !self.success {
+            self.error.unwrap_or_default()
+        } else {
+            panic!("ToolResult::unwrap_err called on success")
+        }
+    }
 }
 
 /// Metadata describing a tool's interface — enough for an agent to decide
