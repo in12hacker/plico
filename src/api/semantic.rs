@@ -1568,6 +1568,9 @@ pub struct ApiResponse {
     /// Evict cold result (F-18).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub evict_result: Option<EvictColdResult>,
+    /// Health report (F-7).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub health_report: Option<HealthReport>,
 }
 
 /// Response for a successful model switch operation (v18.0).
@@ -1655,12 +1658,23 @@ pub struct KGEdgeDto {
     pub created_at: u64,
 }
 
+fn not_false(b: &bool) -> bool { !*b }
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoadedContextDto {
     pub cid: String,
     pub layer: String,
     pub content: String,
     pub tokens_estimate: usize,
+    /// Actual layer returned (may differ from requested if degraded) (F-8c).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actual_layer: Option<String>,
+    /// Whether content was degraded from requested layer (F-8c).
+    #[serde(default, skip_serializing_if = "not_false")]
+    pub degraded: bool,
+    /// Reason for degradation if applicable (F-8c).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub degradation_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1838,6 +1852,43 @@ pub struct HealthIndicators {
     pub health_score: f64,
 }
 
+/// Degradation entry for health report (F-7).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Degradation {
+    pub component: String,
+    pub severity: String,
+    pub message: String,
+}
+
+/// Health report for system observability (F-7).
+/// Provides comprehensive health status including CAS/Agent/KG counts,
+/// active sessions, embedding backend, and degradation list.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HealthReport {
+    /// True if system is healthy (no critical degradations).
+    pub healthy: bool,
+    /// Unix timestamp in milliseconds when report was generated.
+    pub timestamp_ms: i64,
+    /// Number of CAS objects in storage.
+    pub cas_objects: usize,
+    /// Number of registered agents.
+    pub agents: usize,
+    /// Number of KG nodes.
+    pub kg_nodes: usize,
+    /// Number of KG edges.
+    pub kg_edges: usize,
+    /// Number of active sessions.
+    pub active_sessions: usize,
+    /// Embedding backend name (e.g., "stub", "ollama", "local").
+    pub embedding_backend: String,
+    /// List of active degradations.
+    pub degradations: Vec<Degradation>,
+    /// True if roundtrip test passed.
+    pub roundtrip_ok: bool,
+    /// Roundtrip latency in milliseconds (0 if failed).
+    pub roundtrip_ms: u64,
+}
+
 /// Cache statistics for observability (v19.0).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CacheStatsDto {
@@ -1936,6 +1987,29 @@ pub struct SessionEnded {
     /// Current EventBus sequence number.
     /// Client should save this and pass as last_seen_seq in next StartSession.
     pub last_seq: u64,
+    /// Memory consolidation report (F-6).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub consolidation: Option<ConsolidationReport>,
+}
+
+/// Memory consolidation report (F-6).
+/// Reports the results of the Memory Consolidation Cycle at session-end.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConsolidationReport {
+    /// Number of ephemeral memories before consolidation.
+    pub ephemeral_before: usize,
+    /// Number of ephemeral memories after consolidation.
+    pub ephemeral_after: usize,
+    /// Number of working memories before consolidation.
+    pub working_before: usize,
+    /// Number of working memories after consolidation.
+    pub working_after: usize,
+    /// Number of memories promoted to long-term.
+    pub promoted: usize,
+    /// Number of memories evicted.
+    pub evicted: usize,
+    /// Number of memories linked to KG.
+    pub linked: usize,
 }
 
 // ── Hybrid Retrieval / Graph-RAG (F-11) ───────────────────────────────────────
@@ -2291,6 +2365,7 @@ impl ApiResponse {
             object_usage: None,
             storage_stats: None,
             evict_result: None,
+            health_report: None,
         }
     }
 
@@ -2383,6 +2458,7 @@ impl ApiResponse {
             object_usage: None,
             storage_stats: None,
             evict_result: None,
+            health_report: None,
         }
     }
 

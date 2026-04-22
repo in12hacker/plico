@@ -38,8 +38,13 @@ pub fn cmd_add_node(kernel: &AIKernel, args: &[String]) -> ApiResponse {
 }
 
 pub fn cmd_add_edge(kernel: &AIKernel, args: &[String]) -> ApiResponse {
-    let src = extract_arg(args, "--src").unwrap_or_default();
-    let dst = extract_arg(args, "--dst").unwrap_or_default();
+    // F-8b: Support both --src/--dst and --from/--to flag variants
+    let src = extract_arg(args, "--src")
+        .or_else(|| extract_arg(args, "--from"))
+        .unwrap_or_default();
+    let dst = extract_arg(args, "--dst")
+        .or_else(|| extract_arg(args, "--to"))
+        .unwrap_or_default();
     let edge_type = parse_edge_type(&extract_arg(args, "--type").unwrap_or_else(|| "related_to".to_string()));
     let weight = extract_arg(args, "--weight").and_then(|s| s.parse().ok());
     let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());

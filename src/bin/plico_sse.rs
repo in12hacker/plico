@@ -897,6 +897,7 @@ mod tests {
             object_usage: None,
             storage_stats: None,
             evict_result: None,
+            health_report: None,
         }
     }
 

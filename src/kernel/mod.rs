@@ -583,7 +583,7 @@ impl AIKernel {
                 match self.remember_long_term_scoped(&agent_id, &tenant, content, tags.clone(), importance, scope) {
                     Ok(entry_id) => {
                         // A-4: Memory Link Engine — create KG node and link to related memories
-                        link_memory_to_kg(self, &entry_id, &agent_id, &tenant, &tags);
+                        self.link_memory_to_kg(&entry_id, &agent_id, &tenant, &tags);
                         ApiResponse::ok()
                     }
                     Err(e) => ApiResponse::error(e),
@@ -1088,10 +1088,13 @@ impl AIKernel {
                     Ok(loaded) => {
                         let mut r = ApiResponse::ok();
                         r.context_data = Some(crate::api::semantic::LoadedContextDto {
-                            cid: loaded.cid,
+                            cid: loaded.cid.clone(),
                             layer: loaded.layer.name().to_string(),
                             content: loaded.content,
                             tokens_estimate: loaded.tokens_estimate,
+                            actual_layer: loaded.actual_layer.map(|l| l.name().to_string()),
+                            degraded: loaded.degraded,
+                            degradation_reason: loaded.degradation_reason,
                         });
                         r
                     }
@@ -1438,6 +1441,7 @@ impl AIKernel {
                         r.session_ended = Some(crate::api::semantic::SessionEnded {
                             checkpoint_id: result.checkpoint_id,
                             last_seq: result.last_seq,
+                            consolidation: Some(result.consolidation),
                         });
                         r
                     }
@@ -1856,48 +1860,51 @@ fn parse_scope(scope: Option<String>) -> MemoryScope {
 
 /// A-4: Memory Link Engine — create a KG node for a memory and link it to related memories.
 /// Called after a successful remember_long_term storage.
-fn link_memory_to_kg(kernel: &AIKernel, entry_id: &str, agent_id: &str, tenant_id: &str, tags: &[String]) {
-    use crate::fs::KGEdgeType;
+impl AIKernel {
+    /// Public method for CLI handlers to link a memory entry to KG.
+    pub fn link_memory_to_kg(&self, entry_id: &str, agent_id: &str, tenant_id: &str, tags: &[String]) {
+        use crate::fs::KGEdgeType;
 
-    // Create a label from entry_id (truncated for display)
-    let label = format!("mem:{}", &entry_id[..8.min(entry_id.len())]);
-    let props = serde_json::json!({
-        "memory_entry_id": entry_id,
-        "tags": tags,
-        "kind": "memory",
-    });
+        // Create a label from entry_id (truncated for display)
+        let label = format!("mem:{}", &entry_id[..8.min(entry_id.len())]);
+        let props = serde_json::json!({
+            "memory_entry_id": entry_id,
+            "tags": tags,
+            "kind": "memory",
+        });
 
-    // Create KG node for this memory
-    let node_id = match kernel.kg_add_node(&label, KGNodeType::Memory, props, agent_id, tenant_id) {
-        Ok(id) => id,
-        Err(e) => {
-            tracing::warn!("failed to create KG node for memory {}: {}", entry_id, e);
-            return;
-        }
-    };
+        // Create KG node for this memory
+        let node_id = match self.kg_add_node(&label, KGNodeType::Memory, props, agent_id, tenant_id) {
+            Ok(id) => id,
+            Err(e) => {
+                tracing::warn!("failed to create KG node for memory {}: {}", entry_id, e);
+                return;
+            }
+        };
 
-    // Find existing memory nodes for this agent and link related ones
-    let existing_nodes = match kernel.kg_list_nodes(Some(KGNodeType::Memory), agent_id, tenant_id) {
-        Ok(nodes) => nodes,
-        Err(_) => return,
-    };
+        // Find existing memory nodes for this agent and link related ones
+        let existing_nodes = match self.kg_list_nodes(Some(KGNodeType::Memory), agent_id, tenant_id) {
+            Ok(nodes) => nodes,
+            Err(_) => return,
+        };
 
-    for existing in existing_nodes {
-        if existing.id == node_id {
-            continue;
-        }
-        // Check for tag overlap
-        let existing_tags: Vec<String> = existing.properties.get("tags")
-            .and_then(|v: &serde_json::Value| v.as_array())
-            .map(|arr| arr.iter().filter_map(|t| t.as_str().map(String::from)).collect())
-            .unwrap_or_default();
+        for existing in existing_nodes {
+            if existing.id == node_id {
+                continue;
+            }
+            // Check for tag overlap
+            let existing_tags: Vec<String> = existing.properties.get("tags")
+                .and_then(|v: &serde_json::Value| v.as_array())
+                .map(|arr| arr.iter().filter_map(|t| t.as_str().map(String::from)).collect())
+                .unwrap_or_default();
 
-        let shared: Vec<_> = tags.iter().filter(|t| existing_tags.contains(t)).collect();
-        if !shared.is_empty() {
-            // Create SimilarTo edge
-            let weight = shared.len() as f32 / (tags.len().max(existing_tags.len())) as f32;
-            if let Err(e) = kernel.kg_add_edge(&node_id, &existing.id, KGEdgeType::SimilarTo, Some(weight), agent_id, tenant_id) {
-                tracing::debug!("failed to create memory link edge: {}", e);
+            let shared: Vec<_> = tags.iter().filter(|t| existing_tags.contains(t)).collect();
+            if !shared.is_empty() {
+                // Create SimilarTo edge
+                let weight = shared.len() as f32 / (tags.len().max(existing_tags.len())) as f32;
+                if let Err(e) = self.kg_add_edge(&node_id, &existing.id, KGEdgeType::SimilarTo, Some(weight), agent_id, tenant_id) {
+                    tracing::debug!("failed to create memory link edge: {}", e);
+                }
             }
         }
     }

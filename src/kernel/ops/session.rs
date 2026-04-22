@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
-use crate::api::semantic::{ChangeEntry, CheckpointSummaryDto};
+use crate::api::semantic::{ChangeEntry, CheckpointSummaryDto, ConsolidationReport};
 use crate::kernel::event_bus::EventBus;
 use crate::kernel::ops::delta::handle_delta_since;
 use crate::kernel::ops::tier_maintenance::TierMaintenance;
@@ -307,6 +307,12 @@ impl SessionStore {
         sessions.values().filter(|s| s.agent_id == agent_id).count()
     }
 
+    /// Get total active session count across all agents (F-7).
+    pub fn total_active_count(&self) -> usize {
+        let sessions = self.sessions.read().unwrap();
+        sessions.len()
+    }
+
     /// Get active sessions for an agent within a time period (L-5).
     pub fn get_active_sessions(&self, agent_id: &str, cutoff_ms: Option<u64>) -> Vec<ActiveSession> {
         let sessions = self.sessions.read().unwrap();
@@ -552,6 +558,15 @@ pub fn end_session_orchestrate(
     Ok(EndSessionResult {
         checkpoint_id,
         last_seq,
+        consolidation: ConsolidationReport {
+            ephemeral_before: stats.ephemeral_before,
+            ephemeral_after: stats.ephemeral_after,
+            working_before: stats.working_before,
+            working_after: stats.working_after,
+            promoted: stats.promoted_count,
+            evicted: stats.evicted_count,
+            linked: stats.linked_count,
+        },
     })
 }
 
@@ -570,6 +585,7 @@ pub struct StartSessionResult {
 pub struct EndSessionResult {
     pub checkpoint_id: Option<String>,
     pub last_seq: u64,
+    pub consolidation: crate::api::semantic::ConsolidationReport,
 }
 
 /// Spawn a background task that periodically scans for expired sessions

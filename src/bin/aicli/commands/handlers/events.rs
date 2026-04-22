@@ -77,12 +77,11 @@ pub fn cmd_events(kernel: &AIKernel, args: &[String]) -> ApiResponse {
         Some("history") => {
             let since_seq = extract_arg(args, "--since")
                 .and_then(|s| s.parse().ok());
-            let agent_id_filter = extract_arg(args, "--agent-filter");
             let limit = extract_arg(args, "--limit")
                 .and_then(|s| s.parse().ok());
             let req = plico::api::semantic::ApiRequest::EventHistory {
                 since_seq,
-                agent_id_filter,
+                agent_id_filter: agent_id.clone(),
                 limit,
             };
             kernel.handle_api_request(req)

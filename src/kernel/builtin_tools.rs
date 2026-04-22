@@ -274,12 +274,17 @@ impl AIKernel {
                     .unwrap_or_default();
                 let since = params.get("since").and_then(|v| v.as_i64());
                 let until = params.get("until").and_then(|v| v.as_i64());
-                let results = match self.semantic_search_with_time(
-                    query, agent_id, "default", limit, require_tags, exclude_tags, since, until,
+                let mut results = match self.semantic_search_with_time(
+                    query, agent_id, "default", limit * 2, require_tags, exclude_tags, since, until,
                 ) {
                     Ok(r) => r,
                     Err(e) => return ToolResult::error(e.to_string()),
                 };
+                // Deduplicate by CID
+                let mut seen = std::collections::HashSet::new();
+                results.retain(|r| seen.insert(r.cid.clone()));
+                // Apply limit after deduplication
+                results.truncate(limit);
                 let dto: Vec<serde_json::Value> = results.into_iter().map(|r| json!({
                     "cid": r.cid, "relevance": r.relevance, "tags": r.meta.tags,
                 })).collect();

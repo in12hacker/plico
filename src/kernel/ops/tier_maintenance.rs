@@ -81,6 +81,7 @@ impl TierMaintenance {
             promoted_count: (after_working - before_working) + (after_longterm - before_longterm),
             evicted_count: before_ephemeral.saturating_sub(after_ephemeral)
                 .saturating_sub(after_working - before_working),
+            linked_count: 0, // Set by caller after linking
         }
     }
 
@@ -116,6 +117,8 @@ pub struct MaintenanceStats {
     pub longterm_after: usize,
     pub promoted_count: usize,
     pub evicted_count: usize,
+    /// Number of memories linked to KG during consolidation (set by caller).
+    pub linked_count: usize,
 }
 
 #[cfg(test)]

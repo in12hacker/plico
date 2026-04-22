@@ -166,6 +166,8 @@ pub fn cmd_delegate(kernel: &AIKernel, args: &[String]) -> ApiResponse {
         Some(t) => t,
         None => return ApiResponse::error("--to required"),
     };
+    // F-4: resolve agent name to UUID if necessary
+    let to_id = kernel.resolve_agent(&to).unwrap_or(to);
     let desc = extract_arg(args, "--desc").unwrap_or_else(|| "delegated task".to_string());
     let action = extract_arg(args, "--action");
     let priority_str = extract_arg(args, "--priority").unwrap_or_else(|| "medium".to_string());
@@ -175,11 +177,11 @@ pub fn cmd_delegate(kernel: &AIKernel, args: &[String]) -> ApiResponse {
         "medium" => plico::scheduler::IntentPriority::Medium,
         _ => plico::scheduler::IntentPriority::Low,
     };
-    match kernel.delegate_task(&from, &to, desc, action, priority) {
+    match kernel.delegate_task(&from, &to_id, desc, action, priority) {
         Ok((intent_id, msg_id)) => {
             let mut r = ApiResponse::ok();
             r.delegation = Some(plico::api::semantic::DelegationResultDto {
-                intent_id, message_id: msg_id, from, to,
+                intent_id, message_id: msg_id, from, to: to_id,
             });
             r
         }

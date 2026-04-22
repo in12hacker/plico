@@ -67,10 +67,17 @@ pub fn execute_local(kernel: &AIKernel, args: &[String]) -> ApiResponse {
         Some("delta") => cmd_delta(kernel, args),
         Some("growth") => cmd_growth(kernel, args),
         Some("hybrid") => cmd_hybrid(kernel, args),
+        Some("permission") | Some("perm") => cmd_permission(kernel, args),
         Some("system-status") => {
             let status = kernel.system_status();
             let mut r = ApiResponse::ok();
             r.system_status = Some(status);
+            r
+        }
+        Some("health") => {
+            let report = kernel.health_report();
+            let mut r = ApiResponse::ok();
+            r.health_report = Some(report);
             r
         }
         _ => ApiResponse::error("Unknown command. Run: aicli --help"),
@@ -231,8 +238,16 @@ pub fn print_result(response: &ApiResponse) -> bool {
         }
     }
     if let Some(ctx) = &response.context_data {
-        println!("Context [{}] for CID: {}", ctx.layer, ctx.cid);
+        let layer_str = if ctx.degraded {
+            format!("{}, degraded from {}", ctx.layer, ctx.actual_layer.as_deref().unwrap_or("?"))
+        } else {
+            ctx.layer.clone()
+        };
+        println!("Context [{}] for CID: {}", layer_str, ctx.cid);
         println!("Tokens estimate: {}", ctx.tokens_estimate);
+        if let Some(ref reason) = ctx.degradation_reason {
+            println!("Degradation: {}", reason);
+        }
         println!("---");
         println!("{}", ctx.content);
     }
@@ -426,6 +441,23 @@ pub fn print_result(response: &ApiResponse) -> bool {
     // Handle operation feedback message (L-1/F-47)
     if let Some(ref msg) = response.message {
         println!("{}", msg);
+    }
+    if let Some(hr) = &response.health_report {
+        let status_str = if hr.healthy { "HEALTHY" } else { "DEGRADED" };
+        println!("System Health: {} (at {}ms)", status_str, hr.timestamp_ms);
+        println!("  CAS objects:    {}", hr.cas_objects);
+        println!("  Agents:         {}", hr.agents);
+        println!("  KG nodes:       {}", hr.kg_nodes);
+        println!("  KG edges:       {}", hr.kg_edges);
+        println!("  Active sessions: {}", hr.active_sessions);
+        println!("  Embedding:      {}", hr.embedding_backend);
+        println!("  Roundtrip:      {} ({}ms)", if hr.roundtrip_ok { "OK" } else { "FAILED" }, hr.roundtrip_ms);
+        if !hr.degradations.is_empty() {
+            println!("  Degradations:");
+            for d in &hr.degradations {
+                println!("    ⚠ [{}] {} — {}", d.component, d.severity, d.message);
+            }
+        }
     }
 
     // Error path: stderr + non-zero exit

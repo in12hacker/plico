@@ -30,10 +30,13 @@ fn cmd_context_load(kernel: &AIKernel, args: &[String]) -> ApiResponse {
         Ok(loaded) => {
             let mut r = ApiResponse::ok();
             r.context_data = Some(LoadedContextDto {
-                cid: loaded.cid,
+                cid: loaded.cid.clone(),
                 layer: loaded.layer.name().to_string(),
                 content: loaded.content,
                 tokens_estimate: loaded.tokens_estimate,
+                actual_layer: loaded.actual_layer.map(|l| l.name().to_string()),
+                degraded: loaded.degraded,
+                degradation_reason: loaded.degradation_reason,
             });
             r
         }

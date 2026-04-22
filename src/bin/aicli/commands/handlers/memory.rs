@@ -12,14 +12,31 @@ pub fn cmd_remember(kernel: &AIKernel, args: &[String]) -> ApiResponse {
     let tags: Vec<String> = extract_arg(args, "--tags")
         .map(|t| t.split(',').map(|s| s.trim().to_string()).collect())
         .unwrap_or_default();
-    let result = match parse_memory_tier(&tier_str) {
-        MemoryTier::Working => kernel.remember_working(&agent_id, "default", content, tags).map(|_| ()),
-        MemoryTier::LongTerm => kernel.remember_long_term(&agent_id, "default", content, tags, 50).map(|_| ()),
-        _ => kernel.remember(&agent_id, "default", content).map(|_| ()),
-    };
-    match result {
-        Ok(()) => ApiResponse::ok_with_message(format!("Memory stored for agent '{}'", agent_id)),
-        Err(e) => ApiResponse::error(e),
+    match parse_memory_tier(&tier_str) {
+        MemoryTier::Working => {
+            let tags_clone = tags.clone();
+            match kernel.remember_working(&agent_id, "default", content, tags_clone) {
+                Ok(_) => ApiResponse::ok_with_message(format!("Memory stored for agent '{}'", agent_id)),
+                Err(e) => ApiResponse::error(e),
+            }
+        }
+        MemoryTier::LongTerm => {
+            let tags_clone = tags.clone();
+            match kernel.remember_long_term(&agent_id, "default", content, tags_clone, 50) {
+                Ok(entry_id) => {
+                    // A-4: Memory Link Engine — link memory to KG
+                    kernel.link_memory_to_kg(&entry_id, &agent_id, "default", &tags);
+                    ApiResponse::ok_with_message(format!("Memory stored for agent '{}'", agent_id))
+                }
+                Err(e) => ApiResponse::error(e),
+            }
+        }
+        _ => {
+            match kernel.remember(&agent_id, "default", content) {
+                Ok(_) => ApiResponse::ok_with_message(format!("Memory stored for agent '{}'", agent_id)),
+                Err(e) => ApiResponse::error(e),
+            }
+        }
     }
 }
 
@@ -74,11 +91,15 @@ pub fn cmd_memdelete(kernel: &AIKernel, args: &[String]) -> ApiResponse {
 }
 
 pub fn parse_memory_tier(s: &str) -> MemoryTier {
-    match s.to_lowercase().as_str() {
+    match s.to_lowercase().replace(['-', '_'], "").as_str() {
         "ephemeral" | "l0" | "ephem" => MemoryTier::Ephemeral,
         "working" | "l1" | "wk" => MemoryTier::Working,
         "longterm" | "l2" | "lt" | "long" => MemoryTier::LongTerm,
         "procedural" | "l3" | "proc" => MemoryTier::Procedural,
-        _ => MemoryTier::Working,
+        "" => MemoryTier::Working,
+        other => {
+            eprintln!("Warning: unknown tier '{}', defaulting to Working", other);
+            MemoryTier::Working
+        }
     }
 }
