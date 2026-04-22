@@ -214,6 +214,37 @@ kernel.recall_relevant_semantic():
 MCP 用的是 recall_semantic (无 fallback) → B42 的真正根因
 ```
 
+### F-J: Skill ↔ KG 双向断裂 + Entity 锚点缺失 ⚠️ CROSS-SUBSYSTEM
+
+```
+Dogfood KG 状态: 10 Document 节点, 0 Entity, 0 Skill
+→ 整个 KG 是平坦的 Document 列表, 没有层级结构
+
+断裂链路 1: Skills 写入-读取交叉断裂
+  skills register → 写 KG (Fact kind=skill) → skills discover 读 KG ✅
+  skills register → ❌ 不写 LayeredMemory → skills list 读 memory 找不到
+
+  remember --tier procedural → 写 Memory → skills list 读 memory ✅
+  remember --tier procedural → ❌ 不写 KG → skills discover 读 KG 找不到
+
+断裂链路 2: Entity 锚点从未创建
+  register_agent() → 只注册 scheduler, 不创建 KG Entity 节点
+  register_skill() → 尝试找 Entity → 不存在 → 静默跳过 HasFact 边
+  → skill 节点即使存在也是 KG 中的孤岛
+
+代码位置:
+  agent.rs:403-435 register_skill() — 单写 KG, 不写 memory
+  agent.rs:427-432 — Entity 查找 + 静默跳过
+  agent.rs:437-462 discover_skills() — 只读 KG, 不读 memory
+  skills.rs:21-46 cmd_skills_list() — 只读 memory, 不读 KG
+```
+
+这是 OrKa Brain 精确描述的问题：
+> "Two complete memory systems, sitting in the same codebase, sharing no information.
+> I had built the hippocampus and the motor cortex as two separate systems that had never met."
+
+Skills (Procedural Memory) 和 KG 是两个系统，共享零信息。
+
 ### 功能审计总结：断裂模式
 
 ```
@@ -231,6 +262,12 @@ MCP 用的是 recall_semantic (无 fallback) → B42 的真正根因
   Ephemeral = volatile cache (daemon 模式设计)
   CLI = stateless (每命令独立进程)
   两者组合 = Ephemeral 在 CLI 下完全失效
+
+模式 4: "写入-读取交叉断裂" (F-J)
+  skills register → 写 KG, 不写 Memory → skills list 不可见
+  remember --tier procedural → 写 Memory, 不写 KG → skills discover 不可见
+  register_agent → 不创建 Entity → skill 节点无锚点
+  → 两个子系统各自写入, 从对方读取, 互相看不到
 ```
 
 ---
@@ -820,22 +857,61 @@ if query.is_empty() && !require_tags.is_empty() {
 
 ### D3: 记忆绑定 — "记忆不是孤岛"
 
-#### F-5: Memory-KG Binding（记忆-知识图谱绑定）
+#### F-5: Memory-KG Binding + Skill-KG Sync（记忆-知识图谱绑定 + 技能同步）
 
-**问题**: A-4 incomplete — remember 后 explore 无自动边
+**问题 A**: A-4 incomplete — remember 后 explore 无自动边
+**问题 B**: Dogfood 发现 KG 只有 10 个 Document 节点，0 个 Entity/Skill — 技能子系统与 KG 完全断裂
 
-**根因**: Node 12 设计的 `link_memory_to_kg` 在 `cmd_remember` 中只对 LongTerm tier 调用，且代码可能未正确创建双向边。
+**问题 B 根因链 — 代码审计**:
+
+```
+=== 两条独立写入路径 ===
+
+路径 1: skills register
+  → agent.rs:424 kg_add_node(name, KGNodeType::Fact, {kind:"skill"})  ← 写 KG ✅
+  → agent.rs:427 寻找 Entity(agent_id) → 无 → 不创建 HasFact 边  ← ❌ 无锚点
+  → ❌ 不调用 remember_procedural → LayeredMemory 无记录
+  → skills list (读 memory) 找不到!
+
+路径 2: remember --tier procedural
+  → cmd_remember → _ => kernel.remember() → 存为 Ephemeral ← F-B 路由错接
+  → ❌ 不调用 kg_add_node → KG 无记录
+  → skills discover (读 KG) 找不到!
+
+=== 两条独立读取路径 ===
+
+skills list    → recall_procedural() → 读 LayeredMemory Procedural
+skills discover → kg_list_nodes(Fact) → 读 KG, filter kind="skill"
+
+→ 写入路径 和 读取路径 完全交叉断裂
+→ 无论从哪个入口写入，另一个入口都不可见
+```
+
+**问题 B 的第二层 — Entity 节点缺失**:
+
+```
+register_skill (agent.rs:427-432):
+  let agent_nodes = self.kg_list_nodes(Some(KGNodeType::Entity), agent_id, "default")
+  let agent_entity = agent_nodes.iter().find(|n| n.label == agent_id);
+  if let Some(entity) = agent_entity {
+      self.kg_add_edge(&entity.id, &node_id, KGEdgeType::HasFact, ...);
+  }
+  // entity 不存在时静默跳过 ← 没有 HasFact 边
+
+register_agent() 不创建 Entity 节点 ← 根因
+
+→ 即使 skills register 创建了 Fact(kind=skill) 节点，
+   也没有 Entity 锚点来关联，KG 中的 skill 是孤岛
+```
 
 **设计依据**:
 - Kumiho: Graph-native memory — 记忆 IS 图谱的一部分
-- OrKa Memory Binding: 两个系统必须通过显式 binding 连接
+- OrKa Memory Binding: 两个系统必须通过显式 binding 连接 — **Skill ↔ Episode 不绑定 = 记忆失效**（精确命中此问题）
 - HugRAG: 因果关系驱动图谱 — 不是所有关系都是 RelatedTo
 
-**修复方向**:
+**修复方向（三层）**:
 
-1. 所有 tier 的 remember 都触发 KG linking（不只 LongTerm）
-2. linking 使用 BM25 搜索找到相关 CAS 对象和已有记忆
-3. 创建的边类型区分 RelatedTo（内容相似）和 DerivedFrom（同 agent 序列）
+**层 1**: 所有 tier 的 remember 都触发 KG linking（不只 LongTerm）— 同 v1.0
 
 ```rust
 // cmd_remember 修复: 所有 tier 都触发 linking
@@ -858,19 +934,59 @@ match parse_memory_tier(&tier_str) {
 }
 ```
 
+**层 2**: register_agent 自动创建 Entity 锚点 + register_skill 双写 Memory
+
+```rust
+// agent.rs — register_agent 修复: 自动创建 Entity 节点
+pub fn register_agent(&self, name: String) -> String {
+    let aid = self.scheduler.register(name.clone());
+    // 自动在 KG 中创建 Agent Entity 节点
+    let props = serde_json::json!({ "kind": "agent", "name": &name });
+    let _ = self.kg_add_node(&name, KGNodeType::Entity, props, &aid, "default");
+    aid
+}
+
+// agent.rs — register_skill 修复: 双写 KG + Memory
+pub fn register_skill(&self, agent_id: &str, name: &str, description: &str, tags: Vec<String>) -> Result<String, String> {
+    // 1. 写 KG (已有)
+    let node_id = self.kg_add_node(name, KGNodeType::Fact, props, agent_id, "default")?;
+    
+    // 2. 连接 Entity (已有但现在 entity 一定存在)
+    // ... (register_agent 已创建 Entity)
+    
+    // 3. 双写 LayeredMemory Procedural (新增)
+    let _ = self.remember_procedural(
+        agent_id, "default",
+        name.to_string(), description.to_string(),
+        vec![ProcedureStep { action: description.to_string(), expected_result: None }],
+        "register_skill".to_string(),
+        tags,
+    );
+    
+    Ok(node_id)
+}
+```
+
+**层 3**: `link_memory_to_kg` 增强
+
 在 `link_memory_to_kg` 中确保：
 - 为 entry 创建 KG 节点（如果不存在）
 - BM25 搜索相关内容
 - 对 relevance > 0.3 的结果创建 RelatedTo 边
 - 对同 agent 的前一条记忆创建 FollowsFrom 边
+- **Procedural tier 的记忆额外创建 Fact(kind=skill) 节点** ← v2.0 新增
 
-**估算**: ~50 行修改, 5 个新测试
+**估算**: ~70 行修改 (+20 行 entity 自动创建 + skill 双写), 7 个新测试
 **验收**:
 ```
-remember --agent alpha --content "X" → explore --scope full 有 Memory 节点 + 边
+remember --agent alpha --content "X" → explore 有 Memory 节点 + 边
 remember --agent alpha --content "Y related to X" → explore 有 X→Y RelatedTo 边
+skills register --agent alpha --name "foo" → skills list 有 foo ← 双写验证
+skills register --agent alpha --name "foo" → skills discover 有 foo ← KG 路径验证
+register-agent alpha → explore alpha 有 Entity 节点 ← entity 锚点验证
 ```
 **Soul 2.0**: 公理 8（因果先于关联）— 边的类型和权重编码因果关系
+**OrKa 对标**: "Skill + Episode 两套系统不绑定 = 记忆失效" — 精确命中此问题
 
 ---
 
@@ -1166,14 +1282,14 @@ session-end → 输出含 "Consolidation: reviewed X, promoted Y"
 | F-2 Full Tier + Persistence | 0 | ~20 行 | 5 | `handlers/memory.rs` + `kernel/ops/memory.rs` | **+5行** (F-A fix: 添加 persist) |
 | F-3 Tool Agent + Validation | 0 | ~30 行 | 4 | `builtin_tools.rs` | **+10行** (INV-2: agent_id 验证) |
 | F-4 Require-Tags | ~25 行 | ~10 行 | 3 | `handlers/crud.rs` + kernel search | 不变 |
-| F-5 Memory-KG | ~50 行 | ~15 行 | 5 | `handlers/memory.rs` + `kernel/ops/memory.rs` | 不变 |
+| F-5 Memory-KG + Skill Sync | ~50 行 | ~35 行 | 7 | `handlers/memory.rs` + `kernel/ops/memory.rs` + `kernel/ops/agent.rs` | **+20行** (F-J: entity创建+skill双写) |
 | F-6 Consolidation **Display** | ~15 行 | ~5 行 | 2 | `commands/mod.rs` (CLI 输出) | **简化**: 逻辑已存在，只需显示 |
 | F-7 MCP Fallback | 0 | ~15 行 | 2 | `plico_mcp.rs` | 不变 |
 | F-8 Tier Parity + Routing | 0 | ~35 行 | 5 | `handlers/memory.rs` + `builtin_tools.rs` | **+5行** (F-B fix: procedural 路由) |
 | **F-9 Contract Assertions** | **~40 行** | **~15 行** | **4** | **多文件** | **v2.0 新增** |
-| **总计** | **~130 行** | **~153 行** | **33** | | |
+| **总计** | **~130 行** | **~173 行** | **35** | | |
 
-**总估算**: ~283 行代码变更, 33 个新测试
+**总估算**: ~303 行代码变更, 35 个新测试
 
 **v2.0 变化说明**:
 - F-2 扩展: 修复 F-A (Ephemeral 持久化) — `kernel.remember()` 需调用 `persist_memories()`

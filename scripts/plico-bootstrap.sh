@@ -34,7 +34,7 @@ declare -A MODULE_IDS
 for mod in "${MODULES[@]}"; do
     ID=$($CLI node --label "$mod" --type entity \
         --props "{\"kind\":\"module\",\"path\":\"src/$mod\"}" \
-        --agent "$AGENT" 2>/dev/null | grep "Node created:" | awk '{print $3}')
+        --agent "$AGENT" 2>/dev/null | grep "Node ID:" | awk '{print $3}')
     MODULE_IDS[$mod]="$ID"
     echo "  $mod -> $ID"
 done
@@ -44,7 +44,7 @@ echo ""
 echo "--- Creating milestone entity ---"
 MILESTONE_ID=$($CLI node --label "v0.2-dogfooding" --type entity \
     --props '{"kind":"milestone","target":"2026-05-01","goals":["KG API","self-management","bootstrap"]}' \
-    --agent "$AGENT" 2>/dev/null | grep "Node created:" | awk '{print $3}')
+    --agent "$AGENT" 2>/dev/null | grep "Node ID:" | awk '{print $3}')
 echo "  v0.2-dogfooding -> $MILESTONE_ID"
 
 # 4. Link modules to milestone
@@ -85,7 +85,7 @@ All project management happens at the application layer via standard aicli API.
 
 ADR_CID=$($CLI put --content "$ADR_CONTENT" \
     --tags "plico:type:adr,plico:module:graph,plico:module:kernel,plico:status:accepted" \
-    --agent "$AGENT" 2>/dev/null | grep "CID:" | awk '{print $2}')
+    --agent "$AGENT" 2>/dev/null | grep "^CID:" | awk '{print $2}')
 echo "  ADR CID: $ADR_CID"
 
 # 6. Create a Fact node for this decision and link to modules
@@ -93,7 +93,7 @@ echo ""
 echo "--- Creating decision fact + edges ---"
 FACT_ID=$($CLI node --label "Use generic KG primitives for project management" --type fact \
     --props "{\"content_cid\":\"$ADR_CID\",\"kind\":\"adr\"}" \
-    --agent "$AGENT" 2>/dev/null | grep "Node created:" | awk '{print $3}')
+    --agent "$AGENT" 2>/dev/null | grep "Node ID:" | awk '{print $3}')
 echo "  Fact: $FACT_ID"
 
 $CLI edge --src "$FACT_ID" --dst "${MODULE_IDS[graph]}" \

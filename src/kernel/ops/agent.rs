@@ -27,9 +27,15 @@ impl crate::kernel::AIKernel {
     }
 
     pub fn register_agent(&self, name: String) -> String {
-        let agent = Agent::new(name);
+        let agent = Agent::new(name.clone());
         let id = agent.id().to_string();
         self.scheduler.register(agent);
+
+        // F-5: Create KG Entity anchor for this agent (enables skill linking)
+        use crate::fs::KGNodeType;
+        let props = serde_json::json!({ "kind": "agent", "name": name });
+        let _ = self.kg_add_node(&id, KGNodeType::Entity, props, &id, "default");
+
         self.event_bus.emit(KernelEvent::AgentStateChanged {
             agent_id: id.clone(),
             old_state: "None".into(),
@@ -424,12 +430,29 @@ impl crate::kernel::AIKernel {
         let node_id = self.kg_add_node(name, KGNodeType::Fact, props, agent_id, "default")
             .map_err(|e| e.to_string())?;
 
+        // F-5: Link to Entity anchor (now guaranteed to exist via register_agent)
         let agent_nodes = self.kg_list_nodes(Some(KGNodeType::Entity), agent_id, "default")
             .unwrap_or_default();
         let agent_entity = agent_nodes.iter().find(|n| n.label == agent_id);
         if let Some(entity) = agent_entity {
             let _ = self.kg_add_edge(&entity.id, &node_id, KGEdgeType::HasFact, None, agent_id, "default");
         }
+
+        // F-5: Dual-write to Memory (Procedural tier) for skills list visibility
+        let steps = vec![crate::memory::layered::ProcedureStep {
+            step_number: 0,
+            description: description.to_string(),
+            action: format!("invoke skill: {}", name),
+            expected_outcome: String::new(),
+        }];
+        let _ = self.remember_procedural(
+            agent_id, "default",
+            name.to_string(),
+            description.to_string(),
+            steps,
+            "skill_register".to_string(),
+            tags.clone(),
+        );
 
         Ok(node_id)
     }

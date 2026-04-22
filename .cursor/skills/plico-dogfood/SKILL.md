@@ -34,16 +34,38 @@ pcli_human() {
 AGENT="plico-dev"
 ```
 
-### Bootstrap (once per fresh /tmp)
+### Bootstrap — MANDATORY first step
 
-Check if module entities exist, create if empty:
+**MUST run before any storage operation.** Entity nodes are required anchors for KG linking.
+
 ```bash
-EXISTING=$(pcli nodes --type entity --agent $AGENT | python3 -c "import sys,json; print(len(json.load(sys.stdin).get('nodes',[])))")
-if [ "$EXISTING" = "0" ]; then
+EXISTING=$(pcli nodes --type entity --agent $AGENT 2>/dev/null | python3 -c "import sys,json; print(len(json.load(sys.stdin).get('nodes',[])))" 2>/dev/null || echo "0")
+if [ "$EXISTING" = "0" ] || [ -z "$EXISTING" ]; then
+  echo "Bootstrapping dogfood KG..."
+  pcli_human agent --register $AGENT || true
   for mod in cas fs kernel api scheduler memory graph temporal cli daemon; do
-    pcli node --label "$mod" --type entity --props "{\"kind\":\"module\",\"path\":\"src/$mod\"}" --agent $AGENT
+    pcli_human node --label "$mod" --type entity \
+      --props "{\"kind\":\"module\",\"path\":\"src/$mod\"}" --agent $AGENT
   done
+  pcli_human node --label "v0.2-dogfooding" --type entity \
+    --props '{"kind":"milestone"}' --agent $AGENT
 fi
+```
+
+After bootstrap, cache module IDs for the session:
+```bash
+MODULE_JSON=$(pcli nodes --type entity --agent $AGENT)
+```
+
+Helper to look up a module entity ID by label:
+```bash
+mod_id() {
+  echo "$MODULE_JSON" | python3 -c "
+import sys,json
+ns=json.load(sys.stdin).get('nodes',[])
+matches=[n['id'] for n in ns if n['label']=='$1']
+print(matches[0] if matches else '')" 2>/dev/null
+}
 ```
 
 ## Tag Convention
@@ -60,7 +82,10 @@ fi
 
 ## Storage Templates
 
-### ADR
+### ADR — MUST link to KG
+
+Every ADR creates: CAS object + Fact node + edge to module entity.
+Do NOT skip the KG linking — unlinked ADRs are invisible to graph queries.
 
 ```bash
 CID=$(pcli put --content "## <title>
@@ -69,16 +94,15 @@ Decision: <what>
 Consequences: <tradeoffs>" \
   --tags "plico:type:adr,plico:module:<mod>,plico:status:accepted" \
   --agent $AGENT | python3 -c "import sys,json; print(json.load(sys.stdin)['cid'])")
-```
 
-Optionally link to module entity:
-```bash
 FACT_ID=$(pcli node --label "<title>" --type fact \
   --props "{\"content_cid\":\"$CID\",\"kind\":\"adr\"}" --agent $AGENT \
   | python3 -c "import sys,json; print(json.load(sys.stdin)['node_id'])")
-MOD_ID=$(pcli nodes --type entity --agent $AGENT \
-  | python3 -c "import sys,json; ns=json.load(sys.stdin)['nodes']; print(next(n['id'] for n in ns if n['label']=='<mod>'))")
-pcli edge --src $FACT_ID --dst $MOD_ID --type related_to --agent $AGENT
+
+MOD_ID=$(mod_id <mod>)
+if [ -n "$MOD_ID" ]; then
+  pcli edge --src "$FACT_ID" --dst "$MOD_ID" --type related_to --agent $AGENT
+fi
 ```
 
 ### Progress
@@ -115,28 +139,26 @@ Fix: <what fixed it>" \
 ## Query
 
 ```bash
-# List module entities
-pcli_human nodes --type entity --agent $AGENT
-
-# Find all ADRs
+pcli_human nodes --type entity --agent $AGENT        # module anchors
+pcli_human nodes --type fact --agent $AGENT          # decisions/skills
 pcli_human search "adr" -t "plico:type:adr" --agent $AGENT
-
-# Find experiences for a module
 pcli_human search "<module>" -t "plico:type:experience" --agent $AGENT
-
-# All tags
 pcli_human tags
-
-# Graph exploration
 pcli_human explore --cid <node-id> --agent $AGENT
-
-# Paths between nodes
 pcli_human paths --src <id1> --dst <id2> --depth 3
 ```
 
 Note: With `EMBEDDING_BACKEND=stub`, search falls back to tag-substring matching.
-The query text must be a substring of a tag name for results to appear.
-Use `--require-tags` / `-t` for precise filtering.
+Use `--require-tags` / `-t` with `--query` for precise filtering.
+
+## Known Limitations (as of Node 13 audit)
+
+- `recall --tier X` does not filter by tier (B38) — all tiers returned regardless
+- `remember --tier procedural` routes to ephemeral storage (F-B) — use `tool call memory.store_procedure` instead
+- `--require-tags` without `--query` returns empty (B41) — always combine with `--query`
+- `search --require-tags` uses substring matching, not exact tag match
+- `tool call memory.recall` returns empty content field (B40) — use CLI `recall` instead
+- `delete` may panic on certain CID formats (B35)
 
 ## Principles
 
@@ -144,3 +166,5 @@ Use `--require-tags` / `-t` for precise filtering.
 - All operations via `aicli` — no kernel-layer hacks
 - Model-agnostic — any AI agent can use the same API
 - Batch over interrupt — record at pause points, not mid-flow
+- **ALWAYS bootstrap before first storage** — entity anchors are required for graph structure
+- **ALWAYS link ADRs to KG** — unlinked facts are invisible islands (see Node 14 F-J)

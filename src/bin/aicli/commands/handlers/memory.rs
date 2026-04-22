@@ -32,7 +32,7 @@ pub fn cmd_remember(kernel: &AIKernel, args: &[String]) -> ApiResponse {
             let tags_clone = tags.clone();
             match kernel.remember_long_term(&agent_id, "default", content, tags_clone, 50) {
                 Ok(entry_id) => {
-                    // A-4: Memory Link Engine — link memory to KG
+                    // F-5: Memory-KG Binding — link memory to KG for all tiers
                     kernel.link_memory_to_kg(&entry_id, &agent_id, "default", &tags);
                     ApiResponse::ok_with_message(format!("Memory stored for agent '{}'", agent_id))
                 }
@@ -54,9 +54,13 @@ pub fn cmd_remember(kernel: &AIKernel, args: &[String]) -> ApiResponse {
                 content,
                 procedure_steps,
                 "cli".to_string(),
-                tags,
+                tags.clone(),
             ) {
-                Ok(_) => ApiResponse::ok_with_message(format!("Procedural memory stored for agent '{}'", agent_id)),
+                Ok(entry_id) => {
+                    // F-5: Memory-KG Binding — link procedural memory to KG
+                    kernel.link_memory_to_kg(&entry_id, &agent_id, "default", &tags);
+                    ApiResponse::ok_with_message(format!("Procedural memory stored for agent '{}'", agent_id))
+                }
                 Err(e) => ApiResponse::error(e),
             }
         }
