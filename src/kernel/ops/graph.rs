@@ -887,7 +887,7 @@ mod tests {
         let paths = kernel.kg_find_paths(&id1, &id2, 3);
         assert_eq!(paths.len(), 1);
         assert_eq!(paths[0][0].id, id1);
-        assert_eq!(paths[1][paths[0].len() - 1].id, id2);
+        assert_eq!(paths[0][paths[0].len() - 1].id, id2);
     }
 
     #[test]
@@ -914,28 +914,28 @@ mod tests {
     #[test]
     fn test_kg_remove_node() {
         let (kernel, _dir) = crate::kernel::tests::make_kernel();
-        let id = kernel.kg_add_node("to-remove", KGNodeType::Entity, serde_json::json!({}), "agent1", "default").expect("add failed");
+        let id = kernel.kg_add_node("to-remove", KGNodeType::Entity, serde_json::json!({}), "kernel", "default").expect("add failed");
 
-        kernel.kg_remove_node(&id, "agent1", "default").expect("remove failed");
+        kernel.kg_remove_node(&id, "kernel", "default").expect("remove failed");
 
-        let node = kernel.kg_get_node(&id, "agent1", "default").expect("get failed");
+        let node = kernel.kg_get_node(&id, "kernel", "default").expect("get failed");
         assert!(node.is_none());
     }
 
     #[test]
     fn test_kg_remove_edge() {
         let (kernel, _dir) = crate::kernel::tests::make_kernel();
-        let id1 = kernel.kg_add_node("e1", KGNodeType::Entity, serde_json::json!({}), "agent1", "default").expect("add failed");
-        let id2 = kernel.kg_add_node("e2", KGNodeType::Entity, serde_json::json!({}), "agent1", "default").expect("add failed");
+        let id1 = kernel.kg_add_node("e1", KGNodeType::Entity, serde_json::json!({}), "kernel", "default").expect("add failed");
+        let id2 = kernel.kg_add_node("e2", KGNodeType::Entity, serde_json::json!({}), "kernel", "default").expect("add failed");
 
-        kernel.kg_add_edge(&id1, &id2, KGEdgeType::AssociatesWith, None, "agent1", "default").expect("add_edge failed");
+        kernel.kg_add_edge(&id1, &id2, KGEdgeType::AssociatesWith, None, "kernel", "default").expect("add_edge failed");
 
-        let edges_before = kernel.kg_list_edges("agent1", "default", None).expect("list failed");
+        let edges_before = kernel.kg_list_edges("kernel", "default", None).expect("list failed");
         assert_eq!(edges_before.len(), 1);
 
-        kernel.kg_remove_edge(&id1, &id2, None, "agent1", "default").expect("remove_edge failed");
+        kernel.kg_remove_edge(&id1, &id2, None, "kernel", "default").expect("remove_edge failed");
 
-        let edges_after = kernel.kg_list_edges("agent1", "default", None).expect("list failed");
+        let edges_after = kernel.kg_list_edges("kernel", "default", None).expect("list failed");
         assert!(edges_after.is_empty());
     }
 

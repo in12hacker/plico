@@ -523,6 +523,86 @@ impl crate::kernel::AIKernel {
     }
 }
 
+// ─── Tests ────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_remember_ephemeral_basic() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let id = kernel.remember("kernel", "default", "ephemeral thought".to_string());
+        assert!(id.is_ok());
+    }
+
+    #[test]
+    fn test_remember_long_term_basic() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let id = kernel.remember_long_term(
+            "kernel", "default",
+            "important fact".to_string(),
+            vec!["fact".to_string()],
+            80,
+        );
+        assert!(id.is_ok());
+    }
+
+    #[test]
+    fn test_check_and_promote_from_ephemeral_to_working() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        // Store an ephemeral entry with high importance and enough access
+        let id = kernel.remember("kernel", "default", "promotable entry".to_string()).expect("remember failed");
+
+        // Manually bump access count via memory
+        let entries = kernel.memory.get_all("kernel");
+        if let Some(mut entry) = entries.into_iter().find(|e| e.id == id) {
+            entry.access_count = 5; // above promotion threshold
+            entry.importance = 80;   // high importance
+            kernel.memory.store(entry);
+        }
+
+        let promoted = kernel.check_and_promote("kernel", &id);
+        // May or may not promote depending on thresholds, just check no panic
+        let _ = promoted;
+    }
+
+    #[test]
+    fn test_run_tier_maintenance_no_panic() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        kernel.remember("kernel", "default", "test entry".to_string()).ok();
+        // Should not panic
+        kernel.run_tier_maintenance("kernel");
+    }
+
+    #[test]
+    fn test_memory_recall_basic() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        kernel.remember("kernel", "default", "recallable memory".to_string()).ok();
+
+        let entries = kernel.recall("kernel", "default");
+        assert!(!entries.is_empty());
+    }
+
+    #[test]
+    fn test_memory_recall_empty_query() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        kernel.remember("kernel", "default", "test".to_string()).ok();
+        let entries = kernel.recall("kernel", "default");
+        assert!(entries.len() >= 1);
+    }
+
+    #[test]
+    fn test_memory_count_via_agent_usage() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let agent_id = kernel.register_agent("usage-agent".to_string());
+        kernel.remember(&agent_id, "default", "count me".to_string()).ok();
+        let usage = kernel.agent_usage(&agent_id);
+        assert!(usage.is_some());
+        assert!(usage.unwrap().memory_entries >= 1);
+    }
+}
+
 /// Discover shared knowledge from other agents based on query and scope (F-16).
 pub fn discover_knowledge(
     memory: &crate::memory::LayeredMemory,

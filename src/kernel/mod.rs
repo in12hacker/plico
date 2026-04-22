@@ -14,6 +14,7 @@ mod builtin_tools;
 pub mod event_bus;
 pub mod persistence;
 pub mod ops;
+pub mod tests; // test helpers for inline #[cfg(test)] modules
 
 use ops::checkpoint::CheckpointStore;
 use ops::prefetch::IntentPrefetcher;

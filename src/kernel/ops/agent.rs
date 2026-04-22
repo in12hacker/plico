@@ -519,3 +519,91 @@ impl crate::kernel::AIKernel {
             .collect()
     }
 }
+
+// ─── Tests ────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_register_agent_multiple() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let id1 = kernel.register_agent("agent-alpha".to_string());
+        let id2 = kernel.register_agent("agent-beta".to_string());
+        assert_ne!(id1, id2);
+
+        let agents = kernel.list_agents();
+        let names: Vec<_> = agents.iter().map(|a| a.name.clone()).collect();
+        assert!(names.contains(&"agent-alpha".to_string()));
+        assert!(names.contains(&"agent-beta".to_string()));
+    }
+
+    #[test]
+    fn test_resolve_agent_by_uuid() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let id = kernel.register_agent("resolver-test".to_string());
+
+        let resolved = kernel.resolve_agent(&id);
+        assert_eq!(resolved, Some(id));
+    }
+
+    #[test]
+    fn test_resolve_agent_by_name() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        kernel.register_agent("named-agent".to_string());
+
+        let resolved = kernel.resolve_agent("named-agent");
+        assert!(resolved.is_some());
+    }
+
+    #[test]
+    fn test_resolve_agent_nonexistent() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        assert!(kernel.resolve_agent("does-not-exist").is_none());
+    }
+
+    #[test]
+    fn test_submit_intent_basic() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        kernel.register_agent("intent-agent".to_string());
+
+        let result = kernel.submit_intent(
+            IntentPriority::Medium,
+            "test intent".to_string(),
+            None,
+            Some("intent-agent".to_string()),
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_agent_status() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let id = kernel.register_agent("status-agent".to_string());
+
+        let status = kernel.agent_status(&id);
+        assert!(status.is_some());
+        let (agent_id, state, pending) = status.unwrap();
+        assert_eq!(agent_id, id);
+        assert_eq!(pending, 0);
+    }
+
+    #[test]
+    fn test_discover_agents() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        kernel.register_agent("alice".to_string());
+        kernel.register_agent("bob".to_string());
+
+        let agents = kernel.discover_agents(None, None);
+        assert!(agents.len() >= 2);
+    }
+
+    #[test]
+    fn test_ensure_agent_registered() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        kernel.ensure_agent_registered("lazy-agent");
+        let resolved = kernel.resolve_agent("lazy-agent");
+        assert!(resolved.is_some());
+    }
+}

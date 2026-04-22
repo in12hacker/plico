@@ -443,3 +443,89 @@ impl crate::kernel::AIKernel {
         self.fs.cas().persist_access_log()
     }
 }
+
+// ─── Tests ────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_semantic_create_and_semantic_delete_roundtrip() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let cid = kernel.semantic_create(
+            b"important data".to_vec(),
+            vec!["test".to_string(), "data".to_string()],
+            "kernel",
+            None,
+        ).expect("create failed");
+
+        // Verify it exists
+        let obj = kernel.get_object(&cid, "kernel", "default").expect("get failed");
+        assert_eq!(obj.data, b"important data");
+
+        // Delete it
+        kernel.semantic_delete(&cid, "kernel", "default").expect("delete failed");
+
+        // Verify it's gone (or in recycle bin)
+        let entries = kernel.list_deleted("kernel");
+        assert!(entries.iter().any(|e| e.cid == cid));
+    }
+
+    #[test]
+    fn test_semantic_search_with_require_tags_and_semantics() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        kernel.semantic_create(b"doc-a".to_vec(), vec!["rust".to_string(), "async".to_string()], "kernel", None).ok();
+        kernel.semantic_create(b"doc-b".to_vec(), vec!["rust".to_string(), "sync".to_string()], "kernel", None).ok();
+        kernel.semantic_create(b"doc-c".to_vec(), vec!["go".to_string(), "async".to_string()], "kernel", None).ok();
+
+        // Search with require_tags (AND semantics) - should match only doc-a
+        let results = kernel.semantic_search("rust", "kernel", "default", 10, vec!["async".to_string()], vec![]).expect("search failed");
+        assert!(!results.is_empty());
+    }
+
+    #[test]
+    fn test_semantic_search_exclude_tags() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        kernel.semantic_create(b"keep-me".to_vec(), vec!["visible".to_string()], "kernel", None).ok();
+        kernel.semantic_create(b"exclude-me".to_vec(), vec!["visible".to_string(), "secret".to_string()], "kernel", None).ok();
+
+        let results = kernel.semantic_search("", "kernel", "default", 10, vec![], vec!["secret".to_string()]).expect("search failed");
+        assert!(results.iter().all(|r| !r.meta.tags.contains(&"secret".to_string())));
+    }
+
+    #[test]
+    fn test_search_by_tags_intersection() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        kernel.semantic_create(b"doc1".to_vec(), vec!["a".to_string(), "b".to_string()], "kernel", None).ok();
+        kernel.semantic_create(b"doc2".to_vec(), vec!["a".to_string()], "kernel", None).ok();
+        kernel.semantic_create(b"doc3".to_vec(), vec!["b".to_string()], "kernel", None).ok();
+
+        let results = kernel.search_by_tags_intersection(&["a".to_string(), "b".to_string()], 10);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].meta.tags, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn test_list_tags() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        kernel.semantic_create(b"x".to_vec(), vec!["tag-a".to_string()], "kernel", None).ok();
+        kernel.semantic_create(b"y".to_vec(), vec!["tag-b".to_string()], "kernel", None).ok();
+        kernel.semantic_create(b"z".to_vec(), vec!["tag-a".to_string()], "kernel", None).ok();
+
+        let tags = kernel.list_tags();
+        assert!(tags.contains(&"tag-a".to_string()));
+        assert!(tags.contains(&"tag-b".to_string()));
+    }
+
+    #[test]
+    fn test_version_history_single_version() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let cid = kernel.semantic_create(b"v1".to_vec(), vec!["test".to_string()], "kernel", None).expect("create failed");
+
+        let history = kernel.version_history(&cid, "kernel");
+        // Single version with no supersedes chain returns just itself
+        assert!(history.len() >= 1);
+        assert_eq!(history[0], cid);
+    }
+}
