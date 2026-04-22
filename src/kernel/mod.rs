@@ -590,19 +590,17 @@ impl AIKernel {
                 }
             }
             ApiRequest::RecallSemantic { agent_id, query, k } => {
-                match self.recall_semantic(&agent_id, "default", &query, k) {
-                    Ok(entries) => {
-                        let memories: Vec<String> = entries.into_iter()
-                            .filter_map(|m| match m.content {
-                                crate::memory::MemoryContent::Text(t) => Some(t),
-                                _ => None,
-                            }).collect();
-                        let mut r = ApiResponse::ok();
-                        r.memory = Some(memories);
-                        r
-                    }
-                    Err(e) => ApiResponse::error(e),
-                }
+                // F-7: Use recall_relevant_semantic which has BM25 fallback on embedding failure
+                let budget = (k * 500).max(1000); // rough token budget
+                let entries = self.recall_relevant_semantic(&agent_id, "default", &query, budget);
+                let memories: Vec<String> = entries.into_iter()
+                    .filter_map(|m| match m.content {
+                        crate::memory::MemoryContent::Text(t) => Some(t),
+                        _ => None,
+                    }).collect();
+                let mut r = ApiResponse::ok();
+                r.memory = Some(memories);
+                r
             }
             ApiRequest::Explore { cid, edge_type, depth, agent_id: _ } => {
                 let depth = depth.unwrap_or(1).min(3);
