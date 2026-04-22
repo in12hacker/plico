@@ -226,6 +226,108 @@ fn test_kernel_list_tags() {
     assert!(tags.contains(&"c".to_string()));
 }
 
+// Node 15 F-4: Memory tier unit tests
+
+#[test]
+fn test_kernel_remember_working_tier() {
+    let (kernel, _dir) = make_kernel();
+
+    kernel.remember_working("agent1", "default", "working memory content".to_string(), vec!["test".to_string()]).unwrap();
+    let memories = kernel.recall("agent1", "default");
+
+    let working: Vec<_> = memories.iter().filter(|m| matches!(m.tier, plico::memory::MemoryTier::Working)).collect();
+    assert!(!working.is_empty(), "should have at least one working tier memory");
+    assert!(working.iter().any(|m| m.content.display().contains("working memory")));
+}
+
+#[test]
+fn test_kernel_remember_longterm_tier() {
+    let (kernel, _dir) = make_kernel();
+
+    kernel.remember_long_term("agent1", "default", "important fact".to_string(), vec!["fact".to_string()], 50).unwrap();
+    let memories = kernel.recall("agent1", "default");
+
+    let longterm: Vec<_> = memories.iter().filter(|m| matches!(m.tier, plico::memory::MemoryTier::LongTerm)).collect();
+    assert!(!longterm.is_empty(), "should have at least one longterm tier memory");
+    assert!(longterm.iter().any(|m| m.content.display().contains("important fact")));
+}
+
+#[test]
+fn test_kernel_remember_procedural_tier() {
+    let (kernel, _dir) = make_kernel();
+
+    let steps = vec![plico::memory::layered::ProcedureStep {
+        step_number: 0,
+        description: "test procedure".to_string(),
+        action: "do the test".to_string(),
+        expected_outcome: "test passes".to_string(),
+    }];
+    kernel.remember_procedural(
+        "agent1", "default",
+        "test-procedure".to_string(),
+        "A test procedure".to_string(),
+        steps,
+        "unit-test".to_string(),
+        vec!["test".to_string()],
+    ).unwrap();
+
+    let entries = kernel.recall_procedural("agent1", "default", Some("test-procedure"));
+    assert!(!entries.is_empty(), "should recall procedural memory by name");
+    assert!(entries.iter().all(|e| matches!(&e.content, plico::memory::MemoryContent::Procedure(_))));
+}
+
+#[test]
+fn test_kernel_recall_procedural_no_filter() {
+    let (kernel, _dir) = make_kernel();
+
+    // Store two different procedures
+    let steps1 = vec![plico::memory::layered::ProcedureStep {
+        step_number: 0, description: "proc1".to_string(), action: "action1".to_string(), expected_outcome: String::new(),
+    }];
+    kernel.remember_procedural("agent1", "default", "proc1".to_string(), "description1".to_string(), steps1, "test".to_string(), vec![]).unwrap();
+
+    let steps2 = vec![plico::memory::layered::ProcedureStep {
+        step_number: 0, description: "proc2".to_string(), action: "action2".to_string(), expected_outcome: String::new(),
+    }];
+    kernel.remember_procedural("agent1", "default", "proc2".to_string(), "description2".to_string(), steps2, "test".to_string(), vec![]).unwrap();
+
+    // recall_procedural with None returns ALL procedural memories
+    let all = kernel.recall_procedural("agent1", "default", None);
+    assert_eq!(all.len(), 2, "should recall all two procedural memories");
+}
+
+#[test]
+fn test_kernel_memory_move() {
+    let (kernel, _dir) = make_kernel();
+
+    // Store in working
+    kernel.remember_working("agent1", "default", "movable content".to_string(), vec![]).unwrap();
+    let memories_before = kernel.recall("agent1", "default");
+    let entry_id = memories_before.iter().find(|m| m.content.display().contains("movable content")).map(|m| m.id.clone());
+
+    if let Some(eid) = entry_id {
+        // Move to longterm
+        let moved = kernel.memory_move("agent1", "default", &eid, plico::memory::MemoryTier::LongTerm);
+        assert!(moved, "memory_move should succeed");
+
+        let memories_after = kernel.recall("agent1", "default");
+        let moved_entry = memories_after.iter().find(|m| m.id == eid);
+        assert!(moved_entry.map(|m| matches!(m.tier, plico::memory::MemoryTier::LongTerm)).unwrap_or(false));
+    }
+}
+
+#[test]
+fn test_kernel_memory_stats() {
+    let (kernel, _dir) = make_kernel();
+
+    kernel.remember("agent1", "default", "ephemeral".to_string()).unwrap();
+    kernel.remember_working("agent1", "default", "working".to_string(), vec![]).unwrap();
+    kernel.remember_long_term("agent1", "default", "longterm".to_string(), vec![], 50).unwrap();
+
+    let stats = kernel.memory_stats("agent1", None);
+    assert!(stats.total_entries >= 3, "should have at least 3 entries across tiers");
+}
+
 #[test]
 fn test_kernel_list_deleted_after_delete() {
     let (kernel, _dir) = make_kernel();
