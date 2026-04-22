@@ -390,12 +390,20 @@ pub fn print_result(response: &ApiResponse) -> bool {
         }
         println!("  Changes since last: {} (est. {} tokens)", ss.changes_since_last.len(), ss.token_estimate);
     }
-    if let Some(se) = &response.session_ended {
+if let Some(se) = &response.session_ended {
         println!("Session ended");
         if let Some(ref cid) = se.checkpoint_id {
             println!("  Checkpoint: {}", cid);
         }
         println!("  Last seq: {}", se.last_seq);
+        // F-6: Display consolidation report
+        if let Some(ref c) = se.consolidation {
+            println!("  Consolidation: reviewed {} ephemeral, {} working",
+                c.ephemeral_before, c.working_before);
+            if c.promoted > 0 { println!("    ↑ {} promoted", c.promoted); }
+            if c.evicted > 0 { println!("    ✕ {} evicted", c.evicted); }
+            if c.linked > 0 { println!("    🔗 {} KG edges", c.linked); }
+        }
     }
     if let Some(delta) = &response.delta_result {
         if delta.changes.is_empty() {

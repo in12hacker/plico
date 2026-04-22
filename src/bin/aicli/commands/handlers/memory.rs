@@ -2,7 +2,7 @@
 
 use plico::kernel::AIKernel;
 use plico::api::semantic::ApiResponse;
-use plico::memory::MemoryTier;
+use plico::memory::{MemoryTier, layered::ProcedureStep};
 use super::extract_arg;
 
 pub fn cmd_remember(kernel: &AIKernel, args: &[String]) -> ApiResponse {
@@ -13,6 +13,12 @@ pub fn cmd_remember(kernel: &AIKernel, args: &[String]) -> ApiResponse {
         .map(|t| t.split(',').map(|s| s.trim().to_string()).collect())
         .unwrap_or_default();
     match parse_memory_tier(&tier_str) {
+        MemoryTier::Ephemeral => {
+            match kernel.remember(&agent_id, "default", content) {
+                Ok(_) => ApiResponse::ok_with_message(format!("Memory stored for agent '{}'", agent_id)),
+                Err(e) => ApiResponse::error(e),
+            }
+        }
         MemoryTier::Working => {
             let tags_clone = tags.clone();
             match kernel.remember_working(&agent_id, "default", content, tags_clone) {
@@ -31,9 +37,24 @@ pub fn cmd_remember(kernel: &AIKernel, args: &[String]) -> ApiResponse {
                 Err(e) => ApiResponse::error(e),
             }
         }
-        _ => {
-            match kernel.remember(&agent_id, "default", content) {
-                Ok(_) => ApiResponse::ok_with_message(format!("Memory stored for agent '{}'", agent_id)),
+        MemoryTier::Procedural => {
+            // F-B fix: route to remember_procedural instead of generic remember
+            let procedure_steps = vec![ProcedureStep {
+                step_number: 0,
+                description: content.clone(),
+                action: content.clone(),
+                expected_outcome: String::new(),
+            }];
+            match kernel.remember_procedural(
+                &agent_id,
+                "default",
+                "cli-procedure".to_string(),
+                content,
+                procedure_steps,
+                "cli".to_string(),
+                tags,
+            ) {
+                Ok(_) => ApiResponse::ok_with_message(format!("Procedural memory stored for agent '{}'", agent_id)),
                 Err(e) => ApiResponse::error(e),
             }
         }
@@ -42,8 +63,13 @@ pub fn cmd_remember(kernel: &AIKernel, args: &[String]) -> ApiResponse {
 
 pub fn cmd_recall(kernel: &AIKernel, args: &[String]) -> ApiResponse {
     let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
+    let tier_filter = extract_arg(args, "--tier").map(|s| parse_memory_tier(&s));
     let memories = kernel.recall(&agent_id, "default");
-    let strings: Vec<String> = memories.iter().map(|m| format!("[{:?}] {}", m.tier, m.content.display())).collect();
+    let filtered: Vec<_> = match tier_filter {
+        Some(tier) => memories.into_iter().filter(|m| m.tier == tier).collect(),
+        None => memories,
+    };
+    let strings: Vec<String> = filtered.iter().map(|m| format!("[{:?}] {}", m.tier, m.content.display())).collect();
     let mut r = ApiResponse::ok();
     r.memory = Some(strings);
     r
