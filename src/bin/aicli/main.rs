@@ -54,7 +54,9 @@ enum Mode {
 fn run_local(args: &[String]) -> bool {
     let mut filtered = Vec::with_capacity(args.len());
     let mut i = 0;
-    let mut root = PathBuf::from("/tmp/plico");
+    let mut root = dirs::data_dir()
+        .unwrap_or_else(|| PathBuf::from("/tmp"))
+        .join("plico");
 
     while i < args.len() {
         match args[i].as_str() {

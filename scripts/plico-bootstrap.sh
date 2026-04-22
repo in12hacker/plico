@@ -122,12 +122,80 @@ $CLI edge --src "$FACT_ID" --dst "${MODULE_IDS[kernel]}" \
     --type related_to --agent "$AGENT" 2>/dev/null || true
 echo "  fact --[related_to]--> kernel"
 
-# 7. Summary
+# F-6: Batch record historical ADRs for nodes 1-15
+record_adr_bootstrap() {
+    local title="$1"
+    local tags="$2"
+    local content="$3"
+    local existing=$($CLI nodes --type fact --agent "$AGENT" 2>/dev/null \
+        | grep -i "$(echo "$title" | tr '[:upper:]' '[:lower:]')" | head -1 | grep -o '[a-f0-9-]\{36\}' | head -1 || true)
+    if [ -n "$existing" ]; then
+        echo "  ADR '$title' exists (skipping)"
+        return
+    fi
+    local CID=$($CLI put --content "$content" --tags "$tags" --agent "$AGENT" 2>/dev/null | grep "^CID:" | awk '{print $2}')
+    if [ -z "$CID" ]; then
+        echo "  ADR '$title' failed to store"
+        return
+    fi
+    local FACT_ID=$($CLI node --label "$title" --type fact \
+        --props "{\"content_cid\":\"$CID\",\"kind\":\"adr\"}" --agent "$AGENT" 2>/dev/null \
+        | grep "Node ID:" | awk '{print $3}')
+    echo "  ADR: $title -> $FACT_ID"
+}
+
+echo ""
+echo "--- Recording historical ADRs (F-6) ---"
+record_adr_bootstrap "CAS Content Addressing" "plico:type:adr,plico:module:cas,plico:status:accepted" \
+  "## CAS Content Addressing\nDecision: Use SHA-256 content hash as primary address. Auto-dedup by content. All operations address by CID not path."
+
+record_adr_bootstrap "Four-Layer Memory" "plico:type:adr,plico:module:memory,plico:status:accepted" \
+  "## Four-Layer Memory Architecture\nDecision: Ephemeral -> Working -> Long-term -> Procedural tiers. Tier-based lifecycle management. Each tier has distinct eviction/rehydration policies."
+
+record_adr_bootstrap "Everything is a Tool" "plico:type:adr,plico:module:tool,plico:status:accepted" \
+  "## Tool-centric Architecture\nDecision: All external capabilities (filesystem, network, execution) exposed as Tools. Unified ToolHandler trait. No privileged built-ins."
+
+record_adr_bootstrap "Agent Lifecycle Management" "plico:type:adr,plico:module:scheduler,plico:status:accepted" \
+  "## Agent Lifecycle Management\nDecision: Create -> Ready -> Running <-> Suspended -> Terminated state machine. Checkpoint-based suspend/resume. Agent identified by UUID."
+
+record_adr_bootstrap "Event Bus Architecture" "plico:type:adr,plico:module:kernel,plico:status:accepted" \
+  "## Event Bus Architecture\nDecision: Asynchronous event bus for inter-component communication. Event sourcing for audit trail. Topics: agent.*, memory.*, tool.*, kg.*"
+
+record_adr_bootstrap "Session Persistence" "plico:type:adr,plico:module:persistence,plico:status:accepted" \
+  "## Session Persistence\nDecision: Sessions persisted to CAS as checkpoints. Resume loads last checkpoint + replay log. Session ID is CID of checkpoint."
+
+record_adr_bootstrap "KG Generic Types" "plico:type:adr,plico:module:graph,plico:status:accepted" \
+  "## Knowledge Graph Generic Types\nDecision: Entity/Fact/Document/Agent/Memory node types. RelatedTo/PartOf/Mentions/Causes edge types. ID is CID of content. No schema enforcement."
+
+record_adr_bootstrap "Tool Handler Trait" "plico:type:adr,plico:module:tool,plico:status:accepted" \
+  "## Tool Handler Trait\nDecision: ToolHandler trait with execute(context, params) -> Result<Value>. Registry maps name -> handler. Handlers are stateless."
+
+record_adr_bootstrap "ExternalToolProvider Protocol" "plico:type:adr,plico:module:tool,plico:status:accepted" \
+  "## External Tool Provider Protocol\nDecision: External tools via ExternalToolProvider trait: list_tools() -> Vec<ToolDef>, call_tool(name, params) -> Result<Value>. MCP as reference implementation."
+
+record_adr_bootstrap "Semantic Search Fallback" "plico:type:adr,plico:module:fs,plico:status:accepted" \
+  "## Semantic Search Fallback Chain\nDecision: Vector search -> BM25 keyword search -> CAS full-scan. Embedding model configurable (ollama/local/stub). Fallback ensures availability."
+
+record_adr_bootstrap "Agent Checkpoint via CAS" "plico:type:adr,plico:module:kernel,plico:status:accepted" \
+  "## Agent Checkpoint via CAS\nDecision: Agent state serialized to JSON, stored as CAS object. Checkpoint CID = agent state CID. Enables perfect resume."
+
+record_adr_bootstrap "Memory Link Engine" "plico:type:adr,plico:module:memory,plico:status:accepted" \
+  "## Memory Link Engine\nDecision: On remember_long_term, auto-create KG Memory node + SimilarTo edges to related memories. Tag-based similarity. Bidirectional edges."
+
+record_adr_bootstrap "Tier Maintenance Cycle" "plico:type:adr,plico:module:memory,plico:status:accepted" \
+  "## Tier Maintenance Cycle\nDecision: Session-end runs tier maintenance: promote recent ephemeral to working, archive old working to long-term. Never demote working or long-term."
+
+record_adr_bootstrap "Concurrent Agent Dispatch" "plico:type:adr,plico:module:scheduler,plico:status:accepted" \
+  "## Concurrent Agent Dispatch\nDecision: Scheduler uses work-stealing queue for agent dispatch. Max concurrent agents configurable. Agent yield on I/O wait."
+
+record_adr_bootstrap "Context Budget Engine" "plico:type:adr,plico:module:kernel,plico:status:accepted" \
+  "## Context Budget Engine\nDecision: Context loader tracks token budget per request. L0/L1/L2 layers with progressive loading. Budget exceeded = partial context + warning."
+# 8. Summary
 echo ""
 echo "=== Bootstrap Complete ==="
 echo "Modules: ${#MODULES[@]}"
 echo "Milestone: v0.2-dogfooding"
-echo "ADRs: 1"
+echo "ADRs: 16 (1 initial + 15 historical)"
 echo ""
 echo "Verify with:"
 echo "  EMBEDDING_BACKEND=stub cargo run --bin aicli -- --root $ROOT nodes --type entity --agent $AGENT"

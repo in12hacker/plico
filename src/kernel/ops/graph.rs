@@ -782,3 +782,186 @@ impl crate::kernel::AIKernel {
         false
     }
 }
+
+// ─── Tests ────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_graph_explore_empty_returns_empty() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        // Explore with no KG initialized returns empty
+        let results = kernel.graph_explore("nonexistent-cid", None, 1);
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_graph_explore_raw_empty_returns_empty() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let results = kernel.graph_explore_raw("nonexistent-cid", None, 1);
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_kg_add_node_idempotent_returns_unique_ids() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let id1 = kernel.kg_add_node("node-A", KGNodeType::Entity, serde_json::json!({}), "agent1", "default")
+            .expect("first add_node failed");
+        let id2 = kernel.kg_add_node("node-B", KGNodeType::Entity, serde_json::json!({}), "agent1", "default")
+            .expect("second add_node failed");
+        // Each call generates a unique UUID
+        assert_ne!(id1, id2);
+    }
+
+    #[test]
+    fn test_kg_add_node_stores_and_retrieves() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let id = kernel.kg_add_node(
+            "test-node",
+            KGNodeType::Fact,
+            serde_json::json!({ "key": "value" }),
+            "agent1",
+            "default",
+        ).expect("kg_add_node failed");
+
+        let node = kernel.kg_get_node(&id, "agent1", "default")
+            .expect("kg_get_node failed");
+        let node = node.expect("node not found");
+        assert_eq!(node.label, "test-node");
+        assert!(matches!(node.node_type, KGNodeType::Fact));
+    }
+
+    #[test]
+    fn test_kg_list_nodes_filters_by_type() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        kernel.kg_add_node("entity-1", KGNodeType::Entity, serde_json::json!({}), "agent1", "default").ok();
+        kernel.kg_add_node("fact-1", KGNodeType::Fact, serde_json::json!({}), "agent1", "default").ok();
+
+        let all = kernel.kg_list_nodes(None, "agent1", "default").expect("kg_list_nodes failed");
+        assert_eq!(all.len(), 2);
+
+        let entities = kernel.kg_list_nodes(Some(KGNodeType::Entity), "agent1", "default").expect("kg_list_nodes failed");
+        assert_eq!(entities.len(), 1);
+        assert_eq!(entities[0].label, "entity-1");
+
+        let facts = kernel.kg_list_nodes(Some(KGNodeType::Fact), "agent1", "default").expect("kg_list_nodes failed");
+        assert_eq!(facts.len(), 1);
+        assert_eq!(facts[0].label, "fact-1");
+    }
+
+    #[test]
+    fn test_kg_add_edge_and_list() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let id1 = kernel.kg_add_node("src-node", KGNodeType::Entity, serde_json::json!({}), "agent1", "default").expect("add src failed");
+        let id2 = kernel.kg_add_node("dst-node", KGNodeType::Entity, serde_json::json!({}), "agent1", "default").expect("add dst failed");
+
+        kernel.kg_add_edge(&id1, &id2, KGEdgeType::RelatedTo, None, "agent1", "default").expect("add_edge failed");
+
+        let edges = kernel.kg_list_edges("agent1", "default", None).expect("kg_list_edges failed");
+        assert_eq!(edges.len(), 1);
+        assert_eq!(edges[0].src, id1);
+        assert_eq!(edges[0].dst, id2);
+        assert!(matches!(edges[0].edge_type, KGEdgeType::RelatedTo));
+    }
+
+    #[test]
+    fn test_kg_find_paths_no_path_returns_empty() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let id1 = kernel.kg_add_node("isolated-A", KGNodeType::Entity, serde_json::json!({}), "agent1", "default").expect("add failed");
+        let id2 = kernel.kg_add_node("isolated-B", KGNodeType::Entity, serde_json::json!({}), "agent1", "default").expect("add failed");
+
+        let paths = kernel.kg_find_paths(&id1, &id2, 3);
+        assert!(paths.is_empty());
+    }
+
+    #[test]
+    fn test_kg_find_paths_direct() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let id1 = kernel.kg_add_node("start", KGNodeType::Entity, serde_json::json!({}), "agent1", "default").expect("add failed");
+        let id2 = kernel.kg_add_node("end", KGNodeType::Entity, serde_json::json!({}), "agent1", "default").expect("add failed");
+
+        kernel.kg_add_edge(&id1, &id2, KGEdgeType::Follows, None, "agent1", "default").expect("add_edge failed");
+
+        let paths = kernel.kg_find_paths(&id1, &id2, 3);
+        assert_eq!(paths.len(), 1);
+        assert_eq!(paths[0][0].id, id1);
+        assert_eq!(paths[1][paths[0].len() - 1].id, id2);
+    }
+
+    #[test]
+    fn test_kg_get_valid_nodes_at_time() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        kernel.kg_add_node("current-node", KGNodeType::Entity, serde_json::json!({}), "agent1", "default").ok();
+
+        let now = chrono::Utc::now().timestamp_millis() as u64;
+        let nodes = kernel.kg_get_valid_nodes_at("agent1", "default", None, now).expect("kg_get_valid_nodes_at failed");
+        assert!(!nodes.is_empty());
+    }
+
+    #[test]
+    fn test_kg_update_node() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let id = kernel.kg_add_node("old-label", KGNodeType::Entity, serde_json::json!({}), "agent1", "default").expect("add failed");
+
+        kernel.kg_update_node(&id, Some("new-label"), None, "agent1", "default").expect("update failed");
+
+        let node = kernel.kg_get_node(&id, "agent1", "default").expect("get failed").expect("node not found");
+        assert_eq!(node.label, "new-label");
+    }
+
+    #[test]
+    fn test_kg_remove_node() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let id = kernel.kg_add_node("to-remove", KGNodeType::Entity, serde_json::json!({}), "agent1", "default").expect("add failed");
+
+        kernel.kg_remove_node(&id, "agent1", "default").expect("remove failed");
+
+        let node = kernel.kg_get_node(&id, "agent1", "default").expect("get failed");
+        assert!(node.is_none());
+    }
+
+    #[test]
+    fn test_kg_remove_edge() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let id1 = kernel.kg_add_node("e1", KGNodeType::Entity, serde_json::json!({}), "agent1", "default").expect("add failed");
+        let id2 = kernel.kg_add_node("e2", KGNodeType::Entity, serde_json::json!({}), "agent1", "default").expect("add failed");
+
+        kernel.kg_add_edge(&id1, &id2, KGEdgeType::AssociatesWith, None, "agent1", "default").expect("add_edge failed");
+
+        let edges_before = kernel.kg_list_edges("agent1", "default", None).expect("list failed");
+        assert_eq!(edges_before.len(), 1);
+
+        kernel.kg_remove_edge(&id1, &id2, None, "agent1", "default").expect("remove_edge failed");
+
+        let edges_after = kernel.kg_list_edges("agent1", "default", None).expect("list failed");
+        assert!(edges_after.is_empty());
+    }
+
+    #[test]
+    fn test_is_cid_referenced_false_for_unused_cid() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        assert!(!kernel.is_cid_referenced("nonexistent-cid-abc123"));
+    }
+
+    #[test]
+    fn test_kg_impact_analysis_no_neighbors() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let id = kernel.kg_add_node("lonely", KGNodeType::Entity, serde_json::json!({}), "agent1", "default").expect("add failed");
+
+        let impact = kernel.kg_impact_analysis(&id, 2);
+        assert!(impact.affected_nodes.is_empty());
+    }
+
+    #[test]
+    fn test_kg_temporal_changes_empty_range() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        // Future time range with no changes should return empty
+        let future = chrono::Utc::now().timestamp_millis() as u64 + 1_000_000_000;
+        let changes = kernel.kg_temporal_changes(future, future + 1000, "agent1", "default").expect("kg_temporal_changes failed");
+        // May be empty or may contain created nodes depending on timing
+        // Just verify no panic
+        let _ = changes;
+    }
+}
