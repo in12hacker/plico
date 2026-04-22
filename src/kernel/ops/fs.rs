@@ -59,7 +59,27 @@ impl crate::kernel::AIKernel {
 
         let ctx = PermissionContext::new(agent_id.to_string(), "default".to_string());
         self.permissions.check(&ctx, PermissionAction::Write)?;
+
+        // F-2: Precondition — content must be non-empty (fails fast before CAS write)
+        if content.is_empty() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Cannot create object with empty content",
+            ));
+        }
+
         let cid = self.fs.create(content, tags.clone(), agent_id.to_string(), intent)?;
+
+        // F-2: Postcondition — verify CID is actually retrievable (effect contract)
+        // This catches silent failures where CID is returned but CAS write didn't complete
+        if self.fs.read(&crate::fs::Query::ByCid(cid.clone())).is_err() {
+            tracing::error!("Effect contract violated: semantic_create returned CID {} but get failed", cid);
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Interrupted,
+                "Effect contract violated: created CID not retrievable",
+            ));
+        }
+
         self.event_bus.emit(KernelEvent::ObjectStored {
             cid: cid.clone(),
             agent_id: agent_id.to_string(),
@@ -234,6 +254,17 @@ impl crate::kernel::AIKernel {
             }
         }
         self.fs.delete(cid, agent_id.to_string())?;
+
+        // F-2: Postcondition — verify CID is now in recycle bin (effect contract)
+        let deleted = self.fs.list_deleted();
+        if !deleted.iter().any(|e| e.cid == cid) {
+            tracing::error!("Effect contract violated: delete returned success but CID {} not in recycle bin", cid);
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Interrupted,
+                "Effect contract violated: deleted CID not in recycle bin",
+            ));
+        }
+
         tracing::info!(cid = %cid, "object deleted");
         Ok(())
     }
@@ -527,5 +558,38 @@ mod tests {
         // Single version with no supersedes chain returns just itself
         assert!(history.len() >= 1);
         assert_eq!(history[0], cid);
+    }
+
+    // ─── F-2: Effect Contracts ─────────────────────────────────────────────
+
+    #[test]
+    fn test_semantic_create_empty_content_rejected() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        // F-2: Empty content should be rejected at kernel layer (precondition)
+        let result = kernel.semantic_create(vec![], vec!["tag".to_string()], "kernel", None);
+        assert!(result.is_err(), "empty content should be rejected");
+        let err = result.unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn test_semantic_create_returns_valid_cid() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let cid = kernel.semantic_create(b"test content".to_vec(), vec![], "kernel", None).expect("create failed");
+        // CID should be valid hex string (SHA-256 = 64 hex chars)
+        assert_eq!(cid.len(), 64);
+        assert!(cid.chars().all(|c| c.is_ascii_hexdigit()), "CID should be valid hex");
+    }
+
+    #[test]
+    fn test_semantic_delete_cid_in_recycle_bin() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let cid = kernel.semantic_create(b"to delete".to_vec(), vec!["tmp".to_string()], "kernel", None).expect("create failed");
+
+        kernel.semantic_delete(&cid, "kernel", "default").expect("delete failed");
+
+        // F-2: Postcondition — CID must be in recycle bin after delete
+        let deleted = kernel.list_deleted("kernel");
+        assert!(deleted.iter().any(|e| e.cid == cid), "deleted CID must be in recycle bin");
     }
 }

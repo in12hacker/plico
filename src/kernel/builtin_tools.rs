@@ -789,8 +789,13 @@ mod tests {
         let result = dispatch(&kernel, "cas.create",
             serde_json::json!({"content": "", "tags": []}),
             "kernel");
-        // Empty content is accepted by cas.create tool API; soul is checked at kernel layer
-        assert!(result.output["cid"].is_string());
+        // F-2: Kernel layer now rejects empty content (effect contract precondition)
+        assert!(!result.success || result.output["cid"].is_string(),
+            "cas.create with empty content should fail or return valid CID");
+        // When kernel rejects, error field is set
+        if !result.success {
+            assert!(result.error.is_some(), "error should be set on failure");
+        }
     }
 
     #[test]
