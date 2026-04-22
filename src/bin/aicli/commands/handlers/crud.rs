@@ -40,7 +40,7 @@ pub fn cmd_read(kernel: &AIKernel, args: &[String]) -> ApiResponse {
 pub fn cmd_search(kernel: &AIKernel, args: &[String]) -> ApiResponse {
     let search_tags = extract_tags_opt(args, "--tags").unwrap_or_default();
     // A-8a: if tags-only mode (no --query, no positional arg), skip text search
-    let query = if search_tags.is_empty() {
+let mut query = if search_tags.is_empty() {
         extract_arg(args, "--query")
             .or_else(|| args.get(1).cloned())
             .unwrap_or_default()
@@ -58,9 +58,22 @@ pub fn cmd_search(kernel: &AIKernel, args: &[String]) -> ApiResponse {
     let since = extract_arg(args, "--since").and_then(|s| s.parse::<i64>().ok());
     let until = extract_arg(args, "--until").and_then(|s| s.parse::<i64>().ok());
 
-    // A-8a: tag-only search when no query but tags provided
-    if query.is_empty() && !search_tags.is_empty() {
-        let results = kernel.search_by_tags(&search_tags, limit);
+// A-8a/F-4: tag-only search — handle require_tags AND semantics
+    // Trigger when: no query text, but have search_tags OR require_tags
+    if query.is_empty() && (search_tags.is_empty() && require_tags.is_empty()) {
+        // No tags at all — check if positional arg looks like a tag (starts with --)
+        let positional = args.get(1).cloned().unwrap_or_default();
+        if !positional.starts_with("--") {
+            query = positional;
+        }
+    }
+    if query.is_empty() && (!search_tags.is_empty() || !require_tags.is_empty()) {
+        // F-4: require_tags uses AND semantics (all tags must match)
+        let results = if !require_tags.is_empty() {
+            kernel.search_by_tags_intersection(&require_tags, limit)
+        } else {
+            kernel.search_by_tags(&search_tags, limit)
+        };
         let dto: Vec<SearchResultDto> = results.into_iter().map(|r| SearchResultDto {
             cid: r.cid, relevance: r.relevance, tags: r.meta.tags,
             snippet: r.snippet.clone(),

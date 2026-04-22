@@ -133,6 +133,11 @@ impl crate::kernel::AIKernel {
         self.fs.search_by_tags(tags, limit)
     }
 
+    /// F-4: Search requiring ALL tags to match (AND semantics).
+    pub fn search_by_tags_intersection(&self, tags: &[String], limit: usize) -> Vec<crate::fs::SearchResult> {
+        self.fs.search_by_tags_intersection(tags, limit)
+    }
+
     /// Semantic read with ownership and tenant isolation.
     pub fn semantic_read(&self, query: &Query, agent_id: &str, tenant_id: &str) -> std::io::Result<Vec<AIObject>> {
         let _timer = OperationTimer::new(&self.metrics, OpType::SemanticRead);
