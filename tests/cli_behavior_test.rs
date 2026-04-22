@@ -279,3 +279,93 @@ fn test_cli_paths() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(out.status.success() || stderr.contains("Usage") || stdout.contains("paths"));
 }
+
+// ─── F-2 Phantom Delete Defense ─────────────────────────────────────────────
+
+#[test]
+fn test_cli_delete_invalid_cid_returns_error() {
+    let dir = setup_root();
+    let root = dir.path();
+
+    let _ = run_cli(root, &["permission", "grant", "--action", "delete", "--agent", "cli"]);
+
+    let out = run_cli(root, &["delete", "a"]);
+    assert!(!out.status.success(), "delete invalid CID 'a' should fail");
+    let combined = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    assert!(combined.contains("Invalid CID") || combined.to_lowercase().contains("invalid"),
+        "error should mention invalid CID: {}", combined);
+}
+
+#[test]
+fn test_cli_delete_nonexistent_returns_error() {
+    let dir = setup_root();
+    let root = dir.path();
+
+    let _ = run_cli(root, &["permission", "grant", "--action", "delete", "--agent", "cli"]);
+
+    let out = run_cli(root, &["delete", "0000000000000000000000000000000000000000000000000000000000000000"]);
+    assert!(!out.status.success(), "delete nonexistent CID should fail");
+}
+
+// ─── F-3 Name Resolution — Skills ─────────────────────────────────────────────
+
+#[test]
+fn test_cli_skills_register_by_name() {
+    let dir = setup_root();
+    let root = dir.path();
+
+    let reg_out = run_cli_json(root, &["agent", "--register", "--name", "SkillAgent"]);
+    let _agent_id = reg_out.get("agent_id").and_then(|v| v.as_str()).expect("no agent_id");
+
+    let out = run_cli(root, &["skills", "register", "--agent", "SkillAgent", "--name", "my-skill", "--description", "test skill"]);
+    assert!(out.status.success(), "skills register by name should succeed: {}",
+        String::from_utf8_lossy(&out.stderr));
+}
+
+#[test]
+fn test_cli_skills_list_by_name() {
+    let dir = setup_root();
+    let root = dir.path();
+
+    let reg_out = run_cli_json(root, &["agent", "--register", "--name", "ListSkillAgent"]);
+    let _agent_id = reg_out.get("agent_id").and_then(|v| v.as_str()).expect("no agent_id");
+
+    run_cli(root, &["skills", "register", "--agent", "ListSkillAgent", "--name", "skill-to-list", "--description", "desc"]);
+
+    let out = run_cli(root, &["skills", "list", "--agent", "ListSkillAgent"]);
+    assert!(out.status.success(), "skills list by name should succeed: {}",
+        String::from_utf8_lossy(&out.stderr));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("skill-to-list"), "output should contain registered skill: {}", stdout);
+}
+
+// ─── F-5 Handlers — Messaging ────────────────────────────────────────────────
+
+#[test]
+fn test_cli_send_message_with_agent_flag() {
+    let dir = setup_root();
+    let root = dir.path();
+
+    let _ = run_cli(root, &["permission", "grant", "--action", "SendMessage", "--agent", "cli"]);
+
+    let reg_out = run_cli_json(root, &["agent", "--register", "--name", "MsgRecipient"]);
+    let recipient = reg_out.get("agent_id").and_then(|v| v.as_str()).expect("no agent_id");
+
+    let send_out = run_cli(root, &["send", "--agent", "cli", "--to", recipient, "--payload", r#"{"msg":"hello"}"#]);
+    assert!(send_out.status.success(), "send with --agent flag should work: {}",
+        String::from_utf8_lossy(&send_out.stderr));
+}
+
+// ─── F-5 Handlers — Agent Quota ──────────────────────────────────────────────
+
+#[test]
+fn test_cli_quota_by_name_f5() {
+    let dir = setup_root();
+    let root = dir.path();
+
+    run_cli(root, &["agent", "--register", "--name", "QuotaTestAgent"]);
+
+    let out = run_cli(root, &["quota", "--agent", "QuotaTestAgent"]);
+    assert!(out.status.success(), "quota by name should resolve: {}",
+        String::from_utf8_lossy(&out.stderr));
+}

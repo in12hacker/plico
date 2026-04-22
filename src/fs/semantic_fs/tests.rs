@@ -151,6 +151,48 @@ fn test_list_deleted_after_delete() {
     assert_eq!(fs.list_deleted().len(), 1);
 }
 
+// ── Phantom Delete Defense (F-2) ─────────────────────────────────────────
+
+#[test]
+fn test_delete_nonexistent_valid_cid_returns_not_found() {
+    // A valid hex CID that doesn't exist in the CAS
+    let (fs, _dir) = make_fs();
+    let result = fs.delete("0000000000000000000000000000000000000000000000000000000000000000", "a".to_string());
+    assert!(result.is_err(), "delete of nonexistent valid CID should return error, not Ok(())");
+    let err = result.unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::NotFound,
+        "error kind should be NotFound, got {:?}", err.kind());
+}
+
+#[test]
+fn test_delete_invalid_short_cid_returns_invalid_input() {
+    let (fs, _dir) = make_fs();
+    let result = fs.delete("a", "a".to_string());
+    assert!(result.is_err(), "delete of invalid CID 'a' should return error");
+    let err = result.unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput,
+        "error kind should be InvalidInput for CID 'a', got {:?}", err.kind());
+}
+
+#[test]
+fn test_delete_invalid_hex_cid_returns_invalid_input() {
+    let (fs, _dir) = make_fs();
+    let result = fs.delete("xyz!!!", "a".to_string());
+    assert!(result.is_err(), "delete of invalid CID 'xyz!!!' should return error");
+    let err = result.unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput,
+        "error kind should be InvalidInput for CID 'xyz!!!', got {:?}", err.kind());
+}
+
+#[test]
+fn test_delete_existing_moves_to_recycle() {
+    let (fs, _dir) = make_fs();
+    let cid = fs.create(b"to delete".to_vec(), vec!["tmp".to_string()], "a".to_string(), None).unwrap();
+    fs.delete(&cid, "a".to_string()).unwrap();
+    assert_eq!(fs.list_deleted().len(), 1);
+    assert_eq!(fs.list_deleted()[0].cid, cid);
+}
+
 // ── Event tests ────────────────────────────────────────────────────────────
 
 #[test]

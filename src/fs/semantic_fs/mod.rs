@@ -352,29 +352,28 @@ impl SemanticFS {
     }
 
     pub fn delete(&self, cid: &str, agent_id: String) -> std::io::Result<()> {
-        if let Ok(obj) = self.cas.get(cid) {
-            self.recycle_bin.write().unwrap().insert(cid.to_string(), RecycleEntry {
-                cid: cid.to_string(),
-                deleted_at: now_ms(),
-                original_meta: obj.meta.clone(),
-            });
+        let obj = self.cas.get(cid)?;
+        self.recycle_bin.write().unwrap().insert(cid.to_string(), RecycleEntry {
+            cid: cid.to_string(),
+            deleted_at: now_ms(),
+            original_meta: obj.meta.clone(),
+        });
 
-            self.search_index.delete(cid);
-            self.bm25_index.remove(cid);
+        self.search_index.delete(cid);
+        self.bm25_index.remove(cid);
 
-            if let Some(ref kg) = self.knowledge_graph { let _ = kg.remove_node(cid); }
+        if let Some(ref kg) = self.knowledge_graph { let _ = kg.remove_node(cid); }
 
-            self.remove_from_tag_index(&obj.meta.tags, cid);
+        self.remove_from_tag_index(&obj.meta.tags, cid);
 
-            self.audit_log.write().unwrap().push(AuditEntry {
-                timestamp: now_ms(),
-                action: AuditAction::Delete,
-                cid: cid.to_string(),
-                agent_id,
-            });
+        self.audit_log.write().unwrap().push(AuditEntry {
+            timestamp: now_ms(),
+            action: AuditAction::Delete,
+            cid: cid.to_string(),
+            agent_id,
+        });
 
-            let _ = self.persist_recycle_bin();
-        }
+        let _ = self.persist_recycle_bin();
         Ok(())
     }
 

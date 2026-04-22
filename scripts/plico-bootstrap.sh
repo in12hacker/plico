@@ -11,41 +11,59 @@
 
 set -euo pipefail
 
-ROOT="${PLICO_ROOT:-/tmp/plico-dogfood}"
+ROOT="${PLICO_ROOT:-${HOME}/.plico/dogfood}"
 AGENT="plico-dev"
 export EMBEDDING_BACKEND=stub
 
 CLI="cargo run --quiet --bin aicli -- --root $ROOT"
 
+# Ensure root directory exists
+mkdir -p "$ROOT"
+
 echo "=== Plico Bootstrap ==="
 echo "Storage root: $ROOT"
 echo ""
 
-# 1. Register the dogfooding agent
+# 1. Register the dogfooding agent (idempotent: skip if already registered)
 echo "--- Registering agent: $AGENT ---"
 $CLI agent --register "$AGENT" 2>/dev/null || true
 
-# 2. Create Module Entity nodes
+# 2. Create Module Entity nodes (idempotent: skip if already exists)
 echo ""
 echo "--- Creating module entities ---"
 MODULES=(cas fs kernel api scheduler memory graph temporal cli daemon)
 declare -A MODULE_IDS
 
 for mod in "${MODULES[@]}"; do
-    ID=$($CLI node --label "$mod" --type entity \
-        --props "{\"kind\":\"module\",\"path\":\"src/$mod\"}" \
-        --agent "$AGENT" 2>/dev/null | grep "Node ID:" | awk '{print $3}')
+    # F-4: Check if entity with this label already exists (idempotent bootstrap)
+    existing=$($CLI nodes --type entity --agent "$AGENT" 2>/dev/null \
+        | grep -i "\"$mod\"" | head -1 | grep -o '[a-f0-9-]\{36\}' | head -1 || true)
+    if [ -n "$existing" ]; then
+        ID="$existing"
+        echo "  $mod -> $ID (exists, skipping)"
+    else
+        ID=$($CLI node --label "$mod" --type entity \
+            --props "{\"kind\":\"module\",\"path\":\"src/$mod\"}" \
+            --agent "$AGENT" 2>/dev/null | grep "Node ID:" | awk '{print $3}')
+        echo "  $mod -> $ID (created)"
+    fi
     MODULE_IDS[$mod]="$ID"
-    echo "  $mod -> $ID"
 done
 
-# 3. Create current milestone
+# 3. Create current milestone (idempotent)
 echo ""
 echo "--- Creating milestone entity ---"
-MILESTONE_ID=$($CLI node --label "v0.2-dogfooding" --type entity \
-    --props '{"kind":"milestone","target":"2026-05-01","goals":["KG API","self-management","bootstrap"]}' \
-    --agent "$AGENT" 2>/dev/null | grep "Node ID:" | awk '{print $3}')
-echo "  v0.2-dogfooding -> $MILESTONE_ID"
+existing_milestone=$($CLI nodes --type entity --agent "$AGENT" 2>/dev/null \
+    | grep -i "v0.2-dogfooding\|milestone" | head -1 | grep -o '[a-f0-9-]\{36\}' | head -1 || true)
+if [ -n "$existing_milestone" ]; then
+    MILESTONE_ID="$existing_milestone"
+    echo "  v0.2-dogfooding -> $MILESTONE_ID (exists, skipping)"
+else
+    MILESTONE_ID=$($CLI node --label "v0.2-dogfooding" --type entity \
+        --props '{"kind":"milestone","target":"2026-05-01","goals":["KG API","self-management","bootstrap"]}' \
+        --agent "$AGENT" 2>/dev/null | grep "Node ID:" | awk '{print $3}')
+    echo "  v0.2-dogfooding -> $MILESTONE_ID (created)"
+fi
 
 # 4. Link modules to milestone
 echo ""

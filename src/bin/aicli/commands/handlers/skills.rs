@@ -19,7 +19,11 @@ pub fn cmd_skills(kernel: &AIKernel, args: &[String]) -> ApiResponse {
 }
 
 fn cmd_skills_list(kernel: &AIKernel, args: &[String]) -> ApiResponse {
-    let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
+    let agent_input = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
+    let agent_id = match kernel.resolve_agent(&agent_input) {
+        Some(id) => id,
+        None => return ApiResponse::error(format!("Agent not found: {}", agent_input)),
+    };
     let entries = kernel.recall_procedural(&agent_id, "default", None);
     let mut r = ApiResponse::ok();
     let skills: Vec<serde_json::Value> = entries.iter().filter_map(|e| {
@@ -47,7 +51,11 @@ fn cmd_skills_list(kernel: &AIKernel, args: &[String]) -> ApiResponse {
 }
 
 fn cmd_skills_describe(kernel: &AIKernel, args: &[String]) -> ApiResponse {
-    let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
+    let agent_input = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
+    let agent_id = match kernel.resolve_agent(&agent_input) {
+        Some(id) => id,
+        None => return ApiResponse::error(format!("Agent not found: {}", agent_input)),
+    };
     let name = args.get(2).filter(|a| !a.starts_with('-'));
     let name_str = match name {
         Some(n) => n.as_str(),
@@ -79,9 +87,13 @@ fn cmd_skills_describe(kernel: &AIKernel, args: &[String]) -> ApiResponse {
 }
 
 fn cmd_skills_register(kernel: &AIKernel, args: &[String]) -> ApiResponse {
-    let agent_id = match extract_arg(args, "--agent") {
+    let agent_input = match extract_arg(args, "--agent") {
         Some(a) => a,
         None => return ApiResponse::error("--agent required for skills register"),
+    };
+    let agent_id = match kernel.resolve_agent(&agent_input) {
+        Some(id) => id,
+        None => return ApiResponse::error(format!("Agent not found: {}", agent_input)),
     };
     let name = match extract_arg(args, "--name") {
         Some(n) => n,
@@ -103,7 +115,9 @@ fn cmd_skills_register(kernel: &AIKernel, args: &[String]) -> ApiResponse {
 
 fn cmd_skills_discover(kernel: &AIKernel, args: &[String]) -> ApiResponse {
     let query = extract_arg(args, "--query");
-    let agent_id_filter = extract_arg(args, "--agent");
+    let agent_id_filter = extract_arg(args, "--agent").and_then(|input| {
+        kernel.resolve_agent(&input)
+    });
     let tag_filter = extract_arg(args, "--tag");
 
     let req = plico::api::semantic::ApiRequest::DiscoverSkills {
