@@ -328,6 +328,113 @@ fn test_kernel_memory_stats() {
     assert!(stats.total_entries >= 3, "should have at least 3 entries across tiers");
 }
 
+// Node 15 F-4: Agent ops unit tests
+
+#[test]
+fn test_kernel_resolve_agent_by_name() {
+    let (kernel, _dir) = make_kernel();
+
+    let id = kernel.register_agent("resolver-test-agent".to_string());
+    assert!(!id.is_empty());
+
+    // Resolve by name
+    let resolved = kernel.resolve_agent("resolver-test-agent");
+    assert!(resolved.is_some());
+    assert_eq!(resolved.unwrap(), id);
+}
+
+#[test]
+fn test_kernel_resolve_agent_by_uuid() {
+    let (kernel, _dir) = make_kernel();
+
+    let id = kernel.register_agent("uuid-test-agent".to_string());
+
+    // Resolve by UUID directly
+    let resolved = kernel.resolve_agent(&id);
+    assert!(resolved.is_some());
+    assert_eq!(resolved.unwrap(), id);
+}
+
+#[test]
+fn test_kernel_resolve_agent_not_found() {
+    let (kernel, _dir) = make_kernel();
+
+    let resolved = kernel.resolve_agent("nonexistent-agent-xyz");
+    assert!(resolved.is_none());
+}
+
+#[test]
+fn test_kernel_agent_status() {
+    let (kernel, _dir) = make_kernel();
+
+    let id = kernel.register_agent("status-test".to_string());
+    let status = kernel.agent_status(&id);
+
+    assert!(status.is_some());
+    let (ret_id, _state, pending) = status.unwrap();
+    assert_eq!(ret_id, id);
+    assert_eq!(pending, 0);
+}
+
+#[test]
+fn test_kernel_agent_suspend_resume() {
+    let (kernel, _dir) = make_kernel();
+
+    let id = kernel.register_agent("suspend-test".to_string());
+
+    kernel.agent_suspend(&id).expect("suspend should succeed");
+    let status = kernel.agent_status(&id).unwrap();
+    assert!(status.1.contains("Suspended"), "agent should be Suspended");
+
+    kernel.agent_resume(&id).expect("resume should succeed");
+    let status = kernel.agent_status(&id).unwrap();
+    assert!(status.1.contains("Waiting"), "agent should be Waiting after resume");
+}
+
+#[test]
+fn test_kernel_checkpoint_and_restore() {
+    let (kernel, _dir) = make_kernel();
+
+    let agent_id = kernel.register_agent("checkpoint-agent".to_string());
+    kernel.remember_working(&agent_id, "default", "before checkpoint".to_string(), vec![]).unwrap();
+
+    let cid = kernel.checkpoint_agent(&agent_id).expect("checkpoint should succeed");
+    assert!(!cid.is_empty());
+
+    // Verify checkpoint CID is a valid CAS object
+    let obj = kernel.get_object(&cid, &agent_id, "default");
+    assert!(obj.is_ok(), "checkpoint CID should be retrievable");
+}
+
+#[test]
+fn test_kernel_register_skill() {
+    let (kernel, _dir) = make_kernel();
+
+    let agent_id = kernel.register_agent("skill-host".to_string());
+    let node_id = kernel.register_skill(&agent_id, "test-skill", "A test skill", vec!["test".to_string()]);
+
+    assert!(node_id.is_ok());
+    let node_id = node_id.unwrap();
+    assert!(!node_id.is_empty());
+}
+
+#[test]
+fn test_kernel_discover_skills() {
+    let (kernel, _dir) = make_kernel();
+
+    let agent_id = kernel.register_agent("skill-discoverer".to_string());
+    kernel.register_skill(&agent_id, "skill-a", "Description A", vec!["tag1".to_string()]).unwrap();
+    kernel.register_skill(&agent_id, "skill-b", "Description B", vec!["tag2".to_string()]).unwrap();
+
+    let skills = kernel.discover_skills(None, Some(&agent_id), None);
+    assert!(skills.len() >= 2, "should discover at least 2 skills");
+
+    // Filter by query
+    let filtered = kernel.discover_skills(Some("skill-a"), Some(&agent_id), None);
+    assert!(!filtered.is_empty());
+    assert!(filtered.iter().any(|s| s.name == "skill-a"));
+}
+
 #[test]
 fn test_kernel_list_deleted_after_delete() {
     let (kernel, _dir) = make_kernel();
