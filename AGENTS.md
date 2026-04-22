@@ -209,9 +209,9 @@ docs/                    # Tier B — iteration-end human docs (not maintained p
 | `cargo test [test_name]` | Run a single test |
 | `cargo clippy` | Lint check (must be zero warnings) |
 | `cargo build --release` | Release build (LTO + single codegen unit) |
-| `cargo run --bin aicli -- --root /tmp/plico put --content "test" --tags "test"` | Quick CLI test |
-| `cargo run --bin aicli -- --root /tmp/plico system-status` | Check kernel health |
-| `cargo run --bin plicod -- --port 7878 --root /tmp/plico` | Run daemon |
+| `cargo run --bin aicli -- put --content "test" --tags "test"` | Quick CLI test (defaults to ~/.plico) |
+| `cargo run --bin aicli -- system-status` | Check kernel health |
+| `cargo run --bin plicod -- --port 7878` | Run daemon (defaults to ~/.plico) |
 
 ## Conventions
 
@@ -290,7 +290,7 @@ No project-specific KGNodeType or KGEdgeType — all semantics via tags + proper
 | `OLLAMA_URL` | Ollama daemon URL (default: `http://localhost:11434`) | No |
 | `OLLAMA_EMBEDDING_MODEL` | Ollama embedding model (default: `all-minilm-l6-v2`) | No |
 | `OLLAMA_SUMMARIZER_MODEL` | Ollama chat model for summaries (default: `llama3.2`) | No |
-| `PLICO_ROOT` | Storage root for `plicod` / `plico-mcp` (default: `/tmp/plico`) | No |
+| `PLICO_ROOT` | Storage root for all binaries (default: `~/.plico`) | No |
 | `RUST_LOG` | Tracing log level filter (default: `info`) | No |
 | `AICLI_OUTPUT` | CLI output format: `json` for machine-readable (default: human-readable) | No |
 

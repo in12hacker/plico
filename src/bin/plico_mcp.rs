@@ -8,7 +8,7 @@
 //!
 //! Claude Code config (~/.claude.json):
 //!   { "mcpServers": { "plico": { "command": "cargo", "args": ["run", "--bin", "plico-mcp"],
-//!     "env": { "PLICO_ROOT": "/tmp/plico-dogfood", "EMBEDDING_BACKEND": "stub" } } } }
+//!     "env": { "PLICO_ROOT": "~/.plico/dogfood", "EMBEDDING_BACKEND": "stub" } } } }
 
 use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
@@ -67,7 +67,11 @@ fn main() {
 
     let root = std::env::var("PLICO_ROOT")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("/tmp/plico"));
+        .unwrap_or_else(|_| {
+            dirs::home_dir()
+                .unwrap_or_else(|| PathBuf::from("/tmp"))
+                .join(".plico")
+        });
 
     let kernel = match AIKernel::new(root) {
         Ok(k) => Arc::new(k),

@@ -36,7 +36,11 @@ async fn main() {
         .and_then(|i| args.get(i + 1))
         .map(PathBuf::from)
         .or_else(|| std::env::var("PLICO_ROOT").ok().map(PathBuf::from))
-        .unwrap_or_else(|| PathBuf::from("/tmp/plico"));
+        .unwrap_or_else(|| {
+            dirs::home_dir()
+                .unwrap_or_else(|| PathBuf::from("/tmp"))
+                .join(".plico")
+        });
 
     println!("Plico AI-Native OS Daemon");
     println!("Storage root: {:?}", root);

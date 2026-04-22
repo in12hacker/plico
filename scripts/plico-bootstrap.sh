@@ -5,7 +5,7 @@
 # into Plico's own CAS + KG — the first step of dogfooding.
 #
 # Usage:
-#   PLICO_ROOT=/tmp/plico-dogfood ./scripts/plico-bootstrap.sh
+#   PLICO_ROOT=~/.plico/dogfood ./scripts/plico-bootstrap.sh
 #
 # Requires: cargo build (aicli binary must be available)
 

@@ -25,11 +25,11 @@ Every command uses this wrapper — sets env, suppresses logs, enables JSON for 
 ```bash
 pcli() {
   EMBEDDING_BACKEND=stub RUST_LOG=off AICLI_OUTPUT=json \
-    cargo run --quiet --bin aicli -- --root /tmp/plico-dogfood "$@" 2>/dev/null
+    cargo run --quiet --bin aicli -- --root "${HOME}/.plico/dogfood" "$@" 2>/dev/null
 }
 pcli_human() {
   EMBEDDING_BACKEND=stub RUST_LOG=off \
-    cargo run --quiet --bin aicli -- --root /tmp/plico-dogfood "$@" 2>/dev/null
+    cargo run --quiet --bin aicli -- --root "${HOME}/.plico/dogfood" "$@" 2>/dev/null
 }
 AGENT="plico-dev"
 ```

@@ -374,16 +374,16 @@ fn main() {
 
 Examples:
   # Run a knowledge query
-  {} /tmp/plico "How to prevent SQL injection attacks?" knowledge-agent-1
+  {} ~/.plico "How to prevent SQL injection attacks?" knowledge-agent-1
 
   # Demonstrate knowledge sharing between agents
-  {} /tmp/plico --share agent-a agent-b
+  {} ~/.plico --share agent-a agent-b
 
   # Demonstrate growth tracking
-  {} /tmp/plico --growth knowledge-agent-1
+  {} ~/.plico --growth knowledge-agent-1
 
   # Demonstrate intent prefetch
-  {} /tmp/plico --prefetch "SQL injection defense patterns" knowledge-agent-1
+  {} ~/.plico --prefetch "SQL injection defense patterns" knowledge-agent-1
 "#, args[0], args[0], args[0], args[0], args[0]);
         std::process::exit(1);
     }

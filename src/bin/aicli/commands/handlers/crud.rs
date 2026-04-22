@@ -5,7 +5,19 @@ use plico::api::semantic::{ApiResponse, SearchResultDto};
 use super::{extract_arg, extract_tags, extract_tags_opt};
 
 pub fn cmd_create(kernel: &AIKernel, args: &[String]) -> ApiResponse {
-    let content = extract_arg(args, "--content").unwrap_or_default();
+    // F-1: Support positional args AND empty content rejection
+    let content = extract_arg(args, "--content")
+        .or_else(|| {
+            args.get(1).cloned().filter(|a| !a.starts_with("--"))
+        })
+        .unwrap_or_default();
+
+    if content.is_empty() {
+        return ApiResponse::error(
+            "put requires content: put <content> --tags ... or put --content <content> --tags ..."
+        );
+    }
+
     let tags = extract_tags(args, "--tags");
     let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
     let intent = extract_arg(args, "--intent");

@@ -45,22 +45,22 @@ cargo build --release
 cargo test
 
 # AI 友好 CLI（进程内内核；数据目录由 --root 指定）
-cargo run --bin aicli -- --root /tmp/plico put --content "hello" --tags "greeting"
-cargo run --bin aicli -- --root /tmp/plico get <CID>
-cargo run --bin aicli -- --root /tmp/plico search --query "greeting"
+cargo run --bin aicli -- put --content "hello" --tags "greeting"
+cargo run --bin aicli -- get <CID>
+cargo run --bin aicli -- search --query "greeting"
 
 # 连接已运行的守护进程
 cargo run --bin aicli -- --tcp 127.0.0.1:7878 search --query "hello"
 
 # 常驻守护进程（TCP 语义 API + 派发循环 + 结果消费）
-cargo run --bin plicod -- --port 7878 --root /tmp/plico
-# 或：PLICO_ROOT=/tmp/plico cargo run --bin plicod
+cargo run --bin plicod -- --port 7878
+# 或：PLICO_ROOT=~/.plico cargo run --bin plicod
 
 # 查看内核状态（本地内核模式）
-cargo run --bin aicli -- --root /tmp/plico system-status
+cargo run --bin aicli -- system-status
 
 # MCP 适配器（stdio JSON-RPC）
-PLICO_ROOT=/tmp/plico cargo run --bin plico-mcp
+cargo run --bin plico-mcp
 ```
 
 完整子命令（CRUD、检索、智能体、记忆、图、工具、事件、意图、技能等）见：

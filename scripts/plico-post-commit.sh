@@ -12,7 +12,7 @@ set -euo pipefail
 # Skip if explicitly disabled
 [[ "${PLICO_DOGFOOD_SKIP:-}" == "1" ]] && exit 0
 
-ROOT="${PLICO_DOGFOOD_ROOT:-/tmp/plico-dogfood}"
+ROOT="${PLICO_DOGFOOD_ROOT:-${HOME}/.plico/dogfood}"
 AGENT="plico-dev"
 export EMBEDDING_BACKEND=stub
 

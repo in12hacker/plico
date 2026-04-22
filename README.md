@@ -45,22 +45,22 @@ cargo build --release
 cargo test
 
 # AI-friendly CLI (in-process kernel; storage under --root)
-cargo run --bin aicli -- --root /tmp/plico put --content "hello" --tags "greeting"
-cargo run --bin aicli -- --root /tmp/plico get <CID>
-cargo run --bin aicli -- --root /tmp/plico search --query "greeting"
+cargo run --bin aicli -- put --content "hello" --tags "greeting"
+cargo run --bin aicli -- get <CID>
+cargo run --bin aicli -- search --query "greeting"
 
 # Same CLI against a running daemon
 cargo run --bin aicli -- --tcp 127.0.0.1:7878 search --query "hello"
 
 # Long-running daemon (TCP semantic API + dispatch loop + result consumer)
-cargo run --bin plicod -- --port 7878 --root /tmp/plico
-# or: PLICO_ROOT=/tmp/plico cargo run --bin plicod
+cargo run --bin plicod -- --port 7878
+# or: PLICO_ROOT=~/.plico cargo run --bin plicod
 
 # System health (local kernel mode)
-cargo run --bin aicli -- --root /tmp/plico system-status
+cargo run --bin aicli -- system-status
 
 # MCP adapter (stdio JSON-RPC)
-PLICO_ROOT=/tmp/plico cargo run --bin plico-mcp
+cargo run --bin plico-mcp
 ```
 
 Use `cargo run --bin aicli -- --help` for the full command list (CRUD, search, agents, memory, graph, tools, events, intents, skills, etc.).

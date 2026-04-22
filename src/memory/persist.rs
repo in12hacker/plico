@@ -96,7 +96,7 @@ pub struct CASPersister {
 
 impl CASPersister {
     /// Create a new CASPersister rooted at `root`.
-    /// The root should point to the kernel data root (e.g. `/tmp/plico`).
+    /// The root should point to the kernel data root (e.g. `~/.plico`).
     pub fn new(cas: std::sync::Arc<CASStorage>, root: PathBuf) -> std::io::Result<Self> {
         let index_path = root.join("memory_index.json");
         let index = Self::load_index(&index_path).unwrap_or_default();

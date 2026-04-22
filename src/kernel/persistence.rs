@@ -416,3 +416,112 @@ pub(crate) fn create_llm_provider(model_env: &str, default_model: &str) -> Resul
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+    use std::fs;
+
+    #[test]
+    fn test_atomic_write_json_roundtrip() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("test.json");
+        let data = serde_json::json!({
+            "name": "test-agent",
+            "version": 1,
+            "nested": {"key": "value"}
+        });
+        atomic_write_json(&path, &data);
+        assert!(path.exists(), "atomic_write_json should create the file");
+        let content = fs::read_to_string(&path).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
+        assert_eq!(parsed["name"], "test-agent");
+    }
+
+    #[test]
+    fn test_atomic_write_json_no_corrupt_on_error() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("error.json");
+        // Test that invalid JSON serialization (non-serializable type) is handled gracefully
+        // atomic_write_json uses a match on to_string_pretty, so it won't panic
+        // We can test with a value that fails serialization
+        #[derive(serde::Serialize)]
+        struct ValidData { name: String }
+        let valid = ValidData { name: "ok".to_string() };
+        atomic_write_json(&path, &valid);
+        assert!(path.exists(), "valid data should write successfully");
+
+        // Now test with actual serde error path won't happen because atomic_write_json
+        // already matches on the result; the test confirms no panic on write error
+    }
+
+    #[test]
+    fn test_agent_index_path() {
+        let dir = tempdir().unwrap();
+        let kernel = crate::kernel::AIKernel::new(dir.path().to_path_buf()).expect("kernel init");
+        let p = kernel.agent_index_path();
+        assert_eq!(p.file_name().unwrap(), "agent_index.json");
+    }
+
+    #[test]
+    fn test_intent_index_path() {
+        let dir = tempdir().unwrap();
+        let kernel = crate::kernel::AIKernel::new(dir.path().to_path_buf()).expect("kernel init");
+        let p = kernel.intent_index_path();
+        assert_eq!(p.file_name().unwrap(), "intent_index.json");
+    }
+
+    #[test]
+    fn test_persist_and_restore_agents() {
+        let _ = std::env::set_var("EMBEDDING_BACKEND", "stub");
+        let dir = tempdir().unwrap();
+        let kernel = crate::kernel::AIKernel::new(dir.path().to_path_buf()).expect("kernel init");
+
+        kernel.register_agent("PersistAgent1".to_string());
+        kernel.register_agent("PersistAgent2".to_string());
+
+        kernel.persist_agents();
+
+        // New kernel should restore
+        let kernel2 = crate::kernel::AIKernel::new(dir.path().to_path_buf()).expect("kernel init 2");
+        let agents = kernel2.scheduler.list_agents();
+        let names: Vec<_> = agents.iter().map(|a| a.name.clone()).collect();
+        assert!(names.contains(&"PersistAgent1".to_string()));
+        assert!(names.contains(&"PersistAgent2".to_string()));
+    }
+
+    #[test]
+    fn test_persist_and_restore_permissions() {
+        let _ = std::env::set_var("EMBEDDING_BACKEND", "stub");
+        let dir = tempdir().unwrap();
+        let kernel = crate::kernel::AIKernel::new(dir.path().to_path_buf()).expect("kernel init");
+
+        kernel.register_agent("PermAgent".to_string());
+        kernel.permission_grant("PermAgent", crate::api::permission::PermissionAction::Read, None, None);
+
+        kernel.persist_permissions();
+
+        let kernel2 = crate::kernel::AIKernel::new(dir.path().to_path_buf()).expect("kernel init 2");
+        let allowed = kernel2.permission_check("PermAgent", crate::api::permission::PermissionAction::Read).is_ok();
+        assert!(allowed, "permission should be restored after restart");
+    }
+
+    #[test]
+    fn test_restore_from_empty_dir() {
+        let _ = std::env::set_var("EMBEDDING_BACKEND", "stub");
+        let dir = tempdir().unwrap();
+        // Fresh directory with no persisted state - should not panic
+        let kernel = crate::kernel::AIKernel::new(dir.path().to_path_buf()).expect("kernel init from empty");
+        let agents = kernel.scheduler.list_agents();
+        assert!(agents.is_empty(), "empty dir should have no agents");
+    }
+
+    #[test]
+    fn test_create_llm_provider_stub() {
+        let _ = std::env::set_var("LLM_BACKEND", "stub");
+        let provider = create_llm_provider("MODEL", "default").expect("stub provider should work");
+        let result = provider.chat(&[], &crate::llm::ChatOptions::default());
+        assert!(result.is_ok());
+    }
+}

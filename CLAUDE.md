@@ -126,10 +126,10 @@ cargo test
 cargo build --release
 
 # Run CLI
-cargo run --bin aicli -- --root /tmp/plico put --content "test" --tags "test"
+cargo run --bin aicli put --content "test" --tags "test"
 
 # Run daemon
-cargo run --bin plicod -- --port 7878 --root /tmp/plico
+cargo run --bin plicod -- --port 7878
 ```
 
 ## Related Prior Art

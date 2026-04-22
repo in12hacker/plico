@@ -54,9 +54,13 @@ enum Mode {
 fn run_local(args: &[String]) -> bool {
     let mut filtered = Vec::with_capacity(args.len());
     let mut i = 0;
-    let mut root = dirs::data_dir()
-        .unwrap_or_else(|| PathBuf::from("/tmp"))
-        .join("plico");
+    let mut root = std::env::var("PLICO_ROOT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            dirs::home_dir()
+                .unwrap_or_else(|| PathBuf::from("/tmp"))
+                .join(".plico")
+        });
 
     while i < args.len() {
         match args[i].as_str() {
@@ -392,7 +396,7 @@ USAGE:
 
 MODE:
   --tcp [addr]       Connect to plicod daemon (default: 127.0.0.1:7878)
-  --root PATH        Storage root directory (default: /tmp/plico)
+  --root PATH        Storage root directory (default: ~/.plico)
   (default: direct kernel access, no daemon)
 
 COMMANDS:

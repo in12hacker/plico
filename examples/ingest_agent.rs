@@ -386,7 +386,7 @@ fn main() {
 
     if args.len() < 3 {
         println!("Usage: {} <root> <markdown_dir> [agent_id]", args[0]);
-        println!("Example: {} /tmp/plico ./articles ingest-agent-1", args[0]);
+        println!("Example: {} ~/.plico ./articles ingest-agent-1", args[0]);
         std::process::exit(1);
     }
 

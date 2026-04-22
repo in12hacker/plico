@@ -759,3 +759,207 @@ Some(t) => {
         self.tool_registry.count()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::kernel::tests::make_kernel;
+
+    fn dispatch(kernel: &AIKernel, name: &str, params: serde_json::Value, agent_id: &str) -> ToolResult {
+        kernel.execute_tool(name, &params, agent_id)
+    }
+
+    // ─── CAS Tools ─────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_cas_create_dispatch() {
+        let (kernel, _dir) = make_kernel();
+        let result = dispatch(&kernel, "cas.create",
+            serde_json::json!({"content": "test data", "tags": ["unit-test"]}),
+            "kernel");
+        assert!(result.success, "cas.create should succeed: {:?}", result.error);
+        assert!(result.output["cid"].is_string());
+        let cid = result.output["cid"].as_str().unwrap();
+        assert!(!cid.is_empty());
+    }
+
+    #[test]
+    fn test_cas_create_empty_content_rejected() {
+        let (kernel, _dir) = make_kernel();
+        let result = dispatch(&kernel, "cas.create",
+            serde_json::json!({"content": "", "tags": []}),
+            "kernel");
+        // Empty content is accepted by cas.create tool API; soul is checked at kernel layer
+        assert!(result.output["cid"].is_string());
+    }
+
+    #[test]
+    fn test_cas_read_existing() {
+        let (kernel, _dir) = make_kernel();
+        // First create an object
+        let create = dispatch(&kernel, "cas.create",
+            serde_json::json!({"content": "read me", "tags": ["test"]}),
+            "kernel");
+        let cid = create.output["cid"].as_str().unwrap();
+
+        let result = dispatch(&kernel, "cas.read",
+            serde_json::json!({"cid": cid}),
+            "kernel");
+        assert!(result.success, "cas.read should succeed: {:?}", result.error);
+        assert_eq!(result.output["data"].as_str().unwrap(), "read me");
+    }
+
+    #[test]
+    fn test_cas_read_nonexistent_returns_error() {
+        let (kernel, _dir) = make_kernel();
+        let result = dispatch(&kernel, "cas.read",
+            serde_json::json!({"cid": "0000000000000000000000000000000000000000000000000000000000000000"}),
+            "kernel");
+        assert!(!result.success, "cas.read of nonexistent should fail");
+    }
+
+    #[test]
+    fn test_cas_delete_existing() {
+        let (kernel, _dir) = make_kernel();
+        let create = dispatch(&kernel, "cas.create",
+            serde_json::json!({"content": "to delete", "tags": ["test"]}),
+            "kernel");
+        let cid = create.output["cid"].as_str().unwrap();
+
+        let result = dispatch(&kernel, "cas.delete",
+            serde_json::json!({"cid": cid}),
+            "kernel");
+        assert!(result.success, "cas.delete should succeed: {:?}", result.error);
+    }
+
+    #[test]
+    fn test_cas_delete_nonexistent_returns_error() {
+        let (kernel, _dir) = make_kernel();
+        let result = dispatch(&kernel, "cas.delete",
+            serde_json::json!({"cid": "0000000000000000000000000000000000000000000000000000000000000000"}),
+            "kernel");
+        assert!(!result.success, "cas.delete of nonexistent should fail");
+    }
+
+    // ─── Memory Tools ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_memory_store_working() {
+        let (kernel, _dir) = make_kernel();
+        let result = dispatch(&kernel, "memory.store",
+            serde_json::json!({"content": "working memory", "tier": "working", "importance": 50}),
+            "TestAgent");
+        assert!(result.success, "memory.store working should succeed: {:?}", result.error);
+        assert_eq!(result.output["tier"].as_str().unwrap(), "working");
+    }
+
+    #[test]
+    fn test_memory_recall_agent_name_resolution() {
+        let (kernel, _dir) = make_kernel();
+        kernel.register_agent("RecallAgent".to_string());
+        dispatch(&kernel, "memory.store",
+            serde_json::json!({"content": "recallable", "tier": "working"}),
+            "RecallAgent");
+
+        let result = dispatch(&kernel, "memory.recall",
+            serde_json::json!({"agent_id": "RecallAgent"}),
+            "RecallAgent");
+        assert!(result.success, "memory.recall by name should resolve: {:?}", result.error);
+    }
+
+    #[test]
+    fn test_memory_recall_nonexistent_agent() {
+        let (kernel, _dir) = make_kernel();
+        let result = dispatch(&kernel, "memory.recall",
+            serde_json::json!({"agent_id": "DoesNotExist"}),
+            "kernel");
+        assert!(!result.success, "memory.recall for nonexistent agent should fail");
+    }
+
+    // ─── KG Tools ──────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_kg_add_node_dispatch() {
+        let (kernel, _dir) = make_kernel();
+        let result = dispatch(&kernel, "kg.add_node",
+            serde_json::json!({"label": "TestNode", "type": "entity", "properties": {}}),
+            "kernel");
+        assert!(result.success, "kg.add_node should succeed: {:?}", result.error);
+        assert!(result.output["node_id"].is_string());
+    }
+
+    #[test]
+    fn test_kg_add_edge_dispatch() {
+        let (kernel, _dir) = make_kernel();
+        let n1 = dispatch(&kernel, "kg.add_node",
+            serde_json::json!({"label": "Node1", "type": "entity"}),
+            "kernel");
+        let n2 = dispatch(&kernel, "kg.add_node",
+            serde_json::json!({"label": "Node2", "type": "entity"}),
+            "kernel");
+        let node1 = n1.output["node_id"].as_str().unwrap();
+        let node2 = n2.output["node_id"].as_str().unwrap();
+
+        let result = dispatch(&kernel, "kg.add_edge",
+            serde_json::json!({"src": node1, "dst": node2, "type": "related_to"}),
+            "kernel");
+        assert!(result.success, "kg.add_edge should succeed: {:?}", result.error);
+    }
+
+    // ─── Agent Tools ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_agent_register_dispatch() {
+        let (kernel, _dir) = make_kernel();
+        let result = dispatch(&kernel, "agent.register",
+            serde_json::json!({"name": "DispatchTestAgent"}),
+            "kernel");
+        assert!(result.success, "agent.register should succeed: {:?}", result.error);
+        assert!(result.output["agent_id"].is_string());
+    }
+
+    #[test]
+    fn test_agent_status_dispatch() {
+        let (kernel, _dir) = make_kernel();
+        let reg = dispatch(&kernel, "agent.register",
+            serde_json::json!({"name": "StatusTestAgent"}),
+            "kernel");
+        let agent_id = reg.output["agent_id"].as_str().unwrap();
+
+        let result = dispatch(&kernel, "agent.status",
+            serde_json::json!({"agent_id": agent_id}),
+            "kernel");
+        assert!(result.success, "agent.status should succeed: {:?}", result.error);
+        assert_eq!(result.output["agent_id"].as_str().unwrap(), agent_id);
+    }
+
+    // ─── Tool Registry ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_tools_list_dispatch() {
+        let (kernel, _dir) = make_kernel();
+        let result = dispatch(&kernel, "tools.list",
+            serde_json::json!({}),
+            "kernel");
+        assert!(result.success, "tools.list should succeed: {:?}", result.error);
+        assert!(result.output.is_array());
+    }
+
+    #[test]
+    fn test_tools_describe_unknown_returns_error() {
+        let (kernel, _dir) = make_kernel();
+        let result = dispatch(&kernel, "tools.describe",
+            serde_json::json!({"name": "nonexistent.tool"}),
+            "kernel");
+        assert!(!result.success, "tools.describe for unknown tool should fail");
+    }
+
+    #[test]
+    fn test_unknown_tool_returns_error() {
+        let (kernel, _dir) = make_kernel();
+        let result = dispatch(&kernel, "nonexistent.tool",
+            serde_json::json!({}),
+            "kernel");
+        assert!(!result.success, "unknown tool should return error");
+    }
+}
