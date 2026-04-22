@@ -22,25 +22,3 @@ pub mod context_snapshot;
 pub use layered::{LayeredMemory, MemoryTier, MemoryEntry, MemoryContent, MemoryError, MemoryScope};
 pub use persist::{MemoryPersister, CASPersister, MemoryLoader, PersistError, PersistenceIndex, PersistedTier};
 
-use serde::{Deserialize, Serialize};
-
-/// A memory query — used by agents to retrieve relevant context.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MemoryQuery {
-    /// Natural language query text (will be embedded for semantic search)
-    pub query: String,
-    /// Which tier to search (None = all tiers)
-    pub tier: Option<MemoryTier>,
-    /// Maximum number of results
-    pub limit: usize,
-    /// Agent ID to scope the search
-    pub agent_id: String,
-}
-
-/// A memory query result.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MemoryResult {
-    pub entries: Vec<MemoryEntry>,
-    pub tier: MemoryTier,
-    pub total: usize,
-}
