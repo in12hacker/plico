@@ -20,6 +20,8 @@ fn run(root: &std::path::Path, args: &[&str]) -> Output {
     // Use stub embedding to avoid subprocess warm-up delay in tests.
     // E2E embedding tests use EMBEDDING_BACKEND=local separately.
     cmd.env("EMBEDDING_BACKEND", "stub");
+    // Use human output for test compatibility (JSON is now default per Node 18 F-1)
+    cmd.env("AICLI_OUTPUT", "human");
     for arg in args {
         cmd.arg(arg);
     }
@@ -27,13 +29,33 @@ fn run(root: &std::path::Path, args: &[&str]) -> Output {
     cmd.output().expect("failed to spawn aicli")
 }
 
-/// Extract the CID from "CID: <hex>" output lines.
+/// Run aicli with JSON output (default since Node 18 F-1)
+fn run_json(root: &std::path::Path, args: &[&str]) -> Output {
+    let mut cmd = Command::new(aicli());
+    cmd.arg("--root").arg(root);
+    cmd.env("EMBEDDING_BACKEND", "stub");
+    // JSON is the default, no need to set AICLI_OUTPUT
+    for arg in args {
+        cmd.arg(arg);
+    }
+    cmd.output().expect("failed to spawn aicli")
+}
+
+/// Extract CID from human-format "CID: <hex>" output
 fn extract_cid(output: &Output) -> Option<String> {
     let stdout = String::from_utf8_lossy(&output.stdout);
     stdout
         .lines()
         .find(|l| l.starts_with("CID:"))
         .map(|l| l.trim_start_matches("CID:").trim().to_string())
+}
+
+/// Extract CID from JSON output {"cid": "..."}
+fn extract_cid_json(output: &Output) -> Option<String> {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    serde_json::from_str::<serde_json::Value>(&stdout)
+        .ok()
+        .and_then(|v| v.get("cid").and_then(|c| c.as_str().map(String::from)))
 }
 
 /// Assert that stdout contains the given substring.
@@ -271,8 +293,93 @@ fn test_get_with_agent_flag_works() {
         default_combined
     );
 
-    // Get WITH correct agent flag — should succeed
+// Get WITH correct agent flag — should succeed
     let get_agent = run(root.path(), &["get", &cid, "--agent", agent]);
     assert!(get_agent.status.success(), "get with correct agent should succeed");
     assert_contains(&get_agent, "Agent-owned content");
+}
+
+// ─── JSON Output Tests (Node 18 F-1: JSON-First) ─────────────────────────────────
+
+/// Verify that JSON is the default output format (F-1)
+#[test]
+fn test_json_default_output_is_json() {
+    let root = tempdir().unwrap();
+    let output = run_json(root.path(), &["put", "--content", "JSON test", "--tags", "json"]);
+    assert!(output.status.success());
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // Must be valid JSON parseable
+    let parsed = serde_json::from_str::<serde_json::Value>(&stdout)
+        .expect("default output should be valid JSON");
+    assert!(parsed.get("cid").is_some(), "JSON should contain cid field");
+}
+
+/// Verify JSON output contains version field
+#[test]
+fn test_json_output_contains_version() {
+    let root = tempdir().unwrap();
+    let output = run_json(root.path(), &["put", "--content", "version test", "--tags", "test"]);
+    assert!(output.status.success());
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).expect("valid JSON");
+    assert!(parsed.get("version").is_some(), "JSON should contain version field");
+}
+
+/// Verify JSON output for search contains results array
+#[test]
+fn test_json_search_output_structure() {
+    let root = tempdir().unwrap();
+    // First put some content
+    let put = run_json(root.path(), &["put", "--content", "searchable content", "--tags", "findme"]);
+    let cid = extract_cid_json(&put).expect("no CID");
+
+    // Search should return JSON with results array
+    let search = run_json(root.path(), &["search", "--query", "searchable"]);
+    assert!(search.status.success());
+
+    let stdout = String::from_utf8_lossy(&search.stdout);
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).expect("valid JSON");
+
+    // Results should be an array
+    let results = parsed.get("results").expect("JSON should have results field");
+    assert!(results.is_array(), "results should be an array");
+
+    // Should contain our CID
+    let results_arr = results.as_array().unwrap();
+    let has_cid = results_arr.iter().any(|r| r.get("cid").and_then(|c| c.as_str()) == Some(cid.as_str()));
+    assert!(has_cid, "search results should contain our CID");
+}
+
+/// Verify both human and JSON produce same semantic result
+#[test]
+fn test_human_and_json_produce_same_cid() {
+    let root = tempdir().unwrap();
+    let content = "Consistency test";
+    let tags = "consistent";
+
+    let human_out = run(root.path(), &["put", "--content", content, "--tags", tags]);
+    let json_out = run_json(root.path(), &["put", "--content", content, "--tags", tags]);
+
+    let human_cid = extract_cid(&human_out).expect("no CID from human");
+    let json_cid = extract_cid_json(&json_out).expect("no CID from JSON");
+
+    // Same content + tags = same CID
+    assert_eq!(human_cid, json_cid, "human and JSON should produce same CID for same content");
+}
+
+/// Verify JSON error response has proper structure
+#[test]
+fn test_json_error_response_structure() {
+    let root = tempdir().unwrap();
+    let fake_cid = "0000000000000000000000000000000000000000000000000000000000000000";
+    let output = run_json(root.path(), &["get", fake_cid]);
+
+    // Should still be JSON even on error
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).expect("error response should be valid JSON");
+    // Error response should have ok=false
+    let ok = parsed.get("ok").and_then(|v| v.as_bool()).unwrap_or(true);
+    assert!(!ok, "error response should have ok=false");
 }
