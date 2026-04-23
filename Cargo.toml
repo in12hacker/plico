@@ -37,6 +37,7 @@ rand = "0.8"
 dirs = "5.0"
 edgevec = "0.9.0"
 subtle = "2.6.1"
+redb = "4.0"
 
 # ONNX Runtime embedding backend (optional)
 ort = { version = "2.0.0-rc.12", default-features = false, features = ["std", "ndarray", "tracing", "copy-dylibs", "api-24"], optional = true }

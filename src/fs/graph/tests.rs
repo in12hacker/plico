@@ -509,3 +509,178 @@ fn test_weight_not_capped_at_one() {
     assert!(w < 1.0, "weight should be proportional, not capped at 1.0, got {}", w);
     assert!((w - 0.75).abs() < 0.01, "Jaccard should be 3/4=0.75, got {}", w);
 }
+
+// ── redb 4.0 Storage Tests ─────────────────────────────────────────────────────
+
+#[test]
+fn test_redb_node_crud() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let kg = PetgraphBackend::open(dir.path().to_path_buf());
+
+    let node = make_node("test_node", KGNodeType::Entity, vec!["tag1".into()], "agent1");
+    kg.add_node(node).unwrap();
+
+    let retrieved = kg.get_node("test_node").unwrap().unwrap();
+    assert_eq!(retrieved.id, "test_node");
+    assert_eq!(retrieved.label, "test_node");
+
+    // Reopen and verify persistence
+    drop(kg);
+    let kg2 = PetgraphBackend::open(dir.path().to_path_buf());
+    let retrieved2 = kg2.get_node("test_node").unwrap().unwrap();
+    assert_eq!(retrieved2.id, "test_node");
+}
+
+#[test]
+fn test_redb_edge_crud() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let kg = PetgraphBackend::open(dir.path().to_path_buf());
+
+    kg.add_node(make_node("n1", KGNodeType::Entity, vec![], "agent1")).unwrap();
+    kg.add_node(make_node("n2", KGNodeType::Entity, vec![], "agent1")).unwrap();
+
+    let edge = make_edge("n1", "n2", KGEdgeType::RelatedTo, 0.8);
+    kg.add_edge(edge).unwrap();
+
+    let edges = kg.list_edges("agent1").unwrap();
+    assert_eq!(edges.len(), 1);
+
+    drop(kg);
+    let kg2 = PetgraphBackend::open(dir.path().to_path_buf());
+    let edges2 = kg2.list_edges("agent1").unwrap();
+    assert_eq!(edges2.len(), 1);
+    assert_eq!(edges2[0].weight, 0.8);
+}
+
+#[test]
+fn test_redb_persist_incremental() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let kg = PetgraphBackend::open(dir.path().to_path_buf());
+
+    // Add first node/edge
+    kg.add_node(make_node("node1", KGNodeType::Entity, vec![], "a")).unwrap();
+    kg.add_node(make_node("node2", KGNodeType::Entity, vec![], "a")).unwrap();
+    kg.add_edge(make_edge("node1", "node2", KGEdgeType::RelatedTo, 0.5)).unwrap();
+
+    // Verify count immediately
+    assert_eq!(kg.node_count().unwrap(), 2);
+    assert_eq!(kg.edge_count().unwrap(), 1);
+
+    // Add another node/edge incrementally
+    kg.add_node(make_node("node3", KGNodeType::Document, vec![], "a")).unwrap();
+    kg.add_edge(make_edge("node2", "node3", KGEdgeType::AssociatesWith, 0.7)).unwrap();
+
+    assert_eq!(kg.node_count().unwrap(), 3);
+    assert_eq!(kg.edge_count().unwrap(), 2);
+
+    drop(kg);
+    let kg2 = PetgraphBackend::open(dir.path().to_path_buf());
+    assert_eq!(kg2.node_count().unwrap(), 3);
+    assert_eq!(kg2.edge_count().unwrap(), 2);
+}
+
+#[test]
+fn test_redb_load_all() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let kg = PetgraphBackend::open(dir.path().to_path_buf());
+
+    // Create multiple nodes and edges
+    for i in 0..5 {
+        kg.add_node(make_node(&format!("n{}", i), KGNodeType::Entity, vec![], "a")).unwrap();
+    }
+    for i in 0..4 {
+        kg.add_edge(make_edge(&format!("n{}", i), &format!("n{}", i+1), KGEdgeType::RelatedTo, 0.5)).unwrap();
+    }
+
+    drop(kg);
+    let kg2 = PetgraphBackend::open(dir.path().to_path_buf());
+
+    assert_eq!(kg2.node_count().unwrap(), 5);
+    assert_eq!(kg2.edge_count().unwrap(), 4);
+
+    // Verify specific paths
+    let path = kg2.find_weighted_path("n0", "n4", 10).unwrap();
+    assert!(path.is_some());
+    assert_eq!(path.unwrap().len(), 5);
+}
+
+#[test]
+fn test_redb_migration_from_json() {
+    let dir = tempfile::TempDir::new().unwrap();
+
+    // Create a KG with JSON persist, then reopen with redb
+    {
+        let kg = PetgraphBackend::new();
+        kg.add_node(make_node("mig_node1", KGNodeType::Entity, vec![], "agent1")).unwrap();
+        kg.add_node(make_node("mig_node2", KGNodeType::Document, vec![], "agent1")).unwrap();
+        kg.add_edge(make_edge("mig_node1", "mig_node2", KGEdgeType::HasFact, 0.9)).unwrap();
+
+        // Save as JSON (what old code would do)
+        kg.save_to_disk(dir.path()).unwrap();
+    }
+
+    // Now open with redb - should detect JSON and migrate
+    let kg = PetgraphBackend::open(dir.path().to_path_buf());
+    assert_eq!(kg.node_count().unwrap(), 2);
+    assert_eq!(kg.edge_count().unwrap(), 1);
+
+    let node = kg.get_node("mig_node1").unwrap().unwrap();
+    assert_eq!(node.node_type, KGNodeType::Entity);
+}
+
+#[test]
+fn test_redb_edge_key_format() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let kg = PetgraphBackend::open(dir.path().to_path_buf());
+
+    kg.add_node(make_node("src_node", KGNodeType::Entity, vec![], "a")).unwrap();
+    kg.add_node(make_node("dst_node", KGNodeType::Entity, vec![], "a")).unwrap();
+
+    let edge = make_edge("src_node", "dst_node", KGEdgeType::AssociatesWith, 0.6);
+    kg.add_edge(edge).unwrap();
+
+    drop(kg);
+    let kg2 = PetgraphBackend::open(dir.path().to_path_buf());
+
+    // Verify we can retrieve the edge
+    let edges = kg2.list_edges("a").unwrap();
+    assert_eq!(edges.len(), 1);
+    assert_eq!(edges[0].edge_type, KGEdgeType::AssociatesWith);
+}
+
+#[test]
+fn test_redb_remove_node() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let kg = PetgraphBackend::open(dir.path().to_path_buf());
+
+    kg.add_node(make_node("remove_node", KGNodeType::Entity, vec![], "a")).unwrap();
+    kg.add_node(make_node("other", KGNodeType::Entity, vec![], "a")).unwrap();
+    kg.add_edge(make_edge("remove_node", "other", KGEdgeType::RelatedTo, 0.5)).unwrap();
+
+    assert_eq!(kg.node_count().unwrap(), 2);
+    kg.remove_node("remove_node").unwrap();
+    assert_eq!(kg.node_count().unwrap(), 1);
+
+    drop(kg);
+    let kg2 = PetgraphBackend::open(dir.path().to_path_buf());
+    assert_eq!(kg2.node_count().unwrap(), 1);
+    assert!(kg2.get_node("remove_node").unwrap().is_none());
+}
+
+#[test]
+fn test_redb_remove_edge() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let kg = PetgraphBackend::open(dir.path().to_path_buf());
+
+    kg.add_node(make_node("e1", KGNodeType::Entity, vec![], "a")).unwrap();
+    kg.add_node(make_node("e2", KGNodeType::Entity, vec![], "a")).unwrap();
+    kg.add_edge(make_edge("e1", "e2", KGEdgeType::RelatedTo, 0.8)).unwrap();
+
+    assert_eq!(kg.edge_count().unwrap(), 1);
+    kg.remove_edge("e1", "e2", Some(KGEdgeType::RelatedTo)).unwrap();
+    assert_eq!(kg.edge_count().unwrap(), 0);
+
+    drop(kg);
+    let kg2 = PetgraphBackend::open(dir.path().to_path_buf());
+    assert_eq!(kg2.edge_count().unwrap(), 0);
+}

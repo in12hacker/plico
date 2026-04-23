@@ -103,6 +103,9 @@ pub enum KGError {
 
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
+
+    #[error("Database error: {0}")]
+    DatabaseError(String),
 }
 
 /// A hybrid search result combining vector similarity and graph authority.

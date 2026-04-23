@@ -527,10 +527,36 @@ pub struct Assembly {
 ///   - Records which CIDs were actually used vs prefetched but unused
 ///   - Uses feedback history to prioritize historically-used CIDs in future prefetches
 ///
+/// B51: Cache for assembled allocations keyed by assembly_id.
+/// This ensures fetch_assembled_context returns Some(Ok(allocation)) when ready,
+/// even when called immediately after declare_intent (before background prefetch completes).
+struct AllocationCache {
+    cache: RwLock<HashMap<String, BudgetAllocation>>,
+}
+
+impl AllocationCache {
+    fn new() -> Self {
+        Self { cache: RwLock::new(HashMap::new()) }
+    }
+
+    fn insert(&self, assembly_id: String, allocation: BudgetAllocation) {
+        let mut c = self.cache.write().unwrap();
+        c.insert(assembly_id, allocation);
+    }
+
+    fn get(&self, assembly_id: &str) -> Option<BudgetAllocation> {
+        let c = self.cache.read().unwrap();
+        c.get(assembly_id).cloned()
+    }
+}
+
 /// Agent calls `fetch_assembled_context` to retrieve the result.
 pub struct IntentPrefetcher {
     /// Active assemblies keyed by assembly_id.
     assemblies: Arc<RwLock<HashMap<String, Assembly>>>,
+    /// B51: Cache for assembled allocations — ensures fetch returns allocation even when
+    /// called immediately after declare_intent (before async prefetch completes).
+    allocation_cache: Arc<AllocationCache>,
     /// Reference to the search backend for semantic recall.
     search: Arc<dyn crate::fs::SemanticSearch>,
     /// Reference to the knowledge graph (optional).
@@ -567,6 +593,7 @@ impl IntentPrefetcher {
     ) -> Self {
         Self {
             assemblies: Arc::new(RwLock::new(HashMap::new())),
+            allocation_cache: Arc::new(AllocationCache::new()),
             search,
             kg,
             memory,
@@ -599,6 +626,7 @@ impl IntentPrefetcher {
     ) -> Self {
         Self {
             assemblies: Arc::new(RwLock::new(HashMap::new())),
+            allocation_cache: Arc::new(AllocationCache::new()),
             search,
             kg,
             memory,
@@ -638,7 +666,11 @@ impl IntentPrefetcher {
         let intent_embedding: Option<Vec<f32>> = self.embedding.embed(intent).ok();
 
         if let Some(cached_allocation) = self.intent_cache.lookup(intent, &intent_embedding) {
-            // Cache hit! Store directly as Ready assembly
+            // B51 Fix: Cache hit! Store allocation in allocation_cache so fetch_assembled_context
+            // can return it immediately (before async prefetch completes).
+            self.allocation_cache.insert(assembly_id.clone(), cached_allocation.clone());
+
+            // Also store as Ready assembly in assemblies map
             let assembly = Assembly {
                 assembly_id: assembly_id.clone(),
                 agent_id: agent_id.to_string(),
@@ -682,6 +714,7 @@ impl IntentPrefetcher {
 
         // Kick off background prefetch — clone refs for the async task
         let assemblies = Arc::clone(&self.assemblies);
+        let allocation_cache = Arc::clone(&self.allocation_cache);
         let search = Arc::clone(&self.search);
         let kg = self.kg.clone();
         let memory = Arc::clone(&self.memory);
@@ -705,7 +738,7 @@ impl IntentPrefetcher {
 
             rt.block_on(async move {
                 Self::run_prefetch(
-                    assemblies, search, kg, memory, event_bus, embedding, ctx_loader,
+                    assemblies, Some(allocation_cache), search, kg, memory, event_bus, embedding, ctx_loader,
                     assembly_id_clone, intent_clone, related_cids_clone, budget_tokens, max_age,
                     Some(intent_cache), feedback_boost,
                 ).await;
@@ -716,12 +749,21 @@ impl IntentPrefetcher {
     }
 
     /// Fetch a previously declared assembled context.
-    /// Returns `None` if the assembly_id is unknown or still pending.
+    /// Returns `None` if the assembly_id is unknown.
+    /// B51 Fix: First checks allocation_cache for immediately available allocations
+    /// (from cache hits in declare_intent), then falls back to assemblies map.
     pub fn fetch_assembled_context(
         &self,
         agent_id: &str,
         assembly_id: &str,
     ) -> Option<Result<BudgetAllocation, String>> {
+        // B51: First check allocation_cache - this has allocations stored synchronously
+        // when declare_intent had a cache hit, so they're available immediately.
+        if let Some(allocation) = self.allocation_cache.get(assembly_id) {
+            return Some(Ok(allocation));
+        }
+
+        // Fall back to assemblies map for async prefetch results
         let assemblies = self.assemblies.read().unwrap();
         let assembly = assemblies.get(assembly_id)?;
 
@@ -916,8 +958,10 @@ impl IntentPrefetcher {
 
     /// Run the full multi-path prefetch in a background thread.
     /// Optionally stores result in intent cache (F-9).
+    /// B51: Also stores in allocation_cache for fetch_assembled_context.
     async fn run_prefetch(
         assemblies: Arc<RwLock<HashMap<String, Assembly>>>,
+        allocation_cache: Option<Arc<AllocationCache>>,
         search: Arc<dyn crate::fs::SemanticSearch>,
         kg: Option<Arc<dyn KnowledgeGraph>>,
         memory: Arc<LayeredMemory>,
@@ -970,6 +1014,11 @@ impl IntentPrefetcher {
                         .embed(&intent)
                         .ok();
                     cache.store(intent, intent_embedding, allocation.clone(), related_cids);
+                }
+
+                // B51: Also store in allocation_cache so fetch_assembled_context returns immediately
+                if let Some(ref cache) = allocation_cache {
+                    cache.insert(assembly_id.clone(), allocation.clone());
                 }
 
                 a.state = AssemblyState::Ready(allocation);
