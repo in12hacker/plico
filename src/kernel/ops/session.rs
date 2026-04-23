@@ -79,6 +79,29 @@ impl AgentProfile {
             .get(tag_key)
             .and_then(|succs| succs.first().map(|(k, _)| k.clone()))
     }
+
+    /// Record CID usage for hot objects tracking.
+    pub fn record_cid_usage(&mut self, cid: &str) {
+        self.updated_at_ms = now_ms();
+
+        // Find existing entry or add new
+        if let Some(existing) = self.hot_objects.iter_mut().find(|(c, _)| c == cid) {
+            existing.1 += 1;
+        } else {
+            self.hot_objects.push((cid.to_string(), 1));
+        }
+
+        // Sort by count descending, keep top 50
+        self.hot_objects.sort_by(|a, b| b.1.cmp(&a.1));
+        self.hot_objects.truncate(50);
+    }
+
+    /// Record multiple CID usages at once.
+    pub fn record_cid_usages(&mut self, cids: &[String]) {
+        for cid in cids {
+            self.record_cid_usage(cid);
+        }
+    }
 }
 
 /// Strategy for converting intent text to a lookup key.

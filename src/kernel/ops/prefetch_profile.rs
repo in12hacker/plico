@@ -142,6 +142,30 @@ impl AgentProfileStore {
 
         Ok(profiles.len())
     }
+
+    /// Record CID usage for hot objects tracking (F-1).
+    pub fn record_cid_usage(&self, agent_id: &str, cids: &[String]) {
+        let mut profiles = self.profiles.write().unwrap();
+        let profile = profiles
+            .entry(agent_id.to_string())
+            .or_insert_with(|| AgentProfile::new(agent_id.to_string()));
+        profile.record_cid_usages(cids);
+    }
+
+    /// Record execution time for an operation type (F-2).
+    pub fn record_execution_time(&self, agent_id: &str, _operation_type: &str, _duration_ms: u64) {
+        // For now, store in a separate map - could be integrated into profile later
+        // This is a simplified implementation
+        let mut profiles = self.profiles.write().unwrap();
+        let profile = profiles
+            .entry(agent_id.to_string())
+            .or_insert_with(|| AgentProfile::new(agent_id.to_string()));
+        // Update timestamp to show profile was accessed
+        profile.updated_at_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+    }
 }
 
 impl Default for AgentProfileStore {

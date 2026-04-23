@@ -812,6 +812,11 @@ impl IntentPrefetcher {
         profile.hot_objects.iter().map(|(cid, _)| cid.clone()).collect()
     }
 
+    /// F-10: Get the profile store for external access (e.g., by intent_executor).
+    pub fn profile_store(&self) -> &Arc<AgentProfileStore> {
+        &self.profile_store
+    }
+
     /// F-4: Get prefetcher hit rate statistics (lookups, hits, hit rate).
     pub fn prefetch_hit_rate(&self) -> (u64, u64, f64) {
         let lookups = self.total_lookups.load(std::sync::atomic::Ordering::Relaxed);
