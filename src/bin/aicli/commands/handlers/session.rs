@@ -46,8 +46,7 @@ pub fn cmd_growth(kernel: &AIKernel, args: &[String]) -> ApiResponse {
         "last30days" | "30d" => GrowthPeriod::Last30Days,
         "alltime" | "all" => GrowthPeriod::AllTime,
         _ => {
-            eprintln!("Invalid period '{}'. Use: last7days, last30days, or alltime", period_str);
-            return ApiResponse::error(format!("invalid period: {}", period_str));
+            return ApiResponse::error(format!("Invalid period '{}'. Valid: last7days, last30days, alltime", period_str));
         }
     };
 

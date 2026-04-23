@@ -24,8 +24,7 @@ pub fn cmd_tool(kernel: &AIKernel, args: &[String]) -> ApiResponse {
             kernel.handle_api_request(req)
         }
         _ => {
-            eprintln!("Usage: tool <list|describe|call> ...");
-            ApiResponse::error("unknown tool subcommand")
+            ApiResponse::error("Unknown tool subcommand. Valid: list, describe, call")
         }
     }
 }

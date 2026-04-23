@@ -25,8 +25,7 @@ pub fn cmd_hybrid(kernel: &AIKernel, args: &[String]) -> ApiResponse {
     let token_budget = extract_arg(args, "--budget").and_then(|s| s.parse().ok());
 
     if query_text.is_empty() {
-        eprintln!("Error: hybrid requires a query. Use: hybrid <text> or: hybrid --query <text>");
-        return ApiResponse::error("empty query".to_string());
+        return ApiResponse::error("hybrid requires a query. Use: hybrid <text> or: hybrid --query <text>");
     }
 
     let req = plico::api::semantic::ApiRequest::HybridRetrieve {

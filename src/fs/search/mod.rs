@@ -145,3 +145,74 @@ pub trait SemanticSearch: Send + Sync {
     /// Default no-op — backends that self-manage persistence override this.
     fn restore_from(&self, _dir: &Path) -> Result<(), String> { Ok(()) }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn meta(tags: &[&str], ct: &str, created: u64) -> SearchIndexMeta {
+        SearchIndexMeta {
+            cid: "test".into(),
+            tags: tags.iter().map(|s| s.to_string()).collect(),
+            snippet: "".into(),
+            content_type: ct.into(),
+            created_at: created,
+        }
+    }
+
+    #[test]
+    fn test_filter_no_constraints() {
+        let f = SearchFilter::default();
+        assert!(f.matches(&meta(&["a"], "text", 1000)));
+    }
+
+    #[test]
+    fn test_filter_require_tags() {
+        let f = SearchFilter {
+            require_tags: vec!["a".into(), "b".into()],
+            ..Default::default()
+        };
+        assert!(f.matches(&meta(&["a", "b", "c"], "text", 1000)));
+        assert!(!f.matches(&meta(&["a"], "text", 1000)));
+        assert!(!f.matches(&meta(&[], "text", 1000)));
+    }
+
+    #[test]
+    fn test_filter_exclude_tags() {
+        let f = SearchFilter {
+            exclude_tags: vec!["spam".into()],
+            ..Default::default()
+        };
+        assert!(f.matches(&meta(&["a"], "text", 1000)));
+        assert!(!f.matches(&meta(&["a", "spam"], "text", 1000)));
+    }
+
+    #[test]
+    fn test_filter_content_type() {
+        let f = SearchFilter {
+            content_type: Some("image".into()),
+            ..Default::default()
+        };
+        assert!(f.matches(&meta(&[], "image", 1000)));
+        assert!(!f.matches(&meta(&[], "text", 1000)));
+    }
+
+    #[test]
+    fn test_filter_time_range() {
+        let f = SearchFilter {
+            since: Some(500),
+            until: Some(1500),
+            ..Default::default()
+        };
+        assert!(f.matches(&meta(&[], "text", 1000)));
+        assert!(!f.matches(&meta(&[], "text", 400)));
+        assert!(!f.matches(&meta(&[], "text", 1600)));
+    }
+
+    #[test]
+    fn test_filter_with_time_builder() {
+        let f = SearchFilter::default().with_time(100, 200);
+        assert!(f.matches(&meta(&[], "text", 150)));
+        assert!(!f.matches(&meta(&[], "text", 50)));
+    }
+}

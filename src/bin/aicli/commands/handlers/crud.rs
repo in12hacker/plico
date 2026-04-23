@@ -102,8 +102,7 @@ let mut query = if search_tags.is_empty() {
     }
 
     if query.is_empty() {
-        eprintln!("Error: search requires a query. Use: search --query <text> or: search <text>");
-        return ApiResponse::error("empty query");
+        return ApiResponse::error("search requires a query. Use: search --query <text> or: search <text>");
     }
 
     let results = match kernel.semantic_search_with_time(

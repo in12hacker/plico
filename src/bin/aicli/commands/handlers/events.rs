@@ -26,8 +26,7 @@ pub fn cmd_events(kernel: &AIKernel, args: &[String]) -> ApiResponse {
                 .map(|v| v.iter().take_while(|s| !s.starts_with("--")).cloned().collect::<Vec<_>>().join(" "))
                 .unwrap_or_default();
             if time_expression.is_empty() {
-                eprintln!("Usage: events by-time \"last week\" [--tags TAGS]");
-                return ApiResponse::error("Missing time expression".to_string());
+                return ApiResponse::error("events by-time requires a time expression, e.g.: events by-time \"last week\"");
             }
             match kernel.list_events_text(&time_expression, &tags, None, agent_id.as_deref()) {
                 Ok(events) => ApiResponse::with_events(events),
@@ -87,8 +86,7 @@ pub fn cmd_events(kernel: &AIKernel, args: &[String]) -> ApiResponse {
             kernel.handle_api_request(req)
         }
         _ => {
-            eprintln!("Usage: events <list|by-time|subscribe|poll|unsubscribe|history> [options]");
-            ApiResponse::error("unknown events subcommand")
+            ApiResponse::error("Unknown events subcommand. Valid: list, by-time, subscribe, poll, unsubscribe, history")
         }
     }
 }

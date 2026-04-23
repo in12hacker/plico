@@ -10,6 +10,7 @@ Status: active | Fan-in: 0 (entry points) | Fan-out: 2
 |--------|------|-------------|
 | `plicod` | `plicod.rs` | TCP daemon (port 7878, JSON ApiRequest/ApiResponse) |
 | `plico-mcp` | `plico_mcp.rs` | MCP stdio server (JSON-RPC 2.0 over stdin/stdout) |
+| `plico-sse` | `plico_sse.rs` | SSE streaming adapter for A2A protocol compatibility |
 | `aicli` | `aicli/main.rs` | AI-friendly semantic CLI |
 
 ## Task Routing
@@ -20,16 +21,18 @@ Status: active | Fan-in: 0 (entry points) | Fan-out: 2
 | Add CLI command | `aicli/commands/handlers/` + `aicli/commands/mod.rs` dispatch |
 | Fix TCP daemon protocol | `plicod.rs` |
 | Change CLI output format | `aicli/commands/mod.rs` format functions |
+| Fix SSE streaming / A2A | `plico_sse.rs` |
 
 ## Files
 
 | File | Lines | Purpose |
 |------|-------|---------|
-| `plicod.rs` | — | TCP daemon, JSON API server |
-| `plico_mcp.rs` | ⚠ ~1763 | MCP stdio server — needs split (dispatch/resources/tests) |
-| `aicli/main.rs` | — | CLI entry: local kernel or --tcp mode |
-| `aicli/commands/mod.rs` | — | Dispatch + output formatting |
-| `aicli/commands/handlers/` | 15 files | Command handlers (see AGENTS.md directory map) |
+| `plicod.rs` | ~161 | TCP daemon, JSON API server |
+| `plico_mcp.rs` | ~2250 | MCP stdio server (JSON-RPC dispatch + tests) |
+| `plico_sse.rs` | ~1106 | SSE streaming adapter (A2A protocol) |
+| `aicli/main.rs` | ~541 | CLI entry: local kernel or --tcp mode |
+| `aicli/commands/mod.rs` | ~488 | Dispatch + output formatting |
+| `aicli/commands/handlers/` | 16 files | Command handlers (see `handlers/INDEX.md`) |
 
 ## Dependencies (Fan-out: 2)
 

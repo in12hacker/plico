@@ -52,6 +52,8 @@ Status: active | Fan-in: 2 | Fan-out: 2
 | `OllamaBackend` | `embedding/ollama.rs` | Ollama HTTP embedding backend |
 | `LocalEmbeddingBackend` | `embedding/local.rs` | Python subprocess ONNX backend |
 | `StubEmbeddingProvider` | `embedding/stub.rs` | Zero-vector stub (tag-only search) |
+| `OrtEmbeddingBackend` | `embedding/ort_backend.rs` | ONNX Runtime in-process backend (feature-gated) |
+| `EmbeddingCircuitBreaker` | `embedding/circuit_breaker.rs` | 3-state circuit breaker wrapping any provider |
 | `SemanticSearch` | `search/mod.rs` | Trait: vector similarity search |
 | `InMemoryBackend` | `search/memory.rs` | Brute-force cosine similarity |
 | `HnswBackend` | `search/hnsw.rs` | HNSW approximate nearest neighbor |
@@ -79,42 +81,44 @@ Status: active | Fan-in: 2 | Fan-out: 2
 
 ## Files
 
-### `semantic_fs/` — Core CRUD + Events
+### `semantic_fs/` — Core CRUD + Events (see `semantic_fs/INDEX.md`)
 
 | File | Lines | Purpose |
 |------|-------|---------|
-| `mod.rs` | ~679 | SemanticFS CRUD + search + tag index + recycle bin |
-| `events.rs` | ~205 | Event types, event operations |
-| `tests.rs` | (co-located) | Unit tests |
+| `mod.rs` | ~762 | SemanticFS CRUD + search + tag index + recycle bin |
+| `events.rs` | ~392 | Event types, event operations |
+| `tests.rs` | ~497 | Unit tests (37 tests) |
 
-### `embedding/` — Vector Embedding Backends
+### `embedding/` — Vector Embedding Backends (see `embedding/INDEX.md`)
 
 | File | Lines | Purpose |
 |------|-------|---------|
-| `mod.rs` | ~32 | EmbeddingProvider trait + re-exports |
+| `mod.rs` | ~37 | EmbeddingProvider trait + re-exports |
 | `types.rs` | ~69 | Shared embedding types (Embedding, EmbedError, EmbeddingMeta) |
 | `ollama.rs` | ~278 | OllamaBackend (HTTP API) |
 | `local.rs` | ~230 | LocalEmbeddingBackend (Python ONNX subprocess) |
+| `ort_backend.rs` | ~249 | OrtEmbeddingBackend (ONNX Runtime, feature-gated) |
 | `stub.rs` | ~36 | StubEmbeddingProvider (testing) |
+| `circuit_breaker.rs` | ~248 | EmbeddingCircuitBreaker (3-state failure protection) |
 | `json_rpc.rs` | ~30 | JSON-RPC embedding adapter |
 
-### `search/` — Vector + Keyword Search
+### `search/` — Vector + Keyword Search (see `search/INDEX.md`)
 
 | File | Lines | Purpose |
 |------|-------|---------|
 | `mod.rs` | ~147 | SemanticSearch trait, SearchFilter, re-exports |
 | `memory.rs` | ~332 | InMemoryBackend (brute-force cosine) |
 | `hnsw.rs` | ~573 | HnswBackend (approximate NN via hnsw_rs) |
-| `bm25.rs` | ~52 | BM25 keyword search index |
+| `bm25.rs` | ~83 | BM25 keyword search index |
 
-### `graph/` — Knowledge Graph
+### `graph/` — Knowledge Graph (see `graph/INDEX.md`)
 
 | File | Lines | Purpose |
 |------|-------|---------|
 | `mod.rs` | ~70 | KnowledgeGraph trait, ExploreDirection, re-exports |
-| `types.rs` | ~325 | KGNode, KGEdge, KGNodeType, KGEdgeType, DiskGraph |
-| `backend.rs` | ~749 | PetgraphBackend — directed graph + disk persistence |
-| `tests.rs` | (co-located) | Unit tests |
+| `types.rs` | ~520 | KGNode, KGEdge, KGNodeType, KGEdgeType, DiskGraph |
+| `backend.rs` | ~949 | PetgraphBackend — directed graph + disk persistence |
+| `tests.rs` | ~686 | Unit tests (34 tests) |
 
 ### Root-level
 

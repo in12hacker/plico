@@ -198,3 +198,129 @@ pub enum FSError {
     #[error("Embedding error: {0}")]
     Embedding(#[from] crate::fs::embedding::EmbedError),
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_event_type_display() {
+        assert_eq!(EventType::Task.to_string(), "task");
+        assert_eq!(EventType::Report.to_string(), "report");
+        assert_eq!(EventType::Custom.to_string(), "custom");
+    }
+
+    #[test]
+    fn test_event_meta_in_range_no_bounds() {
+        let meta = EventMeta {
+            label: "test".into(),
+            event_type: EventType::Task,
+            start_time: Some(1000),
+            end_time: None,
+            location: None,
+            participant_ids: vec![],
+            related_cids: vec![],
+        };
+        assert!(meta.in_range(None, None));
+    }
+
+    #[test]
+    fn test_event_meta_in_range_since() {
+        let meta = EventMeta {
+            label: "test".into(),
+            event_type: EventType::Task,
+            start_time: Some(1000),
+            end_time: None,
+            location: None,
+            participant_ids: vec![],
+            related_cids: vec![],
+        };
+        assert!(meta.in_range(Some(500), None));
+        assert!(meta.in_range(Some(1000), None));
+        assert!(!meta.in_range(Some(1500), None));
+    }
+
+    #[test]
+    fn test_event_meta_in_range_until() {
+        let meta = EventMeta {
+            label: "test".into(),
+            event_type: EventType::Task,
+            start_time: Some(1000),
+            end_time: None,
+            location: None,
+            participant_ids: vec![],
+            related_cids: vec![],
+        };
+        assert!(meta.in_range(None, Some(1500)));
+        assert!(meta.in_range(None, Some(1000)));
+        assert!(!meta.in_range(None, Some(500)));
+    }
+
+    #[test]
+    fn test_event_meta_in_range_both() {
+        let meta = EventMeta {
+            label: "test".into(),
+            event_type: EventType::Task,
+            start_time: Some(1000),
+            end_time: None,
+            location: None,
+            participant_ids: vec![],
+            related_cids: vec![],
+        };
+        assert!(meta.in_range(Some(500), Some(1500)));
+        assert!(!meta.in_range(Some(1100), Some(1500)));
+    }
+
+    #[test]
+    fn test_event_meta_no_start_time() {
+        let meta = EventMeta {
+            label: "test".into(),
+            event_type: EventType::Task,
+            start_time: None,
+            end_time: None,
+            location: None,
+            participant_ids: vec![],
+            related_cids: vec![],
+        };
+        assert!(meta.in_range(Some(0), None));
+        assert!(meta.in_range(None, Some(1000)));
+    }
+
+    #[test]
+    fn test_event_relation_to_edge_type() {
+        use crate::fs::graph::KGEdgeType;
+        assert!(matches!(EventRelation::Participant.to_edge_type(), KGEdgeType::HasParticipant));
+        assert!(matches!(EventRelation::Artifact.to_edge_type(), KGEdgeType::HasArtifact));
+        assert!(matches!(EventRelation::Recording.to_edge_type(), KGEdgeType::HasRecording));
+        assert!(matches!(EventRelation::Resolution.to_edge_type(), KGEdgeType::HasResolution));
+    }
+
+    #[test]
+    fn test_event_type_serde_roundtrip() {
+        let et = EventType::Analysis;
+        let json = serde_json::to_string(&et).unwrap();
+        assert_eq!(json, "\"analysis\"");
+        let back: EventType = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, et);
+    }
+
+    #[test]
+    fn test_recycle_entry_serde() {
+        let entry = RecycleEntry {
+            cid: "abc123".into(),
+            deleted_at: 1000,
+            original_meta: crate::cas::AIObjectMeta {
+                content_type: crate::cas::ContentType::Text,
+                tags: vec!["test".into()],
+                created_by: "agent1".into(),
+                created_at: 500,
+                intent: None,
+                tenant_id: "default".into(),
+            },
+        };
+        let json = serde_json::to_string(&entry).unwrap();
+        let back: RecycleEntry = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.cid, "abc123");
+        assert_eq!(back.deleted_at, 1000);
+    }
+}

@@ -431,6 +431,185 @@ impl Default for PermissionGuard {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ctx(agent: &str) -> PermissionContext {
+        PermissionContext::new(agent.into(), "default".into())
+    }
+
+    #[test]
+    fn test_default_policy_allows_read_write() {
+        let guard = PermissionGuard::new();
+        let c = ctx("agent1");
+        assert!(guard.check(&c, PermissionAction::Read).is_ok());
+        assert!(guard.check(&c, PermissionAction::Write).is_ok());
+    }
+
+    #[test]
+    fn test_default_policy_denies_dangerous_actions() {
+        let guard = PermissionGuard::new();
+        let c = ctx("agent1");
+        assert!(guard.check(&c, PermissionAction::Delete).is_err());
+        assert!(guard.check(&c, PermissionAction::Network).is_err());
+        assert!(guard.check(&c, PermissionAction::Execute).is_err());
+        assert!(guard.check(&c, PermissionAction::SendMessage).is_err());
+        assert!(guard.check(&c, PermissionAction::CrossTenant).is_err());
+        assert!(guard.check(&c, PermissionAction::All).is_err());
+    }
+
+    #[test]
+    fn test_trusted_agent_bypasses_all() {
+        let guard = PermissionGuard::new();
+        let c = ctx("kernel");
+        assert!(guard.check(&c, PermissionAction::Delete).is_ok());
+        assert!(guard.check(&c, PermissionAction::Execute).is_ok());
+        assert!(guard.is_trusted("kernel"));
+        assert!(guard.is_trusted("system"));
+        assert!(!guard.is_trusted("agent1"));
+    }
+
+    #[test]
+    fn test_grant_and_revoke() {
+        let guard = PermissionGuard::new();
+        let c = ctx("agent1");
+        assert!(guard.check(&c, PermissionAction::Delete).is_err());
+
+        guard.grant("agent1", PermissionGrant::new(PermissionAction::Delete));
+        assert!(guard.check(&c, PermissionAction::Delete).is_ok());
+        assert!(guard.has_grants("agent1"));
+
+        guard.revoke("agent1", PermissionAction::Delete);
+        assert!(guard.check(&c, PermissionAction::Delete).is_err());
+    }
+
+    #[test]
+    fn test_revoke_all() {
+        let guard = PermissionGuard::new();
+        guard.grant("agent1", PermissionGrant::new(PermissionAction::Delete));
+        guard.grant("agent1", PermissionGrant::new(PermissionAction::Network));
+        assert_eq!(guard.list_grants("agent1").len(), 2);
+
+        guard.revoke_all("agent1");
+        assert!(guard.list_grants("agent1").is_empty());
+        assert!(!guard.has_grants("agent1"));
+    }
+
+    #[test]
+    fn test_scoped_grant() {
+        let guard = PermissionGuard::new();
+        let c = ctx("agent1");
+        guard.grant(
+            "agent1",
+            PermissionGrant::new(PermissionAction::Execute).with_scope("tool:web_search"),
+        );
+        assert!(guard.check_scoped(&c, PermissionAction::Execute, Some("tool:web_search")).is_ok());
+        assert!(guard.check_scoped(&c, PermissionAction::Execute, Some("tool:other")).is_err());
+    }
+
+    #[test]
+    fn test_glob_scope() {
+        let grant = PermissionGrant::new(PermissionAction::Execute).with_scope("tool:*");
+        assert!(grant.covers_scoped(PermissionAction::Execute, Some("tool:web_search")));
+        assert!(grant.covers_scoped(PermissionAction::Execute, Some("tool:anything")));
+        assert!(!grant.covers_scoped(PermissionAction::Execute, Some("other:thing")));
+    }
+
+    #[test]
+    fn test_expired_grant() {
+        let grant = PermissionGrant::new(PermissionAction::Delete).with_expiry(0);
+        assert!(!grant.covers(PermissionAction::Delete));
+    }
+
+    #[test]
+    fn test_embedded_grants() {
+        let guard = PermissionGuard::new();
+        let c = PermissionContext::with_grants(
+            "agent1".into(), "default".into(),
+            vec![PermissionGrant::new(PermissionAction::Delete)],
+        );
+        assert!(guard.check(&c, PermissionAction::Delete).is_ok());
+    }
+
+    #[test]
+    fn test_ownership_check() {
+        let guard = PermissionGuard::new();
+        let c = ctx("agent1");
+        assert!(guard.check_ownership(&c, "agent1").is_ok());
+        assert!(guard.check_ownership(&c, "agent2").is_err());
+
+        guard.grant("agent1", PermissionGrant::new(PermissionAction::ReadAny));
+        assert!(guard.check_ownership(&c, "agent2").is_ok());
+    }
+
+    #[test]
+    fn test_tenant_isolation() {
+        let guard = PermissionGuard::new();
+        let c = PermissionContext::new("agent1".into(), "tenant_a".into());
+        assert!(guard.check_tenant_access(&c, "tenant_a").is_ok());
+        assert!(guard.check_tenant_access(&c, "tenant_b").is_err());
+
+        let c_cross = PermissionContext::with_grants(
+            "agent1".into(), "tenant_a".into(),
+            vec![PermissionGrant::new(PermissionAction::CrossTenant)],
+        );
+        assert!(guard.check_tenant_access(&c_cross, "tenant_b").is_ok());
+    }
+
+    #[test]
+    fn test_trusted_cannot_bypass_tenant() {
+        let guard = PermissionGuard::new();
+        let c = PermissionContext::new("kernel".into(), "tenant_a".into());
+        assert!(guard.check_tenant_access(&c, "tenant_b").is_err());
+    }
+
+    #[test]
+    fn test_snapshot_and_restore() {
+        let guard = PermissionGuard::new();
+        guard.grant("agent1", PermissionGrant::new(PermissionAction::Delete));
+        guard.grant("agent2", PermissionGrant::new(PermissionAction::Network));
+
+        let snap = guard.snapshot();
+        let guard2 = PermissionGuard::new();
+        guard2.restore(snap);
+
+        let c1 = ctx("agent1");
+        assert!(guard2.check(&c1, PermissionAction::Delete).is_ok());
+        let c2 = ctx("agent2");
+        assert!(guard2.check(&c2, PermissionAction::Network).is_ok());
+    }
+
+    #[test]
+    fn test_parse_action() {
+        assert_eq!(PermissionGuard::parse_action("read"), Some(PermissionAction::Read));
+        assert_eq!(PermissionGuard::parse_action("DELETE"), Some(PermissionAction::Delete));
+        assert_eq!(PermissionGuard::parse_action("read_any"), Some(PermissionAction::ReadAny));
+        assert_eq!(PermissionGuard::parse_action("readany"), Some(PermissionAction::ReadAny));
+        assert_eq!(PermissionGuard::parse_action("cross_tenant"), Some(PermissionAction::CrossTenant));
+        assert_eq!(PermissionGuard::parse_action("unknown"), None);
+    }
+
+    #[test]
+    fn test_all_grant_covers_everything() {
+        let grant = PermissionGrant::new(PermissionAction::All);
+        assert!(grant.covers(PermissionAction::Delete));
+        assert!(grant.covers(PermissionAction::Execute));
+        assert!(grant.covers(PermissionAction::Network));
+        assert!(grant.covers(PermissionAction::Read));
+    }
+
+    #[test]
+    fn test_can_read_any() {
+        let guard = PermissionGuard::new();
+        assert!(!guard.can_read_any("agent1"));
+        assert!(guard.can_read_any("kernel"));
+
+        guard.grant("agent1", PermissionGrant::new(PermissionAction::ReadAny));
+        assert!(guard.can_read_any("agent1"));
+    }
+}
+
 fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

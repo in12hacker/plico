@@ -12,8 +12,7 @@ pub fn cmd_skills(kernel: &AIKernel, args: &[String]) -> ApiResponse {
         Some("register") => cmd_skills_register(kernel, args),
         Some("discover") => cmd_skills_discover(kernel, args),
         _ => {
-            eprintln!("Usage: skills <list|describe|register|discover> [--agent ID] [NAME]");
-            ApiResponse::error("unknown skills subcommand")
+            ApiResponse::error("Unknown skills subcommand. Valid: list, describe, register, discover")
         }
     }
 }

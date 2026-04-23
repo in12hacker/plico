@@ -14,8 +14,6 @@ pub fn cmd_remember(kernel: &AIKernel, args: &[String]) -> ApiResponse {
         .unwrap_or_default();
     match parse_memory_tier(&tier_str) {
         MemoryTier::Ephemeral => {
-            // INV-1: Warn about CLI ephemeral persistence limitation
-            eprintln!("Warning: ephemeral memory is stored in-process only and will not persist across CLI command boundaries. Use --tier working or --tier long-term for persistence.");
             match kernel.remember(&agent_id, "default", content) {
                 Ok(_) => ApiResponse::ok_with_message(format!("Memory stored for agent '{}'", agent_id)),
                 Err(e) => ApiResponse::error(e),
@@ -93,7 +91,6 @@ pub fn cmd_memmove(kernel: &AIKernel, args: &[String]) -> ApiResponse {
     let entry_id = match extract_arg(args, "--id") {
         Some(id) => id,
         None => {
-            eprintln!("Usage: memmove --id <entry-id> --tier <ephemeral|working|longterm|procedural>");
             return ApiResponse::error("memmove requires --id and --tier");
         }
     };
@@ -111,7 +108,6 @@ pub fn cmd_memdelete(kernel: &AIKernel, args: &[String]) -> ApiResponse {
     let entry_id = match extract_arg(args, "--id") {
         Some(id) => id,
         None => {
-            eprintln!("Usage: memdelete --id <entry-id>");
             return ApiResponse::error("memdelete requires --id");
         }
     };
@@ -130,7 +126,7 @@ pub fn parse_memory_tier(s: &str) -> MemoryTier {
         "procedural" | "l3" | "proc" => MemoryTier::Procedural,
         "" => MemoryTier::Working,
         other => {
-            eprintln!("Warning: unknown tier '{}', defaulting to Working", other);
+            tracing::warn!("Unknown tier '{}', defaulting to Working", other);
             MemoryTier::Working
         }
     }

@@ -81,3 +81,75 @@ impl Default for Bm25Index {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_upsert_and_search() {
+        let idx = Bm25Index::new();
+        idx.upsert("doc1", "rust programming language");
+        idx.upsert("doc2", "python programming language");
+        idx.upsert("doc3", "golang concurrency model");
+
+        let results = idx.search("rust", 5);
+        assert!(!results.is_empty());
+        assert_eq!(results[0].0, "doc1");
+        assert!(results[0].1 > 0.0);
+    }
+
+    #[test]
+    fn test_search_empty_query() {
+        let idx = Bm25Index::new();
+        idx.upsert("doc1", "test content");
+        assert!(idx.search("", 5).is_empty());
+        assert!(idx.search("  ", 5).is_empty());
+    }
+
+    #[test]
+    fn test_search_no_match() {
+        let idx = Bm25Index::new();
+        idx.upsert("doc1", "rust programming");
+        let results = idx.search("javascript", 5);
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_upsert_empty_text_ignored() {
+        let idx = Bm25Index::new();
+        idx.upsert("doc1", "");
+        idx.upsert("doc2", "  ");
+        assert!(idx.is_empty());
+    }
+
+    #[test]
+    fn test_remove() {
+        let idx = Bm25Index::new();
+        idx.upsert("doc1", "rust programming");
+        idx.remove("doc1");
+        let results = idx.search("rust", 5);
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_score_normalization() {
+        let idx = Bm25Index::new();
+        idx.upsert("doc1", "the quick brown fox jumps over the lazy dog");
+        idx.upsert("doc2", "fox fox fox fox fox");
+        let results = idx.search("fox", 5);
+        assert!(!results.is_empty());
+        assert!(results[0].1 <= 1.0);
+        assert!(results[0].1 > 0.0);
+    }
+
+    #[test]
+    fn test_len() {
+        let idx = Bm25Index::new();
+        assert_eq!(idx.len(), 0);
+        idx.upsert("doc1", "hello world");
+        assert_eq!(idx.len(), 1);
+        idx.upsert("doc2", "another document");
+        assert_eq!(idx.len(), 2);
+    }
+}

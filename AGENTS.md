@@ -40,24 +40,30 @@ src/
 │   ├── semantic_fs/
 │   │   ├── mod.rs       # SemanticFS + CRUD + search + event container
 │   │   ├── events.rs    # Event types and operations
-│   │   └── tests.rs     # Unit tests
+│   │   ├── tests.rs     # Unit tests
+│   │   └── INDEX.md
 │   ├── embedding/
 │   │   ├── mod.rs       # EmbeddingProvider trait + re-exports
 │   │   ├── types.rs     # Shared embedding types
 │   │   ├── ollama.rs    # OllamaBackend
 │   │   ├── local.rs     # LocalEmbeddingBackend (Python ONNX)
+│   │   ├── ort_backend.rs # OrtEmbeddingBackend (ONNX Runtime, feature-gated)
 │   │   ├── stub.rs      # StubEmbeddingProvider
-│   │   └── json_rpc.rs  # JSON-RPC embedding adapter
+│   │   ├── circuit_breaker.rs # EmbeddingCircuitBreaker (3-state failure protection)
+│   │   ├── json_rpc.rs  # JSON-RPC embedding adapter
+│   │   └── INDEX.md
 │   ├── search/
 │   │   ├── mod.rs       # SemanticSearch trait, SearchFilter, re-exports
 │   │   ├── memory.rs    # InMemoryBackend (brute-force cosine)
 │   │   ├── bm25.rs      # BM25 keyword search index
-│   │   └── hnsw.rs      # HnswBackend (approximate NN via hnsw_rs)
+│   │   ├── hnsw.rs      # HnswBackend (approximate NN via hnsw_rs)
+│   │   └── INDEX.md
 │   ├── graph/
 │   │   ├── mod.rs       # KnowledgeGraph trait, ExploreDirection, re-exports
 │   │   ├── types.rs     # KGNode, KGEdge, KGNodeType, KGEdgeType, DiskGraph
 │   │   ├── backend.rs   # PetgraphBackend, EdgeRecord — directed graph + disk persistence
-│   │   └── tests.rs     # Unit tests
+│   │   ├── tests.rs     # Unit tests
+│   │   └── INDEX.md
 │   ├── context_loader.rs # L0/L1/L2 layered context loading
 │   ├── context_budget.rs # Context budget engine — adaptive multi-object assembly
 │   ├── summarizer.rs    # Summarizer trait, LlmSummarizer
@@ -95,6 +101,7 @@ src/
 │   │   └── distributed.rs # Distributed operation stubs
 │   └── INDEX.md
 ├── api/                 # API layer — permission guardrails + semantic JSON protocol
+│   ├── agent_auth.rs    # Agent identity authentication (HMAC-SHA256 tokens)
 │   ├── semantic.rs      # ApiRequest, ApiResponse, SystemStatus, protocol types
 │   ├── permission.rs    # PermissionGuard, PermissionContext, PermissionAction
 │   ├── mod.rs           # Re-exports
@@ -121,6 +128,7 @@ src/
 ├── bin/
 │   ├── plicod.rs        # TCP daemon (port 7878, JSON ApiRequest/ApiResponse, no HTTP)
 │   ├── plico_mcp.rs     # MCP stdio server (JSON-RPC 2.0 over stdin/stdout)
+│   ├── plico_sse.rs     # SSE streaming adapter for A2A protocol compatibility
 │   └── aicli/           # AI-friendly semantic CLI
 │       ├── main.rs      # CLI entry: local kernel or --tcp daemon mode
 │       └── commands/
@@ -140,7 +148,9 @@ src/
 │               ├── skills.rs    # skills register/discover
 │               ├── session.rs   # session-start/session-end/growth
 │               ├── delta.rs     # delta change tracking
-│               └── hybrid.rs    # hybrid Graph-RAG retrieval
+│               ├── hybrid.rs    # hybrid Graph-RAG retrieval
+│               ├── permission.rs # permission grant/revoke/list
+│               └── INDEX.md
 ├── lib.rs               # Crate root: pub mod declarations + PlicoError + re-exports
 └── main.rs              # Stub — directs to plicod/aicli/plico-mcp
 

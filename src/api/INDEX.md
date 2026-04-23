@@ -50,9 +50,10 @@ Status: stable | Fan-in: 4 | Fan-out: 1
 
 | File | Lines | Purpose |
 |------|-------|---------|
+| `agent_auth.rs` | ~365 | Agent identity authentication (HMAC-SHA256 tokens) |
 | `permission.rs` | ~439 | PermissionGuard, fine-grained access control |
-| `semantic.rs` | ⚠ ~2600 | ApiRequest/ApiResponse, all protocol types — needs split |
-| `mod.rs` | ~7 | Re-exports |
+| `semantic.rs` | ~2734 | ApiRequest/ApiResponse, all protocol types |
+| `mod.rs` | ~19 | Re-exports |
 
 ## Dependencies (Fan-out: 1)
 
