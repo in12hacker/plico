@@ -7,11 +7,13 @@ use super::extract_arg;
 pub fn cmd_agent(kernel: &AIKernel, args: &[String]) -> ApiResponse {
     if args.get(1).map(|s| s.as_str()) == Some("set-resources") {
         let target = args.get(2).cloned().unwrap_or_default();
+        // B21 fix: resolve name to UUID before calling agent_set_resources
+        let resolved = kernel.resolve_agent(&target).unwrap_or_else(|| target.clone());
         let mq = extract_arg(args, "--memory-quota").and_then(|s| s.parse().ok());
         let cq = extract_arg(args, "--cpu-time-quota").and_then(|s| s.parse().ok());
         let at = extract_arg(args, "--allowed-tools")
             .map(|s| s.split(',').map(String::from).collect::<Vec<_>>());
-        return match kernel.agent_set_resources(&target, mq, cq, at) {
+        return match kernel.agent_set_resources(&resolved, mq, cq, at) {
             Ok(()) => ApiResponse::ok(),
             Err(e) => ApiResponse::error(e.to_string()),
         };
@@ -186,5 +188,105 @@ pub fn cmd_delegate(kernel: &AIKernel, args: &[String]) -> ApiResponse {
             r
         }
         Err(e) => ApiResponse::error(e),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_test_kernel() -> AIKernel {
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var("EMBEDDING_BACKEND", "stub");
+        AIKernel::new(dir.path().to_path_buf()).expect("kernel")
+    }
+
+    #[test]
+    fn test_cmd_agent_register_basic() {
+        let kernel = make_test_kernel();
+        let args = vec!["agent".to_string(), "--name".to_string(), "test-agent".to_string()];
+        let r = cmd_agent(&kernel, &args);
+        assert!(r.error.is_none());
+        assert!(r.agent_id.is_some());
+    }
+
+    #[test]
+    fn test_cmd_agents_list_basic() {
+        let kernel = make_test_kernel();
+        // Register an agent first so list has something
+        let register_args = vec!["agent".to_string(), "--name".to_string(), "list-test-agent".to_string()];
+        cmd_agent(&kernel, &register_args);
+
+        let r = cmd_agents(&kernel, &[]);
+        assert!(r.error.is_none());
+        assert!(r.agents.is_some());
+        let agents = r.agents.unwrap();
+        assert!(!agents.is_empty());
+    }
+
+    #[test]
+    fn test_cmd_agent_status_nonexistent() {
+        let kernel = make_test_kernel();
+        let args = vec!["agent".to_string(), "status".to_string(), "--agent".to_string(), "nonexistent-agent".to_string()];
+        let r = cmd_agent_status(&kernel, &args);
+        assert!(r.error.is_some());
+        assert!(r.error.unwrap().contains("Agent not found"));
+    }
+
+    #[test]
+    fn test_cmd_agent_set_resources_basic() {
+        let kernel = make_test_kernel();
+        // Register an agent first
+        let reg_args = vec!["agent".to_string(), "--name".to_string(), "resource-test-agent".to_string()];
+        cmd_agent(&kernel, &reg_args);
+
+        // Set resources
+        let set_args = vec![
+            "agent".to_string(), "set-resources".to_string(),
+            "resource-test-agent".to_string(),
+            "--memory-quota".to_string(), "1024".to_string(),
+            "--cpu-time-quota".to_string(), "3600".to_string(),
+        ];
+        let r = cmd_agent(&kernel, &set_args);
+        assert!(r.error.is_none());
+    }
+
+    #[test]
+    fn test_cmd_agent_suspend_basic() {
+        let kernel = make_test_kernel();
+        let reg_args = vec!["agent".to_string(), "--name".to_string(), "suspend-test-agent".to_string()];
+        cmd_agent(&kernel, &reg_args);
+
+        let args = vec!["agent".to_string(), "suspend".to_string(), "--agent".to_string(), "suspend-test-agent".to_string()];
+        let r = cmd_agent_suspend(&kernel, &args);
+        assert!(r.error.is_none());
+    }
+
+    #[test]
+    fn test_cmd_agent_resume_basic() {
+        let kernel = make_test_kernel();
+        let reg_args = vec!["agent".to_string(), "--name".to_string(), "resume-test-agent".to_string()];
+        cmd_agent(&kernel, &reg_args);
+
+        // Suspend first
+        let suspend_args = vec!["agent".to_string(), "suspend".to_string(), "--agent".to_string(), "resume-test-agent".to_string()];
+        cmd_agent_suspend(&kernel, &suspend_args);
+
+        // Then resume
+        let args = vec!["agent".to_string(), "resume".to_string(), "--agent".to_string(), "resume-test-agent".to_string()];
+        let r = cmd_agent_resume(&kernel, &args);
+        assert!(r.error.is_none());
+    }
+
+    #[test]
+    fn test_cmd_quota_basic() {
+        let kernel = make_test_kernel();
+        let reg_args = vec!["agent".to_string(), "--name".to_string(), "quota-test-agent".to_string()];
+        cmd_agent(&kernel, &reg_args);
+
+        let args = vec!["quota".to_string(), "--agent".to_string(), "quota-test-agent".to_string()];
+        let r = cmd_quota(&kernel, &args);
+        assert!(r.error.is_none());
+        assert!(r.agent_usage.is_some());
     }
 }

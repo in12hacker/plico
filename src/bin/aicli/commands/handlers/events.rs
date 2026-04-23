@@ -92,3 +92,91 @@ pub fn cmd_events(kernel: &AIKernel, args: &[String]) -> ApiResponse {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_test_kernel() -> plico::kernel::AIKernel {
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var("EMBEDDING_BACKEND", "stub");
+        plico::kernel::AIKernel::new(dir.path().to_path_buf()).expect("kernel")
+    }
+
+    #[test]
+    fn test_cmd_events_basic() {
+        let kernel = make_test_kernel();
+        let args = vec!["events".to_string(), "list".to_string()];
+        let r = cmd_events(&kernel, &args);
+        assert!(r.error.is_none());
+        // list command should return events (may be empty)
+        assert!(r.kernel_events.is_some() || r.events.is_some());
+    }
+
+    #[test]
+    fn test_cmd_events_with_filter() {
+        let kernel = make_test_kernel();
+        let args = vec![
+            "events".to_string(), "list".to_string(),
+            "--agent".to_string(), "cli".to_string(),
+        ];
+        let r = cmd_events(&kernel, &args);
+        assert!(r.error.is_none());
+    }
+
+    #[test]
+    fn test_cmd_events_history() {
+        let kernel = make_test_kernel();
+        let args = vec![
+            "events".to_string(), "history".to_string(),
+            "--agent".to_string(), "cli".to_string(),
+        ];
+        let r = cmd_events(&kernel, &args);
+        assert!(r.error.is_none());
+    }
+
+    #[test]
+    fn test_cmd_events_subscribe() {
+        let kernel = make_test_kernel();
+        let args = vec!["events".to_string(), "subscribe".to_string()];
+        let r = cmd_events(&kernel, &args);
+        assert!(r.error.is_none());
+        assert!(r.subscription_id.is_some());
+    }
+
+    #[test]
+    fn test_cmd_events_unsubscribe() {
+        let kernel = make_test_kernel();
+        // First subscribe to get a valid subscription id
+        let sub_args = vec!["events".to_string(), "subscribe".to_string()];
+        let sub_r = cmd_events(&kernel, &sub_args);
+        let sub_id = sub_r.subscription_id.unwrap();
+
+        // Then unsubscribe
+        let args = vec![
+            "events".to_string(), "unsubscribe".to_string(),
+            "--sub".to_string(), sub_id,
+        ];
+        let r = cmd_events(&kernel, &args);
+        assert!(r.error.is_none());
+    }
+
+    #[test]
+    fn test_cmd_events_poll_unknown() {
+        let kernel = make_test_kernel();
+        let args = vec![
+            "events".to_string(), "poll".to_string(),
+            "--sub".to_string(), "nonexistent-sub".to_string(),
+        ];
+        let r = cmd_events(&kernel, &args);
+        assert!(r.error.is_some());
+    }
+
+    #[test]
+    fn test_cmd_events_unknown_subcommand() {
+        let kernel = make_test_kernel();
+        let args = vec!["events".to_string(), "invalid-subcommand".to_string()];
+        let r = cmd_events(&kernel, &args);
+        assert!(r.error.is_some());
+    }
+}

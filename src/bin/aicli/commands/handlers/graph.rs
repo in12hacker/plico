@@ -254,3 +254,70 @@ pub fn cmd_edge_history(kernel: &AIKernel, args: &[String]) -> ApiResponse {
         Err(e) => ApiResponse::error(e.to_string()),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_test_kernel() -> plico::kernel::AIKernel {
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var("EMBEDDING_BACKEND", "stub");
+        plico::kernel::AIKernel::new(dir.path().to_path_buf()).expect("kernel")
+    }
+
+    // B50: "caused_by" is invalid — valid types use snake_case without underscores
+    #[test]
+    fn test_parse_edge_type_valid_causes() {
+        let result = parse_edge_type("causes");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), KGEdgeType::Causes);
+    }
+
+    #[test]
+    fn test_parse_edge_type_invalid_caused_by_returns_error() {
+        let result = parse_edge_type("caused_by");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("Unknown edge type: 'caused_by'"));
+    }
+
+    #[test]
+    fn test_parse_edge_type_error_lists_valid_types() {
+        let result = parse_edge_type("invalid_type");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("Valid:"));
+        // Verify a few valid types appear in the error message
+        assert!(err.contains("associates_with"));
+        assert!(err.contains("related_to"));
+    }
+
+    #[test]
+    fn test_cmd_add_edge_valid_type() {
+        let kernel = make_test_kernel();
+        // Use a valid edge type — should not return an error about invalid type
+        let args = vec!["edge".to_string(), "--from".to_string(), "node1".to_string(),
+                         "--to".to_string(), "node2".to_string(),
+                         "--type".to_string(), "causes".to_string()];
+        let response = cmd_add_edge(&kernel, &args);
+        // Should either succeed (edge created) or fail for other reasons, but NOT invalid type
+        if !response.ok {
+            let err_msg = response.error.as_deref().unwrap_or("");
+            assert!(!err_msg.contains("Unknown edge type"),
+                "Unexpected invalid edge type error: {}", err_msg);
+        }
+    }
+
+    #[test]
+    fn test_cmd_add_edge_invalid_type_returns_error() {
+        let kernel = make_test_kernel();
+        let args = vec!["edge".to_string(), "--from".to_string(), "node1".to_string(),
+                         "--to".to_string(), "node2".to_string(),
+                         "--type".to_string(), "caused_by".to_string()];
+        let response = cmd_add_edge(&kernel, &args);
+        assert!(!response.ok, "cmd_add_edge should fail for invalid type 'caused_by'");
+        let err_msg = response.error.as_deref().unwrap_or("");
+        assert!(err_msg.contains("Unknown edge type"),
+            "Expected 'Unknown edge type' error, got: {}", err_msg);
+    }
+}

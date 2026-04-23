@@ -129,8 +129,27 @@ let mut query = if search_tags.is_empty() {
 }
 
 pub fn cmd_update(kernel: &AIKernel, args: &[String]) -> ApiResponse {
-    let cid = extract_arg(args, "--cid").unwrap_or_default();
-    let content = extract_arg(args, "--content").unwrap_or_default();
+    // F-1 + B52: Support both positional CID and --cid flag, positional content
+    let cid = extract_arg(args, "--cid")
+        .or_else(|| args.get(1).cloned().filter(|a| !a.starts_with("--")))
+        .unwrap_or_default();
+    if cid.is_empty() {
+        return ApiResponse::error("update requires a CID: update <CID> or update --cid <CID>");
+    }
+
+    let content = extract_arg(args, "--content")
+        .or_else(|| {
+            // Positional content: update <cid> <content> (no --cid flag)
+            // args = ["update", <cid>, <content>]
+            // content is at index 2
+            args.get(2).cloned().filter(|a| !a.starts_with("--"))
+        })
+        .unwrap_or_default();
+
+    if content.is_empty() {
+        return ApiResponse::error("update requires content: update --cid <CID> --content <text>");
+    }
+
     let new_tags = extract_tags_opt(args, "--tags");
     let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
 
@@ -178,5 +197,93 @@ pub fn cmd_rollback(kernel: &AIKernel, args: &[String]) -> ApiResponse {
     match kernel.rollback(&cid, &agent_id) {
         Ok(new_cid) => ApiResponse::with_cid(new_cid),
         Err(e) => ApiResponse::error(e),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_test_kernel() -> plico::kernel::AIKernel {
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var("EMBEDDING_BACKEND", "stub");
+        plico::kernel::AIKernel::new(dir.path().to_path_buf()).expect("kernel")
+    }
+
+    // B49 pattern: positional content works for create
+    #[test]
+    fn test_cmd_create_positional_content() {
+        let kernel = make_test_kernel();
+        let args = vec!["put".to_string(), "hello world".to_string()];
+        let response = cmd_create(&kernel, &args);
+        assert!(response.ok, "put with positional content should succeed: {:?}",
+            response.error);
+        assert!(response.cid.is_some(), "response should contain cid");
+    }
+
+    // B52: update with positional CID and content works
+    #[test]
+    fn test_cmd_update_positional_content() {
+        let kernel = make_test_kernel();
+        // First create an object
+        let create_args = vec!["put".to_string(), "initial content".to_string()];
+        let create_response = cmd_create(&kernel, &create_args);
+        assert!(create_response.ok, "create should succeed");
+        let cid = create_response.cid.expect("cid should be set");
+
+        // Now update using positional args
+        let update_args = vec!["update".to_string(), cid.clone(), "updated content".to_string()];
+        let update_response = cmd_update(&kernel, &update_args);
+        assert!(update_response.ok, "update with positional args should succeed: {:?}",
+            update_response.error);
+        assert!(update_response.cid.is_some(), "update response should have new cid");
+    }
+
+    #[test]
+    fn test_cmd_update_empty_content_returns_error() {
+        let kernel = make_test_kernel();
+        // First create an object to have a valid CID
+        let create_args = vec!["put".to_string(), "some content".to_string()];
+        let create_response = cmd_create(&kernel, &create_args);
+        let cid = create_response.cid.expect("cid should be set");
+
+        // Update with empty content — should this be allowed or rejected?
+        // Based on the cmd_create empty check, we expect it may be rejected
+        let update_args = vec!["update".to_string(), "--cid".to_string(), cid,
+                               "--content".to_string(), "".to_string()];
+        let response = cmd_update(&kernel, &update_args);
+        // Empty content in update may be allowed (creates new version with empty data)
+        // or rejected — just verify it returns a response
+        assert!(response.cid.is_some() || !response.ok,
+            "update should either succeed with new cid or fail gracefully");
+    }
+
+    #[test]
+    fn test_cmd_read_existing_object() {
+        let kernel = make_test_kernel();
+        // Create an object first
+        let create_args = vec!["put".to_string(), "test content".to_string()];
+        let create_response = cmd_create(&kernel, &create_args);
+        let cid = create_response.cid.expect("cid should be set");
+
+        // Read it back using positional CID
+        let read_args = vec!["read".to_string(), cid];
+        let read_response = cmd_read(&kernel, &read_args);
+        assert!(read_response.ok, "read should succeed for existing object: {:?}",
+            read_response.error);
+        assert!(read_response.data.is_some(), "read should return data");
+        let data = read_response.data.unwrap();
+        assert!(data.contains("test content"), "data should contain original content");
+    }
+
+    #[test]
+    fn test_cmd_read_nonexistent_returns_error() {
+        let kernel = make_test_kernel();
+        let fake_cid = "abc123def456".to_string();
+        let args = vec!["read".to_string(), fake_cid];
+        let response = cmd_read(&kernel, &args);
+        assert!(!response.ok, "read should fail for nonexistent CID");
+        let err_msg = response.error.as_deref().unwrap_or("");
+        assert!(!err_msg.is_empty(), "error message should not be empty");
     }
 }

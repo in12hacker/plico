@@ -92,3 +92,78 @@ pub fn cmd_intent(kernel: &AIKernel, args: &[String]) -> ApiResponse {
         r
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_test_kernel() -> plico::kernel::AIKernel {
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var("EMBEDDING_BACKEND", "stub");
+        plico::kernel::AIKernel::new(dir.path().to_path_buf()).expect("kernel")
+    }
+
+    #[test]
+    fn test_cmd_intent_resolve_basic() {
+        let kernel = make_test_kernel();
+        let args = vec![
+            "intent".to_string(), "hello world".to_string(),
+            "--agent".to_string(), "cli".to_string(),
+        ];
+        let r = cmd_intent(&kernel, &args);
+        // May succeed or fail depending on router training, but should not panic
+        // If resolution fails with "Could not resolve", that's an API response, not error
+        assert!(r.error.is_none() || r.resolved_intents.is_some());
+    }
+
+    #[test]
+    fn test_cmd_intent_list_basic() {
+        let kernel = make_test_kernel();
+        // Submit an intent via --description
+        let submit_args = vec![
+            "intent".to_string(),
+            "--description".to_string(), "test intent for list".to_string(),
+            "--agent".to_string(), "cli".to_string(),
+        ];
+        let r = cmd_intent(&kernel, &submit_args);
+        assert!(r.error.is_none());
+        assert!(r.intent_id.is_some());
+    }
+
+    #[test]
+    fn test_cmd_intent_execute_basic() {
+        let kernel = make_test_kernel();
+        let args = vec![
+            "intent".to_string(), "hello".to_string(),
+            "--execute".to_string(),
+            "--agent".to_string(), "cli".to_string(),
+        ];
+        let r = cmd_intent(&kernel, &args);
+        // --execute may fail if no matching procedural, but should not panic
+        // Error response is acceptable
+        assert!(r.error.is_none() || r.data.is_some() || r.resolved_intents.is_some());
+    }
+
+    #[test]
+    fn test_cmd_intent_empty_text_error() {
+        let kernel = make_test_kernel();
+        // Empty text should return error
+        let args = vec!["intent".to_string()];
+        let r = cmd_intent(&kernel, &args);
+        assert!(r.error.is_some());
+    }
+
+    #[test]
+    fn test_cmd_intent_with_priority() {
+        let kernel = make_test_kernel();
+        let args = vec![
+            "intent".to_string(),
+            "--description".to_string(), "high priority test".to_string(),
+            "--priority".to_string(), "high".to_string(),
+            "--agent".to_string(), "cli".to_string(),
+        ];
+        let r = cmd_intent(&kernel, &args);
+        assert!(r.error.is_none());
+        assert!(r.intent_id.is_some());
+    }
+}
