@@ -331,9 +331,9 @@ impl IntentTracker {
 | 总测试数 | 1329 | **1349+** | ✅ 1347 (705 lib + E2E) |
 | Intent Declaration | string only | **Structured** | ✅ M1 完成 |
 | Intent Plan | N/A | **DAG decomposition** | ✅ M2 完成 |
-| Autonomous Execution | Agent-driven | **OS-driven loop** | 🔴 M3 未开始 |
+| Autonomous Execution | Agent-driven | **OS-driven loop** | ✅ M3 完成 |
 | Multi-Agent Intent | N/A | **IntentTree** | 🔴 M4 未开始 |
-| Progress Tracking | N/A | **Real-time tracking** | ✅ M1/M2 完成 |
+| Progress Tracking | N/A | **Real-time tracking** | ✅ M1-M3 完成 |
 
 ---
 
