@@ -4,8 +4,10 @@
 //! Profile learning and feedback tracking change independently from the core prefetch engine.
 
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::RwLock;
 
+use serde::{Deserialize, Serialize};
 use crate::kernel::ops::session::{AgentProfile, IntentKeyStrategy};
 
 /// Minimum confidence threshold for triggering prefetch (0.5 = 50%).
@@ -18,12 +20,11 @@ const MAX_PROFILE_HISTORY: usize = 100;
 pub(crate) const DEFAULT_MAX_FEEDBACK_ENTRIES: usize = 1000;
 
 /// Feedback entry recording what was actually used vs prefetched.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct IntentFeedbackEntry {
     pub(crate) normalized_intent: String,
     pub(crate) used_cids: Vec<String>,
     pub(crate) unused_cids: Vec<String>,
-    #[allow(dead_code)]
     pub(crate) recorded_at_ms: u64,
 }
 
@@ -109,6 +110,38 @@ impl AgentProfileStore {
     pub fn extract_tag_key(&self, intent: &str, known_tags: &[String]) -> Option<String> {
         self.strategy.extract_tag_key(intent, known_tags)
     }
+
+    /// Returns the number of profiles in the store.
+    pub(crate) fn len(&self) -> usize {
+        self.profiles.read().unwrap().len()
+    }
+
+    /// Persist all profiles to a JSON file at `dir/profiles.json`.
+    pub(crate) fn persist_to_dir(&self, dir: &Path) -> std::io::Result<()> {
+        let profiles = self.profiles.read().unwrap();
+        let json = serde_json::to_string_pretty(&*profiles)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        std::fs::write(dir.join("profiles.json"), json)
+    }
+
+    /// Restore profiles from `dir/profiles.json`.
+    /// Missing file is not an error. Returns number of profiles restored.
+    pub(crate) fn restore_from_dir(&self, dir: &Path) -> std::io::Result<usize> {
+        let path = dir.join("profiles.json");
+        if !path.exists() {
+            return Ok(0);
+        }
+        let json = std::fs::read_to_string(&path)?;
+        let loaded: std::collections::HashMap<String, AgentProfile> = serde_json::from_str(&json)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+
+        let mut profiles = self.profiles.write().unwrap();
+        for (id, profile) in loaded {
+            profiles.insert(id, profile);
+        }
+
+        Ok(profiles.len())
+    }
 }
 
 impl Default for AgentProfileStore {
@@ -187,5 +220,37 @@ mod tests {
         let tags = vec!["auth".to_string(), "deploy".to_string()];
         let key = store.extract_tag_key("fix the auth module", &tags);
         assert_eq!(key, Some("auth".to_string()));
+    }
+
+    // F-2: Profile Persistence tests
+    #[test]
+    fn profile_persist_and_restore() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = AgentProfileStore::new(IntentKeyStrategy::TagExtraction);
+
+        // Build up profile
+        for _ in 0..5 {
+            store.record_intent_complete("a", Some("auth"), Some("deploy"));
+        }
+
+        assert_eq!(store.len(), 1);
+
+        store.persist_to_dir(dir.path()).unwrap();
+
+        let restored = AgentProfileStore::new(IntentKeyStrategy::TagExtraction);
+        let count = restored.restore_from_dir(dir.path()).unwrap();
+        assert_eq!(count, 1);
+
+        // After restore, prediction should still work
+        let predicted = restored.record_intent_complete("a", Some("auth"), None);
+        assert_eq!(predicted, Some("deploy".to_string()));
+    }
+
+    #[test]
+    fn profile_restore_missing_file_is_zero() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = AgentProfileStore::default();
+        let count = store.restore_from_dir(dir.path()).unwrap();
+        assert_eq!(count, 0);
     }
 }

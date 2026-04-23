@@ -156,6 +156,8 @@ pub struct IntentPrefetcher {
     feedback_history: RwLock<Vec<IntentFeedbackEntry>>,
     /// Maximum feedback entries to keep.
     max_feedback_entries: usize,
+    /// Root directory for persistence.
+    root: std::path::PathBuf,
 }
 
 impl IntentPrefetcher {
@@ -167,6 +169,7 @@ impl IntentPrefetcher {
         event_bus: Arc<EventBus>,
         embedding: Arc<dyn EmbeddingProvider>,
         ctx_loader: Arc<ContextLoader>,
+        root: std::path::PathBuf,
     ) -> Self {
         Self {
             assemblies: Arc::new(RwLock::new(HashMap::new())),
@@ -182,6 +185,7 @@ impl IntentPrefetcher {
             profile_store: Arc::new(AgentProfileStore::default()),
             feedback_history: RwLock::new(Vec::new()),
             max_feedback_entries: DEFAULT_MAX_FEEDBACK_ENTRIES,
+            root,
         }
     }
 
@@ -195,6 +199,7 @@ impl IntentPrefetcher {
         embedding: Arc<dyn EmbeddingProvider>,
         ctx_loader: Arc<ContextLoader>,
         strategy: IntentKeyStrategy,
+        root: std::path::PathBuf,
     ) -> Self {
         Self {
             assemblies: Arc::new(RwLock::new(HashMap::new())),
@@ -210,7 +215,51 @@ impl IntentPrefetcher {
             profile_store: Arc::new(AgentProfileStore::new(strategy)),
             feedback_history: RwLock::new(Vec::new()),
             max_feedback_entries: DEFAULT_MAX_FEEDBACK_ENTRIES,
+            root,
         }
+    }
+
+    /// Persist intent cache, agent profiles, and feedback to disk.
+    /// Called during shutdown or periodically.
+    pub fn persist(&self) -> std::io::Result<()> {
+        let prefetch_dir = self.root.join("prefetch");
+        std::fs::create_dir_all(&prefetch_dir)?;
+        self.intent_cache.persist_to_dir(&prefetch_dir)?;
+        self.profile_store.persist_to_dir(&prefetch_dir)?;
+        // Persist feedback history
+        let feedback = self.feedback_history.read().unwrap();
+        let json = serde_json::to_string_pretty(&*feedback)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        std::fs::write(prefetch_dir.join("feedback.json"), json)?;
+        tracing::debug!("prefetch state persisted ({} cache, {} profiles, {} feedback)",
+            self.intent_cache.stats().entries,
+            self.profile_store.len(),
+            feedback.len());
+        Ok(())
+    }
+
+    /// Restore intent cache, agent profiles, and feedback from disk.
+    /// Called during initialization. Missing files are not errors.
+    pub fn restore(&self) -> std::io::Result<()> {
+        let prefetch_dir = self.root.join("prefetch");
+        if !prefetch_dir.exists() {
+            return Ok(());
+        }
+        let cache_count = self.intent_cache.restore_from_dir(&prefetch_dir)?;
+        let profile_count = self.profile_store.restore_from_dir(&prefetch_dir)?;
+        // Restore feedback history
+        let feedback_path = prefetch_dir.join("feedback.json");
+        if feedback_path.exists() {
+            let json = std::fs::read_to_string(&feedback_path)?;
+            let loaded: Vec<IntentFeedbackEntry> = serde_json::from_str(&json)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+            let mut feedback = self.feedback_history.write().unwrap();
+            // Keep most recent entries up to max_feedback_entries
+            *feedback = loaded.into_iter().rev().take(self.max_feedback_entries).rev().collect();
+        }
+        tracing::info!("prefetch state restored: {} cache entries, {} profiles",
+            cache_count, profile_count);
+        Ok(())
     }
 
     /// Declare a new intent and trigger async prefetch.
@@ -1382,6 +1431,7 @@ mod tests {
             Arc::new(crate::kernel::event_bus::EventBus::new()),
             Arc::new(crate::fs::StubEmbeddingProvider::new()),
             ctx_loader,
+            dir.path().to_path_buf(),
         )
     }
 

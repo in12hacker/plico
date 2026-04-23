@@ -8,6 +8,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
+use serde::{Deserialize, Serialize};
+
 use crate::api::semantic::{ChangeEntry, CheckpointSummaryDto, ConsolidationReport};
 use crate::kernel::event_bus::EventBus;
 use crate::kernel::ops::delta::handle_delta_since;
@@ -24,7 +26,7 @@ const MIN_TAG_LENGTH: usize = 2;
 /// Stores statistical patterns of agent behavior:
 /// - Intent transitions: which tag keys follow which
 /// - Hot objects: frequently accessed CIDs
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentProfile {
     pub agent_id: String,
     /// Maps tag key → list of (successor_tag_key, count)
@@ -80,7 +82,7 @@ impl AgentProfile {
 }
 
 /// Strategy for converting intent text to a lookup key.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum IntentKeyStrategy {
     /// Extract known tags from intent text, normalize to sorted tag key.
     /// Example: "修复 auth 的测试" → extracts ["auth", "test"] → "auth|test"
@@ -945,6 +947,7 @@ mod tests {
             Arc::new(crate::kernel::event_bus::EventBus::new()),
             embedding,
             ctx_loader,
+            dir.path().to_path_buf(),
         ));
 
         (fs, prefetcher, dir)

@@ -4,7 +4,9 @@
 //! Cache management changes independently from the core prefetch engine.
 
 use std::sync::{RwLock, atomic::{AtomicUsize, AtomicU64, Ordering}};
+use std::path::Path;
 
+use serde::{Deserialize, Serialize};
 use crate::fs::context_budget::BudgetAllocation;
 
 use super::prefetch::now_ms;
@@ -21,8 +23,11 @@ const DEFAULT_SIMILARITY_THRESHOLD: f32 = 0.85;
 /// Default TTL for cache entries (24 hours in milliseconds).
 const DEFAULT_CACHE_TTL_MS: u64 = 24 * 60 * 60 * 1000;
 
+/// Filename for persisting the intent cache.
+const CACHE_PERSIST_FILE: &str = "intent_cache.json";
+
 /// A cached intent assembly result.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct CachedAssembly {
     intent_text: String,
     intent_embedding: Option<Vec<f32>>,
@@ -269,6 +274,48 @@ impl IntentAssemblyCache {
             total_lookups: self.total_lookups.load(Ordering::Relaxed),
         }
     }
+
+    /// Persist the cache entries to a JSON file at `dir/prefetch_cache.json`.
+    /// Returns Ok(()) on success, Error on failure.
+    pub(crate) fn persist_to_dir(&self, dir: &Path) -> std::io::Result<()> {
+        let entries = self.entries.read().unwrap();
+        let persist_entries: Vec<_> = entries.iter().cloned().collect();
+        let json = serde_json::to_string_pretty(&persist_entries)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        let path = dir.join(CACHE_PERSIST_FILE);
+        std::fs::write(path, json)
+    }
+
+    /// Restore the cache entries from `dir/prefetch_cache.json`.
+    /// Expired entries are filtered out. Missing file is not an error.
+    /// Returns the number of entries restored.
+    pub(crate) fn restore_from_dir(&self, dir: &Path) -> std::io::Result<usize> {
+        let path = dir.join(CACHE_PERSIST_FILE);
+        if !path.exists() {
+            return Ok(0);
+        }
+        let json = std::fs::read_to_string(&path)?;
+        let entries: Vec<CachedAssembly> = serde_json::from_str(&json)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+
+        let mut restored = 0;
+        let mut total_mem = 0usize;
+        let mut final_entries = Vec::new();
+
+        for entry in entries {
+            if entry.is_expired(self.ttl_ms) {
+                continue;
+            }
+            total_mem += entry.estimated_size_bytes;
+            final_entries.push(entry);
+            restored += 1;
+        }
+
+        let mut entries_guard = self.entries.write().unwrap();
+        *entries_guard = final_entries;
+        self.current_memory_bytes.store(total_mem, Ordering::Relaxed);
+        Ok(restored)
+    }
 }
 
 impl Default for IntentAssemblyCache {
@@ -451,5 +498,33 @@ mod tests {
         assert_eq!(cache.max_entries, 64);
         assert_eq!(cache.max_memory_bytes, 32 * 1024 * 1024);
         assert!((cache.similarity_threshold - 0.85).abs() < 0.001);
+    }
+
+    // F-1: Prefetch Persistence tests
+    #[test]
+    fn persist_and_restore() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = IntentAssemblyCache::default();
+        cache.store("fix auth".into(), None, make_allocation("c1"), vec![]);
+        cache.store("fix auth v2".into(), None, make_allocation("c2"), vec![]);
+
+        cache.persist_to_dir(dir.path()).unwrap();
+
+        let restored = IntentAssemblyCache::default();
+        let count = restored.restore_from_dir(dir.path()).unwrap();
+        assert_eq!(count, 2);
+        assert!(restored.lookup("fix auth", &None).is_some());
+        assert!(restored.lookup("fix auth v2", &None).is_some());
+        // Hit count should be preserved
+        let stats = restored.stats();
+        assert_eq!(stats.entries, 2);
+    }
+
+    #[test]
+    fn restore_missing_file_is_zero() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = IntentAssemblyCache::default();
+        let count = cache.restore_from_dir(dir.path()).unwrap();
+        assert_eq!(count, 0);
     }
 }

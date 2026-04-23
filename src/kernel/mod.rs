@@ -191,7 +191,13 @@ impl AIKernel {
             event_bus.clone(),
             Arc::new(embedding.clone()) as Arc<dyn EmbeddingProvider>,
             fs.ctx_loader_arc(),
+            root.clone(),
         ));
+
+        // F-20 M1: Restore prefetch state from disk (intent cache + agent profiles)
+        if let Err(e) = prefetch.restore() {
+            tracing::warn!("prefetch restore failed (ok if first run): {}", e);
+        }
 
         // Agent authentication — cryptographic token store
         let key_store = Arc::new(AgentKeyStore::open(&root));
