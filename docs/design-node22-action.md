@@ -286,8 +286,8 @@ impl IntentTracker {
 | Execution as Learning | 0 (结果丢弃) | **Profile 更新** | ✅ M1 完成 |
 | Execution Time Tracking | 0 | **Stats 记录** | ✅ M2 完成 |
 | Self-Optimization | 0 | **optimized_sort** | ✅ M3 完成 |
-| Predictive Execution | 0 | **prefetch 触发** | 🔴 |
-| Learning Loop | 0 | **完整闭环** | 🔴 |
+| Predictive Execution | 0 | **prefetch 触发** | ✅ M4 完成 |
+| Learning Loop | 0 | **完整闭环** | ✅ M5 完成 |
 
 ---
 
