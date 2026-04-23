@@ -323,3 +323,195 @@ pub(crate) fn now_ms() -> u64 {
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ─── KGNodeType ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_kg_node_type_display() {
+        assert_eq!(KGNodeType::Entity.to_string(), "entity");
+        assert_eq!(KGNodeType::Fact.to_string(), "fact");
+        assert_eq!(KGNodeType::Document.to_string(), "document");
+        assert_eq!(KGNodeType::Agent.to_string(), "agent");
+        assert_eq!(KGNodeType::Memory.to_string(), "memory");
+    }
+
+    #[test]
+    fn test_kg_node_type_debug() {
+        assert_eq!(format!("{:?}", KGNodeType::Entity), "Entity");
+        assert_eq!(format!("{:?}", KGNodeType::Fact), "Fact");
+    }
+
+    // ─── KGEdgeType ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_kg_edge_type_display() {
+        assert_eq!(KGEdgeType::AssociatesWith.to_string(), "associates_with");
+        assert_eq!(KGEdgeType::Follows.to_string(), "follows");
+        assert_eq!(KGEdgeType::SimilarTo.to_string(), "similar_to");
+        assert_eq!(KGEdgeType::HasParticipant.to_string(), "has_participant");
+        assert_eq!(KGEdgeType::Supersedes.to_string(), "supersedes");
+    }
+
+    // ─── KGNode ─────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_kg_node_new() {
+        let node = KGNode::new(
+            "TestNode".to_string(),
+            KGNodeType::Entity,
+            "agent1".to_string(),
+            "tenant1".to_string(),
+        );
+        assert_eq!(node.label, "TestNode");
+        assert_eq!(node.node_type, KGNodeType::Entity);
+        assert_eq!(node.agent_id, "agent1");
+        assert_eq!(node.tenant_id, "tenant1");
+        assert!(!node.id.is_empty());
+        assert!(node.content_cid.is_none());
+    }
+
+    #[test]
+    fn test_kg_node_with_content() {
+        let node = KGNode::with_content(
+            "DocNode".to_string(),
+            KGNodeType::Document,
+            "abc123".to_string(),
+            "agent1".to_string(),
+            "tenant1".to_string(),
+        );
+        assert_eq!(node.content_cid, Some("abc123".to_string()));
+    }
+
+    #[test]
+    fn test_kg_node_is_active() {
+        let node = KGNode::new("Test".to_string(), KGNodeType::Entity, "agent".to_string(), "default".to_string());
+        assert!(node.is_active());
+    }
+
+    #[test]
+    fn test_kg_node_is_valid_at() {
+        let node = KGNode::new("Test".to_string(), KGNodeType::Entity, "agent".to_string(), "default".to_string());
+        // Node created now, should be valid at current time
+        let now = now_ms();
+        assert!(node.is_valid_at(now));
+        // Should also be valid at 0
+        assert!(node.is_valid_at(0));
+    }
+
+    #[test]
+    fn test_kg_node_json_serialization() {
+        let node = KGNode::new("Test".to_string(), KGNodeType::Fact, "agent".to_string(), "tenant".to_string());
+        let json = serde_json::to_string(&node).unwrap();
+        let deserialized: KGNode = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.label, node.label);
+        assert_eq!(deserialized.node_type, node.node_type);
+    }
+
+    // ─── KGEdge ─────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_kg_edge_new() {
+        let edge = KGEdge::new(
+            "node1".to_string(),
+            "node2".to_string(),
+            KGEdgeType::RelatedTo,
+            0.8,
+        );
+        assert_eq!(edge.src, "node1");
+        assert_eq!(edge.dst, "node2");
+        assert_eq!(edge.edge_type, KGEdgeType::RelatedTo);
+        assert!((edge.weight - 0.8).abs() < f32::EPSILON);
+        assert!(edge.is_active());
+    }
+
+    #[test]
+    fn test_kg_edge_new_with_episode() {
+        let edge = KGEdge::new_with_episode(
+            "node1".to_string(),
+            "node2".to_string(),
+            KGEdgeType::SimilarTo,
+            0.5,
+            "event-123",
+        );
+        assert_eq!(edge.episode, Some("event-123".to_string()));
+    }
+
+    #[test]
+    fn test_kg_edge_is_active() {
+        let edge = KGEdge::new("a".to_string(), "b".to_string(), KGEdgeType::Follows, 1.0);
+        assert!(edge.is_active());
+    }
+
+    #[test]
+    fn test_kg_edge_is_valid_at() {
+        let edge = KGEdge::new("a".to_string(), "b".to_string(), KGEdgeType::RelatedTo, 1.0);
+        let now = now_ms();
+        assert!(edge.is_valid_at(now));
+    }
+
+    #[test]
+    fn test_kg_edge_json_serialization() {
+        let edge = KGEdge::new_with_episode(
+            "src".to_string(),
+            "dst".to_string(),
+            KGEdgeType::HasFact,
+            0.9,
+            "ep1",
+        );
+        let json = serde_json::to_string(&edge).unwrap();
+        let deserialized: KGEdge = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.src, edge.src);
+        assert_eq!(deserialized.dst, edge.dst);
+        assert_eq!(deserialized.episode, edge.episode);
+    }
+
+    // ─── KGError ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_kg_error_display() {
+        let err = KGError::NodeNotFound("node-x".to_string());
+        assert_eq!(err.to_string(), "Node not found: node-x");
+    }
+
+    #[test]
+    fn test_kg_error_io_roundtrip() {
+        let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "test");
+        let kg_err = KGError::Io(io_err);
+        assert!(kg_err.to_string().contains("test"));
+    }
+
+    // ─── KGSearchHit ────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_kg_search_hit_clone() {
+        let node = KGNode::new("Test".to_string(), KGNodeType::Entity, "agent".to_string(), "tenant".to_string());
+        let hit = KGSearchHit {
+            node,
+            edge_type: Some(KGEdgeType::RelatedTo),
+            vector_score: 0.9,
+            authority_score: 0.5,
+            combined_score: 0.7,
+        };
+        let cloned = hit.clone();
+        assert_eq!(cloned.node.label, "Test");
+        assert_eq!(cloned.combined_score, 0.7);
+    }
+
+    // ─── DiskGraph ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_disk_graph_type_alias() {
+        let graph: DiskGraph = (
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+        );
+        assert_eq!(graph.0.len(), 0);
+        assert_eq!(graph.1.len(), 0);
+        assert_eq!(graph.2.len(), 0);
+    }
+}

@@ -322,3 +322,154 @@ impl ContextLoader {
         self.root.join("l1").join(prefix).join(rest)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ─── ContextLayer ────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_context_layer_tokens_approx() {
+        assert_eq!(ContextLayer::L0.tokens_approx(), 100);
+        assert_eq!(ContextLayer::L1.tokens_approx(), 2000);
+        assert_eq!(ContextLayer::L2.tokens_approx(), usize::MAX);
+    }
+
+    #[test]
+    fn test_context_layer_name() {
+        assert_eq!(ContextLayer::L0.name(), "L0");
+        assert_eq!(ContextLayer::L1.name(), "L1");
+        assert_eq!(ContextLayer::L2.name(), "L2");
+    }
+
+    #[test]
+    fn test_context_layer_parse_valid() {
+        assert_eq!(ContextLayer::parse_layer("L0"), Some(ContextLayer::L0));
+        assert_eq!(ContextLayer::parse_layer("L1"), Some(ContextLayer::L1));
+        assert_eq!(ContextLayer::parse_layer("L2"), Some(ContextLayer::L2));
+        assert_eq!(ContextLayer::parse_layer("l0"), Some(ContextLayer::L0));
+        assert_eq!(ContextLayer::parse_layer("l2"), Some(ContextLayer::L2));
+    }
+
+    #[test]
+    fn test_context_layer_parse_invalid() {
+        assert_eq!(ContextLayer::parse_layer("L3"), None);
+        assert_eq!(ContextLayer::parse_layer("invalid"), None);
+        assert_eq!(ContextLayer::parse_layer(""), None);
+    }
+
+    #[test]
+    fn test_context_layer_from_str() {
+        use std::str::FromStr;
+        assert_eq!(ContextLayer::from_str("L0"), Ok(ContextLayer::L0));
+        assert_eq!(ContextLayer::from_str("L2"), Ok(ContextLayer::L2));
+        assert!(ContextLayer::from_str("L3").is_err());
+    }
+
+    // ─── LoadedContext ───────────────────────────────────────────────────────
+
+    #[test]
+    fn test_loaded_context_debug() {
+        let ctx = LoadedContext {
+            cid: "abc123".to_string(),
+            layer: ContextLayer::L0,
+            content: "summary text".to_string(),
+            tokens_estimate: 50,
+            actual_layer: Some(ContextLayer::L0),
+            degraded: false,
+            degradation_reason: None,
+        };
+        let debug = format!("{:?}", ctx);
+        assert!(debug.contains("abc123"));
+    }
+
+    #[test]
+    fn test_loaded_context_serde_roundtrip() {
+        let ctx = LoadedContext {
+            cid: "test-cid".to_string(),
+            layer: ContextLayer::L1,
+            content: "key sections".to_string(),
+            tokens_estimate: 500,
+            actual_layer: Some(ContextLayer::L1),
+            degraded: true,
+            degradation_reason: Some("LLM failed".to_string()),
+        };
+        let json = serde_json::to_string(&ctx).unwrap();
+        let deserialized: LoadedContext = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.cid, "test-cid");
+        assert_eq!(deserialized.layer, ContextLayer::L1);
+        assert!(deserialized.degraded);
+        assert_eq!(deserialized.degradation_reason, Some("LLM failed".to_string()));
+    }
+
+    // ─── ContextLoader Heuristic ─────────────────────────────────────────────
+
+    #[test]
+    fn test_heuristic_summary_short_content() {
+        let short = "hello world";
+        let result = ContextLoader::heuristic_summary(short);
+        assert_eq!(result, short);
+    }
+
+    #[test]
+    fn test_heuristic_summary_long_content() {
+        let words: Vec<String> = (0..50).map(|i| format!("word{}", i)).collect();
+        let content = words.join(" ");
+        let result = ContextLoader::heuristic_summary(&content);
+        // Should contain first 10 words and last 10 words
+        assert!(result.starts_with("word0 word1 word2 word3 word4 word5 word6 word7 word8 word9"));
+        assert!(result.contains("..."));
+    }
+
+    #[test]
+    fn test_heuristic_summary_exactly_20_words() {
+        let words: Vec<String> = (0..20).map(|i| format!("w{}", i)).collect();
+        let content = words.join(" ");
+        let result = ContextLoader::heuristic_summary(&content);
+        // Exactly 20 words should return content unchanged
+        assert_eq!(result, content);
+    }
+
+    // ─── ContextLoader compute_l0 (no summarizer) ────────────────────────────
+
+    #[test]
+    fn test_compute_l0_fallback_heuristic() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let loader = ContextLoader::new(
+            temp_dir.path().to_path_buf(),
+            None, // no summarizer
+            Arc::new(crate::cas::CASStorage::new(temp_dir.path().join("cas")).unwrap()),
+        ).unwrap();
+
+        let content = (0..50).map(|i| format!("word{}", i)).collect::<Vec<_>>().join(" ");
+        let summary = loader.compute_l0(&content);
+        // Without summarizer, should fall back to heuristic
+        assert!(summary.contains("..."));
+        assert!(summary.starts_with("word0 word1 word2"));
+    }
+
+    // ─── Prefix Truncation ───────────────────────────────────────────────────
+
+    #[test]
+    fn test_prefix_truncate_short() {
+        let short = "hello";
+        let result = super::ContextLoader::prefix_truncate(short, 10);
+        assert_eq!(result, short);
+    }
+
+    #[test]
+    fn test_prefix_truncate_long() {
+        let long = "a".repeat(100);
+        let result = super::ContextLoader::prefix_truncate(&long, 20);
+        assert_eq!(result.len(), 20);
+        assert_eq!(result, "aaaaaaaaaaaaaaaaaaaa");
+    }
+
+    #[test]
+    fn test_prefix_truncate_exactly_limit() {
+        let exact = "exactly10";
+        let result = super::ContextLoader::prefix_truncate(exact, 10);
+        assert_eq!(result, exact);
+    }
+}

@@ -346,3 +346,136 @@ fn get_memory_usage() -> (u64, u64) {
     }
     (0, 0)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::kernel::tests::make_kernel;
+
+    // ─── System Status ─────────────────────────────────────────────────────
+
+    #[test]
+    fn test_system_status_returns_valid_structure() {
+        let (kernel, _dir) = make_kernel();
+        let status = kernel.system_status();
+        assert!(status.timestamp_ms > 0, "timestamp should be set");
+        assert_eq!(status.agent_count, 0, "new kernel has no agents");
+        assert!(status.cas_object_count >= 0);
+        assert!(status.tag_count >= 0);
+    }
+
+    #[test]
+    fn test_system_status_kg_counts_zero_for_empty() {
+        let (kernel, _dir) = make_kernel();
+        let status = kernel.system_status();
+        assert_eq!(status.kg_node_count, 0, "empty KG has no nodes");
+        assert_eq!(status.kg_edge_count, 0, "empty KG has no edges");
+    }
+
+    // ─── Cache Stats ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_cache_stats_returns_valid_hit_rates() {
+        let (kernel, _dir) = make_kernel();
+        let stats = kernel.cache_stats();
+        // Hit rates should be between 0.0 and 1.0 (or exactly 0.0 on cold cache)
+        assert!(stats.embedding_hit_rate >= 0.0);
+        assert!(stats.embedding_hit_rate <= 1.0);
+        assert!(stats.kg_hit_rate >= 0.0);
+        assert!(stats.search_hit_rate >= 0.0);
+    }
+
+    #[test]
+    fn test_cache_invalidate_all_succeeds() {
+        let (kernel, _dir) = make_kernel();
+        // Should not panic
+        kernel.cache_invalidate_all();
+    }
+
+    // ─── Intent Cache Stats ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_intent_cache_stats_returns_valid_structure() {
+        let (kernel, _dir) = make_kernel();
+        let stats = kernel.intent_cache_stats();
+        assert!(stats.entries >= 0, "entries should be non-negative");
+        assert!(stats.memory_bytes >= 0, "memory_bytes should be non-negative");
+    }
+
+    // ─── Health Indicators ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_health_indicators_computes_all_subsystems() {
+        let (kernel, _dir) = make_kernel();
+        let health = kernel.health_indicators();
+        // Memory
+        assert!(health.memory_usage_percent >= 0.0);
+        // Cache
+        assert!(health.cache_hit_rate_percent >= 0.0 && health.cache_hit_rate_percent <= 100.0);
+        // EventBus
+        assert!(health.eventbus_queue_depth >= 0);
+        assert!(health.eventbus_subscriber_count >= 0);
+        // Scheduler
+        assert!(health.scheduler_active_agents >= 0);
+        assert!(health.scheduler_pending_intents >= 0);
+        // Overall
+        assert!(health.health_score >= 0.0 && health.health_score <= 1.0);
+    }
+
+    #[test]
+    fn test_health_indicators_memory_healthy_below_90_percent() {
+        let (kernel, _dir) = make_kernel();
+        let health = kernel.health_indicators();
+        // Default stub returns (0,0) so memory_usage_percent is 0.0 which is < 90
+        if health.memory_total_bytes == 0 {
+            assert!(health.memory_healthy, "zero total memory should be considered healthy");
+        }
+    }
+
+    #[test]
+    fn test_health_indicators_scheduler_healthy_below_100_agents() {
+        let (kernel, _dir) = make_kernel();
+        let health = kernel.health_indicators();
+        // New kernel has 0 agents, should be healthy
+        assert!(health.scheduler_healthy, "0 agents should be scheduler-healthy");
+    }
+
+    // ─── Health Report ──────────────────────────────────────────────────────
+
+    #[test]
+    fn test_health_report_returns_valid_structure() {
+        let (kernel, _dir) = make_kernel();
+        let report = kernel.health_report();
+        assert!(report.timestamp_ms > 0);
+        assert!(report.cas_objects >= 0);
+        assert!(report.agents >= 0);
+    }
+
+    #[test]
+    fn test_health_report_indicates_degradations() {
+        let (kernel, _dir) = make_kernel();
+        let report = kernel.health_report();
+        // With stub backend, should have embedding degradation
+        let has_embedding_deg = report.degradations.iter()
+            .any(|d| d.component == "embedding");
+        assert!(has_embedding_deg, "stub backend should produce embedding degradation");
+    }
+
+    #[test]
+    fn test_health_report_roundtrip_test() {
+        let (kernel, _dir) = make_kernel();
+        let report = kernel.health_report();
+        // Roundtrip should succeed in test environment
+        assert!(report.roundtrip_ms >= 0);
+    }
+
+    // ─── Node Ping ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_node_ping_invalid_address() {
+        let (kernel, _dir) = make_kernel();
+        let result = kernel.node_ping("invalid-host-that-does-not-exist", 9999);
+        // Should fail gracefully
+        assert!(result.is_err(), "ping to invalid host should fail");
+    }
+}

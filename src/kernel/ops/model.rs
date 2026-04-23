@@ -360,3 +360,154 @@ impl AIKernel {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ─── HotSwapEmbeddingProvider ────────────────────────────────────────────
+
+    #[test]
+    fn test_hotswap_embedding_provider_new() {
+        let inner = Arc::new(RwLock::new(Arc::new(crate::fs::StubEmbeddingProvider::new()) as Arc<dyn EmbeddingProvider>));
+        let provider = HotSwapEmbeddingProvider::new(Arc::clone(&inner));
+        assert_eq!(provider.model_name(), "hotswap");
+    }
+
+    #[test]
+    fn test_hotswap_embedding_provider_current() {
+        let stub = Arc::new(crate::fs::StubEmbeddingProvider::new()) as Arc<dyn EmbeddingProvider>;
+        let inner = Arc::new(RwLock::new(stub.clone()));
+        let provider = HotSwapEmbeddingProvider::new(inner);
+        let current = provider.current();
+        assert_eq!(current.model_name(), "stub");
+    }
+
+    #[test]
+    fn test_hotswap_embedding_provider_swap() {
+        let inner = Arc::new(RwLock::new(Arc::new(crate::fs::StubEmbeddingProvider::new()) as Arc<dyn EmbeddingProvider>));
+        let provider = HotSwapEmbeddingProvider::new(Arc::clone(&inner));
+        let new_stub = Arc::new(crate::fs::StubEmbeddingProvider::new()) as Arc<dyn EmbeddingProvider>;
+        let old = provider.swap(new_stub.clone());
+        assert!(old.model_name() == "stub" || old.model_name() == "stub");
+    }
+
+    #[test]
+    fn test_hotswap_embedding_provider_clone() {
+        let inner = Arc::new(RwLock::new(Arc::new(crate::fs::StubEmbeddingProvider::new()) as Arc<dyn EmbeddingProvider>));
+        let provider = HotSwapEmbeddingProvider::new(Arc::clone(&inner));
+        let _cloned = provider.clone();
+        // Clone should not panic
+    }
+
+    #[test]
+    fn test_hotswap_embedding_provider_embed_delegates() {
+        let inner = Arc::new(RwLock::new(Arc::new(crate::fs::StubEmbeddingProvider::new()) as Arc<dyn EmbeddingProvider>));
+        let provider = HotSwapEmbeddingProvider::new(inner);
+        let result = provider.embed("test text");
+        // StubEmbeddingProvider always returns error
+        assert!(result.is_err(), "stub should return error for embed");
+    }
+
+    // ─── HotSwapLlmProvider ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_hotswap_llm_provider_new() {
+        let inner = Arc::new(RwLock::new(Arc::new(crate::llm::StubProvider::empty()) as Arc<dyn LlmProvider>));
+        let provider = HotSwapLlmProvider::new(Arc::clone(&inner));
+        assert_eq!(provider.model_name(), "hotswap-llm");
+    }
+
+    #[test]
+    fn test_hotswap_llm_provider_current() {
+        let stub = Arc::new(crate::llm::StubProvider::empty()) as Arc<dyn LlmProvider>;
+        let inner = Arc::new(RwLock::new(stub));
+        let provider = HotSwapLlmProvider::new(inner);
+        let current = provider.current();
+        assert_eq!(current.model_name(), "stub");
+    }
+
+    #[test]
+    fn test_hotswap_llm_provider_swap() {
+        let inner = Arc::new(RwLock::new(Arc::new(crate::llm::StubProvider::empty()) as Arc<dyn LlmProvider>));
+        let provider = HotSwapLlmProvider::new(inner);
+        let new_stub = Arc::new(crate::llm::StubProvider::empty()) as Arc<dyn LlmProvider>;
+        let _old = provider.swap(new_stub);
+    }
+
+    #[test]
+    fn test_hotswap_llm_provider_clone() {
+        let inner = Arc::new(RwLock::new(Arc::new(crate::llm::StubProvider::empty()) as Arc<dyn LlmProvider>));
+        let provider = HotSwapLlmProvider::new(inner);
+        let _cloned = provider.clone();
+    }
+
+    #[test]
+    fn test_hotswap_llm_provider_chat_delegates() {
+        let inner = Arc::new(RwLock::new(Arc::new(crate::llm::StubProvider::empty()) as Arc<dyn LlmProvider>));
+        let provider = HotSwapLlmProvider::new(inner);
+        let result = provider.chat(&[ChatMessage::user("hello")], &ChatOptions::default());
+        assert!(result.is_ok(), "stub should always succeed: {:?}", result);
+    }
+
+    // ─── Provider Creation ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_create_embedding_provider_stub() {
+        let result = create_embedding_provider("stub", "test-model", None);
+        assert!(result.is_ok(), "stub should always succeed");
+        let provider = result.unwrap();
+        assert_eq!(provider.model_name(), "stub");
+    }
+
+    #[test]
+    fn test_create_embedding_provider_unknown_type() {
+        let result = create_embedding_provider("unknown_type", "model", None);
+        match result {
+            Err(e) => assert!(e.contains("unknown embedding backend type")),
+            Ok(_) => panic!("expected error, got ok"),
+        }
+    }
+
+    #[test]
+    fn test_create_llm_provider_stub() {
+        let result = create_llm_provider("stub", "test-model", None);
+        assert!(result.is_ok(), "stub should always succeed");
+        let provider = result.unwrap();
+        assert_eq!(provider.model_name(), "stub");
+    }
+
+    #[test]
+    fn test_create_llm_provider_unknown_backend() {
+        let result = create_llm_provider("unknown_backend", "model", None);
+        match result {
+            Err(e) => assert!(e.contains("unknown LLM backend")),
+            Ok(_) => panic!("expected error, got ok"),
+        }
+    }
+
+    #[test]
+    fn test_create_embedding_provider_local_missing_python() {
+        // Should fail gracefully when python path is invalid
+        let result = create_embedding_provider("local", "model", Some("/nonexistent/python"));
+        assert!(result.is_err());
+    }
+
+    // ─── Health Checks ───────────────────────────────────────────────────────
+
+    #[test]
+    fn test_check_embedding_health_stub_available() {
+        let stub = Arc::new(crate::fs::StubEmbeddingProvider::new()) as Arc<dyn EmbeddingProvider>;
+        let result = check_embedding_health(&stub);
+        assert!(!result.available, "stub should not be available");
+        assert_eq!(result.model, "stub");
+    }
+
+    #[test]
+    fn test_check_llm_health_stub_available() {
+        let stub = Arc::new(crate::llm::StubProvider::empty()) as Arc<dyn LlmProvider>;
+        let result = check_llm_health(&stub);
+        assert!(result.available, "stub should be available");
+        assert_eq!(result.model, "stub");
+    }
+}

@@ -198,3 +198,62 @@ impl TemporalResolver for StubTemporalResolver {
         None
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_temporal_range_expanded() {
+        let range = TemporalRange {
+            since: 1000,
+            until: 2000,
+            confidence: 0.8,
+            granularity: crate::temporal::rules::Granularity::ExactDay,
+            expression: "test".to_string(),
+        };
+        let expanded = range.expanded(1);
+        // Should expand by 1 day in both directions
+        assert!(expanded.since < range.since);
+        assert!(expanded.until > range.until);
+        assert_eq!(expanded.confidence, range.confidence);
+        assert_eq!(expanded.expression, range.expression);
+    }
+
+    #[test]
+    fn test_temporal_range_expanded_preserves_granularity() {
+        let range = TemporalRange {
+            since: 1000,
+            until: 2000,
+            confidence: 0.5,
+            granularity: crate::temporal::rules::Granularity::Week,
+            expression: "test".to_string(),
+        };
+        let expanded = range.expanded(3);
+        // Expanded range becomes Fuzzy
+        assert_eq!(expanded.granularity, crate::temporal::rules::Granularity::Fuzzy);
+    }
+
+    // ─── Stub Temporal Resolver ─────────────────────────────────────────────
+
+    #[test]
+    fn test_stub_resolver_always_returns_none() {
+        let stub = StubTemporalResolver;
+        let result = stub.resolve("last week", None);
+        assert!(result.is_none(), "stub resolver should always return None");
+    }
+
+    #[test]
+    fn test_stub_resolver_with_reference_time() {
+        let stub = StubTemporalResolver;
+        let result = stub.resolve("yesterday", Some(1700000000000));
+        assert!(result.is_none(), "stub resolver ignores reference time");
+    }
+
+    #[test]
+    fn test_stub_resolver_empty_expression() {
+        let stub = StubTemporalResolver;
+        let result = stub.resolve("", None);
+        assert!(result.is_none(), "stub resolver handles empty expression");
+    }
+}

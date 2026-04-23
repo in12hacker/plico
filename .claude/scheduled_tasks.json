@@ -1,12 +1,3 @@
 {
-  "tasks": [
-    {
-      "id": "d6050a2c",
-      "cron": "*/10 * * * *",
-      "prompt": "推进 node17 链式里程碑 F-1 → F-4a(F-4b,F-4c) → F-5 → F-2。F-1: B49已修复(put \"content\"位置参数+空内容拒绝)。F-4: P0文件测试覆盖率补全 kernel/builtin_tools.rs kernel/persistence.rs intent/execution.rs 每个>=8个单元测试。F-5: V-06 auto_summarize soul violation修复。F-2: 效果合约后置条件。每轮迭代后: 单元测试+cargo test+dogfood验证+dump到plico自身CAS+同步github。当前进度: F-1完成，F-4a待做( builtin_tools.rs 761行零测试)",
-      "createdAt": 1776875888379,
-      "lastFiredAt": 1776878903873,
-      "recurring": true
-    }
-  ]
+  "tasks": []
 }

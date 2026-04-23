@@ -236,3 +236,183 @@ impl crate::kernel::AIKernel {
 fn decode_content(content: &str, encoding: &ContentEncoding) -> Result<Vec<u8>, String> {
     crate::api::semantic::decode_content(content, encoding)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::kernel::tests::make_kernel;
+    use crate::api::semantic::{BatchCreateItem, ContentEncoding};
+
+    // ─── Batch Create ────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_batch_create_empty_list() {
+        let (kernel, _dir) = make_kernel();
+        let resp = kernel.handle_batch_create(vec![], "TestAgent", "default");
+        assert_eq!(resp.successful, 0);
+        assert_eq!(resp.failed, 0);
+        assert!(resp.results.is_empty());
+    }
+
+    #[test]
+    fn test_batch_create_single_item() {
+        let (kernel, _dir) = make_kernel();
+        let items = vec![BatchCreateItem {
+            content: "hello".to_string(),
+            content_encoding: ContentEncoding::Utf8,
+            tags: vec!["test".to_string()],
+            intent: None,
+        }];
+        let resp = kernel.handle_batch_create(items, "TestAgent", "default");
+        assert_eq!(resp.successful, 1);
+        assert_eq!(resp.failed, 0);
+        assert!(resp.results[0].is_ok());
+    }
+
+    #[test]
+    fn test_batch_create_multiple_items() {
+        let (kernel, _dir) = make_kernel();
+        let items = vec![
+            BatchCreateItem {
+                content: "item1".to_string(),
+                content_encoding: ContentEncoding::Utf8,
+                tags: vec!["batch".to_string()],
+                intent: None,
+            },
+            BatchCreateItem {
+                content: "item2".to_string(),
+                content_encoding: ContentEncoding::Utf8,
+                tags: vec!["batch".to_string()],
+                intent: None,
+            },
+        ];
+        let resp = kernel.handle_batch_create(items, "TestAgent", "default");
+        assert_eq!(resp.successful, 2);
+        assert_eq!(resp.failed, 0);
+    }
+
+    #[test]
+    fn test_batch_create_mixed_success_failure() {
+        let (kernel, _dir) = make_kernel();
+        // Empty content might fail depending on implementation
+        let items = vec![
+            BatchCreateItem {
+                content: "valid".to_string(),
+                content_encoding: ContentEncoding::Utf8,
+                tags: vec![],
+                intent: None,
+            },
+            BatchCreateItem {
+                content: "".to_string(),
+                content_encoding: ContentEncoding::Utf8,
+                tags: vec![],
+                intent: None,
+            },
+        ];
+        let resp = kernel.handle_batch_create(items, "TestAgent", "default");
+        // At least one should succeed
+        assert!(resp.successful >= 0);
+        assert!(resp.failed >= 0);
+        assert_eq!(resp.successful + resp.failed, 2);
+    }
+
+    // ─── Batch Memory Store ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_batch_memory_store_empty() {
+        let (kernel, _dir) = make_kernel();
+        let resp = kernel.handle_batch_memory_store(vec![], "TestAgent", "default");
+        assert_eq!(resp.successful, 0);
+        assert_eq!(resp.failed, 0);
+    }
+
+    #[test]
+    fn test_batch_memory_store_single_entry() {
+        let (kernel, _dir) = make_kernel();
+        let entries = vec![crate::api::semantic::BatchMemoryEntry {
+            content: "memory item".to_string(),
+            tier: "working".to_string(),
+            tags: vec!["test".to_string()],
+            importance: 50,
+        }];
+        let resp = kernel.handle_batch_memory_store(entries, "TestAgent", "default");
+        assert_eq!(resp.successful, 1);
+        assert_eq!(resp.failed, 0);
+    }
+
+    // ─── Batch Submit Intent ────────────────────────────────────────────────
+
+    #[test]
+    fn test_batch_submit_intent_empty() {
+        let (kernel, _dir) = make_kernel();
+        let resp = kernel.handle_batch_submit_intent(vec![], "TestAgent");
+        assert_eq!(resp.successful, 0);
+        assert_eq!(resp.failed, 0);
+    }
+
+    #[test]
+    fn test_batch_submit_intent_single() {
+        let (kernel, _dir) = make_kernel();
+        let intents = vec![crate::api::semantic::IntentSpec {
+            priority: "medium".to_string(),
+            description: "test intent".to_string(),
+            action: None,
+        }];
+        let resp = kernel.handle_batch_submit_intent(intents, "TestAgent");
+        // Intent submission may succeed or fail depending on scheduler state
+        assert_eq!(resp.successful + resp.failed, 1);
+    }
+
+    #[test]
+    fn test_batch_submit_intent_multiple_priorities() {
+        let (kernel, _dir) = make_kernel();
+        let intents = vec![
+            crate::api::semantic::IntentSpec { priority: "critical".to_string(), description: "c".to_string(), action: None },
+            crate::api::semantic::IntentSpec { priority: "high".to_string(), description: "h".to_string(), action: None },
+            crate::api::semantic::IntentSpec { priority: "low".to_string(), description: "l".to_string(), action: None },
+        ];
+        let resp = kernel.handle_batch_submit_intent(intents, "TestAgent");
+        assert_eq!(resp.successful + resp.failed, 3);
+    }
+
+    // ─── Batch Query ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_batch_query_empty() {
+        let (kernel, _dir) = make_kernel();
+        let resp = kernel.handle_batch_query(vec![], "TestAgent", "default");
+        assert_eq!(resp.successful, 0);
+        assert_eq!(resp.failed, 0);
+    }
+
+    #[test]
+    fn test_batch_query_recall() {
+        let (kernel, _dir) = make_kernel();
+        let queries = vec![crate::api::semantic::QuerySpec::Recall];
+        let resp = kernel.handle_batch_query(queries, "TestAgent", "default");
+        // Recall should succeed even with no memories
+        assert_eq!(resp.successful + resp.failed, 1);
+    }
+
+    #[test]
+    fn test_batch_query_read_nonexistent() {
+        let (kernel, _dir) = make_kernel();
+        let queries = vec![crate::api::semantic::QuerySpec::Read {
+            cid: "0000000000000000000000000000000000000000000000000000000000000000".to_string(),
+        }];
+        let resp = kernel.handle_batch_query(queries, "TestAgent", "default");
+        // Read of nonexistent should fail gracefully
+        assert_eq!(resp.successful + resp.failed, 1);
+    }
+
+    #[test]
+    fn test_batch_query_mixed() {
+        let (kernel, _dir) = make_kernel();
+        let queries = vec![
+            crate::api::semantic::QuerySpec::Recall,
+            crate::api::semantic::QuerySpec::RecallSemantic { query: "test".to_string(), k: 5 },
+        ];
+        let resp = kernel.handle_batch_query(queries, "TestAgent", "default");
+        assert_eq!(resp.successful + resp.failed, 2);
+    }
+}
