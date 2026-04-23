@@ -168,6 +168,8 @@ pub struct ActiveSession {
     pub last_active_ms: u64,
     /// Seq number at session start — used for delta calculation.
     pub start_seq: u64,
+    /// The current declared intent for this session — used for causal tracking.
+    pub current_intent: Option<String>,
 }
 
 impl ActiveSession {
@@ -179,6 +181,7 @@ impl ActiveSession {
             created_at_ms: now,
             last_active_ms: now,
             start_seq,
+            current_intent: None,
         }
     }
 
@@ -294,6 +297,16 @@ impl SessionStore {
         let mut sessions = self.sessions.write().unwrap();
         if let Some(session) = sessions.get_mut(session_id) {
             session.touch();
+        }
+    }
+
+    /// Set the current intent for an agent's active session (for causal tracking).
+    pub fn set_current_intent(&self, agent_id: &str, intent: Option<String>) {
+        let mut sessions = self.sessions.write().unwrap();
+        for session in sessions.values_mut() {
+            if session.agent_id == agent_id {
+                session.current_intent = intent.clone();
+            }
         }
     }
 

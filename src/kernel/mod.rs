@@ -183,6 +183,25 @@ impl AIKernel {
         // Hook registry — lifecycle interception for tool calls (F-1, Node 19)
         let hook_registry = Arc::new(hook::HookRegistry::new());
 
+        // Session lifecycle store — manages StartSession/EndSession state and timeout (F-6)
+        // Created early so it can be passed to CausalHookHandler (F-3, Node 20)
+        let session_store = Arc::new(ops::session::SessionStore::restore(&root));
+
+        // F-20 M2: Register CausalHookHandler for KG因果链 tracking
+        if let Some(ref kg) = knowledge_graph {
+            let causal_handler = Arc::new(
+                ops::causal_hook::CausalHookHandler::new(
+                    Arc::clone(kg),
+                    Arc::clone(&session_store),
+                )
+            );
+            hook_registry.register(
+                hook::HookPoint::PostToolCall,
+                100, // Low priority — runs after tool completes
+                causal_handler,
+            );
+        }
+
         // Proactive context assembly (semantic prefetch)
         let prefetch = Arc::new(IntentPrefetcher::new(
             search_backend.clone(),
@@ -229,8 +248,8 @@ impl AIKernel {
         ));
 
         // Session lifecycle store — manages StartSession/EndSession state and timeout (F-6)
-        // A-1: Restore from disk if exists, otherwise create fresh
-        let session_store = Arc::new(ops::session::SessionStore::restore(&root));
+        // NOTE: Already created above at line 188 for CausalHookHandler
+        // (session_store is used directly below)
 
         // Spawn background timeout scanner for expired sessions
         let timeout_session_store = Arc::clone(&session_store);

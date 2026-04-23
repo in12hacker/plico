@@ -63,6 +63,10 @@ pub enum KGEdgeType {
     // ── Reasoning edges (AI-native) ─────────────────────────────────────
     /// Agent → Fact (knowledge graph assertion).
     HasFact,
+    /// ToolCall → Intent (this tool was called because of this intent).
+    CausedBy,
+    /// ToolCall A → ToolCall B (A's execution depended on B's result).
+    DependsOn,
     // ── Version tracking ─────────────────────────────────────────────────
     /// New CID → Old CID (version chain for rollback).
     Supersedes,
@@ -84,6 +88,8 @@ impl std::fmt::Display for KGEdgeType {
             KGEdgeType::HasRecording => write!(f, "has_recording"),
             KGEdgeType::HasResolution => write!(f, "has_resolution"),
             KGEdgeType::HasFact => write!(f, "has_fact"),
+            KGEdgeType::CausedBy => write!(f, "caused_by"),
+            KGEdgeType::DependsOn => write!(f, "depends_on"),
             KGEdgeType::Supersedes => write!(f, "supersedes"),
         }
     }

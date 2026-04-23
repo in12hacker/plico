@@ -1049,6 +1049,8 @@ impl crate::kernel::AIKernel {
         self.permissions
             .check(&ctx, PermissionAction::Read)
             .map_err(|e| e.to_string())?;
+        // F-20 M2: Track current intent for causal hook (KG CausedBy edges)
+        self.session_store.set_current_intent(agent_id, Some(intent.to_string()));
         Ok(self.prefetch.declare_intent(
             agent_id,
             intent,
