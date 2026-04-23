@@ -389,4 +389,19 @@ mod tests {
         // Empty string - router may fail but should not panic
         let _ = execute_sync(&kernel, &router, "", "EmptyAgent", 0.0, false);
     }
+
+    #[test]
+    fn test_execute_sync_learn_creates_procedural() {
+        let kernel = make_test_kernel();
+        let router = make_router();
+        kernel.register_agent("LearnProceduralAgent".to_string());
+
+        // With learn=true, a successful execution should create a procedural memory
+        let result = execute_sync(&kernel, &router, "status", "LearnProceduralAgent", 0.0, true);
+        assert!(result.is_ok(), "execute_sync should succeed");
+
+        // Verify a working memory was stored (summary of the execution)
+        let memories = kernel.recall("LearnProceduralAgent", "default");
+        assert!(!memories.is_empty(), "execution should store a working memory summary");
+    }
 }
