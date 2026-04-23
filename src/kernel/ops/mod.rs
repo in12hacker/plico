@@ -29,3 +29,4 @@ pub mod delta;
 pub mod session;
 pub mod hybrid;
 pub mod task;
+pub mod intent;

@@ -93,6 +93,8 @@ pub struct AIKernel {
     pub(crate) checkpoint_store: Arc<CheckpointStore>,
     /// Task store — manages multi-agent task delegation with state tracking (F-14).
     pub(crate) task_store: Arc<ops::task::TaskStore>,
+    /// Intent tracker — structured intent declaration and progress tracking (F-1, F-5, Node 21).
+    pub(crate) intent_tracker: Arc<ops::intent::IntentTracker>,
 }
 
 impl AIKernel {
@@ -265,6 +267,9 @@ impl AIKernel {
         // Task store — manages multi-agent task delegation with state tracking (F-14)
         let task_store = Arc::new(ops::task::TaskStore::restore(root.clone(), event_bus.clone()));
 
+        // Intent tracker — structured intent declaration and progress tracking (F-1, F-5, Node 21)
+        let intent_tracker = Arc::new(ops::intent::IntentTracker::new());
+
         let kernel = Self {
             root: root.clone(),
             cas,
@@ -292,6 +297,7 @@ impl AIKernel {
             session_store,
             checkpoint_store,
             task_store,
+            intent_tracker,
         };
 
         kernel.register_builtin_tools();
