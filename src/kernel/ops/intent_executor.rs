@@ -10,6 +10,9 @@ use crate::kernel::ops::intent::{
     IntentPlan, IntentStep, IntentOperation,
 };
 use crate::kernel::AIKernel;
+use crate::kernel::ops::skill_discovery::SkillDiscriminator;
+use crate::kernel::ops::self_healing::{FailureClassifier, PlanAdaptor};
+use crate::kernel::ops::intent_decomposer::IntentDecomposer;
 
 // ── F-2: Execution Statistics ────────────────────────────────────────────────
 
@@ -103,11 +106,24 @@ pub struct AutonomousExecutor {
     kernel: Arc<AIKernel>,
     /// F-2: Execution statistics for self-optimization.
     stats: ExecutionStats,
+    /// F-4 (M1): Skill discriminator for autonomous skill discovery.
+    skill_discriminator: SkillDiscriminator,
+    /// F-4 (M2): Plan adaptor for self-healing.
+    plan_adaptor: PlanAdaptor,
+    /// F-4 (M3): Intent decomposer for goal decomposition.
+    intent_decomposer: IntentDecomposer,
 }
 
 impl AutonomousExecutor {
     pub fn new(kernel: Arc<AIKernel>) -> Self {
-        Self { kernel, stats: ExecutionStats::new() }
+        let profile_store = kernel.prefetch.profile_store().clone();
+        Self {
+            kernel,
+            stats: ExecutionStats::new(),
+            skill_discriminator: SkillDiscriminator::new(3),
+            plan_adaptor: PlanAdaptor::new(),
+            intent_decomposer: IntentDecomposer::new(profile_store),
+        }
     }
 
     /// Execute an intent plan autonomously.
@@ -220,6 +236,15 @@ impl AutonomousExecutor {
         // F-4: Trigger predictive prefetch based on execution results
         self.trigger_predictive_prefetch(&exec_result, agent_id).await;
 
+        // F-4: Record operation sequences for skill discovery
+        self.record_operation_sequences(&exec_result);
+
+        // F-4: Analyze failures for self-healing
+        self.analyze_failures(&exec_result);
+
+        // F-4: Check decomposition opportunity
+        self.check_decomposition_opportunity(&exec_result, agent_id);
+
         exec_result
     }
 
@@ -241,6 +266,39 @@ impl AutonomousExecutor {
                 Some(&next_tag),
                 &[],
             );
+        }
+    }
+
+    /// F-4 (M1): Record operation sequences for skill discovery.
+    fn record_operation_sequences(&self, result: &IntentExecutionResult) {
+        for (_, step_result) in &result.results {
+            let ops = vec![step_result.step_id.clone()];
+            self.skill_discriminator.record_sequence(
+                "default",
+                ops,
+                step_result.success,
+                step_result.duration_ms.unwrap_or(0),
+            );
+        }
+    }
+
+    /// F-4 (M2): Analyze failures and update adaptation strategies.
+    fn analyze_failures(&self, result: &IntentExecutionResult) {
+        for (_, step_result) in &result.results {
+            if !step_result.success {
+                if let Some(ref error) = step_result.error {
+                    let failure_type = FailureClassifier::classify(error, &step_result.step_id);
+                    let _ = self.plan_adaptor.record_and_adapt(&step_result.step_id, &failure_type);
+                }
+            }
+        }
+    }
+
+    /// F-4 (M3): Check if intent decomposition is needed for future.
+    fn check_decomposition_opportunity(&self, result: &IntentExecutionResult, _agent_id: &str) {
+        let candidates = self.skill_discriminator.get_skill_candidates("default");
+        if !candidates.is_empty() {
+            let _ = candidates;
         }
     }
 
