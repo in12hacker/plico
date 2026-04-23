@@ -13,6 +13,8 @@ pub mod messaging;
 pub mod dashboard;
 pub mod tools_external;
 pub mod permission;
+pub mod prefetch_cache;
+pub mod prefetch_profile;
 pub mod prefetch;
 pub mod tenant;
 pub mod tier_maintenance;

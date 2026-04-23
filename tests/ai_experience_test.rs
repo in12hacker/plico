@@ -205,6 +205,9 @@ fn test_ai_agent_multi_session_experience() {
         // (created via Create) persist across sessions.
         let recall_resp = call_api(&kernel, ApiRequest::Recall {
             agent_id: "agent-a".into(),
+            scope: None,
+            query: None,
+            limit: None,
         });
         assert!(
             recall_resp.ok,

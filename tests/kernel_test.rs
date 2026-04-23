@@ -4199,3 +4199,79 @@ fn test_kernel_events_list_returns_list() {
     let events = kernel.list_events(None, None, empty_tags, None, None);
     assert!(!events.is_empty() || true, "list_events should return Vec, empty is valid");
 }
+
+// ─── B53 Fix: Cross-Agent Shared Recall via API ─────────────────────────────
+
+#[test]
+fn test_b53_recall_shared_via_api() {
+    use plico::api::semantic::{ApiRequest, ApiResponse};
+    use plico::memory::MemoryScope;
+
+    let (kernel, _dir) = make_kernel();
+    let agent_a = kernel.register_agent("sharer".into());
+    let agent_b = kernel.register_agent("reader".into());
+
+    // Agent A stores a shared long-term memory
+    kernel.remember_long_term_scoped(
+        &agent_a, "default",
+        "Rust async best practice: use tokio::spawn for CPU-bound tasks".into(),
+        vec!["rust".into(), "async".into()],
+        80,
+        MemoryScope::Shared,
+    ).unwrap();
+
+    // Agent B recalls with scope=shared via API (the B53 fix path)
+    let resp = kernel.handle_api_request(ApiRequest::Recall {
+        agent_id: agent_b.clone(),
+        scope: Some("shared".into()),
+        query: None,
+        limit: None,
+    });
+    assert!(resp.ok, "recall shared should succeed");
+    let memories = resp.memory.unwrap_or_default();
+    assert!(!memories.is_empty(), "Agent B should see Agent A's shared memory");
+    assert!(memories.iter().any(|m| m.contains("Rust async")),
+        "Should contain Agent A's shared content, got: {:?}", memories);
+}
+
+#[test]
+fn test_b53_recall_without_scope_returns_own_memories() {
+    use plico::api::semantic::{ApiRequest, ApiResponse};
+
+    let (kernel, _dir) = make_kernel();
+    let agent_a = kernel.register_agent("solo".into());
+    kernel.remember(&agent_a, "default", "my private note".into()).unwrap();
+
+    let resp = kernel.handle_api_request(ApiRequest::Recall {
+        agent_id: agent_a.clone(),
+        scope: None,
+        query: None,
+        limit: None,
+    });
+    assert!(resp.ok);
+    let memories = resp.memory.unwrap_or_default();
+    assert!(memories.iter().any(|m| m.contains("my private note")));
+}
+
+// ─── B52 Fix: Delete Invalid CID Returns Not Found ──────────────────────────
+
+#[test]
+fn test_b52_delete_invalid_cid_returns_not_found() {
+    use plico::api::semantic::{ApiRequest, ApiResponse};
+
+    let (kernel, _dir) = make_kernel();
+    let agent_id = kernel.register_agent("deleter".into());
+
+    // Use a valid hex CID format that doesn't exist in CAS
+    let fake_cid = "aa".repeat(32); // 64 hex chars — valid format, doesn't exist
+    let resp = kernel.handle_api_request(ApiRequest::Delete {
+        cid: fake_cid,
+        agent_id: agent_id.clone(),
+        agent_token: None,
+        tenant_id: None,
+    });
+    assert!(!resp.ok, "delete of nonexistent CID should fail");
+    let err = resp.error.unwrap_or_default().to_lowercase();
+    assert!(err.contains("not found") || err.contains("no such file"),
+        "Error should indicate not found, got: {}", err);
+}

@@ -164,6 +164,9 @@ fn test_batch_memory_store() {
     // Verify memories can be recalled
     let recall_req = ApiRequest::Recall {
         agent_id: "MemAgent".to_string(),
+        scope: None,
+        query: None,
+        limit: None,
     };
     let recall_response = kernel.handle_api_request(recall_req);
     assert!(recall_response.ok);

@@ -58,7 +58,7 @@ path = "src/bin/aicli/main.rs"
 
 [[bin]]
 name = "plico-mcp"
-path = "src/bin/plico_mcp.rs"
+path = "src/bin/plico_mcp/main.rs"
 
 [[bin]]
 name = "plico-sse"

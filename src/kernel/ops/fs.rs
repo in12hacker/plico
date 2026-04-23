@@ -244,14 +244,21 @@ impl crate::kernel::AIKernel {
         );
         let _guard = span.enter();
 
+        // B52 fix: check existence before permissions so invalid CID returns "not found"
+        let existing_obj = self.fs.read(&Query::ByCid(cid.to_string()))
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::NotFound, e.to_string()))?;
+        if existing_obj.is_empty() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("Object not found: {}", cid),
+            ));
+        }
+
         let ctx = PermissionContext::new(agent_id.to_string(), tenant_id.to_string());
         self.permissions.check(&ctx, PermissionAction::Delete)?;
-        if let Ok(obj) = self.fs.read(&Query::ByCid(cid.to_string())) {
-            if let Some(existing) = obj.first() {
-                // Check tenant isolation first
-                self.permissions.check_tenant_access(&ctx, &existing.meta.tenant_id)?;
-                self.permissions.check_ownership(&ctx, &existing.meta.created_by)?;
-            }
+        if let Some(existing) = existing_obj.first() {
+            self.permissions.check_tenant_access(&ctx, &existing.meta.tenant_id)?;
+            self.permissions.check_ownership(&ctx, &existing.meta.created_by)?;
         }
         self.fs.delete(cid, agent_id.to_string())?;
 

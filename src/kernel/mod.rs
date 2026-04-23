@@ -4,6 +4,16 @@
 //! Semantic FS, and Permission Guardrails. Upper-layer AI agents
 //! interact with the kernel through the semantic API.
 //!
+//! # Layout
+//!
+//! @lines 43-83    AIKernel struct (40+ fields)
+//! @lines 85-265   AIKernel::new() constructor
+//! @lines 267-309  utility methods — auto_persist, accessors
+//! @lines 311-425  extract_agent_id() — request→agent_id mapping
+//! @lines 427-1849 handle_api_request() — main dispatch (60+ variants)
+//! @lines 1852-1858 parse_scope() helper
+//! @lines 1863-1911 link_memory_to_kg() — A-4 Memory Link Engine
+//!
 //! # Module Structure
 //! - `mod.rs` — struct, constructor, handle_api_request
 //! - `builtin_tools.rs` — tool registration
@@ -318,7 +328,7 @@ impl AIKernel {
             ApiRequest::Update { agent_id, .. } |
             ApiRequest::Delete { agent_id, .. } |
             ApiRequest::Remember { agent_id, .. } |
-            ApiRequest::Recall { agent_id } |
+            ApiRequest::Recall { agent_id, .. } |
             ApiRequest::RememberLongTerm { agent_id, .. } |
             ApiRequest::RecallSemantic { agent_id, .. } |
             ApiRequest::Explore { agent_id, .. } |
@@ -568,12 +578,26 @@ impl AIKernel {
                     Err(e) => ApiResponse::error(e),
                 }
             }
-            ApiRequest::Recall { agent_id } => {
-                let memories: Vec<String> = self.recall(&agent_id, "default").into_iter()
-                    .filter_map(|m| match m.content {
-                        crate::memory::MemoryContent::Text(t) => Some(t),
-                        _ => None,
-                    }).collect();
+            ApiRequest::Recall { agent_id, scope, query, limit } => {
+                let memories: Vec<String> = match scope.as_deref() {
+                    Some("shared") => {
+                        let lim = limit.unwrap_or(20);
+                        self.recall_shared(&agent_id, None, query.as_deref(), lim)
+                            .into_iter()
+                            .filter_map(|m| match m.content {
+                                crate::memory::MemoryContent::Text(t) => Some(t),
+                                crate::memory::MemoryContent::Procedure(p) => Some(format!("procedure:{}", p.name)),
+                                _ => None,
+                            }).collect()
+                    }
+                    _ => {
+                        self.recall(&agent_id, "default").into_iter()
+                            .filter_map(|m| match m.content {
+                                crate::memory::MemoryContent::Text(t) => Some(t),
+                                _ => None,
+                            }).collect()
+                    }
+                };
                 let mut r = ApiResponse::ok();
                 r.memory = Some(memories);
                 r

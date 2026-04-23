@@ -67,7 +67,23 @@ pub fn cmd_remember(kernel: &AIKernel, args: &[String]) -> ApiResponse {
 
 pub fn cmd_recall(kernel: &AIKernel, args: &[String]) -> ApiResponse {
     let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
+    let scope = extract_arg(args, "--scope");
     let tier_filter = extract_arg(args, "--tier").map(|s| parse_memory_tier(&s));
+
+    if scope.as_deref() == Some("shared") {
+        let query = extract_arg(args, "--query");
+        let limit = extract_arg(args, "--limit")
+            .and_then(|l| l.parse::<usize>().ok())
+            .unwrap_or(20);
+        let entries = kernel.recall_shared(&agent_id, None, query.as_deref(), limit);
+        let strings: Vec<String> = entries.iter()
+            .map(|m| format!("[{}:{}] {}", m.agent_id, format!("{:?}", m.tier), m.content.display()))
+            .collect();
+        let mut r = ApiResponse::ok();
+        r.memory = Some(strings);
+        return r;
+    }
+
     let memories = kernel.recall(&agent_id, "default");
     let filtered: Vec<_> = match tier_filter {
         Some(tier) => memories.into_iter().filter(|m| m.tier == tier).collect(),

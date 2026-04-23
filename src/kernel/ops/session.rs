@@ -496,8 +496,23 @@ pub fn start_session_orchestrate(
                 }
             }
             Some(Err(_)) | None => {
-                // Prefetch still pending or failed — fall back to assembly_id
-                Some(assembly_id)
+                // B51 fix: even when prefetch is not ready, store a placeholder in CAS
+                // so warm_context always returns a CAS CID, not a UUID
+                let placeholder = serde_json::json!({
+                    "items": [],
+                    "total_tokens": 0,
+                    "budget": budget,
+                    "status": "pending",
+                    "assembly_id": assembly_id,
+                });
+                let content = serde_json::to_vec(&placeholder).unwrap_or_default();
+                match fs.create(content, vec!["warm-context".into(), "pending".into()], agent_id.to_string(), Some(hint.clone())) {
+                    Ok(cid) => Some(cid),
+                    Err(e) => {
+                        tracing::warn!("Failed to store warm_context placeholder in CAS: {}, falling back to assembly_id", e);
+                        Some(assembly_id)
+                    }
+                }
             }
         }
     } else {
@@ -983,21 +998,19 @@ mod tests {
             &root,
         ).unwrap();
 
-        // warm_context should be present (either CID or UUID fallback)
+        // B51 Fix: warm_context should always be a CAS CID (64 hex chars), never a UUID
         assert!(result.warm_context.is_some());
         let warm_context = result.warm_context.unwrap();
 
-        // B51 Fix: when prefetch is not ready, we fall back to assembly_id (UUID)
-        // A UUID has format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
-        let is_uuid = warm_context.chars().filter(|c| *c == '-').count() == 4
-            && warm_context.len() == 36;
-
-        // Either we got a valid CAS CID (64 hex chars) OR we fell back to UUID
         let is_valid_cid = warm_context.len() == 64
             && warm_context.chars().all(|c| c.is_ascii_hexdigit());
 
-        assert!(is_uuid || is_valid_cid,
-            "warm_context should be either a valid CAS CID (64 hex chars) or a UUID fallback, got: {}", warm_context);
+        assert!(is_valid_cid,
+            "warm_context should be a valid CAS CID (64 hex chars), got: {}", warm_context);
+
+        // Verify the CID can be read from CAS
+        let obj = fs.read(&crate::fs::semantic_fs::Query::ByCid(warm_context.clone()));
+        assert!(obj.is_ok(), "warm_context CID should be readable from CAS");
     }
 
     #[test]

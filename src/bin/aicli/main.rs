@@ -168,7 +168,10 @@ fn build_request(args: &[String]) -> Option<ApiRequest> {
         }
         Some("recall") => {
             let agent_id = commands::extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
-            Some(ApiRequest::Recall { agent_id })
+            let scope = commands::extract_arg(args, "--scope");
+            let query = commands::extract_arg(args, "--query");
+            let limit = commands::extract_arg(args, "--limit").and_then(|l| l.parse().ok());
+            Some(ApiRequest::Recall { agent_id, scope, query, limit })
         }
         Some("explore") => {
             let cid = commands::extract_arg(args, "--cid").unwrap_or_default();

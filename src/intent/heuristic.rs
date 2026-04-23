@@ -255,6 +255,9 @@ fn to_api_request(m: PatternMatch, agent_id: &str) -> ResolvedIntent {
         ActionType::Recall => {
             (ApiRequest::Recall {
                 agent_id: agent_id.to_string(),
+                scope: None,
+                query: None,
+                limit: None,
             }, "Recall all memories".to_string())
         }
         ActionType::ListAgents => {
