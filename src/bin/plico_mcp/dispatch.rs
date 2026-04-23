@@ -1136,3 +1136,424 @@ fn dispatch_plico_skills(args: &Value, kernel: &AIKernel) -> Result<String, Stri
         _ => Err(format!("unknown skills action: {}", skill_action)),
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use std::sync::Arc;
+
+    fn make_kernel() -> (Arc<AIKernel>, tempfile::TempDir) {
+        let _ = std::env::set_var("EMBEDDING_BACKEND", "stub");
+        let dir = tempfile::tempdir().unwrap();
+        let kernel = Arc::new(AIKernel::new(dir.path().to_path_buf()).expect("kernel init"));
+        (kernel, dir)
+    }
+
+    // ── dispatch_tool ────────────────────────────────────────────────────────
+
+    #[test]
+    fn dispatch_tool_plico_routes_to_dispatch_plico() {
+        let (kernel, _dir) = make_kernel();
+        let args = json!({"action": "status"});
+        let result = dispatch_tool("plico", &args, &kernel);
+        // "status" is valid → ok, not "unknown action"
+        assert!(result.is_ok());
+        let out: serde_json::Value = serde_json::from_str(&result.unwrap()).unwrap();
+        assert!(out.get("ok").is_some());
+    }
+
+    #[test]
+    fn dispatch_tool_plico_store_routes_to_dispatch_plico_store() {
+        let (kernel, _dir) = make_kernel();
+        let args = json!({"action": "read", "cid": "nonexistent-cid"});
+        let result = dispatch_tool("plico_store", &args, &kernel);
+        // read with nonexistent cid returns error, not "unknown store action"
+        assert!(result.is_err()); // "no such object" or similar
+        assert!(!result.unwrap_err().contains("unknown store action"));
+    }
+
+    #[test]
+    fn dispatch_tool_plico_skills_routes_to_dispatch_plico_skills() {
+        let (kernel, _dir) = make_kernel();
+        let args = json!({"action": "list"});
+        let result = dispatch_tool("plico_skills", &args, &kernel);
+        // list returns skills json with "skills" key
+        assert!(result.is_ok());
+        let out: serde_json::Value = serde_json::from_str(&result.unwrap()).unwrap();
+        assert!(out.get("skills").is_some());
+    }
+
+    #[test]
+    fn dispatch_tool_unknown_tool_returns_error() {
+        let (kernel, _dir) = make_kernel();
+        let args = json!({});
+        let result = dispatch_tool("unknown_tool", &args, &kernel);
+        assert_eq!(result.unwrap_err(), "unknown tool: unknown_tool");
+    }
+
+    // ── dispatch_plico (pipeline vs single action) ─────────────────────────────
+
+    #[test]
+    fn dispatch_plico_missing_action_returns_error() {
+        let (kernel, _dir) = make_kernel();
+        let args = json!({});
+        let result = dispatch_plico(&args, &kernel);
+        let err = result.unwrap_err();
+        assert!(err.contains("missing required parameter: action"));
+    }
+
+    #[test]
+    fn dispatch_plico_unknown_action_returns_error() {
+        let (kernel, _dir) = make_kernel();
+        let args = json!({"action": "not_a_real_action"});
+        let result = dispatch_plico(&args, &kernel);
+        let err = result.unwrap_err();
+        assert!(err.contains("unknown action: not_a_real_action"));
+    }
+
+    // ── dispatch_plico_action ──────────────────────────────────────────────────
+
+    #[test]
+    fn dispatch_plico_action_help_returns_actions_list() {
+        let (kernel, _dir) = make_kernel();
+        let args = json!({"action": "help"});
+        let result = dispatch_plico_action("help", &args, &kernel);
+        assert!(result.is_ok());
+        let out: serde_json::Value = serde_json::from_str(&result.unwrap()).unwrap();
+        let actions = out.get("actions").expect("help should return actions array");
+        let names: Vec<&str> = actions.as_array().unwrap().iter().filter_map(|a| a.get("name").and_then(|n| n.as_str())).collect();
+        assert!(names.contains(&"put"));
+        assert!(names.contains(&"search"));
+        assert!(names.contains(&"status"));
+    }
+
+    #[test]
+    fn dispatch_plico_action_status_ok() {
+        let (kernel, _dir) = make_kernel();
+        let args = json!({"action": "status"});
+        let result = dispatch_plico_action("status", &args, &kernel);
+        assert!(result.is_ok());
+        let out: serde_json::Value = serde_json::from_str(&result.unwrap()).unwrap();
+        assert!(out.get("ok").is_some() || out.get("cas_object_count").is_some());
+    }
+
+    #[test]
+    fn dispatch_plico_action_get_missing_cid_returns_error() {
+        let (kernel, _dir) = make_kernel();
+        let args = json!({"action": "get"});
+        let result = dispatch_plico_action("get", &args, &kernel);
+        let err = result.unwrap_err();
+        assert!(err.contains("get requires cid"));
+    }
+
+    #[test]
+    fn dispatch_plico_action_put_ok() {
+        let (kernel, _dir) = make_kernel();
+        let args = json!({
+            "action": "put",
+            "content": "hello from test",
+            "agent_id": "test-agent"
+        });
+        let result = dispatch_plico_action("put", &args, &kernel);
+        assert!(result.is_ok());
+        let out: serde_json::Value = serde_json::from_str(&result.unwrap()).unwrap();
+        // successful put returns an object with ok:true and a cid
+        assert_eq!(out.get("ok").and_then(|v| v.as_bool()), Some(true));
+    }
+
+    #[test]
+    fn dispatch_plico_action_put_with_tags() {
+        let (kernel, _dir) = make_kernel();
+        let args = json!({
+            "action": "put",
+            "content": "tagged content",
+            "tags": ["test-tag", "unit-test"],
+            "agent_id": "test-agent"
+        });
+        let result = dispatch_plico_action("put", &args, &kernel);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn dispatch_plico_action_get_nonexistent_cid_returns_error() {
+        let (kernel, _dir) = make_kernel();
+        let args = json!({"action": "get", "cid": "nonexistent-cid-12345"});
+        let result = dispatch_plico_action("get", &args, &kernel);
+        let err = result.unwrap_err();
+        assert!(err.contains("not found") || err.contains("no such object") || err.contains("nonexistent"));
+    }
+
+    #[test]
+    fn dispatch_plico_action_search_requires_query() {
+        let (kernel, _dir) = make_kernel();
+        let args = json!({"action": "search"});
+        let result = dispatch_plico_action("search", &args, &kernel);
+        let err = result.unwrap_err();
+        assert!(err.contains("search requires query"));
+    }
+
+    #[test]
+    fn dispatch_plico_action_search_ok_with_empty_query() {
+        let (kernel, _dir) = make_kernel();
+        let args = json!({"action": "search", "query": "", "agent_id": "test-agent"});
+        let result = dispatch_plico_action("search", &args, &kernel);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn dispatch_plico_action_remember_ok() {
+        let (kernel, _dir) = make_kernel();
+        let args = json!({
+            "action": "remember",
+            "content": "remember this thought",
+            "agent_id": "test-agent"
+        });
+        let result = dispatch_plico_action("remember", &args, &kernel);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn dispatch_plico_action_remember_requires_content() {
+        let (kernel, _dir) = make_kernel();
+        let args = json!({"action": "remember"});
+        let result = dispatch_plico_action("remember", &args, &kernel);
+        let err = result.unwrap_err();
+        assert!(err.contains("remember requires content"));
+    }
+
+    #[test]
+    fn dispatch_plico_action_recall_ok() {
+        let (kernel, _dir) = make_kernel();
+        let args = json!({"action": "recall", "agent_id": "test-agent"});
+        let result = dispatch_plico_action("recall", &args, &kernel);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn dispatch_plico_action_memory_stats_ok() {
+        let (kernel, _dir) = make_kernel();
+        let args = json!({"action": "memory_stats", "agent_id": "test-agent"});
+        let result = dispatch_plico_action("memory_stats", &args, &kernel);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn dispatch_plico_action_growth_unknown_agent_returns_error() {
+        let (kernel, _dir) = make_kernel();
+        let args = json!({"action": "growth", "agent_id": "nonexistent-agent"});
+        let result = dispatch_plico_action("growth", &args, &kernel);
+        // Agent not registered → error response (not panick)
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("not found") || err.contains("Agent"));
+    }
+
+    #[test]
+    fn dispatch_plico_action_session_start_ok() {
+        let (kernel, _dir) = make_kernel();
+        let args = json!({
+            "action": "session_start",
+            "agent_id": "test-agent",
+            "intent_hint": "testing session start"
+        });
+        let result = dispatch_plico_action("session_start", &args, &kernel);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn dispatch_plico_action_session_start_with_handover() {
+        let (kernel, _dir) = make_kernel();
+        let args = json!({
+            "action": "session_start",
+            "agent_id": "test-agent",
+            "handover_mode": "compact"
+        });
+        let result = dispatch_plico_action("session_start", &args, &kernel);
+        assert!(result.is_ok());
+        let out: serde_json::Value = serde_json::from_str(&result.unwrap()).unwrap();
+        // handover mode compact should include handover key
+        assert!(out.get("handover").is_some());
+    }
+
+    #[test]
+    fn dispatch_plico_action_session_end_requires_session_id() {
+        let (kernel, _dir) = make_kernel();
+        let args = json!({"action": "session_end", "agent_id": "test-agent"});
+        let result = dispatch_plico_action("session_end", &args, &kernel);
+        let err = result.unwrap_err();
+        assert!(err.contains("session_end requires session_id"));
+    }
+
+    // ── execute_pipeline ───────────────────────────────────────────────────────
+
+    #[test]
+    fn execute_pipeline_single_step_ok() {
+        let (kernel, _dir) = make_kernel();
+        let args = json!({
+            "pipeline": [
+                {"step": "s1", "action": "status"}
+            ]
+        });
+        let result = execute_pipeline(&args, &kernel);
+        assert!(result.is_ok());
+        let out: serde_json::Value = serde_json::from_str(&result.unwrap()).unwrap();
+        assert!(out.get("s1").is_some());
+    }
+
+    #[test]
+    fn execute_pipeline_multiple_steps_ok() {
+        let (kernel, _dir) = make_kernel();
+        let args = json!({
+            "pipeline": [
+                {"step": "step_a", "action": "put", "content": "p1", "agent_id": "test"},
+                {"step": "step_b", "action": "status"}
+            ]
+        });
+        let result = execute_pipeline(&args, &kernel);
+        assert!(result.is_ok());
+        let out: serde_json::Value = serde_json::from_str(&result.unwrap()).unwrap();
+        assert!(out.get("step_a").is_some());
+        assert!(out.get("step_b").is_some());
+    }
+
+    #[test]
+    fn execute_pipeline_missing_action_returns_error() {
+        let (kernel, _dir) = make_kernel();
+        let args = json!({
+            "pipeline": [
+                {"step": "s1"}
+            ]
+        });
+        let result = execute_pipeline(&args, &kernel);
+        let err = result.unwrap_err();
+        assert!(err.contains("missing action"));
+    }
+
+    // ── substitute_pipeline_vars ─────────────────────────────────────────────
+
+    #[test]
+    fn substitute_pipeline_vars_empty_context_keeps_step() {
+        let ctx = std::collections::HashMap::new();
+        let step = json!({"action": "status"});
+        let result = substitute_pipeline_vars(&step, &ctx);
+        assert!(result.is_ok());
+        let out = result.unwrap();
+        assert_eq!(out.get("action").and_then(|v| v.as_str()), Some("status"));
+    }
+
+    #[test]
+    fn substitute_pipeline_vars_no_match_keeps_original() {
+        let ctx = std::collections::HashMap::new();
+        let step = json!({"action": "get", "cid": "unchanged-value"});
+        let result = substitute_pipeline_vars(&step, &ctx);
+        assert!(result.is_ok());
+        let out = result.unwrap();
+        assert_eq!(out.get("cid").and_then(|v| v.as_str()), Some("unchanged-value"));
+    }
+
+    // ── dispatch_plico_store ──────────────────────────────────────────────────
+
+    #[test]
+    fn dispatch_plico_store_put_ok() {
+        let (kernel, _dir) = make_kernel();
+        let args = json!({
+            "action": "put",
+            "content": "store test",
+            "agent_id": "test-agent"
+        });
+        let result = dispatch_plico_store(&args, &kernel);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn dispatch_plico_store_read_nonexistent_cid_returns_error() {
+        let (kernel, _dir) = make_kernel();
+        // read with nonexistent cid returns an error (not ok)
+        let read_args = json!({"action": "read", "cid": "nonexistent-cid", "agent_id": "test-agent"});
+        let result = dispatch_plico_store(&read_args, &kernel);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn dispatch_plico_store_unknown_action_returns_error() {
+        let (kernel, _dir) = make_kernel();
+        let args = json!({"action": "delete"});
+        let result = dispatch_plico_store(&args, &kernel);
+        let err = result.unwrap_err();
+        assert!(err.contains("unknown store action: delete"));
+    }
+
+    // ── dispatch_plico_skills ────────────────────────────────────────────────
+
+    #[test]
+    fn dispatch_plico_skills_list_ok() {
+        let (kernel, _dir) = make_kernel();
+        let args = json!({"action": "list"});
+        let result = dispatch_plico_skills(&args, &kernel);
+        assert!(result.is_ok());
+        let out: serde_json::Value = serde_json::from_str(&result.unwrap()).unwrap();
+        assert!(out.get("skills").is_some());
+        assert!(out.get("count").is_some());
+    }
+
+    #[test]
+    fn dispatch_plico_skills_create_ok() {
+        let (kernel, _dir) = make_kernel();
+        let args = json!({
+            "action": "create",
+            "name": "test-skill",
+            "description": "A test skill",
+            "steps": [
+                {"description": "step one", "action": "plico(action=\"status\")"}
+            ],
+            "agent_id": "test-agent"
+        });
+        let result = dispatch_plico_skills(&args, &kernel);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn dispatch_plico_skills_run_missing_name_returns_error() {
+        let (kernel, _dir) = make_kernel();
+        let args = json!({"action": "run"});
+        let result = dispatch_plico_skills(&args, &kernel);
+        let err = result.unwrap_err();
+        assert!(err.contains("run requires name"));
+    }
+
+    #[test]
+    fn dispatch_plico_skills_run_unknown_skill_returns_error() {
+        let (kernel, _dir) = make_kernel();
+        let args = json!({"action": "run", "name": "nonexistent-skill-xyz"});
+        let result = dispatch_plico_skills(&args, &kernel);
+        let err = result.unwrap_err();
+        assert!(err.contains("no skill named 'nonexistent-skill-xyz' found"));
+    }
+
+    // ── generate_help_response ───────────────────────────────────────────────
+
+    #[test]
+    fn generate_help_response_contains_expected_actions() {
+        let out = generate_help_response();
+        let json: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let actions = json.get("actions").expect("actions key");
+        let names: Vec<&str> = actions.as_array().unwrap()
+            .iter()
+            .filter_map(|a| a.get("name").and_then(|n| n.as_str()))
+            .collect();
+
+        // key actions that must be present
+        assert!(names.contains(&"put"));
+        assert!(names.contains(&"get"));
+        assert!(names.contains(&"search"));
+        assert!(names.contains(&"status"));
+        assert!(names.contains(&"help"));
+        assert!(names.contains(&"remember"));
+        assert!(names.contains(&"recall"));
+    }
+}

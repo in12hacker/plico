@@ -4275,3 +4275,241 @@ fn test_b52_delete_invalid_cid_returns_not_found() {
     assert!(err.contains("not found") || err.contains("no such file"),
         "Error should indicate not found, got: {}", err);
 }
+
+// ─── AIKernel handle_api_request Dispatch Tests ─────────────────────────────
+
+#[test]
+fn test_kernel_handle_invalid_action() {
+    // Sending a valid ApiRequest variant with data that causes an error path.
+    // This exercises the error handling in handle_api_request for invalid operations.
+    use plico::api::semantic::{ApiRequest, ContentEncoding};
+
+    let (kernel, _dir) = make_kernel();
+
+    // Read a CID that does not exist — should return error response
+    let resp = kernel.handle_api_request(ApiRequest::Read {
+        cid: "aa".repeat(32), // valid hex format, doesn't exist
+        agent_id: "test-agent".to_string(),
+        tenant_id: None,
+        agent_token: None,
+    });
+    assert!(!resp.ok, "read of nonexistent CID should fail");
+    let err = resp.error.unwrap_or_default().to_lowercase();
+    assert!(err.contains("not found") || err.contains("no such file") || err.contains("does not exist"),
+        "Error should indicate not found, got: {}", err);
+}
+
+#[test]
+fn test_kernel_handle_create_via_api() {
+    use plico::api::semantic::{ApiRequest, ContentEncoding};
+
+    let (kernel, _dir) = make_kernel();
+    let resp = kernel.handle_api_request(ApiRequest::Create {
+        api_version: None,
+        content: "API-created content".to_string(),
+        content_encoding: ContentEncoding::Utf8,
+        tags: vec!["api-test".to_string()],
+        agent_id: "api-agent".to_string(),
+        tenant_id: None,
+        agent_token: None,
+        intent: None,
+    });
+    assert!(resp.ok, "Create via API should succeed, error: {:?}", resp.error);
+    assert!(resp.cid.is_some(), "Create response should include cid");
+    let cid = resp.cid.unwrap();
+    assert!(!cid.is_empty(), "cid should not be empty");
+
+    // Verify the object can be read back
+    let read_resp = kernel.handle_api_request(ApiRequest::Read {
+        cid,
+        agent_id: "api-agent".to_string(),
+        tenant_id: None,
+        agent_token: None,
+    });
+    assert!(read_resp.ok);
+    assert_eq!(read_resp.data.as_ref().unwrap(), "API-created content");
+}
+
+#[test]
+fn test_kernel_handle_search_via_api() {
+    use plico::api::semantic::{ApiRequest, ContentEncoding};
+
+    let (kernel, _dir) = make_kernel();
+
+    // Create an object first
+    let create_resp = kernel.handle_api_request(ApiRequest::Create {
+        api_version: None,
+        content: "searchable content".to_string(),
+        content_encoding: ContentEncoding::Utf8,
+        tags: vec!["searchable".to_string()],
+        agent_id: "search-agent".to_string(),
+        tenant_id: None,
+        agent_token: None,
+        intent: None,
+    });
+    assert!(create_resp.ok, "Create should succeed");
+
+    // Search for it
+    let resp = kernel.handle_api_request(ApiRequest::Search {
+        query: "searchable".to_string(),
+        agent_id: "search-agent".to_string(),
+        tenant_id: None,
+        agent_token: None,
+        limit: Some(10),
+        offset: None,
+        require_tags: vec!["searchable".to_string()],
+        exclude_tags: vec![],
+        since: None,
+        until: None,
+    });
+    assert!(resp.ok, "Search should succeed, error: {:?}", resp.error);
+    assert!(resp.results.is_some(), "Search should return results");
+    assert!(!resp.results.unwrap().is_empty(), "Search should find the created object");
+}
+
+#[test]
+fn test_kernel_handle_agent_register_via_api() {
+    use plico::api::semantic::ApiRequest;
+
+    let (kernel, _dir) = make_kernel();
+    let resp = kernel.handle_api_request(ApiRequest::RegisterAgent {
+        name: "ApiRegisteredAgent".to_string(),
+    });
+    assert!(resp.ok, "RegisterAgent should succeed, error: {:?}", resp.error);
+    assert!(resp.agent_id.is_some(), "RegisterAgent should return agent_id");
+
+    // Verify agent appears in list
+    let list_resp = kernel.handle_api_request(ApiRequest::ListAgents);
+    assert!(list_resp.ok);
+    let agents = list_resp.agents.unwrap();
+    assert!(agents.iter().any(|a| a.name == "ApiRegisteredAgent"),
+        "Registered agent should appear in list");
+}
+
+#[test]
+fn test_kernel_new_creates_valid_instance() {
+    // AIKernel::new returns Result, so a successful result means a valid instance
+    let _ = std::env::set_var("EMBEDDING_BACKEND", "stub");
+    let dir = tempdir().unwrap();
+    let kernel = AIKernel::new(dir.path().to_path_buf());
+    assert!(kernel.is_ok(), "AIKernel::new should succeed");
+    // Further verify it works by performing a simple operation
+    let kernel = kernel.unwrap();
+    let agents = kernel.list_agents();
+    assert_eq!(agents.len(), 0, "New kernel should have no agents");
+}
+
+#[test]
+fn test_kernel_handle_remember_via_api() {
+    use plico::api::semantic::ApiRequest;
+
+    let (kernel, _dir) = make_kernel();
+    let agent_id = kernel.register_agent("remember-agent".to_string());
+
+    let resp = kernel.handle_api_request(ApiRequest::Remember {
+        agent_id: agent_id.clone(),
+        content: "Remember this via API".to_string(),
+        tenant_id: None,
+    });
+    assert!(resp.ok, "Remember via API should succeed, error: {:?}", resp.error);
+
+    // Verify memory was stored by recalling
+    let recall_resp = kernel.handle_api_request(ApiRequest::Recall {
+        agent_id: agent_id.clone(),
+        scope: None,
+        query: None,
+        limit: None,
+    });
+    assert!(recall_resp.ok);
+    let memories = recall_resp.memory.unwrap_or_default();
+    assert!(!memories.is_empty(), "Recall should return stored memories");
+    assert!(memories.iter().any(|m| m.contains("Remember this via API")),
+        "Memory content should match what was stored");
+}
+
+#[test]
+fn test_kernel_handle_recall_via_api() {
+    use plico::api::semantic::ApiRequest;
+
+    let (kernel, _dir) = make_kernel();
+    let agent_id = kernel.register_agent("recall-agent".to_string());
+
+    // Store a memory first
+    kernel.remember(&agent_id, "default", "First memory for recall".to_string()).unwrap();
+    kernel.remember(&agent_id, "default", "Second memory for recall".to_string()).unwrap();
+
+    // Recall via API
+    let resp = kernel.handle_api_request(ApiRequest::Recall {
+        agent_id: agent_id.clone(),
+        scope: None,
+        query: None,
+        limit: None,
+    });
+    assert!(resp.ok, "Recall via API should succeed, error: {:?}", resp.error);
+    let memories = resp.memory.unwrap_or_default();
+    assert!(memories.len() >= 2, "Should have at least 2 memories stored");
+    assert!(memories.iter().any(|m| m.contains("First memory")),
+        "Should recall first memory");
+    assert!(memories.iter().any(|m| m.contains("Second memory")),
+        "Should recall second memory");
+}
+
+#[test]
+fn test_kernel_concurrent_api_requests() {
+    use plico::api::semantic::{ApiRequest, ContentEncoding};
+    use std::sync::Arc;
+
+    let (kernel, _dir) = make_kernel_arc();
+    let agent_id = kernel.register_agent("concurrent-agent".to_string());
+
+    // Pre-clone agent_id for each thread since FnMut closures can only consume once
+    let agent_ids: Vec<String> = (0..5).map(|_| agent_id.clone()).collect();
+
+    let handles: Vec<_> = (0..5).map(|i| {
+        let k = Arc::clone(&kernel);
+        let aid = agent_ids[i].clone();
+        std::thread::spawn(move || {
+            let resp = k.handle_api_request(ApiRequest::Create {
+                api_version: None,
+                content: format!("Concurrent content {}", i),
+                content_encoding: ContentEncoding::Utf8,
+                tags: vec![format!("concurrent-{}", i)],
+                agent_id: aid,
+                tenant_id: None,
+                agent_token: None,
+                intent: None,
+            });
+            resp
+        })
+    }).collect();
+
+    let results: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+
+    // All requests should succeed
+    for (i, resp) in results.iter().enumerate() {
+        assert!(resp.ok, "Request {} should succeed, error: {:?}", i, resp.error);
+        assert!(resp.cid.is_some(), "Request {} should have cid", i);
+    }
+}
+
+#[test]
+fn test_kernel_list_agents_returns_registered() {
+    use plico::api::semantic::ApiRequest;
+
+    let (kernel, _dir) = make_kernel();
+
+    // Register two agents
+    let id1 = kernel.register_agent("AgentOne".to_string());
+    let id2 = kernel.register_agent("AgentTwo".to_string());
+    assert_ne!(id1, id2, "Two agents should have different IDs");
+
+    // List via API
+    let resp = kernel.handle_api_request(ApiRequest::ListAgents);
+    assert!(resp.ok, "ListAgents should succeed");
+    let agents = resp.agents.expect("ListAgents should return agents list");
+    assert_eq!(agents.len(), 2, "Should have exactly 2 agents registered");
+
+    let names: Vec<_> = agents.iter().map(|a| a.name.clone()).collect();
+    assert!(names.contains(&"AgentOne".to_string()));
+    assert!(names.contains(&"AgentTwo".to_string()));
+}
