@@ -181,6 +181,9 @@ pub fn cmd_delete(kernel: &AIKernel, args: &[String]) -> ApiResponse {
 
 pub fn cmd_history(kernel: &AIKernel, args: &[String]) -> ApiResponse {
     let cid = extract_arg(args, "--cid").unwrap_or_else(|| args.get(1).cloned().unwrap_or_default());
+    if cid.is_empty() {
+        return ApiResponse::error("cid is required".to_string());
+    }
     let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
 
     let chain = kernel.version_history(&cid, &agent_id);
@@ -191,6 +194,9 @@ pub fn cmd_history(kernel: &AIKernel, args: &[String]) -> ApiResponse {
 
 pub fn cmd_rollback(kernel: &AIKernel, args: &[String]) -> ApiResponse {
     let cid = extract_arg(args, "--cid").unwrap_or_else(|| args.get(1).cloned().unwrap_or_default());
+    if cid.is_empty() {
+        return ApiResponse::error("cid is required".to_string());
+    }
     let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
 
     match kernel.rollback(&cid, &agent_id) {
@@ -284,5 +290,26 @@ mod tests {
         assert!(!response.ok, "read should fail for nonexistent CID");
         let err_msg = response.error.as_deref().unwrap_or("");
         assert!(!err_msg.is_empty(), "error message should not be empty");
+    }
+
+    // F-6: CLI System Audit — cmd_history / cmd_rollback empty CID check
+    #[test]
+    fn test_cmd_history_empty_cid_returns_error() {
+        let kernel = make_test_kernel();
+        let args = vec!["history".to_string()];
+        let response = cmd_history(&kernel, &args);
+        assert!(!response.ok, "history with no cid should fail");
+        let err = response.error.unwrap_or_default();
+        assert!(err.contains("cid"), "error should mention cid requirement");
+    }
+
+    #[test]
+    fn test_cmd_rollback_empty_cid_returns_error() {
+        let kernel = make_test_kernel();
+        let args = vec!["rollback".to_string()];
+        let response = cmd_rollback(&kernel, &args);
+        assert!(!response.ok, "rollback with no cid should fail");
+        let err = response.error.unwrap_or_default();
+        assert!(err.contains("cid"), "error should mention cid requirement");
     }
 }
