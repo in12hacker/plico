@@ -22,6 +22,7 @@
 
 mod builtin_tools;
 pub mod event_bus;
+pub mod hook;
 pub mod persistence;
 pub mod ops;
 pub mod tests; // test helpers for inline #[cfg(test)] modules
@@ -72,6 +73,8 @@ pub struct AIKernel {
     pub(crate) tool_registry: Arc<ToolRegistry>,
     pub(crate) message_bus: Arc<MessageBus>,
     pub(crate) event_bus: Arc<EventBus>,
+    /// Hook registry — lifecycle interception for tool calls (F-1, Node 19).
+    pub(crate) hook_registry: Arc<hook::HookRegistry>,
     /// Proactive context assembly — semantic prefetch engine.
     pub(crate) prefetch: Arc<ops::prefetch::IntentPrefetcher>,
     /// Agent authentication — cryptographic token store.
@@ -177,6 +180,9 @@ impl AIKernel {
         let event_log_path = root.join("event_log.jsonl");
         let event_bus = Arc::new(EventBus::with_persistence(event_log_path));
 
+        // Hook registry — lifecycle interception for tool calls (F-1, Node 19)
+        let hook_registry = Arc::new(hook::HookRegistry::new());
+
         // Proactive context assembly (semantic prefetch)
         let prefetch = Arc::new(IntentPrefetcher::new(
             search_backend.clone(),
@@ -251,6 +257,7 @@ impl AIKernel {
             tool_registry,
             message_bus,
             event_bus,
+            hook_registry,
             prefetch,
             key_store,
             tenant_store,

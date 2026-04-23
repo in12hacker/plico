@@ -208,17 +208,42 @@ impl AIKernel {
     /// Enforces agent tool allowlist: if the agent has a non-empty `allowed_tools`
     /// list, only those tools can be called. Returns error for blocked/unknown tools.
     pub fn execute_tool(&self, name: &str, params: &serde_json::Value, agent_id: &str) -> ToolResult {
+        // F-1 Hook哨兵: PreToolCall interception
+        let ctx = crate::kernel::hook::HookContext::new(agent_id, name, params.clone());
+        if let crate::kernel::hook::HookResult::Block { reason } =
+            self.hook_registry.run_hooks(crate::kernel::hook::HookPoint::PreToolCall, &ctx)
+        {
+            return ToolResult::error(format!("blocked by hook: {}", reason));
+        }
+
+        let result = self.execute_tool_impl(name, params, agent_id);
+
+        // F-1 Hook哨兵: PostToolCall interception
+        let mut post_ctx = ctx;
+        post_ctx.params = serde_json::to_value(&result).unwrap_or(params.clone());
+        self.hook_registry.run_hooks(crate::kernel::hook::HookPoint::PostToolCall, &post_ctx);
+
+        result
+    }
+
+    /// Internal tool dispatch — all built-in tool match arms live here.
+    /// This is wrapped by execute_tool() which adds PreToolCall/PostToolCall hooks.
+    fn execute_tool_impl(&self, name: &str, params: &serde_json::Value, agent_id: &str) -> ToolResult {
         use serde_json::json;
+
+        // F-1: result initialized; early exits below assign before returning
+        let mut result = ToolResult::error("unreachable".to_string());
 
         let aid = crate::scheduler::AgentId(agent_id.to_string());
         if let Some(resources) = self.scheduler.get_resources(&aid) {
             if !resources.allowed_tools.is_empty()
                 && !resources.allowed_tools.iter().any(|t| t == name)
             {
-                return ToolResult::error(format!(
+                result = ToolResult::error(format!(
                     "Tool '{}' not in agent's allowed list: {:?}",
                     name, resources.allowed_tools
                 ));
+                return result;
             }
         }
 
@@ -228,14 +253,16 @@ impl AIKernel {
             let ctx = crate::api::permission::PermissionContext::new(agent_id.to_string(), "default".to_string());
             let scope = format!("tool:{}", name);
             if self.permissions.check_scoped(&ctx, crate::api::permission::PermissionAction::Execute, Some(&scope)).is_err() {
-                return ToolResult::error(format!(
+                result = ToolResult::error(format!(
                     "Agent '{}' lacks Execute permission for external tool '{}'", agent_id, name
                 ));
+                return result;
             }
-            return handler.execute(params, agent_id);
+            result = handler.execute(params, agent_id);
+            return result;
         }
 
-        match name {
+        result = match name {
             "cas.create" => {
                 let content = params.get("content").and_then(|v| v.as_str()).unwrap_or("");
                 let tags: Vec<String> = params.get("tags")
@@ -751,7 +778,8 @@ Some(t) => {
                 ToolResult::ok(json!({"procedures": data, "count": data.len()}))
             }
             _ => ToolResult::error(format!("unknown tool: {}", name)),
-        }
+        };
+        result
     }
 
     /// Number of registered tools.
@@ -966,5 +994,156 @@ mod tests {
             serde_json::json!({}),
             "kernel");
         assert!(!result.success, "unknown tool should return error");
+    }
+
+    // ─── F-1 Hook哨兵 Integration Tests ───────────────────────────────────────
+
+    /// Handler that always blocks.
+    struct BlockHook;
+    impl crate::kernel::hook::HookHandler for BlockHook {
+        fn handle(&self, _point: crate::kernel::hook::HookPoint, _ctx: &crate::kernel::hook::HookContext) -> crate::kernel::hook::HookResult {
+            crate::kernel::hook::HookResult::Block { reason: "blocked by test hook".into() }
+        }
+    }
+
+    /// Handler that always continues.
+    struct NoOpTestHook;
+    impl crate::kernel::hook::HookHandler for NoOpTestHook {
+        fn handle(&self, _point: crate::kernel::hook::HookPoint, _ctx: &crate::kernel::hook::HookContext) -> crate::kernel::hook::HookResult {
+            crate::kernel::hook::HookResult::Continue
+        }
+    }
+
+    /// Handler that records call info for PostToolCall verification.
+    struct RecordingHook {
+        calls: std::sync::Arc<std::sync::Mutex<Vec<(crate::kernel::hook::HookPoint, String)>>>,
+    }
+    impl RecordingHook {
+        fn new() -> Self {
+            Self { calls: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())) }
+        }
+    }
+    impl crate::kernel::hook::HookHandler for RecordingHook {
+        fn handle(&self, point: crate::kernel::hook::HookPoint, ctx: &crate::kernel::hook::HookContext) -> crate::kernel::hook::HookResult {
+            self.calls.lock().unwrap().push((point, ctx.tool_name.clone()));
+            crate::kernel::hook::HookResult::Continue
+        }
+    }
+
+    #[test]
+    fn test_hook_registry_block_prevents_tool_call() {
+        let (kernel, _dir) = make_kernel();
+        // Register a PreToolCall hook that blocks cas.delete
+        kernel.hook_registry.register(
+            crate::kernel::hook::HookPoint::PreToolCall,
+            0,
+            std::sync::Arc::new(BlockHook),
+        );
+
+        let result = dispatch(&kernel, "cas.delete",
+            serde_json::json!({"cid": "nonexistent"}),
+            "kernel");
+
+        // Tool call should be blocked by the hook
+        assert!(!result.success, "blocked tool should fail");
+        let err_msg = result.error.unwrap_or_default();
+        assert!(err_msg.contains("blocked by hook"),
+            "error should mention hook blocking: {}", err_msg);
+    }
+
+    #[test]
+    fn test_hook_registry_continue_allows_execution() {
+        let (kernel, _dir) = make_kernel();
+        kernel.hook_registry.register(
+            crate::kernel::hook::HookPoint::PreToolCall,
+            0,
+            std::sync::Arc::new(NoOpTestHook),
+        );
+
+        let result = dispatch(&kernel, "cas.create",
+            serde_json::json!({"content": "hook test", "tags": ["test"]}),
+            "kernel");
+
+        // NoOp hook allows execution
+        assert!(result.success, "noop hook should allow tool call: {:?}", result.error);
+    }
+
+    #[test]
+    fn test_post_tool_call_receives_result() {
+        let (kernel, _dir) = make_kernel();
+        let recorder = std::sync::Arc::new(RecordingHook::new());
+        let recorder_clone = recorder.clone();
+
+        kernel.hook_registry.register(
+            crate::kernel::hook::HookPoint::PostToolCall,
+            0,
+            recorder_clone,
+        );
+
+        let result = dispatch(&kernel, "cas.create",
+            serde_json::json!({"content": "post hook test", "tags": []}),
+            "kernel");
+
+        assert!(result.success);
+        let calls = recorder.calls.lock().unwrap();
+        assert!(!calls.is_empty(), "PostToolCall should have been called");
+        let (_point, tool_name) = &calls[0];
+        assert_eq!(tool_name, "cas.create", "PostToolCall should receive tool name");
+    }
+
+    #[test]
+    fn test_multiple_hooks_first_block_wins_in_execute() {
+        let (kernel, _dir) = make_kernel();
+        // Register two hooks at different priorities
+        kernel.hook_registry.register(
+            crate::kernel::hook::HookPoint::PreToolCall,
+            5,
+            std::sync::Arc::new(NoOpTestHook),
+        );
+        kernel.hook_registry.register(
+            crate::kernel::hook::HookPoint::PreToolCall,
+            0,
+            std::sync::Arc::new(BlockHook),  // higher priority (lower number), blocks first
+        );
+
+        let result = dispatch(&kernel, "cas.read",
+            serde_json::json!({"cid": "abc"}),
+            "kernel");
+
+        assert!(!result.success, "first blocking hook should win");
+        assert!(result.error.unwrap_or_default().contains("blocked by hook"));
+    }
+
+    #[test]
+    fn test_hook_registry_empty_passes_through() {
+        let (kernel, _dir) = make_kernel();
+        // No hooks registered — should work normally
+        let result = dispatch(&kernel, "cas.create",
+            serde_json::json!({"content": "no hooks", "tags": ["test"]}),
+            "kernel");
+
+        assert!(result.success, "no hooks should not affect execution: {:?}", result.error);
+    }
+
+    #[test]
+    fn test_hook_receives_correct_context() {
+        let (kernel, _dir) = make_kernel();
+        let recorder = std::sync::Arc::new(RecordingHook::new());
+        let recorder_clone = recorder.clone();
+
+        kernel.hook_registry.register(
+            crate::kernel::hook::HookPoint::PreToolCall,
+            0,
+            recorder_clone,
+        );
+
+        let _ = dispatch(&kernel, "cas.search",
+            serde_json::json!({"query": "test query", "limit": 5}),
+            "agent-42");
+
+        let calls = recorder.calls.lock().unwrap();
+        let (point, tool_name) = &calls[0];
+        assert_eq!(*point, crate::kernel::hook::HookPoint::PreToolCall);
+        assert_eq!(tool_name, "cas.search");
     }
 }
