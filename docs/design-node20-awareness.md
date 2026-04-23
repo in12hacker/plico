@@ -326,16 +326,15 @@ pub fn semantic_search_with_intent(
 
 ## 5. 量化目标
 
-| 指标 | N19 现状 | N20 目标 | 计算方式 |
-|------|---------|---------|---------|
-| 总测试数 | 1022 | **1044+** | +22 new |
-| Prefetch 持久化 | 0 (in-memory) | **CAS persist** | restart后cache hit |
-| AgentProfile 持久化 | 0 (in-memory) | **CAS persist** | restart后profile保留 |
-| 因果Hook | 0 | **KG Causes写入** | kg query验证 |
-| Async Prefetch | 0 (blocking) | **JoinHandle返回** | cancel/await测试 |
-| Intent Feedback | 0 | **transition更新** | profile diff验证 |
-| Context-Dependent Gravity | 0 | **search重排** | hot对象排名提升 |
-| Soul 对齐（加权） | 82% | **86%+** | 公理7 35%→55%, 公理9 25%→45%, 公理8 ~50%→60% |
+| 指标 | N19 现状 | N20 目标 | 状态 |
+|------|---------|---------|------|
+| 总测试数 | 1022 | **1044+** | ✅ 1329 |
+| Prefetch 持久化 | 0 (in-memory) | **CAS persist** | ✅ M1 完成 |
+| AgentProfile 持久化 | 0 (in-memory) | **CAS persist** | ✅ M1 完成 |
+| 因果Hook | 0 | **KG CausedBy写入** | ✅ M2 完成 |
+| Async Prefetch | 0 (blocking) | **JoinHandle返回** | ✅ M3 完成 |
+| Intent Feedback | 0 | **hit rate stats** | ✅ M4 完成 |
+| Context-Dependent Gravity | 0 | **search重排** | 🔴 未开始 |
 
 ---
 

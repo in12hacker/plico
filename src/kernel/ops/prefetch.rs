@@ -806,6 +806,12 @@ impl IntentPrefetcher {
         self.feedback_history.read().unwrap().len()
     }
 
+    /// F-6: Get hot objects for an agent (for context-dependent gravity).
+    pub fn get_hot_objects(&self, agent_id: &str) -> Vec<String> {
+        let profile = self.profile_store.get_or_create(agent_id);
+        profile.hot_objects.iter().map(|(cid, _)| cid.clone()).collect()
+    }
+
     /// F-4: Get prefetcher hit rate statistics (lookups, hits, hit rate).
     pub fn prefetch_hit_rate(&self) -> (u64, u64, f64) {
         let lookups = self.total_lookups.load(std::sync::atomic::Ordering::Relaxed);
