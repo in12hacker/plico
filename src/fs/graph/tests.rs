@@ -684,3 +684,128 @@ fn test_redb_remove_edge() {
     let kg2 = PetgraphBackend::open(dir.path().to_path_buf());
     assert_eq!(kg2.edge_count().unwrap(), 0);
 }
+
+// ── Bug-fix regression tests (v2 edge key + atomic persistence) ─────────────
+
+#[test]
+fn test_redb_edge_history_survives_restart() {
+    // Regression: old 3-part key "src|dst|type" caused later edges to overwrite earlier ones.
+    // With 4-part key "src|dst|type|created_at", each temporal version is distinct.
+    let dir = tempfile::TempDir::new().unwrap();
+    let kg = PetgraphBackend::open(dir.path().to_path_buf());
+
+    kg.add_node(make_node("h1", KGNodeType::Entity, vec![], "a")).unwrap();
+    kg.add_node(make_node("h2", KGNodeType::Entity, vec![], "a")).unwrap();
+
+    // Use real timestamps via KGEdge::new to ensure unique created_at
+    let e1 = KGEdge::new("h1".into(), "h2".into(), KGEdgeType::HasFact, 0.5);
+    kg.add_edge(e1).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(2));
+    let e2 = KGEdge::new("h1".into(), "h2".into(), KGEdgeType::HasFact, 0.9);
+    kg.add_edge(e2).unwrap();
+
+    let history = kg.edge_history("h1", "h2", Some(KGEdgeType::HasFact)).unwrap();
+    assert_eq!(history.len(), 2, "in-memory should have 2 edge versions");
+
+    drop(kg);
+    let kg2 = PetgraphBackend::open(dir.path().to_path_buf());
+    let history2 = kg2.edge_history("h1", "h2", Some(KGEdgeType::HasFact)).unwrap();
+    assert_eq!(history2.len(), 2, "redb should preserve both edge versions after restart");
+
+    let active = history2.iter().filter(|e| e.invalid_at.is_none()).count();
+    assert_eq!(active, 1, "only latest edge should be active");
+}
+
+#[test]
+fn test_redb_invalidate_conflicts_persisted() {
+    // Regression: invalidate_conflicts only set invalid_at in memory, not in redb.
+    // After restart, invalidated edges appeared valid again.
+    let dir = tempfile::TempDir::new().unwrap();
+    let kg = PetgraphBackend::open(dir.path().to_path_buf());
+
+    kg.add_node(make_node("ic1", KGNodeType::Entity, vec![], "a")).unwrap();
+    kg.add_node(make_node("ic2", KGNodeType::Entity, vec![], "a")).unwrap();
+
+    let e1 = KGEdge::new("ic1".into(), "ic2".into(), KGEdgeType::RelatedTo, 0.5);
+    kg.add_edge(e1).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(2));
+    let e2 = KGEdge::new("ic1".into(), "ic2".into(), KGEdgeType::RelatedTo, 0.9);
+    kg.add_edge(e2).unwrap();
+
+    // Before restart: 1 active edge at current time
+    let now_val = now_ms();
+    let valid = kg.get_valid_edges_at(now_val + 1).unwrap();
+    let matching = valid.iter().filter(|e| e.src == "ic1" && e.dst == "ic2").count();
+    assert_eq!(matching, 1, "should have exactly 1 active edge before restart");
+
+    drop(kg);
+    let kg2 = PetgraphBackend::open(dir.path().to_path_buf());
+    let valid2 = kg2.get_valid_edges_at(now_val + 2).unwrap();
+    let matching2 = valid2.iter().filter(|e| e.src == "ic1" && e.dst == "ic2").count();
+    assert_eq!(matching2, 1, "after restart, still exactly 1 active edge (invalidation persisted)");
+}
+
+#[test]
+fn test_redb_remove_node_cleans_edges() {
+    // Regression: remove_node removed edges from memory but not from redb.
+    // After restart, orphaned edges reappeared.
+    let dir = tempfile::TempDir::new().unwrap();
+    let kg = PetgraphBackend::open(dir.path().to_path_buf());
+
+    kg.add_node(make_node("rn1", KGNodeType::Entity, vec![], "a")).unwrap();
+    kg.add_node(make_node("rn2", KGNodeType::Entity, vec![], "a")).unwrap();
+    kg.add_node(make_node("rn3", KGNodeType::Entity, vec![], "a")).unwrap();
+    kg.add_edge(KGEdge::new("rn1".into(), "rn2".into(), KGEdgeType::RelatedTo, 0.5)).unwrap();
+    kg.add_edge(KGEdge::new("rn2".into(), "rn3".into(), KGEdgeType::Follows, 0.8)).unwrap();
+    kg.add_edge(KGEdge::new("rn3".into(), "rn1".into(), KGEdgeType::Causes, 0.3)).unwrap();
+
+    assert_eq!(kg.edge_count().unwrap(), 3);
+    kg.remove_node("rn2").unwrap();
+    assert_eq!(kg.node_count().unwrap(), 2);
+    assert_eq!(kg.edge_count().unwrap(), 1, "only rn3→rn1 edge should remain");
+
+    drop(kg);
+    let kg2 = PetgraphBackend::open(dir.path().to_path_buf());
+    assert_eq!(kg2.node_count().unwrap(), 2, "node count preserved after restart");
+    assert_eq!(kg2.edge_count().unwrap(), 1, "orphaned edges should not reappear after restart");
+    assert!(kg2.get_node("rn2").unwrap().is_none(), "removed node stays removed");
+}
+
+#[test]
+fn test_redb_remove_edge_all_history() {
+    // remove_edge should remove all versions (including invalidated) from redb
+    let dir = tempfile::TempDir::new().unwrap();
+    let kg = PetgraphBackend::open(dir.path().to_path_buf());
+
+    kg.add_node(make_node("reh1", KGNodeType::Entity, vec![], "a")).unwrap();
+    kg.add_node(make_node("reh2", KGNodeType::Entity, vec![], "a")).unwrap();
+
+    let e1 = KGEdge::new("reh1".into(), "reh2".into(), KGEdgeType::HasFact, 0.3);
+    kg.add_edge(e1).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(2));
+    let e2 = KGEdge::new("reh1".into(), "reh2".into(), KGEdgeType::HasFact, 0.9);
+    kg.add_edge(e2).unwrap();
+
+    assert_eq!(kg.edge_count().unwrap(), 2, "both versions stored");
+    kg.remove_edge("reh1", "reh2", Some(KGEdgeType::HasFact)).unwrap();
+    assert_eq!(kg.edge_count().unwrap(), 0, "all versions removed");
+
+    drop(kg);
+    let kg2 = PetgraphBackend::open(dir.path().to_path_buf());
+    assert_eq!(kg2.edge_count().unwrap(), 0, "removal persisted across restart");
+}
+
+#[test]
+fn test_redb_update_node_persisted() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let kg = PetgraphBackend::open(dir.path().to_path_buf());
+
+    kg.add_node(make_node("up1", KGNodeType::Entity, vec![], "a")).unwrap();
+    kg.update_node("up1", Some("UpdatedLabel"), Some(serde_json::json!({"key": "value"}))).unwrap();
+
+    drop(kg);
+    let kg2 = PetgraphBackend::open(dir.path().to_path_buf());
+    let node = kg2.get_node("up1").unwrap().unwrap();
+    assert_eq!(node.label, "UpdatedLabel");
+    assert_eq!(node.properties["key"], "value");
+}

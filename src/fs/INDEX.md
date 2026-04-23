@@ -23,7 +23,7 @@ Status: active | Fan-in: 2 | Fan-out: 2
 
 - Fix vector search → `search/memory.rs` (InMemoryBackend) or `search/hnsw.rs` (HnswBackend)
 - Add embedding backend → `embedding/` subdir, add new impl of EmbeddingProvider
-- Fix KG persistence → `graph/backend.rs` PetgraphBackend::save_to_disk/load_from_disk
+- Fix KG persistence → `graph/backend.rs` PetgraphBackend persist_*/remove_* (redb) or save_to_disk (JSON export)
 - Change context layer logic → `context_loader.rs` ContextLoader
 - Change context budget → `context_budget.rs`
 - Change summarizer → `summarizer.rs`
@@ -65,7 +65,7 @@ Status: active | Fan-in: 2 | Fan-out: 2
 | Export | File | Description |
 |--------|------|-------------|
 | `KnowledgeGraph` | `graph/mod.rs` | Trait: typed node/edge graph operations |
-| `PetgraphBackend` | `graph/backend.rs` | Directed graph with disk persistence |
+| `PetgraphBackend` | `graph/backend.rs` | Directed graph with redb 4.0 ACID persistence |
 | `KGNode` | `graph/types.rs` | Graph node (Entity/Fact/Document/Agent/Memory) |
 | `KGEdge` | `graph/types.rs` | Typed weighted edge with episode provenance |
 | `KGNodeType` | `graph/types.rs` | Node type enum |
@@ -117,8 +117,8 @@ Status: active | Fan-in: 2 | Fan-out: 2
 |------|-------|---------|
 | `mod.rs` | ~70 | KnowledgeGraph trait, ExploreDirection, re-exports |
 | `types.rs` | ~520 | KGNode, KGEdge, KGNodeType, KGEdgeType, DiskGraph |
-| `backend.rs` | ~949 | PetgraphBackend — directed graph + disk persistence |
-| `tests.rs` | ~686 | Unit tests (34 tests) |
+| `backend.rs` | ~700 | PetgraphBackend — redb 4.0 ACID directed graph |
+| `tests.rs` | ~750 | Unit tests (39 tests incl. redb regression) |
 
 ### Root-level
 

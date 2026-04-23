@@ -21,7 +21,7 @@ pub enum ExploreDirection {
 /// KnowledgeGraph trait — graph operations for entity and relationship tracking.
 ///
 /// Implementations:
-/// - `PetgraphBackend`: in-memory + JSON persistence (MVP, fast)
+/// - `PetgraphBackend`: in-memory + redb 4.0 ACID persistence (O(1) per write)
 pub trait KnowledgeGraph: Send + Sync {
     fn add_node(&self, node: KGNode) -> Result<(), KGError>;
     fn add_edge(&self, edge: KGEdge) -> Result<(), KGError>;
