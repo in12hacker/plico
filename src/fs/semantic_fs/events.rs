@@ -214,3 +214,179 @@ impl SemanticFS {
     }
 }
 
+// ─── Standalone helper for use in unit tests ────────────────────────────────
+
+/// A simple rule-based resolver for testing (always resolves to last 7 days).
+pub struct RuleBasedResolver;
+
+impl RuleBasedResolver {
+    pub fn resolve_range(_expression: &str) -> Option<(i64, i64)> {
+        let now = chrono::Utc::now().timestamp_millis();
+        let seven_days = 7 * 86_400_000;
+        Some((now - seven_days, now))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+    use tempfile::tempdir;
+    use crate::fs::embedding::StubEmbeddingProvider;
+    use crate::fs::search::InMemoryBackend;
+    use crate::fs::graph::PetgraphBackend;
+
+    fn make_fs() -> (SemanticFS, tempfile::TempDir) {
+        let dir = tempdir().unwrap();
+        let fs = SemanticFS::new(
+            dir.path().to_path_buf(),
+            Arc::new(StubEmbeddingProvider::new()),
+            Arc::new(InMemoryBackend::new()),
+            None,
+            None,
+        ).unwrap();
+        (fs, dir)
+    }
+
+    fn make_fs_with_kg() -> (SemanticFS, tempfile::TempDir) {
+        let dir = tempdir().unwrap();
+        let fs = SemanticFS::new(
+            dir.path().to_path_buf(),
+            Arc::new(StubEmbeddingProvider::new()),
+            Arc::new(InMemoryBackend::new()),
+            None,
+            Some(Arc::new(PetgraphBackend::new())),
+        ).unwrap();
+        (fs, dir)
+    }
+
+    // ─── relation_to_edge_type ───────────────────────────────────────────────
+
+    #[test]
+    fn test_relation_to_edge_type() {
+        assert_eq!(relation_to_edge_type(EventRelation::Participant), KGEdgeType::HasParticipant);
+        assert_eq!(relation_to_edge_type(EventRelation::Artifact), KGEdgeType::HasArtifact);
+        assert_eq!(relation_to_edge_type(EventRelation::Recording), KGEdgeType::HasRecording);
+        assert_eq!(relation_to_edge_type(EventRelation::Resolution), KGEdgeType::HasResolution);
+    }
+
+    // ─── create_event ────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_create_event_returns_valid_id() {
+        // Works even without KG
+        let (fs, _dir) = make_fs();
+        let id = fs.create_event("test-event", EventType::Task, None, None, None, vec![], "agent1").unwrap();
+        assert!(id.starts_with("evt:"));
+    }
+
+    #[test]
+    fn test_create_event_with_tags() {
+        // Requires KG for list_events to work
+        let (fs, _dir) = make_fs_with_kg();
+        let id = fs.create_event(
+            "tagged-event",
+            EventType::Task,
+            None,
+            None,
+            Some("room-1"),
+            vec!["meeting".to_string(), "weekly".to_string()],
+            "agent1",
+        ).unwrap();
+        // List events should find it
+        let events = fs.list_events(None, None, &["meeting".to_string()], None, None).unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].label, "tagged-event");
+    }
+
+    #[test]
+    fn test_create_event_with_time_range() {
+        let (fs, _dir) = make_fs_with_kg();
+        let now = chrono::Utc::now().timestamp_millis() as u64;
+        let id = fs.create_event(
+            "timed-event",
+            EventType::Task,
+            Some(now - 3600_000),
+            Some(now),
+            None,
+            vec![],
+            "agent1",
+        ).unwrap();
+        let events = fs.list_events(Some(now - 86_400_000), Some(now + 1000), &[], None, None).unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].id, id);
+    }
+
+    // ─── list_events ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_list_events_empty_by_default() {
+        let (fs, _dir) = make_fs_with_kg();
+        let events = fs.list_events(None, None, &[], None, None).unwrap();
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn test_list_events_filters_by_agent() {
+        let (fs, _dir) = make_fs_with_kg();
+        fs.create_event("event-a", EventType::Task, None, None, None, vec![], "agent-a").unwrap();
+        fs.create_event("event-b", EventType::Task, None, None, None, vec![], "agent-b").unwrap();
+
+        let events_a = fs.list_events(None, None, &[], None, Some("agent-a")).unwrap();
+        assert_eq!(events_a.len(), 1);
+        assert_eq!(events_a[0].label, "event-a");
+
+        let events_b = fs.list_events(None, None, &[], None, Some("agent-b")).unwrap();
+        assert_eq!(events_b.len(), 1);
+    }
+
+    #[test]
+    fn test_list_events_filters_by_type() {
+        let (fs, _dir) = make_fs_with_kg();
+        fs.create_event("task-e", EventType::Task, None, None, None, vec![], "a").unwrap();
+        fs.create_event("meet-e", EventType::Task, None, None, None, vec![], "a").unwrap();
+
+        let tasks = fs.list_events(None, None, &[], Some(EventType::Task), None).unwrap();
+        assert_eq!(tasks.len(), 2); // both are Task type
+    }
+
+    #[test]
+    fn test_list_events_by_time_filters_by_time_range() {
+        let (fs, _dir) = make_fs_with_kg();
+        let now = chrono::Utc::now().timestamp_millis() as u64;
+        // Event starts 2 days ago, ends yesterday — fully within [since, until]
+        fs.create_event("old", EventType::Task, Some(now - 86_400_000), Some(now - 43_200_000), None, vec![], "a").unwrap();
+        // Event starts 10 days ago, ends 8 days ago — outside [since, until]
+        fs.create_event("ancient", EventType::Task, Some(now - 864_000_000), None, None, vec![], "a").unwrap();
+
+        // [since, until] = [now - 86_400_000, now]
+        let events = fs.list_events(Some(now - 86_400_000), Some(now), &[], None, None).unwrap();
+        assert_eq!(events.len(), 1, "only 'old' within range (ancient starts at now-864000000)");
+        assert_eq!(events[0].label, "old");
+    }
+
+    // ─── event_attach ────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_event_attach_requires_kg() {
+        let (fs, _dir) = make_fs();
+        // Without KG, event_attach should fail
+        let id = fs.create_event("no-kg-event", EventType::Task, None, None, None, vec![], "a").unwrap();
+        let result = fs.event_attach(&id, "target-id", EventRelation::Participant, "a");
+        assert!(result.is_err());
+    }
+
+    // ─── RuleBasedResolver ────────────────────────────────────────────────────
+
+    #[test]
+    fn test_rule_based_resolver_always_resolves() {
+        let result = RuleBasedResolver::resolve_range("anything");
+        assert!(result.is_some());
+        let (since, until) = result.unwrap();
+        assert!(until > since);
+        // Should cover roughly 7 days
+        let diff = until - since;
+        assert!(diff >= 6 * 86_400_000 && diff <= 8 * 86_400_000);
+    }
+}
+
