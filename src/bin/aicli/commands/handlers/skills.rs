@@ -127,3 +127,59 @@ fn cmd_skills_discover(kernel: &AIKernel, args: &[String]) -> ApiResponse {
     };
     kernel.handle_api_request(req)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use plico::kernel::AIKernel;
+    use tempfile::tempdir;
+
+    fn make_test_kernel() -> AIKernel {
+        let _ = std::env::set_var("EMBEDDING_BACKEND", "stub");
+        let dir = tempdir().unwrap();
+        AIKernel::new(dir.path().to_path_buf()).expect("kernel init")
+    }
+
+    #[test]
+    fn test_skills_list_empty() {
+        let kernel = make_test_kernel();
+        kernel.register_agent("SkillsTestAgent".to_string());
+        let args = vec!["skills".to_string(), "list".to_string(), "--agent".to_string(), "SkillsTestAgent".to_string()];
+        let response = cmd_skills(&kernel, &args);
+        assert!(response.ok, "skills list should succeed");
+        assert!(response.data.is_some());
+    }
+
+    #[test]
+    fn test_skills_list_nonexistent_agent() {
+        let kernel = make_test_kernel();
+        let args = vec!["skills".to_string(), "list".to_string(), "--agent".to_string(), "DoesNotExist".to_string()];
+        let response = cmd_skills(&kernel, &args);
+        assert!(!response.ok, "skills list for nonexistent agent should fail");
+    }
+
+    #[test]
+    fn test_skills_describe_requires_name() {
+        let kernel = make_test_kernel();
+        kernel.register_agent("SkillsTestAgent".to_string());
+        let args = vec!["skills".to_string(), "describe".to_string(), "--agent".to_string(), "SkillsTestAgent".to_string()];
+        let response = cmd_skills(&kernel, &args);
+        assert!(!response.ok, "describe without name should fail");
+    }
+
+    #[test]
+    fn test_skills_register_requires_agent() {
+        let kernel = make_test_kernel();
+        let args = vec!["skills".to_string(), "register".to_string(), "--name".to_string(), "test-skill".to_string()];
+        let response = cmd_skills(&kernel, &args);
+        assert!(!response.ok, "register without --agent should fail");
+    }
+
+    #[test]
+    fn test_skills_discover_unknown_subcommand() {
+        let kernel = make_test_kernel();
+        let args = vec!["skills".to_string(), "unknown".to_string()];
+        let response = cmd_skills(&kernel, &args);
+        assert!(!response.ok, "unknown subcommand should fail");
+    }
+}
