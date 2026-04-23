@@ -8,10 +8,12 @@
 //! - `OllamaProvider` — calls local Ollama daemon (`/api/chat`)
 //! - `StubProvider` — returns fixed responses for testing
 
+pub mod circuit_breaker;
 pub mod ollama;
 pub mod openai;
 pub mod stub;
 
+pub use circuit_breaker::CircuitBreakerLlmProvider;
 pub use ollama::OllamaProvider;
 pub use openai::OpenAICompatibleProvider;
 pub use stub::StubProvider;

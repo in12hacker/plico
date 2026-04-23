@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::fs::{OllamaBackend, EmbeddingProvider, LocalEmbeddingBackend, StubEmbeddingProvider, EmbedError, OrtEmbeddingBackend, EmbeddingCircuitBreaker};
-use crate::llm::{LlmProvider, LlmError, OllamaProvider, StubProvider, OpenAICompatibleProvider};
+use crate::llm::{LlmProvider, LlmError, OllamaProvider, StubProvider, OpenAICompatibleProvider, CircuitBreakerLlmProvider};
 use crate::scheduler::Agent;
 use crate::scheduler::agent::Intent;
 
@@ -191,7 +191,7 @@ impl AIKernel {
 
     pub fn persist_event_log(&self) {
         // JSONL persistence is handled inline on each emit() call in EventBus.
-        // This method is kept for backwards compatibility and manual snapshot saves.
+        // This method is used for periodic batch snapshots and shutdown saves.
         let events = self.event_bus.snapshot_events();
         if events.is_empty() {
             return;
@@ -381,7 +381,7 @@ pub(crate) fn create_llm_provider(model_env: &str, default_model: &str) -> Resul
     let backend = std::env::var("LLM_BACKEND")
         .unwrap_or_else(|_| "ollama".to_string());
 
-    match backend.as_str() {
+    let inner: Arc<dyn LlmProvider> = match backend.as_str() {
         "ollama" => {
             let url = std::env::var("OLLAMA_URL")
                 .unwrap_or_else(|_| "http://localhost:11434".to_string());
@@ -389,11 +389,11 @@ pub(crate) fn create_llm_provider(model_env: &str, default_model: &str) -> Resul
                 .unwrap_or_else(|_| default_model.to_string());
             let provider = OllamaProvider::new(&url, &model)?;
             tracing::info!("LLM backend: ollama ({} via {})", model, url);
-            Ok(Arc::new(provider) as Arc<dyn LlmProvider>)
+            Arc::new(provider) as Arc<dyn LlmProvider>
         }
         "stub" => {
             tracing::info!("LLM backend: stub");
-            Ok(Arc::new(StubProvider::empty()) as Arc<dyn LlmProvider>)
+            Arc::new(StubProvider::empty()) as Arc<dyn LlmProvider>
         }
         "openai" => {
             let base_url = std::env::var("OPENAI_API_BASE")
@@ -403,7 +403,7 @@ pub(crate) fn create_llm_provider(model_env: &str, default_model: &str) -> Resul
             let api_key = std::env::var("OPENAI_API_KEY").ok();
             let provider = OpenAICompatibleProvider::new(&base_url, &model, api_key)?;
             tracing::info!("LLM backend: openai-compatible ({} via {})", model, base_url);
-            Ok(Arc::new(provider) as Arc<dyn LlmProvider>)
+            Arc::new(provider) as Arc<dyn LlmProvider>
         }
         other => {
             tracing::warn!("Unknown LLM_BACKEND={other}, falling back to ollama");
@@ -412,9 +412,20 @@ pub(crate) fn create_llm_provider(model_env: &str, default_model: &str) -> Resul
             let model = std::env::var(model_env)
                 .unwrap_or_else(|_| default_model.to_string());
             let provider = OllamaProvider::new(&url, &model)?;
-            Ok(Arc::new(provider) as Arc<dyn LlmProvider>)
+            Arc::new(provider) as Arc<dyn LlmProvider>
         }
-    }
+    };
+
+    // F-2: Wrap with circuit breaker for fail-fast on provider outages
+    let threshold: u32 = std::env::var("LLM_CIRCUIT_BREAKER_FAILURE_THRESHOLD")
+        .unwrap_or_else(|_| "5".into())
+        .parse()
+        .unwrap_or(5);
+    let cooldown_ms: u64 = std::env::var("LLM_CIRCUIT_BREAKER_COOLDOWN_MS")
+        .unwrap_or_else(|_| "60000".into())
+        .parse()
+        .unwrap_or(60000);
+    Ok(Arc::new(CircuitBreakerLlmProvider::new(inner, threshold, cooldown_ms)) as Arc<dyn LlmProvider>)
 }
 
 #[cfg(test)]
