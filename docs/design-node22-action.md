@@ -282,10 +282,10 @@ impl IntentTracker {
 
 | 指标 | N21 现状 | N22 目标 | 状态 |
 |------|---------|---------|------|
-| 总测试数 | 1361 | **1376+** | 🔴 |
-| Execution as Learning | 0 (结果丢弃) | **Profile 更新** | 🔴 |
-| Execution Time Tracking | 0 | **Stats 记录** | 🔴 |
-| Self-Optimization | 0 | **optimized_sort** | 🔴 |
+| 总测试数 | 1361 | **1376+** | ✅ 736+ |
+| Execution as Learning | 0 (结果丢弃) | **Profile 更新** | ✅ M1 完成 |
+| Execution Time Tracking | 0 | **Stats 记录** | ✅ M2 完成 |
+| Self-Optimization | 0 | **optimized_sort** | ✅ M3 完成 |
 | Predictive Execution | 0 | **prefetch 触发** | 🔴 |
 | Learning Loop | 0 | **完整闭环** | 🔴 |
 

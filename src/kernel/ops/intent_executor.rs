@@ -49,6 +49,11 @@ impl ExecutionStats {
     pub fn operation_types(&self) -> Vec<String> {
         self.avg_times.keys().cloned().collect()
     }
+
+    /// F-3: Get all average times for optimized_sort.
+    pub(crate) fn get_avg_times_map(&self) -> std::collections::HashMap<String, u64> {
+        self.avg_times.clone()
+    }
 }
 
 /// Result of executing a single step.
@@ -96,18 +101,21 @@ pub struct IntentExecutionResult {
 /// Agent only intervenes at exception points (human-in-the-loop).
 pub struct AutonomousExecutor {
     kernel: Arc<AIKernel>,
+    /// F-2: Execution statistics for self-optimization.
+    stats: ExecutionStats,
 }
 
 impl AutonomousExecutor {
     pub fn new(kernel: Arc<AIKernel>) -> Self {
-        Self { kernel }
+        Self { kernel, stats: ExecutionStats::new() }
     }
 
     /// Execute an intent plan autonomously.
     ///
     /// Returns when all steps are complete, failed, or blocked.
     /// F-1: Writes execution results back to AgentProfile (learning).
-    pub async fn execute_plan(&self, plan: &IntentPlan, agent_id: &str) -> IntentExecutionResult {
+    /// F-2: Records execution times to ExecutionStats for self-optimization.
+    pub async fn execute_plan(&mut self, plan: &IntentPlan, agent_id: &str) -> IntentExecutionResult {
         let mut results = HashMap::new();
         let mut completed_steps = std::collections::HashSet::new();
         let mut tokens_used = 0;
@@ -117,8 +125,8 @@ impl AutonomousExecutor {
         // F-1: Get profile store for learning
         let profile_store = self.kernel.prefetch.profile_store();
 
-        // Get topologically sorted steps
-        let sorted_indices = match plan.topological_sort() {
+        // F-3: Get topologically sorted steps with execution time optimization
+        let sorted_indices = match plan.optimized_sort(&self.stats.get_avg_times_map()) {
             Ok(indices) => indices,
             Err(e) => {
                 return IntentExecutionResult {
@@ -179,7 +187,17 @@ impl AutonomousExecutor {
                 error: result.error,
                 duration_ms: Some(duration_ms),
             };
-            results.insert(step.step_id.clone(), result_with_duration);
+            results.insert(step.step_id.clone(), result_with_duration.clone());
+
+            // F-2: Record execution time for self-optimization
+            let op_type = match &step.operation {
+                IntentOperation::Read { .. } => "read",
+                IntentOperation::Search { .. } => "search",
+                IntentOperation::Call { .. } => "call",
+                IntentOperation::Create { .. } => "create",
+                IntentOperation::ReadBatch { .. } => "read_batch",
+            };
+            self.stats.record(op_type.to_string(), duration_ms);
         }
 
         // F-1: Record intent transition if we have steps
@@ -189,14 +207,46 @@ impl AutonomousExecutor {
             profile_store.record_intent_complete(agent_id, Some(intent_tag), None);
         }
 
-        IntentExecutionResult {
+        // F-4: Build result before async call
+        let exec_result = IntentExecutionResult {
             intent_id: plan.intent_id.clone(),
             success: steps_failed == 0,
             steps_completed,
             steps_failed,
             tokens_used,
             results,
+        };
+
+        // F-4: Trigger predictive prefetch based on execution results
+        self.trigger_predictive_prefetch(&exec_result, agent_id).await;
+
+        exec_result
+    }
+
+    /// F-4: Trigger predictive prefetch based on execution results.
+    ///
+    /// After plan execution completes, checks if there's a high-confidence
+    /// prediction for the next intent and triggers silent prefetch.
+    async fn trigger_predictive_prefetch(&self, result: &IntentExecutionResult, agent_id: &str) {
+        // Extract current intent tag
+        let current_tag = result.intent_id.split(':').next().unwrap_or("unknown");
+
+        // Get profile and ask for next predicted intent
+        let profile = self.kernel.prefetch.profile_store().get_or_create(agent_id);
+        if let Some(next_tag) = profile.predict_next(current_tag) {
+            // Trigger on_intent_complete which handles the prefetch
+            let _ = self.kernel.prefetch.on_intent_complete(
+                agent_id,
+                current_tag,
+                Some(&next_tag),
+                &[],
+            );
         }
+    }
+
+    /// F-2: Get execution statistics for self-optimization.
+    pub fn get_stats(&self) -> ExecutionStats {
+        self.stats.clone()
     }
 
     /// Execute a single step.

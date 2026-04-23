@@ -228,6 +228,90 @@ impl IntentPlan {
         Ok(sorted)
     }
 
+    /// Topological sort with execution time optimization.
+    ///
+    /// F-3: Long-running steps are prioritized to start earlier,
+    /// improving overall execution time through earlier parallelization.
+    ///
+    /// After dependency ordering, steps are sorted by estimated time (longest first).
+    /// This ensures long steps start ASAP, while still respecting dependencies.
+    ///
+    /// `avg_times`: map from operation type to average execution time in ms.
+    /// Operation types: "read", "search", "call", "create", "read_batch".
+    pub fn optimized_sort(&self, avg_times: &HashMap<String, u64>) -> Result<Vec<usize>, PlanError> {
+        // First get dependency-respecting order
+        let mut sorted = self.topological_sort()?;
+
+        let n = sorted.len();
+        if n <= 1 {
+            return Ok(sorted);
+        }
+
+        // Get step durations from avg_times (use estimated_tokens as fallback)
+        let get_duration = |idx: usize| -> u64 {
+            let step = &self.steps[idx];
+            let op_type = match &step.operation {
+                IntentOperation::Read { .. } => "read",
+                IntentOperation::Search { .. } => "search",
+                IntentOperation::Call { .. } => "call",
+                IntentOperation::Create { .. } => "create",
+                IntentOperation::ReadBatch { .. } => "read_batch",
+            };
+            avg_times.get(op_type).copied().unwrap_or(step.estimated_tokens as u64)
+        };
+
+        // Build dependency info: for each position, what must come before it
+        let step_id_to_idx: std::collections::HashMap<_, _> = self.steps.iter()
+            .enumerate()
+            .map(|(i, s)| (&s.step_id, i))
+            .collect();
+
+        // Greedy placement: for each step, find the earliest valid position
+        let mut result: Vec<usize> = Vec::with_capacity(n);
+
+        // Sort steps by duration (longest first) for greedy assignment
+        // Use (duration, step_idx) order so step_idx is usize for indexing
+        let mut step_durations: Vec<(u64, usize)> = sorted.iter()
+            .map(|&idx| (get_duration(idx), idx))
+            .collect();
+        step_durations.sort_by(|a, b| b.0.cmp(&a.0)); // longest first
+
+        for (_, step_idx) in step_durations {
+            // Find earliest position where all dependencies are placed before this position
+            let deps: Vec<usize> = self.steps[step_idx].dependencies.iter()
+                .filter_map(|d| step_id_to_idx.get(d).copied())
+                .collect();
+
+            let earliest_dep_pos = if deps.is_empty() {
+                0
+            } else {
+                deps.iter()
+                    .filter_map(|&d| result.iter().position(|&r| r == d))
+                    .max()
+                    .map(|p| p + 1)
+                    .unwrap_or(0)
+            };
+
+            // Find the position in result where we can insert this step
+            // It must come after all dependencies, and before any step that depends on it
+            let insert_pos = {
+                let mut pos = earliest_dep_pos;
+                while pos < result.len() {
+                    let step_deps = &self.steps[result[pos]].dependencies;
+                    if step_deps.contains(&self.steps[step_idx].step_id) {
+                        break;
+                    }
+                    pos += 1;
+                }
+                pos
+            };
+
+            result.insert(insert_pos, step_idx);
+        }
+
+        Ok(result)
+    }
+
     /// Get sorted steps (convenience method).
     pub fn sorted_steps(&self) -> Result<Vec<&IntentStep>, PlanError> {
         let indices = self.topological_sort()?;
@@ -1083,6 +1167,53 @@ mod tests {
         .with_dependency("dep2".to_string());
 
         assert_eq!(step.dependencies, vec!["dep1", "dep2"]);
+    }
+
+    // ── F-3: IntentPlan optimized_sort tests ─────────────────────────────
+
+    #[test]
+    fn test_optimized_sort_respects_dependencies() {
+        // When dependencies exist, they must be respected
+        let mut plan = IntentPlan::new("intent-1".to_string());
+        plan.add_step(IntentStep::new("s1".to_string(), IntentOperation::Read { cid: "c1".to_string() }, 100));
+        plan.add_step(
+            IntentStep::new("s2".to_string(), IntentOperation::Read { cid: "c2".to_string() }, 100)
+                .with_dependency("s1".to_string()),
+        );
+
+        // With no stats, should still produce valid dependency-respecting order
+        let sorted = plan.optimized_sort(&std::collections::HashMap::new()).unwrap();
+        // s1 must come before s2
+        let s1_pos = sorted.iter().position(|&i| plan.steps[i].step_id == "s1").unwrap();
+        let s2_pos = sorted.iter().position(|&i| plan.steps[i].step_id == "s2").unwrap();
+        assert!(s1_pos < s2_pos, "s1 should come before s2");
+    }
+
+    #[test]
+    fn test_optimized_sort_empty_plan() {
+        let plan = IntentPlan::new("intent-1".to_string());
+        let sorted = plan.optimized_sort(&std::collections::HashMap::new()).unwrap();
+        assert!(sorted.is_empty());
+    }
+
+    #[test]
+    fn test_optimized_sort_prioritizes_long_steps() {
+        // With execution time data, long operations should be prioritized earlier
+        let mut plan = IntentPlan::new("intent-1".to_string());
+        // s1: short read, s2: long search
+        plan.add_step(IntentStep::new("s1".to_string(), IntentOperation::Read { cid: "c1".to_string() }, 100));
+        plan.add_step(IntentStep::new("s2".to_string(), IntentOperation::Search { query: "test".to_string(), tags: vec![] }, 500));
+        // No dependencies, so order can be optimized
+
+        let mut avg_times = std::collections::HashMap::new();
+        avg_times.insert("read".to_string(), 50);
+        avg_times.insert("search".to_string(), 400);
+
+        let sorted = plan.optimized_sort(&avg_times).unwrap();
+        // s2 (search, 400ms avg) should come before s1 (read, 50ms avg)
+        let s1_pos = sorted.iter().position(|&i| plan.steps[i].step_id == "s1").unwrap();
+        let s2_pos = sorted.iter().position(|&i| plan.steps[i].step_id == "s2").unwrap();
+        assert!(s2_pos < s1_pos, "longer step (s2) should come earlier");
     }
 
     // ── F-4: IntentTree tests ────────────────────────────────────────────
