@@ -1405,6 +1405,7 @@ impl AIKernel {
                     &self.event_bus,
                     &self.memory,
                     &self.prefetch,
+                    &self.fs,
                     &self.root,
                 ) {
                     Ok(result) => {

@@ -437,6 +437,56 @@ impl crate::kernel::AIKernel {
             .collect()
     }
 
+    /// Recall shared memories from other agents.
+    /// If target_agent_id is Some, only returns memories from that agent.
+    /// If None, returns shared memories from all agents except caller.
+    pub fn recall_shared(
+        &self,
+        caller_id: &str,
+        target_agent_id: Option<&str>,
+        query: Option<&str>,
+        limit: usize,
+    ) -> Vec<MemoryEntry> {
+        let ctx = PermissionContext::new(caller_id.to_string(), "default".to_string());
+        if self.permissions.check(&ctx, PermissionAction::Read).is_err() {
+            return Vec::new();
+        }
+
+        let agents: Vec<String> = if let Some(target) = target_agent_id {
+            vec![target.to_string()]
+        } else {
+            self.scheduler
+                .list_agents()
+                .into_iter()
+                .filter(|a| a.id != caller_id)
+                .map(|a| a.id)
+                .collect()
+        };
+
+        let mut results = Vec::new();
+        for agent_id in &agents {
+            let entries = self.memory.get_shared_entries_all_agents();
+            for entry in entries {
+                if entry.agent_id == *agent_id && entry.scope == MemoryScope::Shared {
+                    // Apply query filter if provided
+                    if let Some(q) = query {
+                        let q_lower = q.to_lowercase();
+                        let content_match = entry.content.display().to_string().to_lowercase().contains(&q_lower);
+                        let tag_match = entry.tags.iter().any(|t| t.to_lowercase().contains(&q_lower));
+                        if !content_match && !tag_match {
+                            continue;
+                        }
+                    }
+                    results.push(entry);
+                }
+            }
+        }
+
+        results.sort_by(|a, b| b.importance.partial_cmp(&a.importance).unwrap_or(std::cmp::Ordering::Equal));
+        results.truncate(limit);
+        results
+    }
+
     /// Recall shared procedural memories from all agents.
     pub fn recall_shared_procedural(&self, name_filter: Option<&str>) -> Vec<MemoryEntry> {
         let entries = self.memory.get_shared(MemoryTier::Procedural);
@@ -600,6 +650,161 @@ mod tests {
         let usage = kernel.agent_usage(&agent_id);
         assert!(usage.is_some());
         assert!(usage.unwrap().memory_entries >= 1);
+    }
+
+    // ─── Recall Shared Tests (F-4) ─────────────────────────────────────
+
+    #[test]
+    fn test_recall_shared_from_specific_agent() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let agent_a = kernel.register_agent("agent-a".to_string());
+        let agent_b = kernel.register_agent("agent-b".to_string());
+
+        // Agent A stores a shared memory
+        kernel.remember_long_term_scoped(
+            &agent_a, "default",
+            "shared knowledge from A".to_string(),
+            vec!["shared".to_string()],
+            80,
+            MemoryScope::Shared,
+        ).ok();
+
+        // Agent B recalls shared memories from Agent A
+        let entries = kernel.recall_shared(&agent_b, Some(&agent_a), None, 10);
+        assert!(!entries.is_empty(), "Agent B should see Agent A's shared memory");
+        assert!(entries.iter().all(|e| e.agent_id == agent_a));
+    }
+
+    #[test]
+    fn test_recall_shared_from_all_agents() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let agent_a = kernel.register_agent("agent-a".to_string());
+        let agent_b = kernel.register_agent("agent-b".to_string());
+        let agent_c = kernel.register_agent("agent-c".to_string());
+
+        // Agent A stores shared memory
+        kernel.remember_long_term_scoped(
+            &agent_a, "default",
+            "A's shared".to_string(),
+            vec!["shared".to_string()],
+            80,
+            MemoryScope::Shared,
+        ).ok();
+
+        // Agent B stores shared memory
+        kernel.remember_long_term_scoped(
+            &agent_b, "default",
+            "B's shared".to_string(),
+            vec!["shared".to_string()],
+            70,
+            MemoryScope::Shared,
+        ).ok();
+
+        // Agent C recalls from all agents
+        let entries = kernel.recall_shared(&agent_c, None, None, 10);
+        let agent_ids: Vec<&str> = entries.iter().map(|e| e.agent_id.as_str()).collect();
+        assert!(agent_ids.contains(&agent_a.as_str()), "Should include A's shared");
+        assert!(agent_ids.contains(&agent_b.as_str()), "Should include B's shared");
+        assert!(!agent_ids.contains(&agent_c.as_str()), "Should not include own memories");
+    }
+
+    #[test]
+    fn test_recall_shared_excludes_private() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let agent_a = kernel.register_agent("agent-a".to_string());
+        let agent_b = kernel.register_agent("agent-b".to_string());
+
+        // Agent A stores private memory
+        kernel.remember_long_term(
+            &agent_a, "default",
+            "A's private".to_string(),
+            vec!["private".to_string()],
+            80,
+        ).ok();
+
+        // Agent B stores shared memory
+        kernel.remember_long_term_scoped(
+            &agent_b, "default",
+            "B's shared".to_string(),
+            vec!["shared".to_string()],
+            80,
+            MemoryScope::Shared,
+        ).ok();
+
+        // Agent A recalls shared - should NOT see A's own private
+        let entries = kernel.recall_shared(&agent_a, None, None, 10);
+        assert!(entries.iter().all(|e| e.scope != MemoryScope::Private || e.agent_id != agent_a));
+    }
+
+    #[test]
+    fn test_recall_shared_empty_when_no_shared() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let agent_a = kernel.register_agent("agent-a".to_string());
+        let agent_b = kernel.register_agent("agent-b".to_string());
+
+        // Both only have private memories
+        kernel.remember_long_term(
+            &agent_a, "default",
+            "A's private".to_string(),
+            vec!["private".to_string()],
+            80,
+        ).ok();
+
+        let entries = kernel.recall_shared(&agent_b, Some(&agent_a), None, 10);
+        assert!(entries.is_empty(), "No shared memories should return empty");
+    }
+
+    #[test]
+    fn test_recall_shared_respects_limit() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let agent_a = kernel.register_agent("agent-a".to_string());
+        let agent_b = kernel.register_agent("agent-b".to_string());
+
+        // Agent A stores multiple shared memories
+        for i in 0..5 {
+            kernel.remember_long_term_scoped(
+                &agent_a, "default",
+                format!("shared memory {}", i),
+                vec!["shared".to_string()],
+                80,
+                MemoryScope::Shared,
+            ).ok();
+        }
+
+        // Agent B recalls with limit=2
+        let entries = kernel.recall_shared(&agent_b, Some(&agent_a), None, 2);
+        assert_eq!(entries.len(), 2, "Should respect limit of 2");
+    }
+
+    #[test]
+    fn test_recall_shared_query_filter() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let agent_a = kernel.register_agent("agent-a".to_string());
+        let agent_b = kernel.register_agent("agent-b".to_string());
+
+        // Agent A stores multiple shared memories
+        kernel.remember_long_term_scoped(
+            &agent_a, "default",
+            "python tutorial shared".to_string(),
+            vec!["python".to_string()],
+            80,
+            MemoryScope::Shared,
+        ).ok();
+        kernel.remember_long_term_scoped(
+            &agent_a, "default",
+            "rust tutorial shared".to_string(),
+            vec!["rust".to_string()],
+            80,
+            MemoryScope::Shared,
+        ).ok();
+
+        // Agent B queries for "python"
+        let entries = kernel.recall_shared(&agent_b, None, Some("python"), 10);
+        assert!(!entries.is_empty());
+        assert!(entries.iter().all(|e| {
+            e.content.display().to_string().contains("python") ||
+            e.tags.iter().any(|t| t.contains("python"))
+        }));
     }
 }
 

@@ -115,7 +115,8 @@ pub fn extract_agent_id(args: &[String]) -> String {
 /// If AICLI_OUTPUT=json, print ApiResponse as JSON; otherwise human-readable.
 /// Returns true if the command succeeded (ok), false if it failed.
 pub fn print_result(response: &ApiResponse) -> bool {
-    if std::env::var("AICLI_OUTPUT").as_deref().ok() == Some("json") {
+    let format = std::env::var("AICLI_OUTPUT").unwrap_or_else(|_| "json".to_string());
+    if format != "human" {
         println!("{}", serde_json::to_string_pretty(response).unwrap_or_default());
         return response.ok;
     }
