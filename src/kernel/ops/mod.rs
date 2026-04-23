@@ -30,3 +30,4 @@ pub mod session;
 pub mod hybrid;
 pub mod task;
 pub mod intent;
+pub mod intent_executor;

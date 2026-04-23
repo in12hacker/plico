@@ -333,7 +333,7 @@ mod tests {
         let result = execute_sync(&kernel, &router, "status", "LearnAgent", 0.0, true);
         assert!(result.is_ok());
         // If it executed successfully, a procedural memory should be stored
-        let procs = kernel.recall_procedural("LearnAgent", "default", None);
+        let _procs = kernel.recall_procedural("LearnAgent", "default", None);
         // learn flag should create at least one procedure (if execution succeeded)
     }
 
