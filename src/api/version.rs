@@ -1,4 +1,4 @@
-//! API Versioning — Semantic version types, feature flags, and deprecation notices.
+//! API Versioning — Semantic version types and feature flags.
 //!
 //! Extracted from `semantic.rs` for independent evolution.
 //! Version management changes independently from protocol (ApiRequest/ApiResponse).
@@ -80,8 +80,6 @@ impl ApiVersion {
     pub const V1: ApiVersion = ApiVersion { major: 1, minor: 0, patch: 0 };
     /// Current stable version.
     pub const CURRENT: ApiVersion = ApiVersion { major: 18, minor: 0, patch: 0 };
-    /// Minimum supported version (for compatibility checks).
-    pub const MIN_SUPPORTED: ApiVersion = ApiVersion { major: 1, minor: 0, patch: 0 };
 
     /// Parse a version string like "1.2.0" into an ApiVersion.
     pub fn parse(s: &str) -> Result<Self, String> {
@@ -114,16 +112,6 @@ impl ApiVersion {
         }
     }
 
-    /// Check if this version is backward-compatible with another.
-    /// Two versions are compatible if they have the same major version.
-    pub fn is_compatible(&self, other: ApiVersion) -> bool {
-        self.major == other.major
-    }
-
-    /// Returns true if this version is deprecated.
-    pub fn is_deprecated(&self) -> bool {
-        *self < (ApiVersion { major: 18, minor: 0, patch: 0 })
-    }
 }
 
 impl Default for ApiVersion {
@@ -143,23 +131,6 @@ impl std::str::FromStr for ApiVersion {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         ApiVersion::parse(s)
     }
-}
-
-/// Deprecation notice included in API responses for deprecated endpoints.
-///
-/// When the server responds to a request using an older API version,
-/// it may include a deprecation notice to inform the client of:
-/// - When the endpoint was first deprecated
-/// - When it will be removed entirely (sunset version)
-/// - A migration message suggesting the replacement
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct DeprecationNotice {
-    /// The API version when this endpoint/field was first deprecated.
-    pub deprecated_since: ApiVersion,
-    /// The API version when this endpoint will be removed entirely.
-    pub sunset_version: ApiVersion,
-    /// A human-readable migration message.
-    pub message: String,
 }
 
 /// Feature flags for version-specific behavior.
@@ -282,28 +253,6 @@ mod tests {
     }
 
     #[test]
-    fn is_compatible_same_major() {
-        let a = ApiVersion { major: 18, minor: 0, patch: 0 };
-        let b = ApiVersion { major: 18, minor: 5, patch: 3 };
-        assert!(a.is_compatible(b));
-    }
-
-    #[test]
-    fn is_compatible_different_major() {
-        let a = ApiVersion { major: 17, minor: 0, patch: 0 };
-        let b = ApiVersion { major: 18, minor: 0, patch: 0 };
-        assert!(!a.is_compatible(b));
-    }
-
-    #[test]
-    fn is_deprecated() {
-        let old = ApiVersion { major: 17, minor: 0, patch: 0 };
-        assert!(old.is_deprecated());
-        let current = ApiVersion { major: 18, minor: 0, patch: 0 };
-        assert!(!current.is_deprecated());
-    }
-
-    #[test]
     fn version_supports_none_uses_current() {
         assert!(version_supports(None, "model_hot_swap"));
     }
@@ -322,16 +271,4 @@ mod tests {
         assert!(!old_features.tenant_management);
     }
 
-    #[test]
-    fn deprecation_notice_serde() {
-        let notice = DeprecationNotice {
-            deprecated_since: ApiVersion { major: 15, minor: 0, patch: 0 },
-            sunset_version: ApiVersion { major: 20, minor: 0, patch: 0 },
-            message: "Use v18 API".into(),
-        };
-        let json = serde_json::to_string(&notice).unwrap();
-        let rt: DeprecationNotice = serde_json::from_str(&json).unwrap();
-        assert_eq!(rt.deprecated_since, notice.deprecated_since);
-        assert_eq!(rt.message, "Use v18 API");
-    }
 }

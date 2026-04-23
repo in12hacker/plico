@@ -117,6 +117,7 @@ pub struct AgentResources {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AgentUsage {
     pub tool_call_count: u64,
+    pub total_tokens_consumed: u64,
     pub last_active_ms: u64,
 }
 

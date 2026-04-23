@@ -13,7 +13,6 @@
 //! ```
 //!
 //! If no version is declared, the server defaults to the current stable version.
-//! Deprecated endpoints return a deprecation notice in the response.
 
 use base64::Engine;
 use serde::{Deserialize, Serialize};
@@ -22,14 +21,6 @@ use serde::{Deserialize, Serialize};
 pub use super::version::*;
 // Re-export all DTOs so `crate::api::semantic::SearchResultDto` etc. keep working.
 pub use super::dto::*;
-
-/// Get a deprecation notice for old API variants.
-/// Returns Some(DeprecationNotice) if the request uses a deprecated version.
-pub fn get_deprecation_notice(_request: &ApiRequest) -> Option<DeprecationNotice> {
-    None
-}
-
-pub use get_deprecation_notice as notice_for_request;
 
 use crate::fs::{EventType, EventRelation, EventSummary, KGNodeType, KGEdgeType};
 
@@ -1100,9 +1091,6 @@ pub struct ApiResponse {
     /// The API version of this response (defaults to current stable version).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub version: Option<ApiVersion>,
-    /// Deprecation notice if the request used a deprecated API version.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub deprecation: Option<DeprecationNotice>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cid: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1278,7 +1266,6 @@ impl ApiResponse {
         Self {
             ok: true,
             version: Some(ApiVersion::CURRENT),
-            deprecation: None,
             cid: None, node_id: None, data: None, results: None,
             agent_id: None, agents: None, memory: None, tags: None,
             neighbors: None, deleted: None, events: None, nodes: None,
@@ -1362,16 +1349,11 @@ impl ApiResponse {
         r
     }
 
-    pub fn with_deprecation(mut self, notice: DeprecationNotice) -> Self {
-        self.deprecation = Some(notice);
-        self
-    }
 
     pub fn error(msg: impl Into<String>) -> Self {
         Self {
             ok: false,
             version: Some(ApiVersion::CURRENT),
-            deprecation: None,
             cid: None, node_id: None, data: None, results: None,
             agent_id: None, agents: None, memory: None, tags: None,
             neighbors: None, deleted: None, events: None, nodes: None,
@@ -1531,7 +1513,6 @@ mod tests {
     fn test_version_constants() {
         assert_eq!(ApiVersion::V1.major, 1);
         assert_eq!(ApiVersion::CURRENT.major, 18);
-        assert_eq!(ApiVersion::MIN_SUPPORTED.major, 1);
     }
 
     #[test]
@@ -1554,19 +1535,6 @@ mod tests {
         assert!(v1 < v2);
         assert!(v1 < v3);
         assert!(v3 < v2);
-    }
-
-    #[test]
-    fn test_version_compatibility() {
-        let v1_0 = ApiVersion::parse("1.0.0").unwrap();
-        let v1_5 = ApiVersion::parse("1.5.0").unwrap();
-        let v2_0 = ApiVersion::parse("2.0.0").unwrap();
-        // Same major version = compatible
-        assert!(v1_0.is_compatible(v1_5));
-        assert!(v1_5.is_compatible(v1_0));
-        // Different major version = not compatible
-        assert!(!v1_0.is_compatible(v2_0));
-        assert!(!v2_0.is_compatible(v1_0));
     }
 
     #[test]
@@ -1608,26 +1576,6 @@ mod tests {
     }
 
     #[test]
-    fn test_version_is_deprecated() {
-        assert!(ApiVersion::parse("16.0.0").unwrap().is_deprecated());
-        assert!(ApiVersion::parse("17.0.0").unwrap().is_deprecated());
-        assert!(!ApiVersion::parse("18.0.0").unwrap().is_deprecated());
-        assert!(ApiVersion::parse("1.0.0").unwrap().is_deprecated());
-    }
-
-    #[test]
-    fn test_deprecation_notice_structure() {
-        let notice = DeprecationNotice {
-            deprecated_since: ApiVersion::parse("18.0.0").unwrap(),
-            sunset_version: ApiVersion::parse("19.0.0").unwrap(),
-            message: "Upgrade to v18.0 or later".to_string(),
-        };
-        let json = serde_json::to_string(&notice).unwrap();
-        let decoded: DeprecationNotice = serde_json::from_str(&json).unwrap();
-        assert_eq!(decoded.sunset_version.major, 19);
-    }
-
-    #[test]
     fn test_version_features_from_version() {
         let features = VersionFeatures::from_version(ApiVersion::parse("17.0.0").unwrap());
         assert!(features.deprecation_notices);
@@ -1662,18 +1610,6 @@ mod tests {
     fn test_api_response_includes_version() {
         let resp = ApiResponse::ok();
         assert_eq!(resp.version, Some(ApiVersion::CURRENT));
-        assert!(resp.deprecation.is_none());
-    }
-
-    #[test]
-    fn test_api_response_with_deprecation() {
-        let notice = DeprecationNotice {
-            deprecated_since: ApiVersion::parse("17.0.0").unwrap(),
-            sunset_version: ApiVersion::parse("18.0.0").unwrap(),
-            message: "Deprecated".to_string(),
-        };
-        let resp = ApiResponse::ok().with_deprecation(notice);
-        assert!(resp.deprecation.is_some());
     }
 
     #[test]

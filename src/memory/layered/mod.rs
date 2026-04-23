@@ -181,7 +181,7 @@ pub struct KnowledgePiece {
 }
 
 impl MemoryEntry {
-    /// Default tenant ID for backward compatibility.
+    /// Default tenant ID used when no tenant is specified.
     pub fn default_tenant() -> String {
         "default".to_string()
     }

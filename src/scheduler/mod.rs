@@ -215,6 +215,17 @@ impl AgentScheduler {
         entry.last_active_ms = now_ms();
     }
 
+    /// Record token usage from context assembly for an agent (F-4).
+    pub fn record_token_usage(&self, agent_id: &AgentId, tokens: u64) {
+        if tokens == 0 {
+            return;
+        }
+        let mut usage = self.usage.write().unwrap();
+        let entry = usage.entry(agent_id.clone()).or_default();
+        entry.total_tokens_consumed += tokens;
+        entry.last_active_ms = now_ms();
+    }
+
     /// Drain all pending intents for persistence snapshot.
     /// Returns a copy of all intents currently in the queue.
     pub fn snapshot_intents(&self) -> Vec<Intent> {

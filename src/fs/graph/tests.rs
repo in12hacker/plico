@@ -605,30 +605,6 @@ fn test_redb_load_all() {
 }
 
 #[test]
-fn test_redb_migration_from_json() {
-    let dir = tempfile::TempDir::new().unwrap();
-
-    // Create a KG with JSON persist, then reopen with redb
-    {
-        let kg = PetgraphBackend::new();
-        kg.add_node(make_node("mig_node1", KGNodeType::Entity, vec![], "agent1")).unwrap();
-        kg.add_node(make_node("mig_node2", KGNodeType::Document, vec![], "agent1")).unwrap();
-        kg.add_edge(make_edge("mig_node1", "mig_node2", KGEdgeType::HasFact, 0.9)).unwrap();
-
-        // Save as JSON (what old code would do)
-        kg.save_to_disk(dir.path()).unwrap();
-    }
-
-    // Now open with redb - should detect JSON and migrate
-    let kg = PetgraphBackend::open(dir.path().to_path_buf());
-    assert_eq!(kg.node_count().unwrap(), 2);
-    assert_eq!(kg.edge_count().unwrap(), 1);
-
-    let node = kg.get_node("mig_node1").unwrap().unwrap();
-    assert_eq!(node.node_type, KGNodeType::Entity);
-}
-
-#[test]
 fn test_redb_edge_key_format() {
     let dir = tempfile::TempDir::new().unwrap();
     let kg = PetgraphBackend::open(dir.path().to_path_buf());

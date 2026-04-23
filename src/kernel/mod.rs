@@ -42,7 +42,7 @@ use std::sync::{Arc, RwLock, atomic::{AtomicU64, Ordering}};
 
 use crate::cas::CASStorage;
 use crate::memory::{LayeredMemory, MemoryScope, CASPersister, MemoryPersister};
-use crate::scheduler::{AgentScheduler, IntentPriority};
+use crate::scheduler::{AgentScheduler, IntentPriority, AgentId};
 use crate::scheduler::messaging::MessageBus;
 use crate::fs::{SemanticFS, InMemoryBackend, HnswBackend, EmbeddingProvider, SemanticSearch, LlmSummarizer, Summarizer, KnowledgeGraph, PetgraphBackend, StubEmbeddingProvider, KGNodeType};
 use crate::llm::LlmProvider;
@@ -1254,6 +1254,10 @@ impl AIKernel {
                     .collect();
                 match self.context_assemble(&candidates, budget_tokens, &agent_id) {
                     Ok(allocation) => {
+                        let used_tokens = allocation.total_tokens as u64;
+                        if used_tokens > 0 {
+                            self.scheduler.record_token_usage(&AgentId(agent_id.clone()), used_tokens);
+                        }
                         let mut r = ApiResponse::ok();
                         r.context_assembly = Some(allocation);
                         r
@@ -1473,6 +1477,7 @@ impl AIKernel {
                             checkpoint_id: result.checkpoint_id,
                             last_seq: result.last_seq,
                             consolidation: Some(result.consolidation),
+                            total_tokens_consumed: self.scheduler.get_usage(&AgentId(agent_id.clone())).total_tokens_consumed,
                         });
                         r
                     }

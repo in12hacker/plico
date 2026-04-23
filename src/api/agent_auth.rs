@@ -31,7 +31,7 @@ type HmacSha256 = Hmac<Sha256>;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[derive(Default)]
 pub enum AgentAuthMode {
-    /// Token optional — backward compatible, no token requests allowed.
+    /// Token optional — unauthenticated requests allowed (default for development).
     #[default]
     Optional,
     /// Token required — all requests with agent_id must carry valid token.

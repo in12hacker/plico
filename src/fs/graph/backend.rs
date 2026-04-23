@@ -75,8 +75,6 @@ impl PetgraphBackend {
 
     pub fn open(root: std::path::PathBuf) -> Self {
         let db_path = root.join("kg.redb");
-        let nodes_path = root.join("kg_nodes.json");
-        let needs_migration = nodes_path.exists() && !db_path.exists();
 
         use std::collections::HashMap;
         use std::sync::{Arc, Mutex, OnceLock};
@@ -99,34 +97,12 @@ impl PetgraphBackend {
             }
         };
 
-        let (nodes, out_e, in_e) = if needs_migration {
-            match Self::load_from_json(&root) {
-                Ok((nodes, out_edges, in_edges)) => {
-                    tracing::info!("Migrating KG from JSON to redb...");
-                    if let Some(ref database) = db {
-                        Self::bulk_persist_to_redb(database, &nodes, &out_edges);
-                        tracing::info!("KG migration to redb complete");
-                    }
-                    (nodes, out_edges, in_edges)
-                }
-                Err(e) => {
-                    tracing::warn!("Failed to load KG from JSON for migration, starting fresh: {}", e);
-                    (HashMap::new(), HashMap::new(), HashMap::new())
-                }
-            }
-        } else if let Some(ref database) = db {
-            // Migrate old 3-part edge keys to 4-part format if needed
-            Self::migrate_old_edge_keys(database);
+        let (nodes, out_e, in_e) = if let Some(ref database) = db {
             match Self::load_from_redb(database) {
                 Ok(triple) => triple,
-                Err(_) => {
-                    match Self::load_from_json(&root) {
-                        Ok(triple) => triple,
-                        Err(e) => {
-                            tracing::warn!("Failed to load KG, starting fresh: {}", e);
-                            (HashMap::new(), HashMap::new(), HashMap::new())
-                        }
-                    }
+                Err(e) => {
+                    tracing::warn!("Failed to load KG from redb, starting fresh: {}", e);
+                    (HashMap::new(), HashMap::new(), HashMap::new())
                 }
             }
         } else {
@@ -279,7 +255,7 @@ impl PetgraphBackend {
                     let key_str = key.value();
                     if let Ok(edge) = serde_json::from_slice::<KGEdge>(value.value()) {
                         let parts: Vec<&str> = key_str.split('|').collect();
-                        if parts.len() >= 3 {
+                        if parts.len() == 4 {
                             let src = parts[0].to_string();
                             let dst = parts[1].to_string();
                             out_edges.entry(src.clone()).or_default().push((dst.clone(), edge.clone()));
@@ -291,82 +267,6 @@ impl PetgraphBackend {
         }
 
         Ok((nodes, out_edges, in_edges))
-    }
-
-    /// One-time migration: rewrite old 3-part edge keys to 4-part format.
-    fn migrate_old_edge_keys(database: &Database) {
-        let read_txn = database.begin_read().expect("Failed to begin read txn");
-        let mut to_migrate: Vec<(String, KGEdge, Vec<u8>)> = Vec::new();
-
-        if let Ok(table) = read_txn.open_table(KG_EDGES) {
-            if let Ok(iter) = table.range::<&str>(..) {
-                for (key, value) in iter.flatten() {
-                    let key_str = key.value();
-                    let parts: Vec<&str> = key_str.split('|').collect();
-                    if parts.len() == 3 {
-                        if let Ok(edge) = serde_json::from_slice::<KGEdge>(value.value()) {
-                            to_migrate.push((key_str.to_string(), edge, value.value().to_vec()));
-                        }
-                    }
-                }
-            }
-        }
-        drop(read_txn);
-
-        if to_migrate.is_empty() { return; }
-
-        tracing::info!("Migrating {} old-format edge keys to v2 format", to_migrate.len());
-        let write_txn = database.begin_write().expect("Failed to begin write txn");
-        {
-            let mut table = write_txn.open_table(KG_EDGES).expect("Failed to open edges table");
-            for (old_key, edge, data) in &to_migrate {
-                let new_key = Self::edge_key(&edge.src, &edge.dst, &edge.edge_type, edge.created_at);
-                if new_key != *old_key {
-                    table.insert(new_key.as_str(), data.as_slice()).expect("Failed to insert migrated edge");
-                    table.remove(old_key.as_str()).ok();
-                }
-            }
-        }
-        write_txn.commit().expect("Failed to commit edge key migration");
-    }
-
-    /// Bulk-write all nodes and edges to redb (used during JSON→redb migration).
-    fn bulk_persist_to_redb(
-        database: &Database,
-        nodes: &HashMap<String, KGNode>,
-        out_edges: &HashMap<String, Vec<(String, KGEdge)>>,
-    ) {
-        {
-            let write_txn = database.begin_write().expect("Failed to begin write txn");
-            {
-                let mut table = write_txn.open_table(KG_NODES).expect("Failed to open nodes table");
-                for (node_id, node) in nodes {
-                    let data = serde_json::to_vec(node).expect("Failed to serialize node");
-                    table.insert(node_id.as_str(), data.as_slice()).expect("Failed to insert node");
-                }
-            }
-            write_txn.commit().expect("Failed to commit nodes migration");
-        }
-        {
-            let write_txn = database.begin_write().expect("Failed to begin write txn");
-            {
-                let mut table = write_txn.open_table(KG_EDGES).expect("Failed to open edges table");
-                for (src, list) in out_edges {
-                    for (dst, edge) in list {
-                        let key = Self::edge_key(src, dst, &edge.edge_type, edge.created_at);
-                        let data = serde_json::to_vec(edge).expect("Failed to serialize edge");
-                        table.insert(key.as_str(), data.as_slice()).expect("Failed to insert edge");
-                    }
-                }
-            }
-            write_txn.commit().expect("Failed to commit edges migration");
-        }
-    }
-
-    fn load_from_json(root: &std::path::Path) -> Result<DiskGraph, KGError> {
-        let nodes_path = root.join("kg_nodes.json");
-        let edges_path = root.join("kg_edges.json");
-        Self::load_from_disk_internal(&nodes_path, &edges_path)
     }
 
     fn load_from_disk_internal(

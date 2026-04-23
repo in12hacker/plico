@@ -204,3 +204,18 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 ---
 
 **These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
+
+## 5. No Compatibility Code (Pre-Release Policy)
+
+**This project has no released versions. Only one branch is maintained. All backward-compatibility code is dead code.**
+
+Rules:
+- Do NOT write data migration code (old format → new format). No users have old data.
+- Do NOT write version-checking logic (`is_compatible`, `is_deprecated`, `MIN_SUPPORTED`). There is only one version.
+- Do NOT add CLI argument aliases "for compatibility". There are no existing scripts using old flags.
+- Do NOT create `DeprecationNotice` types or deprecation-check functions. Nothing is deprecated.
+- Do NOT add fallback paths (e.g., "try redb, fall back to JSON"). Pick one format and commit.
+
+When to revisit: Only after the **first public release**. At that point, compatibility code becomes necessary.
+
+**Lesson learned (2026-04-23):** A redb migration added `migrate_old_edge_keys()`, `bulk_persist_to_redb()`, `load_from_json()` fallback, and `DeprecationNotice` — all for formats that never existed in production. These 140+ lines of dead code were cleaned up immediately. The cost of premature compatibility code: wasted implementation time, inflated code size, test maintenance burden, and misleading code paths that confuse future AI agents reading the codebase.

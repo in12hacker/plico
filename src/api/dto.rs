@@ -546,6 +546,8 @@ pub struct SessionEnded {
     /// Memory consolidation report (F-6).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub consolidation: Option<ConsolidationReport>,
+    /// Cumulative token consumption for this session (F-4).
+    pub total_tokens_consumed: u64,
 }
 
 /// Memory consolidation report (F-6).
@@ -822,6 +824,7 @@ pub struct AgentUsageDto {
     pub memory_entries: usize,
     pub memory_quota: u64,
     pub tool_call_count: u64,
+    pub total_tokens_consumed: u64,
     pub cpu_time_quota: u64,
     pub allowed_tools: Vec<String>,
     pub last_active_ms: u64,

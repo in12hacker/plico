@@ -830,7 +830,6 @@ mod tests {
         ApiResponse {
             ok,
             version: None,
-            deprecation: None,
             cid: None,
             node_id: None,
             data: None,

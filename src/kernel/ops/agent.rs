@@ -345,6 +345,7 @@ impl crate::kernel::AIKernel {
             memory_entries,
             memory_quota: resources.memory_quota,
             tool_call_count: usage.tool_call_count,
+            total_tokens_consumed: usage.total_tokens_consumed,
             cpu_time_quota: resources.cpu_time_quota,
             allowed_tools: resources.allowed_tools,
             last_active_ms: usage.last_active_ms,
