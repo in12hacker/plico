@@ -1,8 +1,14 @@
 //! Knowledge Graph Backend — PetgraphBackend implementation.
+//!
+//! Persistence strategy:
+//! - Runtime: redb 4.0 ACID KV store — O(1) per write, crash-safe
+//! - Export:  JSON via `save_to_disk`/`load_from_disk` — portable, human-readable
+//!
+//! Edge keys use 4-part format: `"src|dst|type_debug|created_at"` to preserve
+//! full temporal history across restarts (system-v2.md axiom 8: causality).
 
 use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::sync::RwLock;
-use std::path::PathBuf;
 
 use redb::{Database, ReadableDatabase, TableDefinition};
 
@@ -54,7 +60,6 @@ pub struct PetgraphBackend {
     nodes: RwLock<HashMap<String, KGNode>>,
     out_edges: RwLock<HashMap<String, Vec<(String, KGEdge)>>>,
     in_edges: RwLock<HashMap<String, Vec<(String, KGEdge)>>>,
-    root: Option<PathBuf>,
     db: Option<std::sync::Arc<Database>>,
 }
 
@@ -64,7 +69,6 @@ impl PetgraphBackend {
             nodes: RwLock::new(HashMap::new()),
             out_edges: RwLock::new(HashMap::new()),
             in_edges: RwLock::new(HashMap::new()),
-            root: None,
             db: None,
         }
     }
@@ -72,11 +76,8 @@ impl PetgraphBackend {
     pub fn open(root: std::path::PathBuf) -> Self {
         let db_path = root.join("kg.redb");
         let nodes_path = root.join("kg_nodes.json");
-
-        // Determine if we need migration from JSON to redb
         let needs_migration = nodes_path.exists() && !db_path.exists();
 
-        // Use a static map to track open databases per path, wrapped in Arc for sharing
         use std::collections::HashMap;
         use std::sync::{Arc, Mutex, OnceLock};
         static OPEN_DATABASES: OnceLock<Mutex<HashMap<std::path::PathBuf, Arc<Database>>>> = OnceLock::new();
@@ -85,51 +86,25 @@ impl PetgraphBackend {
         let db = {
             let mut db_guard = db_map.lock().unwrap();
             if let Some(existing) = db_guard.get(&db_path) {
-                // Return existing database (Arc clone is cheap)
                 Some(Arc::clone(existing))
             } else {
-                let db = if db_path.exists() {
+                let database = if db_path.exists() {
                     Database::open(&db_path).expect("Failed to open redb database")
                 } else {
                     Database::create(&db_path).expect("Failed to create redb database")
                 };
-                let arc_db = Arc::new(db);
+                let arc_db = Arc::new(database);
                 db_guard.insert(db_path.clone(), Arc::clone(&arc_db));
                 Some(arc_db)
             }
         };
 
         let (nodes, out_e, in_e) = if needs_migration {
-            // Migrate from JSON to redb
             match Self::load_from_json(&root) {
                 Ok((nodes, out_edges, in_edges)) => {
                     tracing::info!("Migrating KG from JSON to redb...");
                     if let Some(ref database) = db {
-                        // Persist all nodes to redb
-                        {
-                            let write_txn = database.begin_write().expect("Failed to begin write txn");
-                            let mut table = write_txn.open_table(KG_NODES).expect("Failed to open nodes table");
-                            for (node_id, node) in &nodes {
-                                let data = serde_json::to_vec(node).expect("Failed to serialize node");
-                                table.insert(node_id.as_str(), data.as_slice()).expect("Failed to insert node");
-                            }
-                            drop(table);
-                            write_txn.commit().expect("Failed to commit nodes migration");
-                        }
-                        // Persist all edges to redb
-                        {
-                            let write_txn = database.begin_write().expect("Failed to begin write txn");
-                            let mut table = write_txn.open_table(KG_EDGES).expect("Failed to open edges table");
-                            for (src, list) in &out_edges {
-                                for (dst, edge) in list {
-                                    let key = Self::edge_key(src, dst, &edge.edge_type);
-                                    let data = serde_json::to_vec(edge).expect("Failed to serialize edge");
-                                    table.insert(key.as_str(), data.as_slice()).expect("Failed to insert edge");
-                                }
-                            }
-                            drop(table);
-                            write_txn.commit().expect("Failed to commit edges migration");
-                        }
+                        Self::bulk_persist_to_redb(database, &nodes, &out_edges);
                         tracing::info!("KG migration to redb complete");
                     }
                     (nodes, out_edges, in_edges)
@@ -140,10 +115,11 @@ impl PetgraphBackend {
                 }
             }
         } else if let Some(ref database) = db {
+            // Migrate old 3-part edge keys to 4-part format if needed
+            Self::migrate_old_edge_keys(database);
             match Self::load_from_redb(database) {
                 Ok(triple) => triple,
                 Err(_) => {
-                    // Try JSON fallback
                     match Self::load_from_json(&root) {
                         Ok(triple) => triple,
                         Err(e) => {
@@ -161,14 +137,18 @@ impl PetgraphBackend {
             nodes: RwLock::new(nodes),
             out_edges: RwLock::new(out_e),
             in_edges: RwLock::new(in_e),
-            root: Some(root),
             db,
         }
     }
 
-    fn edge_key(src: &str, dst: &str, edge_type: &KGEdgeType) -> String {
-        format!("{}|{}|{:?}", src, dst, edge_type)
+    // ── Key format ─────────────────────────────────────────────────────────
+
+    /// v2 edge key: includes `created_at` so each temporal version is distinct.
+    fn edge_key(src: &str, dst: &str, edge_type: &KGEdgeType, created_at: u64) -> String {
+        format!("{}|{}|{:?}|{}", src, dst, edge_type, created_at)
     }
+
+    // ── Single-record persistence ──────────────────────────────────────────
 
     fn persist_node(&self, node_id: &str, node: &KGNode) {
         let Some(ref db) = self.db else { return };
@@ -181,79 +161,129 @@ impl PetgraphBackend {
         write_txn.commit().expect("Failed to commit node");
     }
 
-    fn persist_edge(&self, src: &str, dst: &str, edge: &KGEdge) {
+    // ── Atomic batch persistence ───────────────────────────────────────────
+
+    /// Persist a new edge + all invalidated predecessors in one ACID transaction.
+    fn persist_add_edge_atomic(&self, new_edge: &KGEdge, invalidated: &[KGEdge]) {
         let Some(ref db) = self.db else { return };
-        let key = Self::edge_key(src, dst, &edge.edge_type);
         let write_txn = db.begin_write().expect("Failed to begin write txn");
         {
             let mut table = write_txn.open_table(KG_EDGES).expect("Failed to open edges table");
-            let data = serde_json::to_vec(edge).expect("Failed to serialize edge");
+            for edge in invalidated {
+                let key = Self::edge_key(&edge.src, &edge.dst, &edge.edge_type, edge.created_at);
+                let data = serde_json::to_vec(edge).expect("Failed to serialize edge");
+                table.insert(key.as_str(), data.as_slice()).expect("Failed to insert edge");
+            }
+            let key = Self::edge_key(&new_edge.src, &new_edge.dst, &new_edge.edge_type, new_edge.created_at);
+            let data = serde_json::to_vec(new_edge).expect("Failed to serialize edge");
             table.insert(key.as_str(), data.as_slice()).expect("Failed to insert edge");
         }
-        write_txn.commit().expect("Failed to commit edge");
+        write_txn.commit().expect("Failed to commit edge batch");
     }
 
-    fn remove_node_from_db(&self, node_id: &str) {
+    /// Batch-remove edges from redb in one transaction.
+    fn remove_edges_from_db(&self, edges: &[KGEdge]) {
+        let Some(ref db) = self.db else { return };
+        if edges.is_empty() { return; }
+        let write_txn = db.begin_write().expect("Failed to begin write txn");
+        {
+            let mut table = write_txn.open_table(KG_EDGES).expect("Failed to open edges table");
+            for edge in edges {
+                let key = Self::edge_key(&edge.src, &edge.dst, &edge.edge_type, edge.created_at);
+                table.remove(key.as_str()).ok();
+            }
+        }
+        write_txn.commit().expect("Failed to commit edge removal");
+    }
+
+    /// Remove a node + all its edges in one ACID transaction.
+    fn remove_node_and_edges_from_db(&self, node_id: &str, edges: &[KGEdge]) {
         let Some(ref db) = self.db else { return };
         let write_txn = db.begin_write().expect("Failed to begin write txn");
         {
             let mut table = write_txn.open_table(KG_NODES).expect("Failed to open nodes table");
             table.remove(node_id).ok();
         }
+        if !edges.is_empty() {
+            let mut table = write_txn.open_table(KG_EDGES).expect("Failed to open edges table");
+            for edge in edges {
+                let key = Self::edge_key(&edge.src, &edge.dst, &edge.edge_type, edge.created_at);
+                table.remove(key.as_str()).ok();
+            }
+        }
         write_txn.commit().expect("Failed to commit node removal");
     }
 
-    fn remove_edge_from_db(&self, src: &str, dst: &str, edge_type: &KGEdgeType) {
-        let Some(ref db) = self.db else { return };
-        let key = Self::edge_key(src, dst, edge_type);
-        let write_txn = db.begin_write().expect("Failed to begin write txn");
+    // ── Conflict invalidation (private) ────────────────────────────────────
+
+    /// In-memory invalidation: sets `invalid_at` on conflicting edges, returns clones.
+    /// Does NOT persist — caller is responsible for persistence.
+    fn invalidate_conflicts_internal(&self, new_edge: &KGEdge) -> Vec<KGEdge> {
+        let now = now_ms();
+        let mut invalidated = Vec::new();
         {
-            let mut table = write_txn.open_table(KG_EDGES).expect("Failed to open edges table");
-            table.remove(key.as_str()).ok();
+            let mut out = self.out_edges.write().unwrap();
+            if let Some(list) = out.get_mut(&new_edge.src) {
+                for (dst, edge) in list.iter_mut() {
+                    if *dst == new_edge.dst
+                        && edge.edge_type == new_edge.edge_type
+                        && edge.invalid_at.is_none()
+                    {
+                        edge.invalid_at = Some(now);
+                        invalidated.push(edge.clone());
+                    }
+                }
+            }
         }
-        write_txn.commit().expect("Failed to commit edge removal");
+        {
+            let mut inc = self.in_edges.write().unwrap();
+            if let Some(list) = inc.get_mut(&new_edge.dst) {
+                for (src, edge) in list.iter_mut() {
+                    if *src == new_edge.src
+                        && edge.edge_type == new_edge.edge_type
+                        && edge.invalid_at.is_none()
+                    {
+                        edge.invalid_at = Some(now);
+                    }
+                }
+            }
+        }
+        invalidated
     }
+
+    // ── Load / Migration ───────────────────────────────────────────────────
 
     fn load_from_redb(
         database: &std::sync::Arc<Database>,
-    ) -> Result<(HashMap<String, KGNode>, HashMap<String, Vec<(String, KGEdge)>>, HashMap<String, Vec<(String, KGEdge)>>), KGError> {
+    ) -> Result<DiskGraph, KGError> {
         let read_txn = database.begin_read().expect("Failed to begin read txn");
 
         let mut nodes = HashMap::new();
         let mut out_edges: HashMap<String, Vec<(String, KGEdge)>> = HashMap::new();
         let mut in_edges: HashMap<String, Vec<(String, KGEdge)>> = HashMap::new();
 
-        // Load nodes - use range() to iterate all entries
         if let Ok(table) = read_txn.open_table(KG_NODES) {
-            // Use unbounded range .. to get all entries (K=&str, so &str implements RangeBounds<&str>)
             if let Ok(iter) = table.range::<&str>(..) {
-                for item in iter {
-                    if let Ok((node_id, value)) = item {
-                        // AccessGuard with &str key returns &str directly
-                        let node_id_str = node_id.value();
-                        if let Ok(node) = serde_json::from_slice::<KGNode>(value.value()) {
-                            nodes.insert(node_id_str.to_string(), node);
-                        }
+                for (node_id, value) in iter.flatten() {
+                    let node_id_str = node_id.value();
+                    if let Ok(node) = serde_json::from_slice::<KGNode>(value.value()) {
+                        nodes.insert(node_id_str.to_string(), node);
                     }
                 }
             }
         }
 
-        // Load edges - use range() to iterate all entries
         if let Ok(table) = read_txn.open_table(KG_EDGES) {
             if let Ok(iter) = table.range::<&str>(..) {
-                for item in iter {
-                    if let Ok((key, value)) = item {
-                        // AccessGuard with &str key returns &str directly
-                        let key_str = key.value();
-                        if let Ok(edge) = serde_json::from_slice::<KGEdge>(value.value()) {
-                            let parts: Vec<&str> = key_str.split('|').collect();
-                            if parts.len() == 3 {
-                                let src = parts[0].to_string();
-                                let dst = parts[1].to_string();
-                                out_edges.entry(src.clone()).or_default().push((dst.clone(), edge.clone()));
-                                in_edges.entry(dst).or_default().push((src, edge));
-                            }
+                for (key, value) in iter.flatten() {
+                    let key_str = key.value();
+                    if let Ok(edge) = serde_json::from_slice::<KGEdge>(value.value()) {
+                        let parts: Vec<&str> = key_str.split('|').collect();
+                        if parts.len() >= 3 {
+                            let src = parts[0].to_string();
+                            let dst = parts[1].to_string();
+                            out_edges.entry(src.clone()).or_default().push((dst.clone(), edge.clone()));
+                            in_edges.entry(dst).or_default().push((src, edge));
                         }
                     }
                 }
@@ -263,7 +293,77 @@ impl PetgraphBackend {
         Ok((nodes, out_edges, in_edges))
     }
 
-    fn load_from_json(root: &std::path::Path) -> Result<(HashMap<String, KGNode>, HashMap<String, Vec<(String, KGEdge)>>, HashMap<String, Vec<(String, KGEdge)>>), KGError> {
+    /// One-time migration: rewrite old 3-part edge keys to 4-part format.
+    fn migrate_old_edge_keys(database: &Database) {
+        let read_txn = database.begin_read().expect("Failed to begin read txn");
+        let mut to_migrate: Vec<(String, KGEdge, Vec<u8>)> = Vec::new();
+
+        if let Ok(table) = read_txn.open_table(KG_EDGES) {
+            if let Ok(iter) = table.range::<&str>(..) {
+                for (key, value) in iter.flatten() {
+                    let key_str = key.value();
+                    let parts: Vec<&str> = key_str.split('|').collect();
+                    if parts.len() == 3 {
+                        if let Ok(edge) = serde_json::from_slice::<KGEdge>(value.value()) {
+                            to_migrate.push((key_str.to_string(), edge, value.value().to_vec()));
+                        }
+                    }
+                }
+            }
+        }
+        drop(read_txn);
+
+        if to_migrate.is_empty() { return; }
+
+        tracing::info!("Migrating {} old-format edge keys to v2 format", to_migrate.len());
+        let write_txn = database.begin_write().expect("Failed to begin write txn");
+        {
+            let mut table = write_txn.open_table(KG_EDGES).expect("Failed to open edges table");
+            for (old_key, edge, data) in &to_migrate {
+                let new_key = Self::edge_key(&edge.src, &edge.dst, &edge.edge_type, edge.created_at);
+                if new_key != *old_key {
+                    table.insert(new_key.as_str(), data.as_slice()).expect("Failed to insert migrated edge");
+                    table.remove(old_key.as_str()).ok();
+                }
+            }
+        }
+        write_txn.commit().expect("Failed to commit edge key migration");
+    }
+
+    /// Bulk-write all nodes and edges to redb (used during JSON→redb migration).
+    fn bulk_persist_to_redb(
+        database: &Database,
+        nodes: &HashMap<String, KGNode>,
+        out_edges: &HashMap<String, Vec<(String, KGEdge)>>,
+    ) {
+        {
+            let write_txn = database.begin_write().expect("Failed to begin write txn");
+            {
+                let mut table = write_txn.open_table(KG_NODES).expect("Failed to open nodes table");
+                for (node_id, node) in nodes {
+                    let data = serde_json::to_vec(node).expect("Failed to serialize node");
+                    table.insert(node_id.as_str(), data.as_slice()).expect("Failed to insert node");
+                }
+            }
+            write_txn.commit().expect("Failed to commit nodes migration");
+        }
+        {
+            let write_txn = database.begin_write().expect("Failed to begin write txn");
+            {
+                let mut table = write_txn.open_table(KG_EDGES).expect("Failed to open edges table");
+                for (src, list) in out_edges {
+                    for (dst, edge) in list {
+                        let key = Self::edge_key(src, dst, &edge.edge_type, edge.created_at);
+                        let data = serde_json::to_vec(edge).expect("Failed to serialize edge");
+                        table.insert(key.as_str(), data.as_slice()).expect("Failed to insert edge");
+                    }
+                }
+            }
+            write_txn.commit().expect("Failed to commit edges migration");
+        }
+    }
+
+    fn load_from_json(root: &std::path::Path) -> Result<DiskGraph, KGError> {
         let nodes_path = root.join("kg_nodes.json");
         let edges_path = root.join("kg_edges.json");
         Self::load_from_disk_internal(&nodes_path, &edges_path)
@@ -295,39 +395,7 @@ impl PetgraphBackend {
         Ok((nodes, out_edges, in_edges))
     }
 
-    fn persist(&self) {
-        // Legacy JSON persist kept for backward compatibility when db is None
-        let Some(ref path) = self.root else { return };
-        let nodes_path = path.join("kg_nodes.json");
-        let edges_path = path.join("kg_edges.json");
-
-        let nodes = self.nodes.read().unwrap();
-        if let Ok(json) = serde_json::to_string(&*nodes) {
-            let tmp = nodes_path.with_extension("json.tmp");
-            if std::fs::write(&tmp, json).is_ok() {
-                let _ = std::fs::rename(&tmp, &nodes_path);
-            }
-        }
-        drop(nodes);
-
-        let out = self.out_edges.read().unwrap();
-        let records: Vec<EdgeRecord> = out
-            .iter()
-            .flat_map(|(src, list)| {
-                list.iter().map(move |(dst, edge)| EdgeRecord {
-                    src: src.clone(),
-                    dst: dst.clone(),
-                    edge: edge.clone(),
-                })
-            })
-            .collect();
-        if let Ok(json) = serde_json::to_string(&records) {
-            let tmp = edges_path.with_extension("json.tmp");
-            if std::fs::write(&tmp, json).is_ok() {
-                let _ = std::fs::rename(&tmp, &edges_path);
-            }
-        }
-    }
+    // ── Domain logic ───────────────────────────────────────────────────────
 
     pub fn upsert_document(
         &self,
@@ -472,6 +540,8 @@ impl Default for PetgraphBackend {
     }
 }
 
+// ── KnowledgeGraph trait implementation ────────────────────────────────────────
+
 impl KnowledgeGraph for PetgraphBackend {
     fn add_node(&self, node: KGNode) -> Result<(), KGError> {
         let node_id = node.id.clone();
@@ -484,7 +554,7 @@ impl KnowledgeGraph for PetgraphBackend {
     }
 
     fn add_edge(&self, edge: KGEdge) -> Result<(), KGError> {
-        self.invalidate_conflicts(&edge)?;
+        let invalidated = self.invalidate_conflicts_internal(&edge);
         let edge_clone = edge.clone();
         self.out_edges
             .write()
@@ -498,7 +568,7 @@ impl KnowledgeGraph for PetgraphBackend {
             .entry(edge.dst.clone())
             .or_default()
             .push((edge.src.clone(), edge));
-        self.persist_edge(&edge_clone.src, &edge_clone.dst, &edge_clone);
+        self.persist_add_edge_atomic(&edge_clone, &invalidated);
         Ok(())
     }
 
@@ -589,13 +659,6 @@ impl KnowledgeGraph for PetgraphBackend {
         let nodes = self.nodes.read().unwrap();
         let out = self.out_edges.read().unwrap();
 
-        // Best-first DFS: explore paths ordered by descending cumulative weight.
-        // At each step, expand the highest-weight partial path first.
-        // This finds the maximum-weight path (unlike Dijkstra which finds minimum).
-        //
-        // Strategy: maintain a max-heap of (cost, path) and expand highest-cost paths,
-        // tracking the best path to each visited node. When we reach dst, return it
-        // because the heap ensures we've explored all higher-cost paths first.
         let mut heap: BinaryHeap<PathState> = BinaryHeap::new();
         heap.push(PathState {
             cost: 0.0,
@@ -603,19 +666,14 @@ impl KnowledgeGraph for PetgraphBackend {
             path: vec![src.to_string()],
         });
 
-        // Track best known cost to each node
         let mut best_cost: HashMap<String, f32> = HashMap::new();
         best_cost.insert(src.to_string(), 0.0);
 
         while let Some(state) = heap.pop() {
-            // Skip if we've exceeded max depth
             if state.path.len() > max_depth as usize {
                 continue;
             }
 
-            // Found destination — return immediately.
-            // Because we use a max-heap and expand highest-cost paths first,
-            // the first time we reach dst, it's via the highest-weight path.
             if state.node == dst {
                 let node_path: Vec<KGNode> = state
                     .path
@@ -625,26 +683,22 @@ impl KnowledgeGraph for PetgraphBackend {
                 return Ok(Some(node_path));
             }
 
-            // Skip if we've already found a better path to this node
             if let Some(&best) = best_cost.get(&state.node) {
                 if state.cost < best {
                     continue;
                 }
             }
 
-            // Explore neighbors in descending weight order
             if let Some(edges) = out.get(&state.node) {
                 let mut sorted_edges: Vec<_> = edges.clone();
                 sorted_edges.sort_by(|a, b| b.1.weight.partial_cmp(&a.1.weight).unwrap_or(std::cmp::Ordering::Equal));
 
                 for (next_dst, edge) in sorted_edges {
-                    // Avoid cycles within current path
                     if state.path.contains(&next_dst) {
                         continue;
                     }
                     let new_cost = state.cost + edge.weight;
 
-                    // Only proceed if this is a better path to next_dst
                     if let Some(&best) = best_cost.get(&next_dst) {
                         if new_cost <= best {
                             continue;
@@ -663,7 +717,6 @@ impl KnowledgeGraph for PetgraphBackend {
             }
         }
 
-        // No path found within depth limit
         Ok(None)
     }
 
@@ -707,15 +760,18 @@ impl KnowledgeGraph for PetgraphBackend {
         drop(nodes);
         let mut out = self.out_edges.write().unwrap();
         let mut in_e = self.in_edges.write().unwrap();
+        let mut removed_edges: Vec<KGEdge> = Vec::new();
         if let Some(list) = out.remove(id) {
-            for (dst, _) in list {
+            for (dst, edge) in list {
+                removed_edges.push(edge);
                 if let Some(in_list) = in_e.get_mut(&dst) {
                     in_list.retain(|(s, _)| s != id);
                 }
             }
         }
         if let Some(list) = in_e.remove(id) {
-            for (src, _) in list {
+            for (src, edge) in list {
+                removed_edges.push(edge);
                 if let Some(out_list) = out.get_mut(&src) {
                     out_list.retain(|(d, _)| d != id);
                 }
@@ -723,7 +779,7 @@ impl KnowledgeGraph for PetgraphBackend {
         }
         drop(out);
         drop(in_e);
-        self.remove_node_from_db(id);
+        self.remove_node_and_edges_from_db(id, &removed_edges);
         Ok(())
     }
 
@@ -731,32 +787,27 @@ impl KnowledgeGraph for PetgraphBackend {
         let mut out = self.out_edges.write().unwrap();
         let mut in_e = self.in_edges.write().unwrap();
 
-        // Track which edge type to remove for redb
-        let mut removed_type: Option<KGEdgeType> = None;
-        let removed = if let Some(list) = out.get_mut(src) {
-            let before = list.len();
-            list.retain(|(d, e)| {
-                let keep = !(d == dst && edge_type.is_none_or(|et| et == e.edge_type));
-                if !keep && removed_type.is_none() {
-                    removed_type = Some(e.edge_type);
+        let mut removed_edges: Vec<KGEdge> = Vec::new();
+        if let Some(list) = out.get_mut(src) {
+            let mut keep = Vec::new();
+            for item in list.drain(..) {
+                if item.0 == dst && edge_type.is_none_or(|et| et == item.1.edge_type) {
+                    removed_edges.push(item.1);
+                } else {
+                    keep.push(item);
                 }
-                keep
-            });
-            before - list.len()
-        } else {
-            0
-        };
+            }
+            *list = keep;
+        }
         if let Some(list) = in_e.get_mut(dst) {
             list.retain(|(s, e)| !(s == src && edge_type.is_none_or(|et| et == e.edge_type)));
         }
         drop(out);
         drop(in_e);
-        if removed == 0 {
+        if removed_edges.is_empty() {
             return Err(KGError::NodeNotFound(format!("edge {}→{} not found", src, dst)));
         }
-        if let Some(et) = removed_type {
-            self.remove_edge_from_db(src, dst, &et);
-        }
+        self.remove_edges_from_db(&removed_edges);
         Ok(())
     }
 
@@ -777,7 +828,7 @@ impl KnowledgeGraph for PetgraphBackend {
         }
         let node_clone = node.clone();
         drop(nodes);
-        self.persist_node(&id, &node_clone);
+        self.persist_node(id, &node_clone);
         Ok(())
     }
 
@@ -833,37 +884,21 @@ impl KnowledgeGraph for PetgraphBackend {
     }
 
     fn invalidate_conflicts(&self, new_edge: &KGEdge) -> Result<usize, KGError> {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis() as u64)
-            .unwrap_or(0);
-        let mut count = 0;
-        {
-            let mut out = self.out_edges.write().unwrap();
-            if let Some(list) = out.get_mut(&new_edge.src) {
-                for (dst, edge) in list.iter_mut() {
-                    if *dst == new_edge.dst
-                        && edge.edge_type == new_edge.edge_type
-                        && edge.invalid_at.is_none()
-                    {
-                        edge.invalid_at = Some(now);
-                        count += 1;
-                    }
+        let invalidated = self.invalidate_conflicts_internal(new_edge);
+        let count = invalidated.len();
+        if !invalidated.is_empty() {
+            // Persist the invalidated edges so `invalid_at` survives restart
+            let Some(ref db) = self.db else { return Ok(count); };
+            let write_txn = db.begin_write().expect("Failed to begin write txn");
+            {
+                let mut table = write_txn.open_table(KG_EDGES).expect("Failed to open edges table");
+                for edge in &invalidated {
+                    let key = Self::edge_key(&edge.src, &edge.dst, &edge.edge_type, edge.created_at);
+                    let data = serde_json::to_vec(edge).expect("Failed to serialize edge");
+                    table.insert(key.as_str(), data.as_slice()).expect("Failed to insert edge");
                 }
             }
-        }
-        {
-            let mut inc = self.in_edges.write().unwrap();
-            if let Some(list) = inc.get_mut(&new_edge.dst) {
-                for (src, edge) in list.iter_mut() {
-                    if *src == new_edge.src
-                        && edge.edge_type == new_edge.edge_type
-                        && edge.invalid_at.is_none()
-                    {
-                        edge.invalid_at = Some(now);
-                    }
-                }
-            }
+            write_txn.commit().expect("Failed to commit invalidation");
         }
         Ok(count)
     }
