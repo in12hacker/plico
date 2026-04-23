@@ -213,6 +213,10 @@ pub struct IntentPrefetcher {
     max_feedback_entries: usize,
     /// Root directory for persistence.
     root: std::path::PathBuf,
+    /// F-4: Total intent cache lookups (for hit rate calculation).
+    total_lookups: std::sync::atomic::AtomicU64,
+    /// F-4: Total cache hits (for hit rate calculation).
+    cache_hits: std::sync::atomic::AtomicU64,
 }
 
 impl IntentPrefetcher {
@@ -241,6 +245,8 @@ impl IntentPrefetcher {
             feedback_history: RwLock::new(Vec::new()),
             max_feedback_entries: DEFAULT_MAX_FEEDBACK_ENTRIES,
             root,
+            total_lookups: std::sync::atomic::AtomicU64::new(0),
+            cache_hits: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
@@ -271,6 +277,8 @@ impl IntentPrefetcher {
             feedback_history: RwLock::new(Vec::new()),
             max_feedback_entries: DEFAULT_MAX_FEEDBACK_ENTRIES,
             root,
+            total_lookups: std::sync::atomic::AtomicU64::new(0),
+            cache_hits: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
@@ -438,7 +446,11 @@ impl IntentPrefetcher {
         // F-9: Try to get embedding and check cache first
         let intent_embedding: Option<Vec<f32>> = self.embedding.embed(intent).ok();
 
+        // F-4: Track intent cache lookups and hits
+        self.total_lookups.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
         if let Some(cached_allocation) = self.intent_cache.lookup(intent, &intent_embedding) {
+            self.cache_hits.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             self.allocation_cache.insert(assembly_id.clone(), cached_allocation.clone());
             let alloc_clone = cached_allocation.clone();
             let assembly = Assembly {
@@ -792,6 +804,14 @@ impl IntentPrefetcher {
     #[allow(dead_code)]
     pub fn feedback_count(&self) -> usize {
         self.feedback_history.read().unwrap().len()
+    }
+
+    /// F-4: Get prefetcher hit rate statistics (lookups, hits, hit rate).
+    pub fn prefetch_hit_rate(&self) -> (u64, u64, f64) {
+        let lookups = self.total_lookups.load(std::sync::atomic::Ordering::Relaxed);
+        let hits = self.cache_hits.load(std::sync::atomic::Ordering::Relaxed);
+        let rate = if lookups > 0 { hits as f64 / lookups as f64 } else { 0.0 };
+        (lookups, hits, rate)
     }
 
     /// Run the full multi-path prefetch in a background thread.
