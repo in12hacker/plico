@@ -45,7 +45,11 @@ pub fn cmd_add_edge(kernel: &AIKernel, args: &[String]) -> ApiResponse {
     let dst = extract_arg(args, "--dst")
         .or_else(|| extract_arg(args, "--to"))
         .unwrap_or_default();
-    let edge_type = parse_edge_type(&extract_arg(args, "--type").unwrap_or_else(|| "related_to".to_string()));
+    let edge_type_str = extract_arg(args, "--type").unwrap_or_else(|| "related_to".to_string());
+    let edge_type = match parse_edge_type(&edge_type_str) {
+        Ok(t) => t,
+        Err(e) => return ApiResponse::error(e),
+    };
     let weight = extract_arg(args, "--weight").and_then(|s| s.parse().ok());
     let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
 
@@ -162,7 +166,8 @@ pub fn cmd_rm_node(kernel: &AIKernel, args: &[String]) -> ApiResponse {
 pub fn cmd_rm_edge(kernel: &AIKernel, args: &[String]) -> ApiResponse {
     let src = extract_arg(args, "--src").unwrap_or_default();
     let dst = extract_arg(args, "--dst").unwrap_or_default();
-    let edge_type = extract_arg(args, "--type").map(|s| parse_edge_type(&s));
+    let edge_type: Option<KGEdgeType> = extract_arg(args, "--type")
+        .and_then(|s| parse_edge_type(&s).ok());
     let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
 
     match kernel.kg_remove_edge(&src, &dst, edge_type, &agent_id, "default") {
@@ -195,30 +200,36 @@ pub fn parse_node_type(s: &str) -> KGNodeType {
     }
 }
 
-pub fn parse_edge_type(s: &str) -> KGEdgeType {
+pub fn parse_edge_type(s: &str) -> Result<KGEdgeType, String> {
     match s {
-        "associates_with" => KGEdgeType::AssociatesWith,
-        "follows" => KGEdgeType::Follows,
-        "mentions" => KGEdgeType::Mentions,
-        "causes" => KGEdgeType::Causes,
-        "reminds" => KGEdgeType::Reminds,
-        "part_of" => KGEdgeType::PartOf,
-        "similar_to" => KGEdgeType::SimilarTo,
-        "related_to" => KGEdgeType::RelatedTo,
-        "has_participant" => KGEdgeType::HasParticipant,
-        "has_artifact" => KGEdgeType::HasArtifact,
-        "has_recording" => KGEdgeType::HasRecording,
-        "has_resolution" => KGEdgeType::HasResolution,
-        "has_fact" => KGEdgeType::HasFact,
-        "supersedes" => KGEdgeType::Supersedes,
-        _ => KGEdgeType::RelatedTo,
+        "associates_with" => Ok(KGEdgeType::AssociatesWith),
+        "follows" => Ok(KGEdgeType::Follows),
+        "mentions" => Ok(KGEdgeType::Mentions),
+        "causes" => Ok(KGEdgeType::Causes),
+        "reminds" => Ok(KGEdgeType::Reminds),
+        "part_of" => Ok(KGEdgeType::PartOf),
+        "similar_to" => Ok(KGEdgeType::SimilarTo),
+        "related_to" => Ok(KGEdgeType::RelatedTo),
+        "has_participant" => Ok(KGEdgeType::HasParticipant),
+        "has_artifact" => Ok(KGEdgeType::HasArtifact),
+        "has_recording" => Ok(KGEdgeType::HasRecording),
+        "has_resolution" => Ok(KGEdgeType::HasResolution),
+        "has_fact" => Ok(KGEdgeType::HasFact),
+        "supersedes" => Ok(KGEdgeType::Supersedes),
+        _ => Err(format!(
+            "Unknown edge type: '{}'. Valid: associates_with, follows, mentions, causes, \
+             reminds, part_of, similar_to, related_to, has_participant, has_artifact, \
+             has_recording, has_resolution, has_fact, supersedes",
+            s
+        )),
     }
 }
 
 pub fn cmd_edge_history(kernel: &AIKernel, args: &[String]) -> ApiResponse {
     let src = extract_arg(args, "--src").unwrap_or_default();
     let dst = extract_arg(args, "--dst").unwrap_or_default();
-    let edge_type = extract_arg(args, "--edge-type").map(|s| parse_edge_type(&s));
+    let edge_type: Option<KGEdgeType> = extract_arg(args, "--edge-type")
+        .and_then(|s| parse_edge_type(&s).ok());
     let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
 
     if src.is_empty() || dst.is_empty() {

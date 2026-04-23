@@ -208,7 +208,13 @@ fn build_request(args: &[String]) -> Option<ApiRequest> {
         Some("edge") => {
             let src_id = commands::extract_arg(args, "--src").unwrap_or_default();
             let dst_id = commands::extract_arg(args, "--dst").unwrap_or_default();
-            let edge_type = commands::parse_edge_type(&commands::extract_arg(args, "--type").unwrap_or_else(|| "related_to".to_string()));
+            let edge_type = match commands::parse_edge_type(&commands::extract_arg(args, "--type").unwrap_or_else(|| "related_to".to_string())) {
+                Ok(t) => t,
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    return None;
+                }
+            };
             let weight = commands::extract_arg(args, "--weight").and_then(|s| s.parse().ok());
             let agent_id = commands::extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
             Some(ApiRequest::AddEdge { src_id, dst_id, edge_type, weight, agent_id, tenant_id: None })
