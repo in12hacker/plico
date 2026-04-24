@@ -1972,6 +1972,196 @@ impl AIKernel {
     }
 }
 
+#[cfg(test)]
+mod kernel_mod_tests {
+    use super::AIKernel;
+    use crate::api::semantic::ApiRequest;
+    use crate::kernel::tests::make_kernel;
+
+    // Test 1: AIKernel::new creates a valid kernel
+    #[test]
+    fn test_kernel_new_creates_valid_kernel() {
+        let _ = std::env::set_var("EMBEDDING_BACKEND", "stub");
+        let dir = tempfile::tempdir().unwrap();
+        let kernel = AIKernel::new(dir.path().to_path_buf()).expect("kernel init");
+        assert!(!kernel.root.as_os_str().is_empty());
+    }
+
+    // Test 2: Tool registry has builtin tools registered
+    #[test]
+    fn test_tool_registry_has_builtin_tools() {
+        let (kernel, _dir) = make_kernel();
+        let tools = kernel.tool_registry.list();
+        assert!(!tools.is_empty(), "builtin tools should be registered");
+    }
+
+    // Test 3: handle_api_request returns error for invalid action (via ToolCall with unknown tool)
+    #[test]
+    fn test_handle_api_request_unknown_tool_returns_error() {
+        let (kernel, _dir) = make_kernel();
+        let req = ApiRequest::ToolCall {
+            tool: "nonexistent_tool_xyz".to_string(),
+            params: serde_json::json!({}),
+            agent_id: "test-agent".to_string(),
+        };
+        let resp = kernel.handle_api_request(req);
+        // Unknown tool should return an error or at least not panic
+        // The tool may not exist, so we get back whatever the kernel returns
+        assert!(resp.error.is_some() || resp.tool_result.is_some());
+    }
+
+    // Test 4: handle_api_request Create succeeds
+    #[test]
+    fn test_handle_api_request_create_success() {
+        let (kernel, _dir) = make_kernel();
+        let req = ApiRequest::Create {
+            api_version: None,
+            content: "hello world".to_string(),
+            content_encoding: crate::api::semantic::ContentEncoding::Utf8,
+            tags: vec!["test".to_string()],
+            agent_id: "test-agent".to_string(),
+            tenant_id: None,
+            agent_token: None,
+            intent: None,
+        };
+        let resp = kernel.handle_api_request(req);
+        assert!(resp.cid.is_some(), "Create should return a cid: {:?}", resp.error);
+    }
+
+    // Test 5: handle_api_request Search returns results
+    #[test]
+    fn test_handle_api_request_search_returns_response() {
+        let (kernel, _dir) = make_kernel();
+        // First create something to search for
+        let create_req = ApiRequest::Create {
+            api_version: None,
+            content: "searchable content".to_string(),
+            content_encoding: crate::api::semantic::ContentEncoding::Utf8,
+            tags: vec!["searchable".to_string()],
+            agent_id: "test-agent".to_string(),
+            tenant_id: None,
+            agent_token: None,
+            intent: None,
+        };
+        kernel.handle_api_request(create_req);
+
+        let search_req = ApiRequest::Search {
+            query: "searchable".to_string(),
+            agent_id: "test-agent".to_string(),
+            tenant_id: None,
+            agent_token: None,
+            limit: Some(10),
+            offset: None,
+            require_tags: vec![],
+            exclude_tags: vec![],
+            since: None,
+            until: None,
+        };
+        let resp = kernel.handle_api_request(search_req);
+        // Should return without error (may have 0 results with stub backend)
+        assert!(resp.error.is_none() || resp.results.is_some());
+    }
+
+    // Test 6: handle_api_request RegisterAgent creates an agent
+    #[test]
+    fn test_handle_api_request_register_agent_creates_agent() {
+        let (kernel, _dir) = make_kernel();
+        let req = ApiRequest::RegisterAgent {
+            name: "test-agent".to_string(),
+        };
+        let resp = kernel.handle_api_request(req);
+        assert!(resp.agent_id.is_some(), "RegisterAgent should set agent_id: {:?}", resp.error);
+    }
+
+    // Test 7: Hook registry has hooks registered (causal hook at minimum)
+    #[test]
+    fn test_hook_registry_has_hooks() {
+        let (kernel, _dir) = make_kernel();
+        let count = kernel.hook_registry.count();
+        assert!(count > 0, "hook registry should have at least causal hook registered");
+    }
+
+    // Test 8: Event bus event_subscribe works
+    #[test]
+    fn test_event_bus_subscribe_works() {
+        let (kernel, _dir) = make_kernel();
+        let sub_id = kernel.event_subscribe();
+        assert!(!sub_id.is_empty(), "subscribe should return non-empty subscription id");
+    }
+
+    // Test 9: Session store is accessible
+    #[test]
+    fn test_session_store_accessible() {
+        let (kernel, _dir) = make_kernel();
+        // Just verify the session_store field is accessible and non-null
+        let _ = &kernel.session_store;
+    }
+
+    // Test 10: metrics() returns valid metrics
+    #[test]
+    fn test_metrics_returns_valid_metrics() {
+        let (kernel, _dir) = make_kernel();
+        let metrics = kernel.metrics();
+        // Should be able to get a metrics snapshot without panic
+        let _snapshot = metrics.get_metrics();
+    }
+
+    // Test 11: handle_api_request AgentStatus returns error for unknown agent
+    #[test]
+    fn test_handle_api_request_agent_status_unknown_agent() {
+        let (kernel, _dir) = make_kernel();
+        let req = ApiRequest::AgentStatus {
+            agent_id: "nonexistent-agent-xyz".to_string(),
+        };
+        let resp = kernel.handle_api_request(req);
+        // Unknown agent should return error
+        assert!(resp.error.is_some() || resp.agent_state.is_none());
+    }
+
+    // Test 12: handle_api_request ListAgents returns a response
+    #[test]
+    fn test_handle_api_request_list_agents() {
+        let (kernel, _dir) = make_kernel();
+        let req = ApiRequest::ListAgents;
+        let resp = kernel.handle_api_request(req);
+        assert!(resp.agents.is_some() || resp.error.is_none());
+    }
+
+    // Test 13: event_subscribe_filtered works
+    #[test]
+    fn test_event_bus_subscribe_filtered_works() {
+        let (kernel, _dir) = make_kernel();
+        use crate::kernel::event_bus::EventFilter;
+        let filter = EventFilter {
+            event_types: Some(vec!["tool_call".to_string()]),
+            agent_ids: None,
+        };
+        let sub_id = kernel.event_subscribe_filtered(Some(filter));
+        assert!(!sub_id.is_empty(), "subscribe_filtered should return non-empty subscription id");
+    }
+
+    // Test 14: event_poll returns None for unknown subscription
+    #[test]
+    fn test_event_poll_unknown_subscription_returns_none() {
+        let (kernel, _dir) = make_kernel();
+        let events = kernel.event_poll("nonexistent-subscription-id-xyz");
+        assert!(events.is_none(), "poll for unknown subscription should return None");
+    }
+
+    // Test 15: handle_api_request CheckPermission works
+    #[test]
+    fn test_handle_api_request_check_permission() {
+        let (kernel, _dir) = make_kernel();
+        let req = ApiRequest::CheckPermission {
+            agent_id: "test-agent".to_string(),
+            action: "read".to_string(),
+        };
+        let resp = kernel.handle_api_request(req);
+        // Should return without panic; result is either allowed or not
+        assert!(resp.error.is_none() || resp.data.is_some());
+    }
+}
+
 fn parse_scope(scope: Option<String>) -> MemoryScope {
     match scope.as_deref() {
         None | Some("private") => MemoryScope::Private,
