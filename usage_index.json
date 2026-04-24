@@ -1,0 +1,12 @@
+{
+  "1fa16b7e-6ea5-4854-87d4-a3adb81ae0cc": {
+    "tool_call_count": 1,
+    "total_tokens_consumed": 24,
+    "last_active_ms": 1777012208497
+  },
+  "cli": {
+    "tool_call_count": 1,
+    "total_tokens_consumed": 19,
+    "last_active_ms": 1777012208497
+  }
+}
