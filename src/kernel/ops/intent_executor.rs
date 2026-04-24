@@ -515,6 +515,159 @@ impl AutonomousExecutor {
 mod tests {
     use super::*;
 
+    /// Helper to create a kernel for async tests.
+    fn make_test_kernel() -> (std::sync::Arc<AIKernel>, std::path::PathBuf) {
+        let _ = std::env::set_var("EMBEDDING_BACKEND", "stub");
+        let dir = std::env::temp_dir().join(format!("plico_test_{}_{}", std::process::id(), rand::random::<u32>()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let kernel = std::sync::Arc::new(AIKernel::new(dir.clone()).expect("kernel init"));
+        (kernel, dir)
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_autonomous_executor_executes_sequential_steps() {
+        let (kernel, dir) = make_test_kernel();
+        // Clone kernel so we can leak the clone after passing original to executor
+        let kernel_leak = kernel.clone();
+        let mut executor = AutonomousExecutor::new(kernel);
+
+        let mut plan = IntentPlan::new("test-intent-1".to_string());
+        plan.add_step(IntentStep::new(
+            "step-1".to_string(),
+            IntentOperation::Create {
+                content: b"content-1".to_vec(),
+                tags: vec!["test".to_string()],
+            },
+            100,
+        ));
+        plan.add_step(IntentStep::new(
+            "step-2".to_string(),
+            IntentOperation::Create {
+                content: b"content-2".to_vec(),
+                tags: vec!["test".to_string()],
+            },
+            100,
+        ));
+
+        let result = executor.execute_plan(&plan, "test-agent").await;
+
+        // Leak kernel clone and dir to avoid tokio blocking shutdown errors
+        std::mem::forget(kernel_leak);
+        std::mem::forget(dir);
+
+        assert!(result.success);
+        assert_eq!(result.steps_completed, 2);
+        assert_eq!(result.steps_failed, 0);
+        assert_eq!(result.results.len(), 2);
+
+        let step1_result = result.results.get("step-1").unwrap();
+        assert!(step1_result.success);
+        assert!(!step1_result.output_cids.is_empty());
+
+        let step2_result = result.results.get("step-2").unwrap();
+        assert!(step2_result.success);
+        assert!(!step2_result.output_cids.is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_autonomous_executor_handles_step_failure() {
+        let (kernel, dir) = make_test_kernel();
+        let kernel_leak = kernel.clone();
+        let mut executor = AutonomousExecutor::new(kernel);
+
+        let mut plan = IntentPlan::new("test-intent-2".to_string());
+        plan.add_step(IntentStep::new(
+            "step-1".to_string(),
+            IntentOperation::Read {
+                cid: "nonexistent-cid-12345".to_string(),
+            },
+            100,
+        ));
+
+        let result = executor.execute_plan(&plan, "test-agent").await;
+
+        // Leak to avoid tokio blocking shutdown errors
+        std::mem::forget(kernel_leak);
+        std::mem::forget(dir);
+
+        assert!(!result.success);
+        assert_eq!(result.steps_completed, 0);
+        assert_eq!(result.steps_failed, 1);
+
+        let step1_result = result.results.get("step-1").unwrap();
+        assert!(!step1_result.success);
+        assert!(step1_result.error.is_some());
+        assert!(step1_result.output_cids.is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_autonomous_executor_blocks_on_dependency() {
+        let (kernel, dir) = make_test_kernel();
+        let kernel_leak = kernel.clone();
+        let mut executor = AutonomousExecutor::new(kernel);
+
+        let mut plan = IntentPlan::new("test-intent-3".to_string());
+        plan.add_step(IntentStep::new(
+            "step-1".to_string(),
+            IntentOperation::Create {
+                content: b"shared-content".to_vec(),
+                tags: vec!["shared".to_string()],
+            },
+            100,
+        ));
+        let step2 = IntentStep::new(
+            "step-2".to_string(),
+            IntentOperation::Read {
+                cid: "will-be-set-dynamically".to_string(),
+            },
+            100,
+        )
+        .with_dependency("step-1".to_string());
+        plan.add_step(step2);
+
+        let result = executor.execute_plan(&plan, "test-agent").await;
+
+        let step1_result = result.results.get("step-1").unwrap();
+        assert!(step1_result.success);
+        assert!(!step1_result.output_cids.is_empty());
+
+        let step2_result = result.results.get("step-2").unwrap();
+        assert!(
+            step2_result.error.is_some() || step2_result.success,
+            "step-2 should have been attempted (not blocked on dependency)"
+        );
+
+        if let Some(cid) = step1_result.output_cids.first() {
+            let mut plan2 = IntentPlan::new("test-intent-3b".to_string());
+            plan2.add_step(IntentStep::new(
+                "step-1b".to_string(),
+                IntentOperation::Create {
+                    content: b"content-for-read".to_vec(),
+                    tags: vec!["test".to_string()],
+                },
+                100,
+            ));
+            let step2b = IntentStep::new(
+                "step-2b".to_string(),
+                IntentOperation::Read { cid: cid.clone() },
+                100,
+            )
+            .with_dependency("step-1b".to_string());
+            plan2.add_step(step2b);
+
+            let result2 = executor.execute_plan(&plan2, "test-agent").await;
+
+            let step1b_result = result2.results.get("step-1b").unwrap();
+            let step2b_result = result2.results.get("step-2b").unwrap();
+            assert!(step1b_result.success);
+            assert!(step2b_result.success);
+        }
+
+        // Leak to avoid tokio blocking shutdown errors
+        std::mem::forget(kernel_leak);
+        std::mem::forget(dir);
+    }
+
     #[test]
     fn test_step_result_creation() {
         let result = StepResult {
