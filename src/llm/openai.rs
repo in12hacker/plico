@@ -206,4 +206,83 @@ mod tests {
         let provider = OpenAICompatibleProvider::new("http://localhost:8000/v1", "deepseek-chat", None).unwrap();
         assert_eq!(provider.model_name(), "deepseek-chat");
     }
+
+    // ─── Integration tests against local llama-server ─────────────────────────
+
+    const LLAMA_SERVER_URL: &str = "http://127.0.0.1:18920/v1";
+    const LLAMA_MODEL: &str = "qwen2.5-0.5b-instruct-q4_k_m.gguf";
+
+    #[test]
+    fn test_openai兼容_provider_llama_server_simple() {
+        // Smoke test: send a single-user message and verify we get a non-empty reply.
+        let provider = OpenAICompatibleProvider::new(LLAMA_SERVER_URL, LLAMA_MODEL, None)
+            .expect("provider should be constructible");
+        let msgs = vec![ChatMessage::user("Say hello in 3 words")];
+        let opts = ChatOptions { temperature: 0.7, max_tokens: Some(20) };
+        let result = provider.chat(&msgs, &opts);
+        assert!(result.is_ok(), "chat should succeed: {:?}", result);
+        let reply = result.unwrap();
+        assert!(!reply.is_empty(), "reply should not be empty, got: {:?}", reply);
+        println!("[llama-server] simple reply: {:?}", reply);
+    }
+
+    #[test]
+    fn test_openai兼容_provider_llama_server_system_prompt() {
+        // Verify system prompt is passed (model may not strictly obey, so just check
+        // the reply is non-empty and the API call succeeds).
+        let provider = OpenAICompatibleProvider::new(LLAMA_SERVER_URL, LLAMA_MODEL, None)
+            .expect("provider should be constructible");
+        let msgs = vec![
+            ChatMessage::system("You are a helpful assistant."),
+            ChatMessage::user("What is 1+1?"),
+        ];
+        let opts = ChatOptions { temperature: 0.5, max_tokens: Some(20) };
+        let result = provider.chat(&msgs, &opts);
+        assert!(result.is_ok(), "chat should succeed: {:?}", result);
+        let reply = result.unwrap();
+        assert!(!reply.is_empty(), "reply should not be empty, got: {:?}", reply);
+        println!("[llama-server] system-prompt reply: {:?}", reply);
+    }
+
+    #[test]
+    fn test_openai兼容_provider_llama_server_multi_turn() {
+        // Two messages: model should consider context from first in second response.
+        let provider = OpenAICompatibleProvider::new(LLAMA_SERVER_URL, LLAMA_MODEL, None)
+            .expect("provider should be constructible");
+        let msgs = vec![
+            ChatMessage::user("My favorite color is blue."),
+            ChatMessage::user("What is my favorite color?"),
+        ];
+        let opts = ChatOptions { temperature: 0.0, max_tokens: Some(30) };
+        let result = provider.chat(&msgs, &opts);
+        assert!(result.is_ok(), "chat should succeed: {:?}", result);
+        let reply = result.unwrap().to_lowercase();
+        // 0.5B model may not have perfect context but should mention blue.
+        assert!(reply.contains("blue"), "reply should mention 'blue', got: {:?}", reply);
+        println!("[llama-server] multi-turn reply: {:?}", reply);
+    }
+
+    #[test]
+    fn test_openai兼容_provider_llama_server_temperature_zero() {
+        // Temperature=0 should produce consistent output for same input.
+        let provider = OpenAICompatibleProvider::new(LLAMA_SERVER_URL, LLAMA_MODEL, None)
+            .expect("provider should be constructible");
+        let msgs = vec![ChatMessage::user("What is 1+1?")];
+        let opts = ChatOptions { temperature: 0.0, max_tokens: Some(10) };
+        let r1 = provider.chat(&msgs, &opts);
+        let r2 = provider.chat(&msgs, &opts);
+        assert!(r1.is_ok() && r2.is_ok());
+        let (c1, c2) = (r1.unwrap(), r2.unwrap());
+        assert!(c1.contains('2') && c2.contains('2'),
+            "both replies should contain '2', got r1={:?} r2={:?}", c1, c2);
+        println!("[llama-server] temp=0 replies: r1={:?} r2={:?}", c1, c2);
+    }
+
+    #[test]
+    fn test_openai兼容_provider_llama_server_model_name() {
+        // Verify model_name() returns the configured model.
+        let provider = OpenAICompatibleProvider::new(LLAMA_SERVER_URL, LLAMA_MODEL, None)
+            .expect("provider should be constructible");
+        assert_eq!(provider.model_name(), LLAMA_MODEL);
+    }
 }
