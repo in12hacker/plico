@@ -29,15 +29,17 @@ Storage persists to `~/.plico/dogfood` (survives reboots, not `/tmp`).
 
 ```bash
 pcli() {
-  EMBEDDING_BACKEND=stub RUST_LOG=off AICLI_OUTPUT=json \
+  RUST_LOG=off AICLI_OUTPUT=json \
     cargo run --quiet --bin aicli -- --root "${HOME}/.plico/dogfood" --embedded "$@" 2>/dev/null
 }
 pcli_human() {
-  EMBEDDING_BACKEND=stub RUST_LOG=off \
+  RUST_LOG=off \
     cargo run --quiet --bin aicli -- --root "${HOME}/.plico/dogfood" --embedded "$@" 2>/dev/null
 }
 AGENT="plico-dev"
 ```
+
+> **Note**: 默认使用 `EMBEDDING_BACKEND=local`（bge-small-en-v1.5, 384维）。若需 tag-only 搜索（无真实 embedding），显式设置 `EMBEDDING_BACKEND=stub`。
 
 ### Bootstrap — MANDATORY first step
 

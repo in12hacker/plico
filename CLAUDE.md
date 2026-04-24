@@ -103,22 +103,17 @@ Tools are registered at user scope — available in all sessions. Use `claude mc
 Embedding and LLM backends are **inference-framework-agnostic**. Any server exposing an OpenAI-compatible `/v1/embeddings` or `/v1/chat/completions` endpoint works (llama.cpp, vLLM, SGLang, TensorRT-LLM, Ollama, OpenAI, etc.).
 
 ```bash
-# Recommended: OpenAI-compatible backend (works with llama.cpp, vLLM, etc.)
-export EMBEDDING_BACKEND=openai
-export EMBEDDING_API_BASE=http://127.0.0.1:8080/v1
-export EMBEDDING_MODEL=your-model-name
-
-# LLM: llama.cpp shorthand
+# LLM: llama.cpp (qwen2.5-coder-7b-instruct-q4_k_m.gguf @ :18920)
 export LLM_BACKEND=llama
-export LLAMA_URL=http://127.0.0.1:8080/v1
-export LLAMA_MODEL=qwen2.5
+export LLAMA_URL=http://127.0.0.1:18920/v1
+export LLAMA_MODEL=qwen2.5-coder-7b-instruct-q4_k_m.gguf
 
-# Alternative: local Python subprocess (slower cold start per CLI call)
-export EMBEDDING_BACKEND=local          # "local" | "openai" | "ollama" | "stub"
+# Embedding: local Python subprocess (bge-small-en-v1.5, 384d)
+export EMBEDDING_BACKEND=local
 export EMBEDDING_MODEL_ID=BAAI/bge-small-en-v1.5
 export EMBEDDING_PYTHON=python3
 
-# For tests: stub backend (no real embeddings, tag-only search)
+# For tests: stub backend (tag-only search, no real embeddings)
 export EMBEDDING_BACKEND=stub
 ```
 
