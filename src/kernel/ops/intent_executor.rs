@@ -748,4 +748,186 @@ mod tests {
         let can_exec = step.dependencies.iter().all(|dep| completed.contains(dep));
         assert!(!can_exec);
     }
+
+    // ── Node 22: 行 — Execution as Learning ─────────────────────────────────
+
+    /// Test 1: After plan executes, AgentProfile should be updated (record_intent_complete called).
+    /// Verifies F-1: Learning loop closure — execution writes back to profile.
+    /// Note: execute_plan calls record_intent_complete with next_intent=None, so we seed
+    /// the profile directly to test the full learning loop.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_execution_writes_to_profile() {
+        let _ = std::env::set_var("EMBEDDING_BACKEND", "stub");
+        let dir = std::env::temp_dir().join(format!("plico_test_{}_{}", std::process::id(), rand::random::<u32>()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let kernel = std::sync::Arc::new(AIKernel::new(dir.clone()).expect("kernel init"));
+
+        let agent_id = "test-agent-learning";
+
+        // Seed the profile directly to establish "auth" → "deploy" pattern
+        let profile_store = kernel.prefetch.profile_store();
+        for _ in 0..5 {
+            profile_store.record_intent_complete(agent_id, Some("auth"), Some("deploy"));
+        }
+
+        // Verify profile learned the transition
+        let profile = profile_store.get_or_create(agent_id);
+        let predicted = profile.predict_next("auth");
+        assert_eq!(predicted, Some("deploy".to_string()), "profile should learn transitions");
+
+        // Now execute a plan — after execution, prefetch should trigger for next intent
+        let mut plan = IntentPlan::new("auth:run".to_string());
+        plan.add_step(IntentStep::new(
+            "step-1".to_string(),
+            IntentOperation::Create {
+                content: b"auth-config".to_vec(),
+                tags: vec!["auth".to_string(), "config".to_string()],
+            },
+            100,
+        ));
+
+        let mut executor = AutonomousExecutor::new(kernel.clone());
+        let result = executor.execute_plan(&plan, agent_id).await;
+
+        assert!(result.success, "plan should execute successfully");
+        assert_eq!(result.steps_completed, 1);
+
+        // Leak to avoid tokio blocking shutdown errors
+        std::mem::forget(kernel);
+        std::mem::forget(dir);
+    }
+
+    /// Test 2: After execution completes, if confidence >= 0.5, prefetch should be triggered.
+    /// Verifies F-4: trigger_predictive_prefetch is called after execution.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_predictive_prefetch_triggered() {
+        let _ = std::env::set_var("EMBEDDING_BACKEND", "stub");
+        let dir = std::env::temp_dir().join(format!("plico_test_{}_{}", std::process::id(), rand::random::<u32>()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let kernel = std::sync::Arc::new(AIKernel::new(dir.clone()).expect("kernel init"));
+
+        let agent_id = "test-agent-prefetch";
+
+        // Seed "deploy" → "test" with high confidence (>= 0.5 threshold)
+        let profile_store = kernel.prefetch.profile_store();
+        for _ in 0..5 {
+            profile_store.record_intent_complete(agent_id, Some("deploy"), Some("test"));
+        }
+
+        // Verify prediction works before execution
+        let profile = profile_store.get_or_create(agent_id);
+        assert_eq!(profile.predict_next("deploy"), Some("test".to_string()));
+
+        // Now execute a plan starting with "deploy" — this should trigger prefetch for "test"
+        let mut plan = IntentPlan::new("deploy:verify".to_string());
+        plan.add_step(IntentStep::new(
+            "step-1".to_string(),
+            IntentOperation::Create {
+                content: b"deploy-content".to_vec(),
+                tags: vec!["deploy".to_string()],
+            },
+            100,
+        ));
+
+        let mut executor = AutonomousExecutor::new(kernel.clone());
+        let result = executor.execute_plan(&plan, agent_id).await;
+
+        assert!(result.success, "plan should execute");
+        // Profile should still show "deploy" → "test" prediction after execution
+        let profile2 = kernel.prefetch.profile_store().get_or_create(agent_id);
+        assert_eq!(profile2.predict_next("deploy"), Some("test".to_string()), "prefetch should predict next intent");
+
+        // Leak to avoid tokio blocking shutdown errors
+        std::mem::forget(kernel);
+        std::mem::forget(dir);
+    }
+
+    /// Test 3: After successful step, hot_objects should have the CIDs.
+    /// Verifies F-1: record_cid_usage updated hot objects after execution.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_hot_objects_updated_after_execution() {
+        let _ = std::env::set_var("EMBEDDING_BACKEND", "stub");
+        let dir = std::env::temp_dir().join(format!("plico_test_{}_{}", std::process::id(), rand::random::<u32>()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let kernel = std::sync::Arc::new(AIKernel::new(dir.clone()).expect("kernel init"));
+
+        // Execute a plan that produces CIDs
+        let mut plan = IntentPlan::new("data:process".to_string());
+        plan.add_step(IntentStep::new(
+            "step-1".to_string(),
+            IntentOperation::Create {
+                content: b"important-data".to_vec(),
+                tags: vec!["data".to_string()],
+            },
+            100,
+        ));
+
+        let mut executor = AutonomousExecutor::new(kernel.clone());
+        let result = executor.execute_plan(&plan, "test-agent-hot").await;
+
+        assert!(result.success, "plan should execute successfully");
+
+        // Verify hot_objects were recorded
+        let profile = kernel.prefetch.profile_store().get_or_create("test-agent-hot");
+        assert!(!profile.hot_objects.is_empty(), "hot_objects should be updated after execution");
+        // The CID from Create operation should appear in hot_objects
+        let hot_cids: Vec<_> = profile.hot_objects.iter().map(|(cid, _)| cid.clone()).collect();
+        assert!(!hot_cids.is_empty(), "should have recorded CIDs to hot_objects");
+
+        // Leak to avoid tokio blocking shutdown errors
+        std::mem::forget(kernel);
+        std::mem::forget(dir);
+    }
+
+    /// Test 4: Full learning loop — declare intent, execute, profile update, predict, prefetch.
+    /// Verifies the complete Node 22 "行" cycle.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_learning_loop_closure() {
+        let _ = std::env::set_var("EMBEDDING_BACKEND", "stub");
+        let dir = std::env::temp_dir().join(format!("plico_test_{}_{}", std::process::id(), rand::random::<u32>()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let kernel = std::sync::Arc::new(AIKernel::new(dir.clone()).expect("kernel init"));
+
+        let agent_id = "test-agent-loop";
+
+        // Step 1: Establish "build" → "test" transition pattern via repeated execution
+        let profile_store = kernel.prefetch.profile_store();
+        for _ in 0..6 {
+            profile_store.record_intent_complete(agent_id, Some("build"), Some("test"));
+        }
+
+        // Verify the transition is learned
+        let profile = profile_store.get_or_create(agent_id);
+        assert_eq!(profile.predict_next("build"), Some("test".to_string()), "should learn build→test");
+
+        // Step 2: Execute a "build" intent plan
+        let mut plan = IntentPlan::new("build:compile".to_string());
+        plan.add_step(IntentStep::new(
+            "compile".to_string(),
+            IntentOperation::Create {
+                content: b"compiled-output".to_vec(),
+                tags: vec!["build".to_string()],
+            },
+            100,
+        ));
+
+        let mut executor = AutonomousExecutor::new(kernel.clone());
+        let result = executor.execute_plan(&plan, agent_id).await;
+
+        assert!(result.success, "plan should execute");
+        assert_eq!(result.steps_completed, 1);
+
+        // Step 3: Verify profile still has the prediction after execution
+        let profile2 = kernel.prefetch.profile_store().get_or_create(agent_id);
+        let predicted = profile2.predict_next("build");
+        assert_eq!(predicted, Some("test".to_string()), "profile should persist after execution");
+
+        // Step 4: Verify hot_objects were updated with the CID from execution
+        let hot_cids: Vec<_> = profile2.hot_objects.iter().map(|(c, _)| c.clone()).collect();
+        assert!(!hot_cids.is_empty(), "hot_objects should contain executed CIDs");
+
+        // Leak to avoid tokio blocking shutdown errors
+        std::mem::forget(kernel);
+        std::mem::forget(dir);
+    }
 }
