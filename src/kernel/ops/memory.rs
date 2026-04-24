@@ -463,10 +463,11 @@ impl crate::kernel::AIKernel {
                     || target_uuid.as_deref().map_or(false, |u| e.agent_id == u)
             });
         } else {
-            results.retain(|e| {
-                e.agent_id != caller_id
-                    && caller_uuid.as_deref().map_or(true, |u| e.agent_id != u)
-            });
+            // No target specified: return ALL shared memories from ALL agents,
+            // including the caller's own. This allows CLI "recall --scope shared" to work
+            // (agent sees their own shared memories) while still supporting cross-agent
+            // recall (an agent can see other agents' shared memories too).
+            // No filtering needed - return all.
         }
 
         if let Some(q) = query {
