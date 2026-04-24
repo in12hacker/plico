@@ -65,6 +65,10 @@ impl AIKernel {
         self.persist_tenants();
         self.persist_key_store();
         self.persist_sessions();
+        // F-1/F-2: IntentCache and AgentProfile persistence (Node 20 "觉")
+        if let Err(e) = self.prefetch.persist() {
+            tracing::warn!("Failed to persist prefetch state: {}", e);
+        }
         tracing::info!("All kernel state persisted to disk");
     }
 
