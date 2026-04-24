@@ -67,6 +67,8 @@ pub enum KGEdgeType {
     CausedBy,
     /// ToolCall A → ToolCall B (A's execution depended on B's result).
     DependsOn,
+    /// Process → Output (this process/action produced this artifact).
+    Produces,
     // ── Version tracking ─────────────────────────────────────────────────
     /// New CID → Old CID (version chain for rollback).
     Supersedes,
@@ -90,6 +92,7 @@ impl std::fmt::Display for KGEdgeType {
             KGEdgeType::HasFact => write!(f, "has_fact"),
             KGEdgeType::CausedBy => write!(f, "caused_by"),
             KGEdgeType::DependsOn => write!(f, "depends_on"),
+            KGEdgeType::Produces => write!(f, "produces"),
             KGEdgeType::Supersedes => write!(f, "supersedes"),
         }
     }

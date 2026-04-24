@@ -43,6 +43,7 @@ redb = "4.0"
 ort = { version = "2.0.0-rc.12", default-features = false, features = ["std", "ndarray", "tracing", "copy-dylibs", "api-24"], optional = true }
 tokenizers = { version = "0.22", optional = true, default-features = false, features = ["fancy-regex", "hf-hub", "http"] }
 ndarray = { version = "0.16", optional = true }
+libc = "0.2.186"
 
 [dev-dependencies]
 tempfile = "3.0"

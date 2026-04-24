@@ -161,11 +161,14 @@ pub fn parse_edge_type(s: &str) -> Result<KGEdgeType, String> {
         "has_recording" => Ok(KGEdgeType::HasRecording),
         "has_resolution" => Ok(KGEdgeType::HasResolution),
         "has_fact" => Ok(KGEdgeType::HasFact),
+        "caused_by" => Ok(KGEdgeType::CausedBy),
+        "depends_on" => Ok(KGEdgeType::DependsOn),
+        "produces" => Ok(KGEdgeType::Produces),
         "supersedes" => Ok(KGEdgeType::Supersedes),
         _ => Err(format!(
             "Unknown edge type: '{}'. Valid: associates_with, follows, mentions, causes, \
              reminds, part_of, similar_to, related_to, has_participant, has_artifact, \
-             has_recording, has_resolution, has_fact, supersedes",
+             has_recording, has_resolution, has_fact, caused_by, depends_on, produces, supersedes",
             s
         )),
     }
@@ -205,11 +208,17 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_edge_type_invalid_caused_by_returns_error() {
+    fn test_parse_edge_type_valid_caused_by() {
         let result = parse_edge_type("caused_by");
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert!(err.contains("Unknown edge type: 'caused_by'"));
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), KGEdgeType::CausedBy);
+    }
+
+    #[test]
+    fn test_parse_edge_type_valid_produces() {
+        let result = parse_edge_type("produces");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), KGEdgeType::Produces);
     }
 
     #[test]
@@ -241,9 +250,9 @@ mod tests {
         let kernel = make_test_kernel();
         let args = vec!["edge".to_string(), "--from".to_string(), "node1".to_string(),
                          "--to".to_string(), "node2".to_string(),
-                         "--type".to_string(), "caused_by".to_string()];
+                         "--type".to_string(), "nonexistent_type".to_string()];
         let response = cmd_add_edge(&kernel, &args);
-        assert!(!response.ok, "cmd_add_edge should fail for invalid type 'caused_by'");
+        assert!(!response.ok, "cmd_add_edge should fail for invalid type 'nonexistent_type'");
         let err_msg = response.error.as_deref().unwrap_or("");
         assert!(err_msg.contains("Unknown edge type"),
             "Expected 'Unknown edge type' error, got: {}", err_msg);

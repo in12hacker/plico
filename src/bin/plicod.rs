@@ -3,7 +3,10 @@
 //! Long-running daemon exposing the semantic API over TCP and Unix Domain Socket.
 //! Also runs the agent execution dispatch loop in the background.
 //!
-//! Usage: cargo run --bin plicod [--port PORT] [--root PATH] [--no-uds]
+//! Usage:
+//!   plicod [start] [--port PORT] [--root PATH] [--no-uds]   Start daemon (default)
+//!   plicod stop    [--root PATH]                             Stop running daemon
+//!   plicod status  [--root PATH]                             Show daemon status (JSON)
 //!
 //! # Protocol
 //!
@@ -12,13 +15,14 @@
 //!
 //! # Daemon Lifecycle
 //!
-//! On startup: writes PID to `<root>/plicod.pid`, creates UDS at `<root>/plico.sock`.
+//! On startup: checks for existing daemon (multi-instance protection),
+//!   writes PID to `<root>/plicod.pid`, creates UDS at `<root>/plico.sock`.
 //! On shutdown: persists state, removes PID file and socket.
 
 use plico::kernel::AIKernel;
 use plico::api::semantic::{ApiRequest, ApiResponse};
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -28,21 +32,149 @@ use tracing_subscriber::util::SubscriberInitExt;
 
 const MAX_MESSAGE_SIZE: u32 = 16 * 1024 * 1024; // 16 MiB
 
+// ── Subcommand Dispatch ─────────────────────────────────────────────
+
 #[tokio::main]
 async fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let port = extract_opt(&args, "--port")
-        .and_then(|s| s.parse::<u16>().ok())
-        .unwrap_or(7878);
-    let no_uds = args.iter().any(|a| a == "--no-uds");
-    let root = extract_opt(&args, "--root")
+    let root = resolve_root(&args);
+
+    match detect_subcommand(&args) {
+        Subcommand::Start => cmd_start(args, root).await,
+        Subcommand::Stop  => cmd_stop(&root),
+        Subcommand::Status => cmd_status(&root),
+    }
+}
+
+enum Subcommand { Start, Stop, Status }
+
+fn detect_subcommand(args: &[String]) -> Subcommand {
+    for arg in args.iter().skip(1) {
+        match arg.as_str() {
+            "stop"   => return Subcommand::Stop,
+            "status" => return Subcommand::Status,
+            "start"  => return Subcommand::Start,
+            _ if arg.starts_with("--") => continue,
+            _ => continue,
+        }
+    }
+    Subcommand::Start
+}
+
+fn resolve_root(args: &[String]) -> PathBuf {
+    extract_opt(args, "--root")
         .map(PathBuf::from)
         .or_else(|| std::env::var("PLICO_ROOT").ok().map(PathBuf::from))
         .unwrap_or_else(|| {
             dirs::home_dir()
                 .unwrap_or_else(|| PathBuf::from("/tmp"))
                 .join(".plico")
-        });
+        })
+}
+
+// ── PID Management ──────────────────────────────────────────────────
+
+fn pid_path(root: &Path) -> PathBuf { root.join("plicod.pid") }
+fn sock_path(root: &Path) -> PathBuf { root.join("plico.sock") }
+
+/// Read PID file and check if the process is still alive.
+/// Returns `Some(pid)` if daemon is running, `None` otherwise.
+fn check_existing_daemon(root: &Path) -> Option<u32> {
+    let path = pid_path(root);
+    let pid_str = std::fs::read_to_string(&path).ok()?;
+    let pid: u32 = pid_str.trim().parse().ok()?;
+    if pid == 0 { return None; }
+    // Check if process exists via /proc on Linux, or kill(0) on Unix
+    #[cfg(unix)]
+    {
+        let alive = unsafe { libc::kill(pid as i32, 0) } == 0;
+        if alive { Some(pid) } else { None }
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::metadata(format!("/proc/{}", pid)).ok().map(|_| pid)
+    }
+}
+
+fn write_pid_file(path: &Path) {
+    if let Err(e) = std::fs::write(path, std::process::id().to_string()) {
+        eprintln!("Warning: failed to write PID file {:?}: {}", path, e);
+    }
+}
+
+// ── cmd_stop ────────────────────────────────────────────────────────
+
+fn cmd_stop(root: &Path) {
+    match check_existing_daemon(root) {
+        Some(pid) => {
+            #[cfg(unix)]
+            {
+                let rc = unsafe { libc::kill(pid as i32, libc::SIGTERM) };
+                if rc == 0 {
+                    println!("{{\"ok\":true,\"message\":\"SIGTERM sent to plicod (PID {})\"}}", pid);
+                    // Wait briefly for process to exit, clean up stale PID if it does
+                    std::thread::sleep(Duration::from_millis(500));
+                    if check_existing_daemon(root).is_none() {
+                        let _ = std::fs::remove_file(pid_path(root));
+                        let _ = std::fs::remove_file(sock_path(root));
+                    }
+                } else {
+                    eprintln!("{{\"ok\":false,\"error\":\"Failed to send SIGTERM to PID {}\"}}", pid);
+                    std::process::exit(1);
+                }
+            }
+            #[cfg(not(unix))]
+            {
+                eprintln!("{{\"ok\":false,\"error\":\"stop not supported on this platform\"}}");
+                std::process::exit(1);
+            }
+        }
+        None => {
+            eprintln!("{{\"ok\":false,\"error\":\"plicod is not running (no live PID in {:?})\"}}",
+                pid_path(root));
+            std::process::exit(1);
+        }
+    }
+}
+
+// ── cmd_status ──────────────────────────────────────────────────────
+
+fn cmd_status(root: &Path) {
+    let pp = pid_path(root);
+    let sp = sock_path(root);
+    match check_existing_daemon(root) {
+        Some(pid) => {
+            let sock_exists = sp.exists();
+            println!(
+                "{{\"ok\":true,\"running\":true,\"pid\":{},\"pid_file\":\"{}\",\"socket\":\"{}\",\"socket_exists\":{}}}",
+                pid,
+                pp.display(),
+                sp.display(),
+                sock_exists,
+            );
+        }
+        None => {
+            let stale = pp.exists();
+            if stale {
+                let _ = std::fs::remove_file(&pp);
+                let _ = std::fs::remove_file(&sp);
+            }
+            println!(
+                "{{\"ok\":true,\"running\":false,\"stale_pid_cleaned\":{}}}",
+                stale,
+            );
+            std::process::exit(1);
+        }
+    }
+}
+
+// ── cmd_start (main daemon logic) ───────────────────────────────────
+
+async fn cmd_start(args: Vec<String>, root: PathBuf) {
+    let port = extract_opt(&args, "--port")
+        .and_then(|s| s.parse::<u16>().ok())
+        .unwrap_or(7878);
+    let no_uds = args.iter().any(|a| a == "--no-uds");
 
     let env = std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string());
     tracing_subscriber::fmt()
@@ -51,6 +183,25 @@ async fn main() {
         .finish()
         .try_init()
         .ok();
+
+    // Multi-instance protection
+    if let Some(existing_pid) = check_existing_daemon(&root) {
+        eprintln!(
+            "{{\"ok\":false,\"error\":\"plicod already running (PID {}). Use 'plicod stop' first.\"}}",
+            existing_pid
+        );
+        std::process::exit(1);
+    }
+
+    // Clean stale PID/socket from crashed previous run
+    let pp = pid_path(&root);
+    let sp = sock_path(&root);
+    if pp.exists() {
+        let _ = std::fs::remove_file(&pp);
+    }
+
+    // Ensure root directory exists
+    let _ = std::fs::create_dir_all(&root);
 
     println!("Plico AI-Native OS Daemon");
     println!("Storage root: {:?}", root);
@@ -63,19 +214,14 @@ async fn main() {
         }
     };
 
-    let pid_path = root.join("plicod.pid");
-    let sock_path = root.join("plico.sock");
+    write_pid_file(&pp);
 
-    write_pid_file(&pid_path);
-
-    // Graceful shutdown: persist state, remove PID file and socket
     setup_shutdown_handler(
         Arc::clone(&kernel),
-        pid_path.clone(),
-        sock_path.clone(),
+        pp.clone(),
+        sp.clone(),
     );
 
-    // Periodic persistence
     setup_periodic_persist(Arc::clone(&kernel));
 
     let dispatch = kernel.start_dispatch_loop();
@@ -90,22 +236,20 @@ async fn main() {
     // UDS listener (Unix only)
     #[cfg(unix)]
     let uds_listener = if !no_uds {
-        // Remove stale socket if present
-        let _ = std::fs::remove_file(&sock_path);
-        match tokio::net::UnixListener::bind(&sock_path) {
+        let _ = std::fs::remove_file(&sp);
+        match tokio::net::UnixListener::bind(&sp) {
             Ok(l) => {
-                // Restrict socket permissions to owner only
                 #[cfg(unix)]
                 {
                     use std::os::unix::fs::PermissionsExt;
-                    let _ = std::fs::set_permissions(&sock_path,
+                    let _ = std::fs::set_permissions(&sp,
                         std::fs::Permissions::from_mode(0o600));
                 }
-                println!("UDS listening on: {:?}", sock_path);
+                println!("UDS listening on: {:?}", sp);
                 Some(l)
             }
             Err(e) => {
-                eprintln!("Warning: failed to bind UDS at {:?}: {}", sock_path, e);
+                eprintln!("Warning: failed to bind UDS at {:?}: {}", sp, e);
                 None
             }
         }
@@ -114,7 +258,7 @@ async fn main() {
         None
     };
 
-    println!("Daemon ready. PID file: {:?}", pid_path);
+    println!("Daemon ready. PID file: {:?}", pp);
     println!("Awaiting AI connections...");
 
     #[cfg(unix)]
@@ -161,17 +305,11 @@ async fn main() {
     }
 }
 
-// ── Helpers ──────────────────────────────────────────────────────────
+// ── Helpers ─────────────────────────────────────────────────────────
 
 fn extract_opt(args: &[String], flag: &str) -> Option<String> {
     args.iter().position(|a| a == flag)
         .and_then(|i| args.get(i + 1).cloned())
-}
-
-fn write_pid_file(path: &PathBuf) {
-    if let Err(e) = std::fs::write(path, std::process::id().to_string()) {
-        eprintln!("Warning: failed to write PID file {:?}: {}", path, e);
-    }
 }
 
 fn setup_shutdown_handler(kernel: Arc<AIKernel>, pid_path: PathBuf, sock_path: PathBuf) {
@@ -211,9 +349,8 @@ fn setup_periodic_persist(kernel: Arc<AIKernel>) {
     });
 }
 
-// ── Length-Prefixed Framing ──────────────────────────────────────────
+// ── Length-Prefixed Framing ─────────────────────────────────────────
 
-/// Read one length-prefixed frame: [4-byte big-endian length][JSON payload].
 async fn read_frame<R: AsyncReadExt + Unpin>(reader: &mut R) -> std::io::Result<Option<Vec<u8>>> {
     let mut header = [0u8; 4];
     match reader.read_exact(&mut header).await {
@@ -236,7 +373,6 @@ async fn read_frame<R: AsyncReadExt + Unpin>(reader: &mut R) -> std::io::Result<
     Ok(Some(payload))
 }
 
-/// Write a length-prefixed frame.
 async fn write_frame<W: AsyncWriteExt + Unpin>(writer: &mut W, payload: &[u8]) -> std::io::Result<()> {
     let len = payload.len() as u32;
     writer.write_all(&len.to_be_bytes()).await?;
