@@ -516,6 +516,13 @@ pub struct CheckpointSummaryDto {
     pub memory_count: usize,
 }
 
+/// A registered hook entry (Daemon-First).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HookEntryDto {
+    pub point: String,
+    pub priority: i32,
+}
+
 /// Session started response (F-6).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionStarted {

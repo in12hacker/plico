@@ -297,8 +297,8 @@ fn test_g2_knowledge_agent_hybrid_retrieve_with_token_estimate() {
     // G-2 Acceptance criteria - relaxed for stub embedding backend
     // With stub backend, vector search fails but KG graph traversal may still work
     // We verify the API response is well-formed (has fields, no errors)
-    assert!(result_count >= 0, "Should return results structure");
-    assert!(token_estimate_sum >= 0, "token_estimate should be calculated");
+    let _ = result_count;
+    let _ = token_estimate_sum;
 
     tracing::info!("G-2 PASSED: HybridRetrieve API contract verified");
 }
@@ -349,9 +349,8 @@ fn test_g2_hybrid_retrieve_token_budget_pruning() {
     assert!(result_large.items.len() <= 20, "Should not exceed max_results");
     assert!(result_small.items.len() <= 20, "Should not exceed max_results");
 
-    // Verify token_estimate is calculated (may be 0 with stub backend but structure is correct)
-    assert!(result_large.token_estimate >= 0, "token_estimate should be calculated");
-    assert!(result_small.token_estimate >= 0, "token_estimate should be calculated");
+    let _ = result_large.token_estimate;
+    let _ = result_small.token_estimate;
 
     tracing::info!(
         "G-2 Token Budget: large={} ({} items), small={} ({} items)",
@@ -397,8 +396,7 @@ fn test_hybrid_retrieve_via_api() {
     assert!(resp.hybrid_result.is_some(), "Response should contain hybrid_result");
 
     let result = resp.hybrid_result.unwrap();
-    // With stub embedding, token_estimate may be 0 but structure should be correct
-    assert!(result.token_estimate >= 0, "token_estimate should be calculated");
+    let _ = result.token_estimate;
 
     tracing::info!(
         "API HybridRetrieve: {} items, {} tokens, {} vector, {} graph, {} paths",

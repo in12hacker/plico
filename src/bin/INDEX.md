@@ -1,25 +1,35 @@
 # Module: bin
 
-Binary entry points — three executables for different deployment scenarios.
+Binary entry points — four executables for different deployment scenarios.
 
-Status: active | Fan-in: 0 (entry points) | Fan-out: 2
+Status: active | Fan-in: 0 (entry points) | Fan-out: 3
 
 ## Binaries
 
 | Binary | File | Description |
 |--------|------|-------------|
-| `plicod` | `plicod.rs` | TCP daemon (port 7878, JSON ApiRequest/ApiResponse) |
-| `plico-mcp` | `plico_mcp.rs` | MCP stdio server (JSON-RPC 2.0 over stdin/stdout) |
+| `plicod` | `plicod.rs` | Daemon — TCP + UDS, length-prefixed JSON framing, PID lifecycle |
+| `plico-mcp` | `plico_mcp/` | MCP stdio server (JSON-RPC 2.0 over stdin/stdout) |
 | `plico-sse` | `plico_sse.rs` | SSE streaming adapter for A2A protocol compatibility |
-| `aicli` | `aicli/main.rs` | AI-friendly semantic CLI |
+| `aicli` | `aicli/main.rs` | Semantic CLI — daemon-first, `--embedded` fallback, `--tcp` remote |
+
+## Connection Modes (Daemon-First Architecture)
+
+```
+Default:    aicli → UDS (~/.plico/plico.sock) → plicod → AIKernel
+Embedded:   aicli --embedded → AIKernel (direct, for testing)
+TCP:        aicli --tcp 1.2.3.4:7878 → plicod → AIKernel
+```
+
+Transport abstraction: `src/client.rs` — `KernelClient` trait with `EmbeddedClient` and `RemoteClient`.
 
 ## Task Routing
 
 | Task | File |
 |------|------|
-| Add MCP tool/resource/action | `plico_mcp.rs` |
+| Add MCP tool/resource/action | `plico_mcp/dispatch.rs` + `plico_mcp/tools.rs` |
 | Add CLI command | `aicli/commands/handlers/` + `aicli/commands/mod.rs` dispatch |
-| Fix TCP daemon protocol | `plicod.rs` |
+| Fix daemon protocol / UDS | `plicod.rs` |
 | Change CLI output format | `aicli/commands/mod.rs` format functions |
 | Fix SSE streaming / A2A | `plico_sse.rs` |
 
@@ -27,30 +37,28 @@ Status: active | Fan-in: 0 (entry points) | Fan-out: 2
 
 | File | Lines | Purpose |
 |------|-------|---------|
-| `plicod.rs` | ~161 | TCP daemon, JSON API server |
-| `plico_mcp.rs` | ~2250 | MCP stdio server (JSON-RPC dispatch + tests) |
+| `plicod.rs` | ~161 | TCP + UDS daemon, length-prefixed JSON framing |
+| `plico_mcp/main.rs` | ~200 | MCP stdio entry point |
+| `plico_mcp/dispatch.rs` | ~1138 | MCP tool call dispatcher (40+ routes) |
+| `plico_mcp/tools.rs` | ~400 | MCP tool definitions |
+| `plico_mcp/format.rs` | ~140 | Response formatting |
 | `plico_sse.rs` | ~1106 | SSE streaming adapter (A2A protocol) |
-| `aicli/main.rs` | ~541 | CLI entry: local kernel or --tcp mode |
-| `aicli/commands/mod.rs` | ~488 | Dispatch + output formatting |
-| `aicli/commands/handlers/` | 16 files | Command handlers (see `handlers/INDEX.md`) |
+| `aicli/main.rs` | ~695 | CLI entry: daemon / --embedded / --tcp mode |
+| `aicli/commands/mod.rs` | ~494 | Dispatch + output formatting |
+| `aicli/commands/handlers/` | 17 files | Command handlers (see `handlers/INDEX.md`) |
 
-## Dependencies (Fan-out: 2)
+## Dependencies (Fan-out: 3)
 
 - `src/kernel/` → AIKernel (all binaries)
 - `src/api/` → ApiRequest, ApiResponse, PermissionGuard (protocol types)
-
-## Modification Risk
-
-- Change `ApiRequest` handling in plico_mcp.rs → affects all MCP clients (Cursor, Claude, etc.)
-- Change CLI dispatch → affects all CLI users
-- Change TCP protocol → affects plicod clients
+- `src/client.rs` → KernelClient, EmbeddedClient, RemoteClient (transport)
 
 ## Interface Contract
 
-- `plicod`: TCP-only, no HTTP; reads/writes JSON `ApiRequest`/`ApiResponse` per line
+- `plicod`: TCP + UDS; length-prefixed JSON framing (`[4-byte BE length][JSON payload]`)
 - `plico-mcp`: JSON-RPC 2.0 over stdio; 3 composite tools (`plico`, `plico_cold`, `plico_skills`)
-- `aicli`: subcommand dispatch; supports `--root`, `--tcp`, `--agent`, `AICLI_OUTPUT=json`
-- All binaries call `AIKernel::new()` or connect via TCP; never import subsystem modules directly
+- `aicli`: daemon-first; `--root`, `--embedded`, `--tcp`, `--agent`, `AICLI_OUTPUT=json` (default)
+- All binaries use `KernelClient` trait; never import subsystem modules directly
 
 ## Tests
 

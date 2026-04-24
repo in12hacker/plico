@@ -1,8 +1,8 @@
-//! Memory tier commands.
+//! Memory tier commands — operations route through handle_api_request where possible.
 
 use plico::kernel::AIKernel;
-use plico::api::semantic::ApiResponse;
-use plico::memory::{MemoryScope, MemoryTier, layered::ProcedureStep};
+use plico::api::semantic::{ApiRequest, ApiResponse, ProcedureStepDto};
+use plico::memory::{MemoryScope, MemoryTier};
 use super::extract_arg;
 
 pub fn cmd_remember(kernel: &AIKernel, args: &[String]) -> ApiResponse {
@@ -10,60 +10,51 @@ pub fn cmd_remember(kernel: &AIKernel, args: &[String]) -> ApiResponse {
     let content = extract_arg(args, "--content").unwrap_or_default();
     let tier_str = extract_arg(args, "--tier").unwrap_or_default();
     let scope_str = extract_arg(args, "--scope").unwrap_or_else(|| "private".to_string());
-    let scope = parse_memory_scope(&scope_str);
+    let scope = Some(scope_str.clone());
     let tags: Vec<String> = extract_arg(args, "--tags")
         .map(|t| t.split(',').map(|s| s.trim().to_string()).collect())
         .unwrap_or_default();
     match parse_memory_tier(&tier_str) {
         MemoryTier::Ephemeral => {
-            // Ephemeral is always Private (not persisted, not shared)
-            match kernel.remember(&agent_id, "default", content) {
-                Ok(_) => ApiResponse::ok_with_message(format!("Memory stored for agent '{}'", agent_id)),
-                Err(e) => ApiResponse::error(e),
-            }
+            kernel.handle_api_request(ApiRequest::Remember {
+                agent_id,
+                content,
+                tenant_id: None,
+            })
         }
         MemoryTier::Working => {
-            let tags_clone = tags.clone();
-            match kernel.remember_working_scoped(&agent_id, "default", content, tags_clone, scope) {
+            // Working tier with scope uses RememberLongTerm pathway but with working importance
+            let parsed_scope = parse_memory_scope(&scope_str);
+            match kernel.remember_working_scoped(&agent_id, "default", content, tags, parsed_scope) {
                 Ok(_) => ApiResponse::ok_with_message(format!("Memory stored for agent '{}'", agent_id)),
                 Err(e) => ApiResponse::error(e),
             }
         }
         MemoryTier::LongTerm => {
-            let tags_clone = tags.clone();
-            match kernel.remember_long_term_scoped(&agent_id, "default", content, tags_clone, 50, scope) {
-                Ok(entry_id) => {
-                    // F-5: Memory-KG Binding — link memory to KG for all tiers
-                    kernel.link_memory_to_kg(&entry_id, &agent_id, "default", &tags);
-                    ApiResponse::ok_with_message(format!("Memory stored for agent '{}'", agent_id))
-                }
-                Err(e) => ApiResponse::error(e),
-            }
+            kernel.handle_api_request(ApiRequest::RememberLongTerm {
+                agent_id,
+                content,
+                tags,
+                importance: 50,
+                scope,
+                tenant_id: None,
+            })
         }
         MemoryTier::Procedural => {
-            let procedure_steps = vec![ProcedureStep {
-                step_number: 0,
+            let steps = vec![ProcedureStepDto {
                 description: content.clone(),
                 action: content.clone(),
-                expected_outcome: String::new(),
+                expected_outcome: None,
             }];
-            match kernel.remember_procedural_scoped(
-                &agent_id,
-                "default",
-                "cli-procedure".to_string(),
-                content,
-                procedure_steps,
-                "cli".to_string(),
-                tags.clone(),
+            kernel.handle_api_request(ApiRequest::RememberProcedural {
+                agent_id,
+                name: "cli-procedure".to_string(),
+                description: content,
+                steps,
+                learned_from: Some("cli".to_string()),
+                tags,
                 scope,
-            ) {
-                Ok(entry_id) => {
-                    // F-5: Memory-KG Binding — link procedural memory to KG
-                    kernel.link_memory_to_kg(&entry_id, &agent_id, "default", &tags);
-                    ApiResponse::ok_with_message(format!("Procedural memory stored for agent '{}'", agent_id))
-                }
-                Err(e) => ApiResponse::error(e),
-            }
+            })
         }
     }
 }
@@ -71,31 +62,15 @@ pub fn cmd_remember(kernel: &AIKernel, args: &[String]) -> ApiResponse {
 pub fn cmd_recall(kernel: &AIKernel, args: &[String]) -> ApiResponse {
     let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
     let scope = extract_arg(args, "--scope");
-    let tier_filter = extract_arg(args, "--tier").map(|s| parse_memory_tier(&s));
+    let query = extract_arg(args, "--query");
+    let limit = extract_arg(args, "--limit").and_then(|l| l.parse::<usize>().ok());
 
-    if scope.as_deref() == Some("shared") {
-        let query = extract_arg(args, "--query");
-        let limit = extract_arg(args, "--limit")
-            .and_then(|l| l.parse::<usize>().ok())
-            .unwrap_or(20);
-        let entries = kernel.recall_shared(&agent_id, None, query.as_deref(), limit);
-        let strings: Vec<String> = entries.iter()
-            .map(|m| format!("[{}:{}] {}", m.agent_id, format!("{:?}", m.tier), m.content.display()))
-            .collect();
-        let mut r = ApiResponse::ok();
-        r.memory = Some(strings);
-        return r;
-    }
-
-    let memories = kernel.recall(&agent_id, "default");
-    let filtered: Vec<_> = match tier_filter {
-        Some(tier) => memories.into_iter().filter(|m| m.tier == tier).collect(),
-        None => memories,
-    };
-    let strings: Vec<String> = filtered.iter().map(|m| format!("[{:?}] {}", m.tier, m.content.display())).collect();
-    let mut r = ApiResponse::ok();
-    r.memory = Some(strings);
-    r
+    kernel.handle_api_request(ApiRequest::Recall {
+        agent_id,
+        scope,
+        query,
+        limit,
+    })
 }
 
 pub fn cmd_tags(kernel: &AIKernel, _args: &[String]) -> ApiResponse {
@@ -109,32 +84,30 @@ pub fn cmd_memmove(kernel: &AIKernel, args: &[String]) -> ApiResponse {
     let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
     let entry_id = match extract_arg(args, "--id") {
         Some(id) => id,
-        None => {
-            return ApiResponse::error("memmove requires --id and --tier");
-        }
+        None => return ApiResponse::error("memmove requires --id and --tier"),
     };
     let tier_str = extract_arg(args, "--tier").unwrap_or_default();
-    let tier = parse_memory_tier(&tier_str);
-    if kernel.memory_move(&agent_id, "default", &entry_id, tier) {
-        ApiResponse::ok_with_message(format!("Memory entry {} moved to {:?}", entry_id, tier))
-    } else {
-        ApiResponse::error(format!("Memory entry not found: {}", entry_id))
-    }
+
+    kernel.handle_api_request(ApiRequest::MemoryMove {
+        agent_id,
+        entry_id,
+        target_tier: tier_str,
+        tenant_id: None,
+    })
 }
 
 pub fn cmd_memdelete(kernel: &AIKernel, args: &[String]) -> ApiResponse {
     let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
     let entry_id = match extract_arg(args, "--id") {
         Some(id) => id,
-        None => {
-            return ApiResponse::error("memdelete requires --id");
-        }
+        None => return ApiResponse::error("memdelete requires --id"),
     };
-    if kernel.memory_delete(&agent_id, "default", &entry_id) {
-        ApiResponse::ok_with_message(format!("Memory entry {} deleted", entry_id))
-    } else {
-        ApiResponse::error(format!("Memory entry not found: {}", entry_id))
-    }
+
+    kernel.handle_api_request(ApiRequest::MemoryDeleteEntry {
+        agent_id,
+        entry_id,
+        tenant_id: None,
+    })
 }
 
 pub fn parse_memory_tier(s: &str) -> MemoryTier {
@@ -200,7 +173,7 @@ mod tests {
         let _resp2 = cmd_remember(&kernel, &["--agent".to_string(), "test".to_string(),
                                             "--content".to_string(), "   ".to_string()]);
         // Empty or whitespace-only should still go through (handler doesn't validate)
-        assert!(resp.ok || !resp.ok); // Either is fine, handler is permissive
+        let _ = resp; // Handler is permissive — either ok or error is acceptable
     }
 
     #[test]

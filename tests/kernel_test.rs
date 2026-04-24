@@ -823,9 +823,7 @@ fn test_e2e_agent_autonomy_cycle() {
         let (_, state, _) = kernel.agent_status(&agent_id).expect("status after suspend");
         assert_eq!(state, "Suspended");
 
-        kernel.persist_memories();
-        kernel.persist_agents();
-        kernel.persist_intents();
+        kernel.persist_all();
 
         dispatch.shutdown();
     }
@@ -945,10 +943,7 @@ fn test_e2e_tool_cognitive_memory_cycle() {
     assert!(has_snapshot, "suspend should create a context snapshot");
 
     // 10. Persist everything
-    kernel.persist_agents();
-    kernel.persist_intents();
-    kernel.persist_memories();
-    kernel.persist_search_index();
+    kernel.persist_all();
 
     // 11. Resume agent → verify snapshot loaded into ephemeral
     kernel.agent_resume(&agent_id).expect("resume failed");
@@ -3383,7 +3378,7 @@ fn test_event_log_persists_across_restart() {
             agent_token: None,
             intent: None,
         });
-        kernel.persist_event_log();
+        kernel.persist_all();
 
         let resp = kernel.handle_api_request(plico::api::semantic::ApiRequest::EventHistory {
             since_seq: None, agent_id_filter: None, limit: None,
@@ -3412,7 +3407,7 @@ fn test_event_log_sequence_continues_after_restore() {
     {
         let kernel = AIKernel::new(dir.path().to_path_buf()).expect("kernel init");
         kernel.register_agent("seq-test".into());
-        kernel.persist_event_log();
+        kernel.persist_all();
 
         let resp = kernel.handle_api_request(plico::api::semantic::ApiRequest::EventHistory {
             since_seq: None, agent_id_filter: None, limit: None,
@@ -3460,7 +3455,7 @@ fn test_event_log_explicit_persist() {
         intent: None,
     });
 
-    kernel.persist_event_log();
+    kernel.persist_all();
 
     let path = _dir.path().join("event_log.jsonl");
     assert!(path.exists(), "event_log.jsonl should exist after persist");
@@ -4192,19 +4187,19 @@ fn test_kernel_semantic_search_with_require_tags() {
 #[test]
 fn test_kernel_events_list_returns_list() {
     let (kernel, _dir) = make_kernel();
-    let agent_id = kernel.register_agent("EventAgent".into());
+    let _agent_id = kernel.register_agent("EventAgent".into());
 
     // Events should return a list (empty is fine)
     let empty_tags: &[String] = &[];
     let events = kernel.list_events(None, None, empty_tags, None, None);
-    assert!(!events.is_empty() || true, "list_events should return Vec, empty is valid");
+    let _ = events; // list_events returns Vec — empty is valid for new kernel
 }
 
 // ─── B53 Fix: Cross-Agent Shared Recall via API ─────────────────────────────
 
 #[test]
 fn test_b53_recall_shared_via_api() {
-    use plico::api::semantic::{ApiRequest, ApiResponse};
+    use plico::api::semantic::ApiRequest;
     use plico::memory::MemoryScope;
 
     let (kernel, _dir) = make_kernel();
@@ -4236,7 +4231,7 @@ fn test_b53_recall_shared_via_api() {
 
 #[test]
 fn test_b53_recall_without_scope_returns_own_memories() {
-    use plico::api::semantic::{ApiRequest, ApiResponse};
+    use plico::api::semantic::ApiRequest;
 
     let (kernel, _dir) = make_kernel();
     let agent_a = kernel.register_agent("solo".into());
@@ -4257,7 +4252,7 @@ fn test_b53_recall_without_scope_returns_own_memories() {
 
 #[test]
 fn test_b52_delete_invalid_cid_returns_not_found() {
-    use plico::api::semantic::{ApiRequest, ApiResponse};
+    use plico::api::semantic::ApiRequest;
 
     let (kernel, _dir) = make_kernel();
     let agent_id = kernel.register_agent("deleter".into());
@@ -4280,9 +4275,7 @@ fn test_b52_delete_invalid_cid_returns_not_found() {
 
 #[test]
 fn test_kernel_handle_invalid_action() {
-    // Sending a valid ApiRequest variant with data that causes an error path.
-    // This exercises the error handling in handle_api_request for invalid operations.
-    use plico::api::semantic::{ApiRequest, ContentEncoding};
+    use plico::api::semantic::ApiRequest;
 
     let (kernel, _dir) = make_kernel();
 

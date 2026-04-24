@@ -1,10 +1,12 @@
-# Plico — AI-Native Operating System
+# 太初 (Plico) — AI-Native Operating System
 
-An operating system designed entirely from AI perspective. No human CLI/GUI. All data operations via semantic APIs for upper-layer AI agents. The system is model-agnostic and does not depend on any specific AI or agent.
+An operating system kernel designed entirely from AI perspective. No human CLI/GUI. All data operations via semantic APIs for upper-layer AI agents. The system is model-agnostic and does not depend on any specific AI or agent. "太初" means "Genesis / In the Beginning" — the primordial state where an AI-OS becomes self-aware.
 
 ## Architecture Overview
 
 Four-layer architecture: **Application Layer** (external AI agents) → **AI-Friendly Interface Layer** (semantic API/CLI/MCP) → **AI Kernel Layer** (agent scheduler, layered memory, event bus, tool registry, permission guardrails) → **AI-Native File System** (CAS, vector index, knowledge graph, layered context).
+
+**Daemon-First**: `plicod` hosts the single `AIKernel` instance. All clients (`aicli`, `plico_mcp`, `plico_sse`) connect via Unix Domain Socket (UDS) or TCP using the length-prefixed JSON framing protocol (`[4-byte BE length][JSON payload]`). The `KernelClient` trait (`src/client.rs`) abstracts the transport: `EmbeddedClient` for `--embedded` mode, `RemoteClient` for daemon communication.
 
 Core philosophy: management unit = agents/intents (not processes/files); storage addressing = content hashes + semantic tags (not filesystem paths); indexing = vectors + knowledge graphs (not filenames).
 
@@ -125,12 +127,13 @@ src/
 │   ├── mod.rs           # Re-exports (ExternalToolProvider adapter)
 │   ├── client.rs        # McpClient, McpToolDef, McpError
 │   └── tests.rs         # Unit tests
+├── client.rs            # KernelClient trait + EmbeddedClient + RemoteClient (UDS/TCP framing)
 ├── bin/
-│   ├── plicod.rs        # TCP daemon (port 7878, JSON ApiRequest/ApiResponse, no HTTP)
+│   ├── plicod.rs        # Daemon — hosts AIKernel, listens on TCP + UDS, PID file lifecycle
 │   ├── plico_mcp.rs     # MCP stdio server (JSON-RPC 2.0 over stdin/stdout)
 │   ├── plico_sse.rs     # SSE streaming adapter for A2A protocol compatibility
-│   └── aicli/           # AI-friendly semantic CLI
-│       ├── main.rs      # CLI entry: local kernel or --tcp daemon mode
+│   └── aicli/           # AI-friendly semantic CLI (daemon-first, --embedded fallback)
+│       ├── main.rs      # CLI entry: daemon (default) or --embedded or --tcp mode
 │       └── commands/
 │           ├── mod.rs   # execute_local dispatch + shared parse utilities
 │           └── handlers/
@@ -151,7 +154,7 @@ src/
 │               ├── hybrid.rs    # hybrid Graph-RAG retrieval
 │               ├── permission.rs # permission grant/revoke/list
 │               └── INDEX.md
-├── lib.rs               # Crate root: pub mod declarations + PlicoError + re-exports
+├── lib.rs               # Crate root: pub mod declarations + PlicoError + re-exports (includes `pub mod client`)
 └── main.rs              # Stub — directs to plicod/aicli/plico-mcp
 
 tests/                   # Integration tests (28 files)
@@ -203,7 +206,8 @@ docs/                    # Tier B — iteration-end human docs (not maintained p
 | MCP client | `src/mcp/INDEX.md` | External tool integration via MCP protocol |
 | Event bus | `src/kernel/event_bus.rs` | Kernel pub/sub, persisted event log |
 | Kernel ops | `src/kernel/ops/INDEX.md` | 24 operation files (session, delta, prefetch, hybrid, etc.) |
-| Binaries | `src/bin/INDEX.md` | plicod (TCP), plico-mcp (MCP stdio), aicli (CLI) |
+| KernelClient | `src/client.rs` | Transport abstraction: EmbeddedClient + RemoteClient (UDS/TCP) |
+| Binaries | `src/bin/INDEX.md` | plicod (TCP+UDS daemon), plico-mcp (MCP stdio), aicli (CLI) |
 | Milestone plans | `docs/plans/INDEX.md` | v0.5+ roadmap copies for Git; sync at iteration end |
 
 ## Build & Test
@@ -219,9 +223,10 @@ docs/                    # Tier B — iteration-end human docs (not maintained p
 | `cargo test [test_name]` | Run a single test |
 | `cargo clippy` | Lint check (must be zero warnings) |
 | `cargo build --release` | Release build (LTO + single codegen unit) |
-| `cargo run --bin aicli -- put --content "test" --tags "test"` | Quick CLI test (defaults to ~/.plico) |
-| `cargo run --bin aicli -- system-status` | Check kernel health |
-| `cargo run --bin plicod -- --port 7878` | Run daemon (defaults to ~/.plico) |
+| `cargo run --bin aicli -- --embedded put --content "test" --tags "test"` | Quick CLI test, embedded mode |
+| `cargo run --bin aicli -- system-status` | Check kernel health (requires running daemon) |
+| `cargo run --bin plicod -- --port 7878` | Run daemon on TCP + UDS (defaults to ~/.plico) |
+| `cargo run --bin plicod -- --no-uds` | Run daemon TCP-only (disable UDS) |
 
 ## Conventions
 
@@ -237,10 +242,12 @@ docs/                    # Tier B — iteration-end human docs (not maintained p
 - Dependency direction: **api/bin → kernel → tool/fs/intent → cas/memory/scheduler/temporal/llm** (never reverse)
 - `kernel/` is the only module that imports all other modules — all subsystem calls go through `AIKernel`
 - `AIKernel` fields are `pub(crate)` — visible only inside the `plico` crate; integration tests in `tests/` use the public API
-- Binaries (`bin/`) import only `kernel/` and `api/`, never subsystem modules directly
+- Binaries (`bin/`) import only `kernel/`, `api/`, and `client`, never subsystem modules directly
 - CAS is the only module that touches the host filesystem directly
 - No `unsafe` blocks in library code without a `# Safety` doc comment
-- `plicod` is **TCP-only** — no HTTP endpoints; `SystemStatus` is queried via the semantic API (`ApiRequest::SystemStatus`)
+- `plicod` listens on **TCP + UDS** — no HTTP endpoints; UDS is primary for local clients, TCP for remote
+- `aicli` defaults to daemon mode (connects via UDS); use `--embedded` for direct kernel access
+- Agent lifecycle requests (`AgentStatus`, `AgentSuspend`, etc.) do NOT auto-register agents — they fail if the agent does not exist
 - All known soul violations from prior iterations have been resolved:
   - Behavioral pipeline removed from `semantic_fs`
   - Dashboard hardcoded dev data removed; replaced by `SystemStatus` (runtime metrics only)
@@ -262,7 +269,7 @@ docs/                    # Tier B — iteration-end human docs (not maintained p
 
 ### Concurrency
 - `RwLock` for in-memory maps (memory tiers, tag index, recycle bin, event log)
-- `tokio` for async TCP server (`plicod`); `aicli` runs on `std` blocking
+- `tokio` for async TCP/UDS server (`plicod`); `aicli` runs on `std` blocking via `RemoteClient`
 - All `Arc<...>` wrapping shared kernel state in daemon
 - `EventBus` uses `tokio::sync::broadcast` for pub/sub + `Mutex` for subscriptions
 
@@ -302,7 +309,8 @@ No project-specific KGNodeType or KGEdgeType — all semantics via tags + proper
 | `OLLAMA_SUMMARIZER_MODEL` | Ollama chat model for summaries (default: `llama3.2`) | No |
 | `PLICO_ROOT` | Storage root for all binaries (default: `~/.plico`) | No |
 | `RUST_LOG` | Tracing log level filter (default: `info`) | No |
-| `AICLI_OUTPUT` | CLI output format: `json` for machine-readable (default: human-readable) | No |
+| `AICLI_OUTPUT` | CLI output format: `json` (default) / `human` | No |
+| `PLICO_PERSIST_INTERVAL_SECS` | Periodic persist interval for `plicod` (default: 300) | No |
 
 ## AI Agent Instructions
 

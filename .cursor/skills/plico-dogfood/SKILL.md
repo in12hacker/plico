@@ -3,7 +3,7 @@ name: plico-dogfood
 description: PROACTIVE skill — the agent MUST automatically store architectural decisions, progress, experiences, bugs, and code changes into Plico's own CAS + Knowledge Graph during any Plico development work. This skill should be used proactively without waiting for the user to ask. Trigger on ANY code change, design decision, bug fix, feature completion, debugging insight, or reasoning that produced a non-obvious conclusion. Also triggers on "记录", "dogfood", "ADR", "经验", "进度", "保存到plico".
 ---
 
-# Plico Dogfooding (Self-Sustaining)
+# 太初 (Plico) Dogfooding — Self-Sustaining
 
 This skill captures architectural decisions, progress, and insights into Plico's own CAS + Knowledge Graph during development. Plico manages itself.
 
@@ -20,16 +20,17 @@ Batch at natural pause points (feature complete, session end, milestone). Don't 
 
 ## CLI Setup
 
-Every command uses this wrapper — sets env, suppresses logs, enables JSON for parsing:
+Every command uses this wrapper — sets env, suppresses logs, enables JSON for parsing.
+**CRITICAL**: `--embedded` is required (daemon-first architecture; without it, CLI tries to connect to plicod).
 
 ```bash
 pcli() {
   EMBEDDING_BACKEND=stub RUST_LOG=off AICLI_OUTPUT=json \
-    cargo run --quiet --bin aicli -- --root "${HOME}/.plico/dogfood" "$@" 2>/dev/null
+    cargo run --quiet --bin aicli -- --root "${HOME}/.plico/dogfood" --embedded "$@" 2>/dev/null
 }
 pcli_human() {
   EMBEDDING_BACKEND=stub RUST_LOG=off \
-    cargo run --quiet --bin aicli -- --root "${HOME}/.plico/dogfood" "$@" 2>/dev/null
+    cargo run --quiet --bin aicli -- --root "${HOME}/.plico/dogfood" --embedded "$@" 2>/dev/null
 }
 AGENT="plico-dev"
 ```
@@ -43,12 +44,10 @@ EXISTING=$(pcli nodes --type entity --agent $AGENT 2>/dev/null | python3 -c "imp
 if [ "$EXISTING" = "0" ] || [ -z "$EXISTING" ]; then
   echo "Bootstrapping dogfood KG..."
   pcli_human agent --register $AGENT || true
-  for mod in cas fs kernel api scheduler memory graph temporal cli daemon; do
+  for mod in cas fs kernel api scheduler memory graph temporal cli daemon intent llm mcp tool; do
     pcli_human node --label "$mod" --type entity \
       --props "{\"kind\":\"module\",\"path\":\"src/$mod\"}" --agent $AGENT
   done
-  pcli_human node --label "v0.2-dogfooding" --type entity \
-    --props '{"kind":"milestone"}' --agent $AGENT
 fi
 ```
 
@@ -75,9 +74,9 @@ print(matches[0] if matches else '')" 2>/dev/null
 | Dimension | Values |
 |-----------|--------|
 | `plico:type:<T>` | adr, progress, experience, test-result, bug, code-change, doc |
-| `plico:module:<M>` | cas, fs, kernel, api, scheduler, memory, graph, temporal, cli, daemon |
+| `plico:module:<M>` | cas, fs, kernel, api, scheduler, memory, graph, temporal, cli, daemon, intent, llm, mcp, tool |
 | `plico:status:<S>` | accepted, active, superseded, resolved, wip |
-| `plico:milestone:<V>` | v0.1 .. v0.6 |
+| `plico:milestone:<V>` | v0.1 .. v8.0 |
 | `plico:severity:<L>` | critical, high, medium, low (bugs only) |
 
 ## Storage Templates
@@ -113,7 +112,7 @@ Completed: <what>
 Files: <changed files>
 Tests: <pass/fail>
 Next: <upcoming>" \
-  --tags "plico:type:progress,plico:milestone:v0.6" --agent $AGENT
+  --tags "plico:type:progress,plico:milestone:<ver>" --agent $AGENT
 ```
 
 ### Experience
@@ -151,20 +150,12 @@ pcli_human paths --src <id1> --dst <id2> --depth 3
 Note: With `EMBEDDING_BACKEND=stub`, search falls back to tag-substring matching.
 Use `--require-tags` / `-t` with `--query` for precise filtering.
 
-## Known Limitations (as of Node 13 audit)
-
-- `recall --tier X` does not filter by tier (B38) — all tiers returned regardless
-- `remember --tier procedural` routes to ephemeral storage (F-B) — use `tool call memory.store_procedure` instead
-- `--require-tags` without `--query` returns empty (B41) — always combine with `--query`
-- `search --require-tags` uses substring matching, not exact tag match
-- `tool call memory.recall` returns empty content field (B40) — use CLI `recall` instead
-- `delete` may panic on certain CID formats (B35)
-
 ## Principles
 
 - Generic KG types only (Entity/Fact) — domain semantics live in `plico:` tags
-- All operations via `aicli` — no kernel-layer hacks
+- All operations via `aicli --embedded` — no kernel-layer hacks
 - Model-agnostic — any AI agent can use the same API
 - Batch over interrupt — record at pause points, not mid-flow
 - **ALWAYS bootstrap before first storage** — entity anchors are required for graph structure
-- **ALWAYS link ADRs to KG** — unlinked facts are invisible islands (see Node 14 F-J)
+- **ALWAYS link ADRs to KG** — unlinked facts are invisible islands
+- **ALWAYS use `--embedded` flag** — daemon-first architecture requires it for direct kernel access

@@ -213,6 +213,87 @@ pub fn generate_content_profile(kernel: &AIKernel) -> Value {
     })
 }
 
+pub fn tool_definitions() -> Vec<Value> {
+    vec![
+        serde_json::json!({
+            "name": "plico",
+            "description": "Plico AIOS kernel gateway. Single mode: session_start/end, remember/recall/recall_semantic, search/hybrid, intent_declare/intent_fetch, delta/growth/status. Batch mode: pipeline=[...] for sequential multi-step execution. Use select:[\"field\"] for field projection on search/hybrid. Use preview:N for result previews. For advanced ops (KG, tasks, batch), use plico_skills.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["session_start","session_end","put","get","remember","recall","recall_semantic",
+                                 "search","hybrid","intent_declare","intent_fetch","delta","growth","status",
+                                 "discover","memory_stats","help"],
+                        "description": "Single operation mode"
+                    },
+                    "pipeline": {
+                        "type": "array",
+                        "description": "Batch mode: [{step,action,...}]. Steps run sequentially. Use $step.field for references.",
+                        "items": { "type": "object" }
+                    },
+                    "agent_id": { "type": "string" },
+                    "content": { "type": "string", "description": "For remember, intent_declare" },
+                    "query": { "type": "string", "description": "For recall/search/hybrid" },
+                    "tier": { "type": "string", "enum": ["working","long_term"], "description": "For recall" },
+                    "scope": { "type": "string", "enum": ["private","shared"], "description": "For remember" },
+                    "token_budget": { "type": "number", "description": "Max tokens for context (intent_fetch)" },
+                    "intent_hint": { "type": "string", "description": "For session_start: triggers delta+prefetch" },
+                    "handover_mode": { "type": "string", "enum": ["full", "compact", "none"], "description": "For session_start: context assembly mode for session recovery" },
+                    "session_id": { "type": "string", "description": "For session_end" },
+                    "cid": { "type": "string", "description": "For get: content ID to retrieve" },
+                    "intent_id": { "type": "string", "description": "For intent_fetch" },
+                    "since_seq": { "type": "number", "description": "For delta" },
+                    "tags": { "type": "array", "items": { "type": "string" } },
+                    "select": { "type": "array", "items": { "type": "string" }, "description": "Field projection for search/hybrid" },
+                    "preview": { "type": "number", "description": "Preview chars per result (0=full)" },
+                    "params": { "type": "object", "description": "Additional/cold-path parameters" },
+                    "limit": { "type": "number", "description": "Max results for search/hybrid" },
+                    "require_tags": { "type": "array", "items": { "type": "string" }, "description": "For search" },
+                    "exclude_tags": { "type": "array", "items": { "type": "string" }, "description": "For search" }
+                },
+                "oneOf": [
+                    { "required": ["action", "agent_id"] },
+                    { "required": ["pipeline"] }
+                ]
+            }
+        }),
+        serde_json::json!({
+            "name": "plico_store",
+            "description": "CAS read/write. action:\"put\" stores content, returns CID. action:\"read\" retrieves by CID.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "action": { "type": "string", "enum": ["put", "read"] },
+                    "content": { "type": "string", "description": "Content to store (for put)" },
+                    "cid": { "type": "string", "description": "CID to read (for read)" },
+                    "tags": { "type": "array", "items": { "type": "string" } },
+                    "agent_id": { "type": "string" }
+                },
+                "required": ["action", "agent_id"]
+            }
+        }),
+        serde_json::json!({
+            "name": "plico_skills",
+            "description": "Discover, run, and create reusable workflows. Skills teach you how to use advanced Plico features (knowledge graph, task delegation, batch operations). Skills are procedural memories — once learned, available across all sessions.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "action": { "type": "string", "enum": ["list", "run", "create"] },
+                    "name": { "type": "string", "description": "Skill name (for run/create)" },
+                    "agent_id": { "type": "string" },
+                    "description": { "type": "string", "description": "Skill description (for create)" },
+                    "steps": { "type": "array", "description": "Workflow steps (for create)" },
+                    "learned_from": { "type": "string", "description": "Provenance (for create)" },
+                    "tags": { "type": "array", "items": { "type": "string" }, "description": "For create" }
+                },
+                "required": ["action", "agent_id"]
+            }
+        }),
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -313,88 +394,4 @@ mod tests {
         let text = resp["result"]["messages"][0]["content"]["text"].as_str().unwrap();
         assert!(text.contains("fix CI"));
     }
-}
-
-pub fn tool_definitions() -> Vec<Value> {
-    vec![
-        // Main gateway tool - plico
-        serde_json::json!({
-            "name": "plico",
-            "description": "Plico AIOS kernel gateway. Single mode: session_start/end, remember/recall/recall_semantic, search/hybrid, intent_declare/intent_fetch, delta/growth/status. Batch mode: pipeline=[...] for sequential multi-step execution. Use select:[\"field\"] for field projection on search/hybrid. Use preview:N for result previews. For advanced ops (KG, tasks, batch), use plico_skills.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "action": {
-                        "type": "string",
-                        "enum": ["session_start","session_end","put","get","remember","recall","recall_semantic",
-                                 "search","hybrid","intent_declare","intent_fetch","delta","growth","status",
-                                 "discover","memory_stats","help"],
-                        "description": "Single operation mode"
-                    },
-                    "pipeline": {
-                        "type": "array",
-                        "description": "Batch mode: [{step,action,...}]. Steps run sequentially. Use $step.field for references.",
-                        "items": { "type": "object" }
-                    },
-                    "agent_id": { "type": "string" },
-                    "content": { "type": "string", "description": "For remember, intent_declare" },
-                    "query": { "type": "string", "description": "For recall/search/hybrid" },
-                    "tier": { "type": "string", "enum": ["working","long_term"], "description": "For recall" },
-                    "scope": { "type": "string", "enum": ["private","shared"], "description": "For remember" },
-                    "token_budget": { "type": "number", "description": "Max tokens for context (intent_fetch)" },
-                    "intent_hint": { "type": "string", "description": "For session_start: triggers delta+prefetch" },
-                    "handover_mode": { "type": "string", "enum": ["full", "compact", "none"], "description": "For session_start: context assembly mode for session recovery" },
-                    "session_id": { "type": "string", "description": "For session_end" },
-                    "cid": { "type": "string", "description": "For get: content ID to retrieve" },
-                    "intent_id": { "type": "string", "description": "For intent_fetch" },
-                    "since_seq": { "type": "number", "description": "For delta" },
-                    "tags": { "type": "array", "items": { "type": "string" } },
-                    "select": { "type": "array", "items": { "type": "string" }, "description": "Field projection for search/hybrid" },
-                    "preview": { "type": "number", "description": "Preview chars per result (0=full)" },
-                    "params": { "type": "object", "description": "Additional/cold-path parameters" },
-                    "limit": { "type": "number", "description": "Max results for search/hybrid" },
-                    "require_tags": { "type": "array", "items": { "type": "string" }, "description": "For search" },
-                    "exclude_tags": { "type": "array", "items": { "type": "string" }, "description": "For search" }
-                },
-                "oneOf": [
-                    { "required": ["action", "agent_id"] },
-                    { "required": ["pipeline"] }
-                ]
-            }
-        }),
-        // CAS store tool - plico_store
-        serde_json::json!({
-            "name": "plico_store",
-            "description": "CAS read/write. action:\"put\" stores content, returns CID. action:\"read\" retrieves by CID.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "action": { "type": "string", "enum": ["put", "read"] },
-                    "content": { "type": "string", "description": "Content to store (for put)" },
-                    "cid": { "type": "string", "description": "CID to read (for read)" },
-                    "tags": { "type": "array", "items": { "type": "string" } },
-                    "agent_id": { "type": "string" }
-                },
-                "required": ["action", "agent_id"]
-            }
-        }),
-        // Skills tool - plico_skills
-        serde_json::json!({
-            "name": "plico_skills",
-            "description": "Discover, run, and create reusable workflows. Skills teach you how to use advanced Plico features (knowledge graph, task delegation, batch operations). Skills are procedural memories — once learned, available across all sessions.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "action": { "type": "string", "enum": ["list", "run", "create"] },
-                    "name": { "type": "string", "description": "Skill name (for run/create)" },
-                    "agent_id": { "type": "string" },
-                    "description": { "type": "string", "description": "Skill description (for create)" },
-                    "steps": { "type": "array", "description": "Workflow steps (for create)" },
-                    "learned_from": { "type": "string", "description": "Provenance (for create)" },
-                    "tags": { "type": "array", "items": { "type": "string" }, "description": "For create" }
-                },
-                "required": ["action", "agent_id"]
-            }
-        }),
-    ]
 }

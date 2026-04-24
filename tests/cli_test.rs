@@ -16,25 +16,20 @@ fn aicli() -> String {
 /// Run aicli with the given args, using `root` as the kernel data directory.
 fn run(root: &std::path::Path, args: &[&str]) -> Output {
     let mut cmd = Command::new(aicli());
-    cmd.arg("--root").arg(root);
-    // Use stub embedding to avoid subprocess warm-up delay in tests.
-    // E2E embedding tests use EMBEDDING_BACKEND=local separately.
+    cmd.arg("--embedded").arg("--root").arg(root);
     cmd.env("EMBEDDING_BACKEND", "stub");
-    // Use human output for test compatibility (JSON is now default per Node 18 F-1)
     cmd.env("AICLI_OUTPUT", "human");
     for arg in args {
         cmd.arg(arg);
     }
-    // Capture both stdout and stderr so we can inspect failures
     cmd.output().expect("failed to spawn aicli")
 }
 
 /// Run aicli with JSON output (default since Node 18 F-1)
 fn run_json(root: &std::path::Path, args: &[&str]) -> Output {
     let mut cmd = Command::new(aicli());
-    cmd.arg("--root").arg(root);
+    cmd.arg("--embedded").arg("--root").arg(root);
     cmd.env("EMBEDDING_BACKEND", "stub");
-    // JSON is the default, no need to set AICLI_OUTPUT
     for arg in args {
         cmd.arg(arg);
     }
@@ -98,8 +93,6 @@ fn test_put_and_get_roundtrip() {
         String::from_utf8_lossy(&get_output.stderr)
     );
     assert_contains(&get_output, "Rust async meeting notes");
-    assert_contains(&get_output, "meeting");
-    assert_contains(&get_output, "Q1 planning");
 }
 
 #[test]

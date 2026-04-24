@@ -11,11 +11,12 @@ fn transition_err(e: TransitionError) -> std::io::Error {
 impl crate::kernel::AIKernel {
     /// Ensure an agent is registered, creating a minimal registration if needed.
     /// This enables lazy agent registration on first API call.
-    pub fn ensure_agent_registered(&self, agent_id: &str) {
-        let aid = AgentId(agent_id.to_string());
-        if !self.scheduler.has_agent(&aid) {
-            let _ = self.register_agent_internal(agent_id);
+    /// Checks both UUID and name-based resolution before creating a new agent.
+    pub(crate) fn ensure_agent_registered(&self, agent_id: &str) {
+        if self.scheduler.resolve(agent_id).is_some() {
+            return;
         }
+        let _ = self.register_agent_internal(agent_id);
     }
 
     /// Internal agent registration (used for lazy registration).
@@ -108,6 +109,22 @@ impl crate::kernel::AIKernel {
     /// B21 fix: enables name-based lookup for quota/status commands.
     pub fn resolve_agent(&self, name_or_id: &str) -> Option<String> {
         self.scheduler.resolve(name_or_id).map(|a| a.0)
+    }
+
+    /// Track a CLI command as a tool call for the given agent.
+    pub fn track_cli_usage(&self, agent_name_or_id: &str) {
+        self.ensure_agent_registered(agent_name_or_id);
+        let resolved = self.scheduler.resolve(agent_name_or_id)
+            .unwrap_or_else(|| AgentId(agent_name_or_id.to_string()));
+        self.scheduler.record_tool_call(&resolved);
+    }
+
+    /// Track token consumption for a CLI command response.
+    pub fn track_cli_token_usage(&self, agent_name_or_id: &str, tokens: u64) {
+        let resolved = self.scheduler.resolve(agent_name_or_id)
+            .unwrap_or_else(|| AgentId(agent_name_or_id.to_string()));
+        self.scheduler.record_token_usage(&resolved, tokens);
+        self.persist_usage();
     }
 
     pub fn agent_suspend(&self, name_or_id: &str) -> std::io::Result<()> {
@@ -585,7 +602,7 @@ mod tests {
 
         let status = kernel.agent_status(&id);
         assert!(status.is_some());
-        let (agent_id, state, pending) = status.unwrap();
+        let (agent_id, _state, pending) = status.unwrap();
         assert_eq!(agent_id, id);
         assert_eq!(pending, 0);
     }

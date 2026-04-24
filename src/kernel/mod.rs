@@ -93,8 +93,6 @@ pub struct AIKernel {
     pub(crate) checkpoint_store: Arc<CheckpointStore>,
     /// Task store — manages multi-agent task delegation with state tracking (F-14).
     pub(crate) task_store: Arc<ops::task::TaskStore>,
-    /// Intent tracker — structured intent declaration and progress tracking (F-1, F-5, Node 21).
-    pub(crate) intent_tracker: Arc<ops::intent::IntentTracker>,
 }
 
 impl AIKernel {
@@ -267,9 +265,6 @@ impl AIKernel {
         // Task store — manages multi-agent task delegation with state tracking (F-14)
         let task_store = Arc::new(ops::task::TaskStore::restore(root.clone(), event_bus.clone()));
 
-        // Intent tracker — structured intent declaration and progress tracking (F-1, F-5, Node 21)
-        let intent_tracker = Arc::new(ops::intent::IntentTracker::new());
-
         let kernel = Self {
             root: root.clone(),
             cas,
@@ -297,7 +292,6 @@ impl AIKernel {
             session_store,
             checkpoint_store,
             task_store,
-            intent_tracker,
         };
 
         kernel.register_builtin_tools();
@@ -469,6 +463,9 @@ impl AIKernel {
             ApiRequest::RevokePermission { agent_id, .. } => Some(agent_id.clone()),
             ApiRequest::ListPermissions { agent_id } => Some(agent_id.clone()),
             ApiRequest::CheckPermission { agent_id, .. } => Some(agent_id.clone()),
+            ApiRequest::HookList => None,
+            ApiRequest::HookRegister { .. } => None,
+            ApiRequest::HealthReport => None,
         }
     }
 
@@ -495,10 +492,24 @@ impl AIKernel {
 
         let _corr_id = correlation_id; // Used in tracing span above
 
-        // ── Lazy Agent Registration (C-3) ─────────────────────────────────────
-        // Auto-register agent on first API call so that agent persists across restarts.
-        if let Some(ref aid) = Self::extract_agent_id(&req) {
-            self.ensure_agent_registered(aid);
+        let request_agent_id = Self::extract_agent_id(&req);
+        let skip_auto_register = matches!(&req,
+            ApiRequest::AgentStatus { .. } |
+            ApiRequest::AgentSuspend { .. } |
+            ApiRequest::AgentResume { .. } |
+            ApiRequest::AgentTerminate { .. } |
+            ApiRequest::AgentComplete { .. } |
+            ApiRequest::AgentFail { .. } |
+            ApiRequest::AgentCheckpoint { .. } |
+            ApiRequest::AgentRestore { .. } |
+            ApiRequest::AgentUsage { .. } |
+            ApiRequest::AgentSetResources { .. }
+        );
+        if let Some(ref aid) = request_agent_id {
+            if !skip_auto_register {
+                self.ensure_agent_registered(aid);
+            }
+            self.scheduler.record_tool_call(&AgentId(aid.clone()));
         }
 
         let mut response = match req {
@@ -1907,11 +1918,56 @@ impl AIKernel {
                 });
                 r
             }
+
+            // ── Hook Management (Daemon-First) ──────────────────────────
+
+            ApiRequest::HookList => {
+                let hooks = self.hook_registry.list_hooks();
+                let dtos: Vec<crate::api::semantic::HookEntryDto> = hooks.into_iter()
+                    .map(|(point, prio)| crate::api::semantic::HookEntryDto { point, priority: prio })
+                    .collect();
+                let mut r = ApiResponse::ok();
+                r.hook_list = Some(dtos);
+                r
+            }
+
+            ApiRequest::HookRegister { point, action, tool_pattern, reason, priority } => {
+                let hook_point = match point.to_lowercase().as_str() {
+                    "pretoolcall" | "pre-tool-call" | "pre" => hook::HookPoint::PreToolCall,
+                    "posttoolcall" | "post-tool-call" | "post" => hook::HookPoint::PostToolCall,
+                    "prewrite" | "pre-write" => hook::HookPoint::PreWrite,
+                    "predelete" | "pre-delete" => hook::HookPoint::PreDelete,
+                    "presessionstart" | "pre-session" => hook::HookPoint::PreSessionStart,
+                    _ => return ApiResponse::error(format!("Unknown hook point: {}. Use: PreToolCall, PostToolCall, PreWrite, PreDelete, PreSessionStart", point)),
+                };
+                let prio = priority.unwrap_or(50);
+                let reason_str = reason.unwrap_or_else(|| "blocked by API hook".to_string());
+                let handler: std::sync::Arc<dyn hook::HookHandler> = match action.to_lowercase().as_str() {
+                    "block" => std::sync::Arc::new(ApiBlockHook { tool_pattern: tool_pattern.clone(), reason: reason_str }),
+                    "log" | "continue" => std::sync::Arc::new(ApiLogHook { tool_pattern: tool_pattern.clone() }),
+                    _ => return ApiResponse::error(format!("Unknown action: {}. Use: block, log", action)),
+                };
+                self.hook_registry.register(hook_point.clone(), prio, handler);
+                ApiResponse::ok_with_message(format!("Hook registered: {:?} priority={} action={}", hook_point, prio, action))
+            }
+
+            // ── Health Report (Daemon-First) ────────────────────────────
+
+            ApiRequest::HealthReport => {
+                let report = self.health_report();
+                let mut r = ApiResponse::ok();
+                r.health_report = Some(report);
+                r
+            }
         };
         self.maybe_persist_event_log();
-        // Token cost transparency (F-8): calculate estimate for every response
         let json = serde_json::to_string(&response).unwrap_or_default();
-        response.token_estimate = Some(crate::api::semantic::estimate_tokens(&json));
+        let token_est = crate::api::semantic::estimate_tokens(&json);
+        if let Some(ref aid) = request_agent_id {
+            self.scheduler.record_token_usage(&AgentId(aid.clone()), token_est as u64);
+            self.persist_usage();
+        }
+        response.token_estimate = Some(token_est);
         response
     }
 }
@@ -1925,11 +1981,43 @@ fn parse_scope(scope: Option<String>) -> MemoryScope {
     }
 }
 
+struct ApiBlockHook {
+    tool_pattern: Option<String>,
+    reason: String,
+}
+
+impl hook::HookHandler for ApiBlockHook {
+    fn handle(&self, _point: hook::HookPoint, context: &hook::HookContext) -> hook::HookResult {
+        if let Some(ref pattern) = self.tool_pattern {
+            if !context.tool_name.contains(pattern.as_str()) {
+                return hook::HookResult::Continue;
+            }
+        }
+        hook::HookResult::Block { reason: self.reason.clone() }
+    }
+}
+
+struct ApiLogHook {
+    tool_pattern: Option<String>,
+}
+
+impl hook::HookHandler for ApiLogHook {
+    fn handle(&self, point: hook::HookPoint, context: &hook::HookContext) -> hook::HookResult {
+        if let Some(ref pattern) = self.tool_pattern {
+            if !context.tool_name.contains(pattern.as_str()) {
+                return hook::HookResult::Continue;
+            }
+        }
+        tracing::info!(point = ?point, tool = %context.tool_name, agent = %context.agent_id, "API hook triggered");
+        hook::HookResult::Continue
+    }
+}
+
 /// A-4: Memory Link Engine — create a KG node for a memory and link it to related memories.
 /// Called after a successful remember_long_term storage.
 impl AIKernel {
     /// Public method for CLI handlers to link a memory entry to KG.
-    pub fn link_memory_to_kg(&self, entry_id: &str, agent_id: &str, tenant_id: &str, tags: &[String]) {
+    pub(crate) fn link_memory_to_kg(&self, entry_id: &str, agent_id: &str, tenant_id: &str, tags: &[String]) {
         use crate::fs::KGEdgeType;
 
         // Create a label from entry_id (truncated for display)

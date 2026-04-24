@@ -121,7 +121,7 @@ impl LlmProvider for CircuitBreakerLlmProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicU32, AtomicU8};
+    use std::sync::atomic::AtomicU32;
 
     struct FailingLlm {
         fail_count: AtomicU32,

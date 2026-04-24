@@ -1,8 +1,8 @@
 //! Context loading commands (L0/L1/L2) and context budget assembly.
+//! Routes through handle_api_request.
 
 use plico::kernel::AIKernel;
-use plico::api::semantic::{ApiResponse, LoadedContextDto};
-use plico::fs::ContextLayer;
+use plico::api::semantic::{ApiRequest, ApiResponse, ContextAssembleCandidate};
 use super::extract_arg;
 
 pub fn cmd_context(kernel: &AIKernel, args: &[String]) -> ApiResponse {
@@ -14,34 +14,48 @@ pub fn cmd_context(kernel: &AIKernel, args: &[String]) -> ApiResponse {
 
 fn cmd_context_load(kernel: &AIKernel, args: &[String]) -> ApiResponse {
     let cid = extract_arg(args, "--cid").unwrap_or_default();
-    let layer_str = extract_arg(args, "--layer").unwrap_or_else(|| "L2".to_string());
+    let intent = extract_arg(args, "--intent");
+    let layer = extract_arg(args, "--layer").unwrap_or_else(|| "L2".to_string());
     let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
+    let budget = extract_arg(args, "--budget")
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(4000);
+
+    if let Some(intent_text) = intent {
+        let search_resp = kernel.handle_api_request(ApiRequest::Search {
+            query: intent_text.clone(),
+            agent_id: agent_id.clone(),
+            tenant_id: None,
+            agent_token: None,
+            limit: Some(5),
+            offset: None,
+            require_tags: vec![],
+            exclude_tags: vec![],
+            since: None,
+            until: None,
+        });
+        let results = search_resp.results.unwrap_or_default();
+        if results.is_empty() {
+            return ApiResponse::error(format!("No content found for intent: {}", intent_text));
+        }
+        let cids: Vec<ContextAssembleCandidate> = results.iter().enumerate()
+            .map(|(i, sr)| ContextAssembleCandidate {
+                cid: sr.cid.clone(),
+                relevance: if sr.relevance > 0.0 { sr.relevance } else { 1.0 - i as f32 * 0.1 },
+            })
+            .collect();
+        return kernel.handle_api_request(ApiRequest::ContextAssemble {
+            agent_id, cids, budget_tokens: budget,
+        });
+    }
 
     if cid.is_empty() {
-        return ApiResponse::error("Missing --cid argument");
+        return ApiResponse::error("Missing --cid or --intent argument");
     }
 
-    let layer = match ContextLayer::parse_layer(&layer_str) {
-        Some(l) => l,
-        None => return ApiResponse::error(format!("Invalid layer '{}'. Use L0, L1, or L2.", layer_str)),
-    };
-
-    match kernel.context_load(&cid, layer, &agent_id) {
-        Ok(loaded) => {
-            let mut r = ApiResponse::ok();
-            r.context_data = Some(LoadedContextDto {
-                cid: loaded.cid.clone(),
-                layer: loaded.layer.name().to_string(),
-                content: loaded.content,
-                tokens_estimate: loaded.tokens_estimate,
-                actual_layer: loaded.actual_layer.map(|l| l.name().to_string()),
-                degraded: loaded.degraded,
-                degradation_reason: loaded.degradation_reason,
-            });
-            r
-        }
-        Err(e) => ApiResponse::error(e.to_string()),
-    }
+    kernel.handle_api_request(ApiRequest::LoadContext {
+        cid, layer, agent_id, tenant_id: None,
+    })
 }
 
 fn cmd_context_assemble(kernel: &AIKernel, args: &[String]) -> ApiResponse {
@@ -55,21 +69,16 @@ fn cmd_context_assemble(kernel: &AIKernel, args: &[String]) -> ApiResponse {
         return ApiResponse::error("Missing --cids argument (comma-separated CIDs)");
     }
 
-    let candidates: Vec<plico::fs::context_budget::ContextCandidate> = cids_str
+    let cids: Vec<ContextAssembleCandidate> = cids_str
         .split(',')
         .enumerate()
-        .map(|(i, cid)| plico::fs::context_budget::ContextCandidate {
+        .map(|(i, cid)| ContextAssembleCandidate {
             cid: cid.trim().to_string(),
             relevance: 1.0 - i as f32 * 0.05,
         })
         .collect();
 
-    match kernel.context_assemble(&candidates, budget, &agent_id) {
-        Ok(allocation) => {
-            let mut r = ApiResponse::ok();
-            r.context_assembly = Some(allocation);
-            r
-        }
-        Err(e) => ApiResponse::error(e.to_string()),
-    }
+    kernel.handle_api_request(ApiRequest::ContextAssemble {
+        agent_id, cids, budget_tokens: budget,
+    })
 }

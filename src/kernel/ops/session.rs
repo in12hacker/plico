@@ -730,7 +730,7 @@ mod tests {
 
     #[test]
     fn test_session_expiry() {
-        let store = SessionStore::new();
+        let _store = SessionStore::new();
         // Create a session that's already expired (we can't easily test this without mocking time)
         // But we can test the expiry detection logic
         let session = ActiveSession::new("s1".to_string(), "a1".to_string(), 10);
@@ -1056,11 +1056,7 @@ mod tests {
     fn test_session_start_warm_context_stores_in_cas_when_ready() {
         // This test verifies the B51 fix: when warm_context IS a CID,
         // it can be retrieved from CAS
-        let (fs, prefetcher, _dir) = create_test_fs_and_prefetcher();
-        let session_store = Arc::new(SessionStore::new());
-        let event_bus = Arc::new(crate::kernel::event_bus::EventBus::new());
-        let memory = Arc::new(crate::memory::LayeredMemory::new());
-        let root = std::env::temp_dir();
+        let (fs, _prefetcher, _dir) = create_test_fs_and_prefetcher();
 
         // First, manually create a warm_context in CAS to simulate the fixed behavior
         let test_content = serde_json::json!({

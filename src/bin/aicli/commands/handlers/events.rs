@@ -1,23 +1,23 @@
-//! Event commands — list events by time or natural language expression,
-//! plus event bus subscribe/poll/unsubscribe for reactive workflows.
+//! Event commands — all operations route through handle_api_request.
 
 use plico::kernel::AIKernel;
-use plico::api::semantic::ApiResponse;
+use plico::api::semantic::{ApiRequest, ApiResponse};
 use super::extract_arg;
 use super::extract_tags;
 
 pub fn cmd_events(kernel: &AIKernel, args: &[String]) -> ApiResponse {
-    let agent_id = extract_arg(args, "--agent");
+    let agent_id = extract_arg(args, "--agent").unwrap_or_default();
     let tags = extract_tags(args, "--tags");
 
     match args.get(1).map(|s| s.as_str()) {
         Some("list") => {
-            let since = extract_arg(args, "--since")
-                .and_then(|s| s.parse().ok());
-            let until = extract_arg(args, "--until")
-                .and_then(|s| s.parse().ok());
-            let events = kernel.list_events(since, until, &tags, None, agent_id.as_deref());
-            ApiResponse::with_events(events)
+            let since = extract_arg(args, "--since").and_then(|s| s.parse().ok());
+            let until = extract_arg(args, "--until").and_then(|s| s.parse().ok());
+            let limit = extract_arg(args, "--limit").and_then(|s| s.parse().ok());
+            let offset = extract_arg(args, "--offset").and_then(|s| s.parse().ok());
+            kernel.handle_api_request(ApiRequest::ListEvents {
+                since, until, tags, event_type: None, agent_id, limit, offset,
+            })
         }
         Some("by-time") | Some("text") => {
             let time_expression = args.get(2..)
@@ -26,62 +26,41 @@ pub fn cmd_events(kernel: &AIKernel, args: &[String]) -> ApiResponse {
             if time_expression.is_empty() {
                 return ApiResponse::error("events by-time requires a time expression, e.g.: events by-time \"last week\"");
             }
-            match kernel.list_events_text(&time_expression, &tags, None, agent_id.as_deref()) {
-                Ok(events) => ApiResponse::with_events(events),
-                Err(e) => ApiResponse::error(e.to_string()),
-            }
+            kernel.handle_api_request(ApiRequest::ListEventsText {
+                time_expression, tags, event_type: None, agent_id,
+            })
         }
         Some("subscribe") => {
             let event_types = extract_arg(args, "--types")
                 .map(|s| s.split(',').map(|t| t.trim().to_string()).collect::<Vec<_>>());
             let agent_ids = extract_arg(args, "--agents")
                 .map(|s| s.split(',').map(|a| a.trim().to_string()).collect::<Vec<_>>());
-            let filter = if event_types.is_some() || agent_ids.is_some() {
-                Some(plico::kernel::event_bus::EventFilter { event_types, agent_ids })
-            } else {
-                None
-            };
-            let sub_id = kernel.event_subscribe_filtered(filter);
-            let mut r = ApiResponse::ok();
-            r.subscription_id = Some(sub_id);
-            r
+            kernel.handle_api_request(ApiRequest::EventSubscribe {
+                agent_id, event_types, agent_ids,
+            })
         }
         Some("poll") => {
-            let sub_id = match extract_arg(args, "--sub") {
+            let subscription_id = match extract_arg(args, "--sub") {
                 Some(s) => s,
-                None => return ApiResponse::error("--sub required".to_string()),
+                None => return ApiResponse::error("--sub required"),
             };
-            match kernel.event_poll(&sub_id) {
-                Some(events) => {
-                    let mut r = ApiResponse::ok();
-                    r.kernel_events = Some(events);
-                    r
-                }
-                None => ApiResponse::error(format!("Unknown subscription: {}", sub_id)),
-            }
+            kernel.handle_api_request(ApiRequest::EventPoll { subscription_id })
         }
         Some("unsubscribe") => {
-            let sub_id = match extract_arg(args, "--sub") {
+            let subscription_id = match extract_arg(args, "--sub") {
                 Some(s) => s,
-                None => return ApiResponse::error("--sub required".to_string()),
+                None => return ApiResponse::error("--sub required"),
             };
-            if kernel.event_unsubscribe(&sub_id) {
-                ApiResponse::ok()
-            } else {
-                ApiResponse::error(format!("Unknown subscription: {}", sub_id))
-            }
+            kernel.handle_api_request(ApiRequest::EventUnsubscribe { subscription_id })
         }
         Some("history") => {
-            let since_seq = extract_arg(args, "--since")
-                .and_then(|s| s.parse().ok());
-            let limit = extract_arg(args, "--limit")
-                .and_then(|s| s.parse().ok());
-            let req = plico::api::semantic::ApiRequest::EventHistory {
+            let since_seq = extract_arg(args, "--since").and_then(|s| s.parse().ok());
+            let limit = extract_arg(args, "--limit").and_then(|s| s.parse().ok());
+            kernel.handle_api_request(ApiRequest::EventHistory {
                 since_seq,
-                agent_id_filter: agent_id.clone(),
+                agent_id_filter: if agent_id.is_empty() { None } else { Some(agent_id) },
                 limit,
-            };
-            kernel.handle_api_request(req)
+            })
         }
         _ => {
             ApiResponse::error("Unknown events subcommand. Valid: list, by-time, subscribe, poll, unsubscribe, history")
@@ -105,7 +84,6 @@ mod tests {
         let args = vec!["events".to_string(), "list".to_string()];
         let r = cmd_events(&kernel, &args);
         assert!(r.error.is_none());
-        // list command should return events (may be empty)
         assert!(r.kernel_events.is_some() || r.events.is_some());
     }
 
@@ -143,12 +121,10 @@ mod tests {
     #[test]
     fn test_cmd_events_unsubscribe() {
         let kernel = make_test_kernel();
-        // First subscribe to get a valid subscription id
         let sub_args = vec!["events".to_string(), "subscribe".to_string()];
         let sub_r = cmd_events(&kernel, &sub_args);
         let sub_id = sub_r.subscription_id.unwrap();
 
-        // Then unsubscribe
         let args = vec![
             "events".to_string(), "unsubscribe".to_string(),
             "--sub".to_string(), sub_id,

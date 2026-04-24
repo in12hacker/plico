@@ -258,7 +258,7 @@ fn to_sse_event(se: SseEvent) -> Event {
         .data(event_data)
 }
 
-// ── plicod TCP Client ──────────────────────────────────────────────────────────
+// ── plicod Client (length-prefixed framing) ───────────────────────────────────
 
 async fn send_to_plicod(
     port: u16,
@@ -282,31 +282,25 @@ async fn send_to_plicod(
         }
     };
 
-    let json = serde_json::to_vec(&request)?;
-    stream.write_all(&json).await?;
-    stream.write_all(b"\n").await?;
+    let payload = serde_json::to_vec(&request)?;
+
+    // Length-prefixed framing: [4-byte BE length][JSON payload]
+    let len = payload.len() as u32;
+    stream.write_all(&len.to_be_bytes()).await?;
+    stream.write_all(&payload).await?;
     stream.flush().await?;
 
-    // Read response
-    let mut buf = Vec::new();
-    let mut temp_buf = [0u8; 4096];
-    loop {
-        let n = stream.read(&mut temp_buf).await?;
-        if n == 0 {
-            break;
-        }
-        buf.extend_from_slice(&temp_buf[..n]);
-        // Check for newline delimiter (plicod protocol)
-        if buf.contains(&b'\n') {
-            break;
-        }
+    // Read length-prefixed response
+    let mut header = [0u8; 4];
+    stream.read_exact(&mut header).await?;
+    let resp_len = u32::from_be_bytes(header) as usize;
+    if resp_len > 16 * 1024 * 1024 {
+        return Err(SseError::Internal(format!("response frame too large: {} bytes", resp_len)));
     }
+    let mut resp_buf = vec![0u8; resp_len];
+    stream.read_exact(&mut resp_buf).await?;
 
-    // Parse response, handling potential multiple JSON objects
-    let buf_str = String::from_utf8_lossy(&buf);
-    let first_json = buf_str.lines().next().unwrap_or("{}");
-    let response: ApiResponse = serde_json::from_str(first_json)?;
-
+    let response: ApiResponse = serde_json::from_slice(&resp_buf)?;
     Ok(response)
 }
 
@@ -897,6 +891,7 @@ mod tests {
             storage_stats: None,
             evict_result: None,
             health_report: None,
+            hook_list: None,
         }
     }
 

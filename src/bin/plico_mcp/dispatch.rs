@@ -19,6 +19,105 @@ pub fn dispatch_tool(name: &str, args: &Value, kernel: &AIKernel) -> Result<Stri
     }
 }
 
+/// Remote-mode dispatch: routes MCP tool calls via KernelClient (no direct kernel access).
+pub fn dispatch_tool_remote(name: &str, args: &Value, client: &dyn plico::client::KernelClient) -> Result<String, String> {
+    check_rate_limit()?;
+    match name {
+        "plico" => dispatch_plico_remote(args, client),
+        "plico_store" => dispatch_plico_store_remote(args, client),
+        "plico_skills" => Err("plico_skills not available in daemon mode (requires direct kernel access)".to_string()),
+        _ => Err(format!("unknown tool: {name}")),
+    }
+}
+
+fn dispatch_plico_remote(args: &Value, client: &dyn plico::client::KernelClient) -> Result<String, String> {
+    let action = args.get("action")
+        .and_then(|a| a.as_str())
+        .ok_or("missing required parameter: action")?;
+    dispatch_plico_action_remote(action, args, client)
+}
+
+fn dispatch_plico_action_remote(action: &str, args: &Value, client: &dyn plico::client::KernelClient) -> Result<String, String> {
+    check_read_only(action, PLICO_ACTIONS)?;
+    let agent = args.get("agent_id").and_then(|a| a.as_str()).unwrap_or(DEFAULT_AGENT);
+
+    let req = match action {
+        "help" => return Ok(generate_help_response()),
+        "put" => {
+            let content = args.get("content").and_then(|c| c.as_str()).ok_or("put requires content")?;
+            let tags: Vec<String> = args.get("tags")
+                .and_then(|t| t.as_array())
+                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                .unwrap_or_default();
+            ApiRequest::Create { api_version: None, content: content.to_string(), content_encoding: Default::default(), tags, agent_id: agent.to_string(), tenant_id: None, agent_token: None, intent: None }
+        }
+        "get" => {
+            let cid = args.get("cid").and_then(|c| c.as_str()).ok_or("get requires cid")?;
+            ApiRequest::Read { cid: cid.to_string(), agent_id: agent.to_string(), tenant_id: None, agent_token: None }
+        }
+        "search" => {
+            let query = args.get("query").and_then(|q| q.as_str()).ok_or("search requires query")?;
+            let limit = args.get("limit").and_then(|l| l.as_u64()).map(|l| l as usize);
+            ApiRequest::Search { query: query.to_string(), agent_id: agent.to_string(), tenant_id: None, agent_token: None, limit, offset: None, require_tags: vec![], exclude_tags: vec![], since: None, until: None }
+        }
+        "remember" => {
+            let content = args.get("content").and_then(|c| c.as_str()).ok_or("remember requires content")?;
+            ApiRequest::Remember { agent_id: agent.to_string(), content: content.to_string(), tenant_id: None }
+        }
+        "recall" => {
+            let scope = args.get("scope").and_then(|s| s.as_str()).map(String::from);
+            let query = args.get("query").and_then(|q| q.as_str()).map(String::from);
+            let limit = args.get("limit").and_then(|l| l.as_u64()).map(|l| l as usize);
+            ApiRequest::Recall { agent_id: agent.to_string(), scope, query, limit }
+        }
+        "status" => ApiRequest::SystemStatus,
+        "session_start" => {
+            ApiRequest::StartSession { agent_id: agent.to_string(), agent_token: None, intent_hint: args.get("intent_hint").and_then(|v| v.as_str()).map(String::from), load_tiers: vec![], last_seen_seq: args.get("last_seen_seq").and_then(|v| v.as_u64()) }
+        }
+        "session_end" => {
+            let session_id = args.get("session_id").and_then(|s| s.as_str()).ok_or("session_end requires session_id")?;
+            ApiRequest::EndSession { agent_id: agent.to_string(), session_id: session_id.to_string(), auto_checkpoint: true }
+        }
+        "delta" => {
+            let since_seq = args.get("since_seq").and_then(|s| s.as_u64()).ok_or("delta requires since_seq")?;
+            let limit = args.get("limit").and_then(|l| l.as_u64()).map(|l| l as usize);
+            ApiRequest::DeltaSince { agent_id: agent.to_string(), since_seq, watch_cids: vec![], watch_tags: vec![], limit }
+        }
+        "hybrid" => {
+            let query = args.get("query").and_then(|q| q.as_str()).ok_or("hybrid requires query")?;
+            ApiRequest::HybridRetrieve { query_text: query.to_string(), agent_id: agent.to_string(), tenant_id: None, seed_tags: vec![], graph_depth: 2, edge_types: vec![], max_results: 20, token_budget: None }
+        }
+        _ => return Err(format!("action '{}' not available in daemon mode", action)),
+    };
+
+    let resp = client.request(req);
+    super::format::format_plico_response(resp, args)
+}
+
+fn dispatch_plico_store_remote(args: &Value, client: &dyn plico::client::KernelClient) -> Result<String, String> {
+    let agent = args.get("agent_id").and_then(|a| a.as_str()).unwrap_or(DEFAULT_AGENT);
+    let store_action = args.get("action").and_then(|a| a.as_str()).ok_or("plico_store requires action")?;
+
+    let req = match store_action {
+        "put" => {
+            let content = args.get("content").and_then(|c| c.as_str()).ok_or("put requires content")?;
+            let tags: Vec<String> = args.get("tags")
+                .and_then(|t| t.as_array())
+                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                .unwrap_or_default();
+            ApiRequest::Create { api_version: None, content: content.to_string(), content_encoding: Default::default(), tags, agent_id: agent.to_string(), tenant_id: None, agent_token: None, intent: None }
+        }
+        "read" => {
+            let cid = args.get("cid").and_then(|c| c.as_str()).ok_or("read requires cid")?;
+            ApiRequest::Read { cid: cid.to_string(), agent_id: agent.to_string(), tenant_id: None, agent_token: None }
+        }
+        _ => return Err(format!("unknown store action: {}", store_action)),
+    };
+
+    let resp = client.request(req);
+    super::format::format_response(resp)
+}
+
 /// Main gateway dispatcher for plico tool
 fn dispatch_plico(args: &Value, kernel: &AIKernel) -> Result<String, String> {
     // Check for pipeline mode first

@@ -12,7 +12,7 @@ use crate::kernel::ops::intent::{
 use crate::kernel::AIKernel;
 use crate::kernel::ops::skill_discovery::SkillDiscriminator;
 use crate::kernel::ops::self_healing::{FailureClassifier, PlanAdaptor};
-use crate::kernel::ops::intent_decomposer::IntentDecomposer;
+
 
 // ── F-2: Execution Statistics ────────────────────────────────────────────────
 
@@ -110,19 +110,15 @@ pub struct AutonomousExecutor {
     skill_discriminator: SkillDiscriminator,
     /// F-4 (M2): Plan adaptor for self-healing.
     plan_adaptor: PlanAdaptor,
-    /// F-4 (M3): Intent decomposer for goal decomposition.
-    intent_decomposer: IntentDecomposer,
 }
 
 impl AutonomousExecutor {
     pub fn new(kernel: Arc<AIKernel>) -> Self {
-        let profile_store = kernel.prefetch.profile_store().clone();
         Self {
             kernel,
             stats: ExecutionStats::new(),
             skill_discriminator: SkillDiscriminator::new(3),
             plan_adaptor: PlanAdaptor::new(),
-            intent_decomposer: IntentDecomposer::new(profile_store),
         }
     }
 
@@ -144,7 +140,7 @@ impl AutonomousExecutor {
         // F-3: Get topologically sorted steps with execution time optimization
         let sorted_indices = match plan.optimized_sort(&self.stats.get_avg_times_map()) {
             Ok(indices) => indices,
-            Err(e) => {
+            Err(_) => {
                 return IntentExecutionResult {
                     intent_id: plan.intent_id.clone(),
                     success: false,
@@ -295,7 +291,7 @@ impl AutonomousExecutor {
     }
 
     /// F-4 (M3): Check if intent decomposition is needed for future.
-    fn check_decomposition_opportunity(&self, result: &IntentExecutionResult, _agent_id: &str) {
+    fn check_decomposition_opportunity(&self, _result: &IntentExecutionResult, _agent_id: &str) {
         let candidates = self.skill_discriminator.get_skill_candidates("default");
         if !candidates.is_empty() {
             let _ = candidates;
@@ -420,7 +416,7 @@ impl AutonomousExecutor {
     }
 
     /// Execute a tool call.
-    async fn execute_call(&self, tool: &str, params: &serde_json::Value, step_id: &str) -> StepResult {
+    async fn execute_call(&self, _tool: &str, _params: &serde_json::Value, step_id: &str) -> StepResult {
         // For now, tool calls are handled via API request
         // This is a placeholder for the full implementation
         StepResult {
@@ -518,7 +514,6 @@ impl AutonomousExecutor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::kernel::ops::intent::{IntentPlan, IntentStep, IntentOperation};
 
     #[test]
     fn test_step_result_creation() {
@@ -565,8 +560,6 @@ mod tests {
             IntentOperation::Read { cid: "c1".to_string() },
             100,
         );
-        let completed = std::collections::HashSet::<String>::new();
-
         // Can't test the executor directly without kernel, but we can test the logic
         let can_exec = step.dependencies.is_empty();
         assert!(can_exec);

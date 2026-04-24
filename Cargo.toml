@@ -2,7 +2,7 @@
 name = "plico"
 version = "0.1.0"
 edition = "2021"
-description = "AI-native operating system — designed entirely from AI perspective"
+description = "太初 (Plico) — AI-native operating system kernel designed entirely from AI perspective"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/in12hacker/plico"
 readme = "README.md"

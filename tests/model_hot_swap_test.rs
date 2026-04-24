@@ -7,7 +7,7 @@
 //! - Automatic fallback on failure
 
 use plico::kernel::AIKernel;
-use plico::api::semantic::{ApiRequest, ApiResponse, ModelSwitchResponse, ModelHealthResponse};
+use plico::api::semantic::ApiRequest;
 use tempfile::tempdir;
 
 fn make_kernel() -> (AIKernel, tempfile::TempDir) {

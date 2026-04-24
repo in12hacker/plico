@@ -9,7 +9,6 @@ use crate::api::permission::{PermissionAction, PermissionContext};
 use crate::memory::{MemoryEntry, MemoryContent, MemoryTier, MemoryScope};
 use crate::scheduler::AgentId;
 use crate::kernel::event_bus::KernelEvent;
-use crate::kernel::ops::tier_maintenance::TierMaintenance;
 use crate::fs::embedding::types::EmbeddingProvider;
 use super::observability::{OpType, OperationTimer};
 
@@ -24,7 +23,8 @@ impl crate::kernel::AIKernel {
     /// Check and promote a specific memory entry if it meets promotion thresholds.
     ///
     /// Returns `true` if the entry was promoted, `false` otherwise.
-    pub fn check_and_promote(&self, agent_id: &str, entry_id: &str) -> bool {
+    #[cfg(test)]
+    pub(crate) fn check_and_promote(&self, agent_id: &str, entry_id: &str) -> bool {
         let thresholds = crate::memory::relevance::PromotionThresholds::default();
         let thresholds_ref = &thresholds;
 
@@ -47,8 +47,9 @@ impl crate::kernel::AIKernel {
     /// Run tier maintenance for an agent:
     /// - Process ephemeral eviction (low-importance entries are discarded)
     /// - Process promotions across all tiers
-    pub fn run_tier_maintenance(&self, agent_id: &str) {
-        let maintenance = TierMaintenance::new();
+    #[cfg(test)]
+    pub(crate) fn run_tier_maintenance(&self, agent_id: &str) {
+        let maintenance = crate::kernel::ops::tier_maintenance::TierMaintenance::new();
         maintenance.run_maintenance_cycle(&self.memory, agent_id);
     }
 
@@ -330,7 +331,7 @@ impl crate::kernel::AIKernel {
     }
 
     /// Retrieve relevant memories with semantic scoring, within token budget.
-    pub fn recall_relevant_semantic(
+    pub(crate) fn recall_relevant_semantic(
         &self,
         agent_id: &str,
         tenant_id: &str,
@@ -440,7 +441,7 @@ impl crate::kernel::AIKernel {
     /// Recall shared memories from other agents.
     /// If target_agent_id is Some, only returns memories from that agent.
     /// If None, returns shared memories from all agents except caller.
-    pub fn recall_shared(
+    pub(crate) fn recall_shared(
         &self,
         caller_id: &str,
         target_agent_id: Option<&str>,
@@ -452,34 +453,29 @@ impl crate::kernel::AIKernel {
             return Vec::new();
         }
 
-        let agents: Vec<String> = if let Some(target) = target_agent_id {
-            vec![target.to_string()]
-        } else {
-            self.scheduler
-                .list_agents()
-                .into_iter()
-                .filter(|a| a.id != caller_id)
-                .map(|a| a.id)
-                .collect()
-        };
+        let mut results = self.memory.get_shared_entries_all_agents();
 
-        let mut results = Vec::new();
-        for agent_id in &agents {
-            let entries = self.memory.get_shared_entries_all_agents();
-            for entry in entries {
-                if entry.agent_id == *agent_id && entry.scope == MemoryScope::Shared {
-                    // Apply query filter if provided
-                    if let Some(q) = query {
-                        let q_lower = q.to_lowercase();
-                        let content_match = entry.content.display().to_string().to_lowercase().contains(&q_lower);
-                        let tag_match = entry.tags.iter().any(|t| t.to_lowercase().contains(&q_lower));
-                        if !content_match && !tag_match {
-                            continue;
-                        }
-                    }
-                    results.push(entry);
-                }
-            }
+        let caller_uuid = self.resolve_agent(caller_id);
+        if let Some(target) = target_agent_id {
+            let target_uuid = self.resolve_agent(target);
+            results.retain(|e| {
+                e.agent_id == target
+                    || target_uuid.as_deref().map_or(false, |u| e.agent_id == u)
+            });
+        } else {
+            results.retain(|e| {
+                e.agent_id != caller_id
+                    && caller_uuid.as_deref().map_or(true, |u| e.agent_id != u)
+            });
+        }
+
+        if let Some(q) = query {
+            let q_lower = q.to_lowercase();
+            results.retain(|entry| {
+                let content_match = entry.content.display().to_string().to_lowercase().contains(&q_lower);
+                let tag_match = entry.tags.iter().any(|t| t.to_lowercase().contains(&q_lower));
+                content_match || tag_match
+            });
         }
 
         results.sort_by(|a, b| b.importance.partial_cmp(&a.importance).unwrap_or(std::cmp::Ordering::Equal));
@@ -571,6 +567,104 @@ impl crate::kernel::AIKernel {
             about_to_expire_count,
         }
     }
+}
+
+/// Discover shared knowledge from other agents based on query and scope (F-16).
+pub fn discover_knowledge(
+    memory: &crate::memory::LayeredMemory,
+    query: &str,
+    scope: &crate::api::semantic::DiscoveryScope,
+    knowledge_types: &[crate::api::semantic::KnowledgeType],
+    max_results: usize,
+    _token_budget: Option<usize>,
+) -> crate::api::semantic::DiscoveryResult {
+    use crate::api::semantic::{DiscoveryHit, DiscoveryResult, KnowledgeType};
+    use crate::memory::MemoryContent;
+
+    let entries = match scope {
+        crate::api::semantic::DiscoveryScope::Shared => {
+            memory.get_shared_entries_all_agents()
+        }
+        crate::api::semantic::DiscoveryScope::Group(group_id) => {
+            memory.get_group_entries_all_agents(group_id)
+        }
+        crate::api::semantic::DiscoveryScope::AllAccessible => {
+            memory.get_all_entries_all_agents()
+        }
+    };
+
+    let filtered: Vec<_> = entries.into_iter().filter(|e| {
+        if knowledge_types.is_empty() {
+            return true;
+        }
+        match &e.content {
+            MemoryContent::Text(_) => knowledge_types.contains(&KnowledgeType::Memory),
+            MemoryContent::Procedure(_) => knowledge_types.contains(&KnowledgeType::Procedure),
+            MemoryContent::Knowledge(_) | MemoryContent::ObjectRef(_) | MemoryContent::Structured(_) => {
+                knowledge_types.contains(&KnowledgeType::Knowledge)
+            }
+        }
+    }).collect();
+
+    let query_lower = query.to_lowercase();
+    let query_terms: Vec<&str> = query_lower.split_whitespace().collect();
+
+    let mut hits: Vec<DiscoveryHit> = filtered.into_iter().map(|e| {
+        let preview: String = match &e.content {
+            MemoryContent::Text(t) => t.chars().take(200).collect::<String>(),
+            MemoryContent::Procedure(p) => p.description.chars().take(200).collect::<String>(),
+            MemoryContent::Knowledge(kp) => kp.statement.chars().take(200).collect::<String>(),
+            MemoryContent::ObjectRef(cid) => format!("<object: {}>", cid).chars().take(200).collect::<String>(),
+            MemoryContent::Structured(s) => serde_json::to_string(s).unwrap_or_default().chars().take(200).collect::<String>(),
+        };
+
+        let relevance_score = calculate_relevance(&e.tags, &preview, &query_terms);
+
+        DiscoveryHit {
+            cid: e.id.clone(),
+            source_agent: e.agent_id.clone(),
+            shared_at: e.created_at,
+            tags: e.tags.clone(),
+            preview,
+            relevance_score,
+            usage_count: e.access_count as u64,
+        }
+    }).collect();
+
+    hits.sort_by(|a, b| b.relevance_score.partial_cmp(&a.relevance_score).unwrap_or(std::cmp::Ordering::Equal));
+
+    let total_available = hits.len();
+    hits.truncate(max_results);
+
+    let token_estimate = hits.iter()
+        .map(|i| i.preview.len() / 4)
+        .sum();
+
+    DiscoveryResult {
+        items: hits,
+        token_estimate,
+        total_available,
+    }
+}
+
+fn calculate_relevance(tags: &[String], content: &str, query_terms: &[&str]) -> f32 {
+    use std::collections::HashSet;
+
+    let content_lower = content.to_lowercase();
+    let tag_set: HashSet<&str> = tags.iter().map(|t| t.as_str()).collect();
+
+    let mut score = 0.0f32;
+
+    for term in query_terms {
+        if content_lower.contains(term) {
+            score += 0.1;
+        }
+        if tag_set.contains(term) {
+            score += 0.2;
+        }
+    }
+
+    score.min(1.0)
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -806,116 +900,22 @@ mod tests {
             e.tags.iter().any(|t| t.contains("python"))
         }));
     }
-}
 
-/// Discover shared knowledge from other agents based on query and scope (F-16).
-pub fn discover_knowledge(
-    memory: &crate::memory::LayeredMemory,
-    query: &str,
-    scope: &crate::api::semantic::DiscoveryScope,
-    knowledge_types: &[crate::api::semantic::KnowledgeType],
-    max_results: usize,
-    _token_budget: Option<usize>,
-) -> crate::api::semantic::DiscoveryResult {
-    use crate::api::semantic::{DiscoveryHit, DiscoveryResult, KnowledgeType};
-    use crate::memory::MemoryContent;
+    #[test]
+    fn test_recall_shared_with_name_not_uuid() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let _alice_uuid = kernel.register_agent("alice".to_string());
+        let _bob_uuid = kernel.register_agent("bob".to_string());
 
-    // 1. Get entries based on scope
-    let entries = match scope {
-        crate::api::semantic::DiscoveryScope::Shared => {
-            // Get all entries with scope=Shared across all agents
-            memory.get_shared_entries_all_agents()
-        }
-        crate::api::semantic::DiscoveryScope::Group(group_id) => {
-            // Get entries with scope=Group(id) across all agents
-            memory.get_group_entries_all_agents(group_id)
-        }
-        crate::api::semantic::DiscoveryScope::AllAccessible => {
-            // Get all accessible entries across all agents
-            memory.get_all_entries_all_agents()
-        }
-    };
+        kernel.remember_working_scoped(
+            "alice", "default",
+            "shared by name".to_string(),
+            vec![],
+            MemoryScope::Shared,
+        ).unwrap();
 
-    // 2. Filter by knowledge type
-    let filtered: Vec<_> = entries.into_iter().filter(|e| {
-        if knowledge_types.is_empty() {
-            return true;
-        }
-        match &e.content {
-            MemoryContent::Text(_) => knowledge_types.contains(&KnowledgeType::Memory),
-            MemoryContent::Procedure(_) => knowledge_types.contains(&KnowledgeType::Procedure),
-            MemoryContent::Knowledge(_) | MemoryContent::ObjectRef(_) | MemoryContent::Structured(_) => {
-                knowledge_types.contains(&KnowledgeType::Knowledge)
-            }
-        }
-    }).collect();
-
-    // 3. Generate preview and build discovery hits
-    // Simple text-based relevance scoring based on query keyword match
-    let query_lower = query.to_lowercase();
-    let query_terms: Vec<&str> = query_lower.split_whitespace().collect();
-
-    let mut hits: Vec<DiscoveryHit> = filtered.into_iter().map(|e| {
-        let preview: String = match &e.content {
-            MemoryContent::Text(t) => t.chars().take(200).collect::<String>(),
-            MemoryContent::Procedure(p) => p.description.chars().take(200).collect::<String>(),
-            MemoryContent::Knowledge(kp) => kp.statement.chars().take(200).collect::<String>(),
-            MemoryContent::ObjectRef(cid) => format!("<object: {}>", cid).chars().take(200).collect::<String>(),
-            MemoryContent::Structured(s) => serde_json::to_string(s).unwrap_or_default().chars().take(200).collect::<String>(),
-        };
-
-        // Calculate simple relevance score based on tag/content matching
-        let relevance_score = calculate_relevance(&e.tags, &preview, &query_terms);
-
-        DiscoveryHit {
-            cid: e.id.clone(),
-            source_agent: e.agent_id.clone(),
-            shared_at: e.created_at,
-            tags: e.tags.clone(),
-            preview,
-            relevance_score,
-            usage_count: e.access_count as u64,
-        }
-    }).collect();
-
-    // Sort by relevance score descending
-    hits.sort_by(|a, b| b.relevance_score.partial_cmp(&a.relevance_score).unwrap_or(std::cmp::Ordering::Equal));
-
-    // Apply max_results limit
-    let total_available = hits.len();
-    hits.truncate(max_results);
-
-    let token_estimate = hits.iter()
-        .map(|i| i.preview.len() / 4)  // rough token estimate
-        .sum();
-
-    DiscoveryResult {
-        items: hits,
-        token_estimate,
-        total_available,
+        let entries = kernel.recall_shared("bob", None, None, 10);
+        assert!(!entries.is_empty(), "B53 regression: recall_shared should work when agent_id is a name, not UUID");
+        assert!(entries.iter().any(|e| e.content.display().to_string().contains("shared by name")));
     }
-}
-
-/// Calculate a simple relevance score based on tag and content matching.
-fn calculate_relevance(tags: &[String], content: &str, query_terms: &[&str]) -> f32 {
-    use std::collections::HashSet;
-
-    let content_lower = content.to_lowercase();
-    let tag_set: HashSet<&str> = tags.iter().map(|t| t.as_str()).collect();
-
-    let mut score = 0.0f32;
-
-    // Each query term found in content adds 0.1
-    for term in query_terms {
-        if content_lower.contains(term) {
-            score += 0.1;
-        }
-        // Exact tag match adds 0.2
-        if tag_set.contains(term) {
-            score += 0.2;
-        }
-    }
-
-    // Normalize to [0, 1] range (max possible score is 1.0 if all terms match)
-    score.min(1.0)
 }

@@ -63,6 +63,7 @@ fn get_intent_cache_stats(kernel: &AIKernel) -> (usize, u64) {
 
 /// Record for a single session's metrics.
 #[derive(Debug)]
+#[allow(dead_code)]
 struct SessionMetrics {
     session_num: usize,
     token_estimate: usize,
@@ -306,7 +307,7 @@ fn test_intent_cache_hit_rate_stub_mode() {
             format!("{} task {}", intent_pool[i % intent_pool.len()], i)
         };
 
-        let (entries_before, hits_before) = get_intent_cache_stats(&kernel);
+        let (_entries_before, hits_before) = get_intent_cache_stats(&kernel);
 
         let req = ApiRequest::DeclareIntent {
             agent_id: agent_id.clone(),

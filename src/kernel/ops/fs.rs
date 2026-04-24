@@ -104,7 +104,7 @@ impl crate::kernel::AIKernel {
 
     /// Semantic search with time-range bounds.
     #[allow(clippy::too_many_arguments)]
-    pub fn semantic_search_with_time(
+    pub(crate) fn semantic_search_with_time(
         &self,
         query: &str,
         agent_id: &str,
@@ -163,8 +163,9 @@ impl crate::kernel::AIKernel {
     /// When intent_context is provided, results are re-ranked based on:
     /// - Hot objects from the agent's profile (boosted by 1.5x)
     /// - Current intent alignment (gravity toward related CIDs)
+    #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
-    pub fn semantic_search_with_intent(
+    pub(crate) fn semantic_search_with_intent(
         &self,
         query: &str,
         agent_id: &str,
@@ -501,7 +502,7 @@ impl crate::kernel::AIKernel {
 
     /// Evict cold objects from CAS (F-24: real eviction via soft-delete).
     /// `dry_run=true` returns what would be evicted without acting.
-    pub fn evict_cold(&self, dry_run: bool) -> crate::api::semantic::EvictColdResult {
+    pub(crate) fn evict_cold(&self, dry_run: bool) -> crate::api::semantic::EvictColdResult {
         let cold_threshold = 30 * 24 * 3600 * 1000_u64;
         let cold_cids = self.fs.cas().cold_objects(cold_threshold);
         let evicted_count = cold_cids.len();
@@ -531,18 +532,12 @@ impl crate::kernel::AIKernel {
         }
     }
 
-    /// Persist CAS access log (called on shutdown/checkpoint).
-    pub fn persist_cas_access_log(&self) -> std::io::Result<()> {
-        self.fs.cas().persist_access_log()
-    }
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
     fn test_semantic_create_and_semantic_delete_roundtrip() {
         let (kernel, _dir) = crate::kernel::tests::make_kernel();
@@ -687,7 +682,7 @@ mod tests {
         );
 
         // Get hot objects - should include doc-a-cid if profile tracking works
-        let hot = kernel.prefetch.get_hot_objects("kernel");
+        let _hot = kernel.prefetch.get_hot_objects("kernel");
         // Profile might be empty since we don't have a real profile store connected
         // The key is that the search_with_intent doesn't crash and returns results
         let results = kernel.semantic_search_with_intent(

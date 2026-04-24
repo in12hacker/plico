@@ -14,6 +14,16 @@ pub use handlers::graph::parse_edge_type;
 
 /// Execute a command locally (direct kernel access).
 pub fn execute_local(kernel: &AIKernel, args: &[String]) -> ApiResponse {
+    let agent_id = extract_agent_id(args);
+    kernel.track_cli_usage(&agent_id);
+    let response = execute_local_inner(kernel, args);
+    let json = serde_json::to_string(&response).unwrap_or_default();
+    let tokens = plico::api::semantic::estimate_tokens(&json) as u64;
+    kernel.track_cli_token_usage(&agent_id, tokens);
+    response
+}
+
+fn execute_local_inner(kernel: &AIKernel, args: &[String]) -> ApiResponse {
     use handlers::*;
     match args.first().map(|s| s.as_str()) {
         Some("put") | Some("create") => cmd_create(kernel, args),
@@ -68,17 +78,12 @@ pub fn execute_local(kernel: &AIKernel, args: &[String]) -> ApiResponse {
         Some("growth") => cmd_growth(kernel, args),
         Some("hybrid") => cmd_hybrid(kernel, args),
         Some("permission") | Some("perm") => cmd_permission(kernel, args),
+        Some("hook") => cmd_hook(kernel, args),
         Some("system-status") => {
-            let status = kernel.system_status();
-            let mut r = ApiResponse::ok();
-            r.system_status = Some(status);
-            r
+            kernel.handle_api_request(plico::api::semantic::ApiRequest::SystemStatus)
         }
         Some("health") => {
-            let report = kernel.health_report();
-            let mut r = ApiResponse::ok();
-            r.health_report = Some(report);
-            r
+            kernel.handle_api_request(plico::api::semantic::ApiRequest::HealthReport)
         }
         _ => ApiResponse::error("Unknown command. Run: aicli --help"),
     }

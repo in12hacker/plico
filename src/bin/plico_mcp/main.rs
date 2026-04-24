@@ -17,6 +17,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use plico::api::semantic::ApiRequest;
+use plico::client::{KernelClient, EmbeddedClient, RemoteClient};
 use plico::kernel::AIKernel;
 use serde_json::Value;
 use tracing_subscriber::EnvFilter;
@@ -72,6 +73,9 @@ fn main() {
         .with_writer(io::stderr)
         .init();
 
+    let args: Vec<String> = std::env::args().collect();
+    let daemon_mode = args.iter().any(|a| a == "--daemon");
+
     let root = std::env::var("PLICO_ROOT")
         .map(PathBuf::from)
         .unwrap_or_else(|_| {
@@ -80,17 +84,45 @@ fn main() {
                 .join(".plico")
         });
 
-    let kernel = match AIKernel::new(root) {
-        Ok(k) => Arc::new(k),
-        Err(e) => {
-            let err = make_error_response(Value::Null, -32603, &format!("kernel init failed: {e}"));
-            let _ = writeln!(io::stdout(), "{}", serde_json::to_string(&err).unwrap());
-            std::process::exit(1);
+    // Connect to plicod daemon or embed kernel directly
+    let kernel: Arc<dyn KernelClient> = if daemon_mode {
+        let sock_path = root.join("plico.sock");
+        let client = RemoteClient::uds(sock_path.clone());
+        if !client.is_reachable() {
+            let tcp_addr = args.iter().position(|a| a == "--addr")
+                .and_then(|i| args.get(i + 1).cloned())
+                .unwrap_or_else(|| "127.0.0.1:7878".to_string());
+            let tcp_client = RemoteClient::tcp(tcp_addr.clone());
+            if !tcp_client.is_reachable() {
+                let err = make_error_response(Value::Null, -32603,
+                    &format!("daemon not reachable at {:?} or tcp://{}", sock_path, tcp_addr));
+                let _ = writeln!(io::stdout(), "{}", serde_json::to_string(&err).unwrap());
+                std::process::exit(1);
+            }
+            Arc::new(tcp_client)
+        } else {
+            Arc::new(client)
+        }
+    } else {
+        match AIKernel::new(root.clone()) {
+            Ok(k) => {
+                let embedded = EmbeddedClient { kernel: k };
+                Arc::new(embedded)
+            }
+            Err(e) => {
+                let err = make_error_response(Value::Null, -32603, &format!("kernel init failed: {e}"));
+                let _ = writeln!(io::stdout(), "{}", serde_json::to_string(&err).unwrap());
+                std::process::exit(1);
+            }
         }
     };
 
-    // Seed 6 pre-installed skills on first MCP server start
-    dispatch::ensure_builtin_skills(&kernel);
+    // Seed built-in skills (only works in embedded mode — needs direct kernel access)
+    if !daemon_mode {
+        if let Some(embedded) = downcast_embedded(&kernel) {
+            dispatch::ensure_builtin_skills(&embedded.kernel);
+        }
+    }
 
     let stdin = io::stdin().lock();
     let mut stdout = io::stdout().lock();
@@ -124,9 +156,27 @@ fn main() {
         let response = match method {
             "initialize" => handle_initialize(id),
             "tools/list" => handle_tools_list(id),
-            "tools/call" => handle_tools_call(id, &msg["params"], &kernel),
-            "resources/list" => handle_resources_list(id, &kernel),
-            "resources/read" => handle_resources_read(id, &msg["params"], &kernel),
+            "tools/call" => {
+                if let Some(embedded) = downcast_embedded(&kernel) {
+                    handle_tools_call(id, &msg["params"], &embedded.kernel)
+                } else {
+                    handle_tools_call_remote(id, &msg["params"], kernel.as_ref())
+                }
+            }
+            "resources/list" => {
+                if let Some(embedded) = downcast_embedded(&kernel) {
+                    handle_resources_list(id, &embedded.kernel)
+                } else {
+                    handle_resources_list_remote(id, kernel.as_ref())
+                }
+            }
+            "resources/read" => {
+                if let Some(embedded) = downcast_embedded(&kernel) {
+                    handle_resources_read(id, &msg["params"], &embedded.kernel)
+                } else {
+                    handle_resources_read_remote(id, &msg["params"], kernel.as_ref())
+                }
+            }
             "prompts/list" => tools::handle_prompts_list(id),
             "prompts/get" => tools::handle_prompts_get(id, &msg["params"]),
             "ping" => make_result(id, serde_json::json!({})),
@@ -136,6 +186,12 @@ fn main() {
         let _ = writeln!(stdout, "{}", serde_json::to_string(&response).unwrap());
         let _ = stdout.flush();
     }
+}
+
+/// Downcast Arc<dyn KernelClient> to EmbeddedClient for direct kernel access.
+fn downcast_embedded(client: &Arc<dyn KernelClient>) -> Option<&EmbeddedClient> {
+    use std::any::Any;
+    (client.as_ref() as &dyn Any).downcast_ref::<EmbeddedClient>()
 }
 
 fn handle_initialize(id: Value) -> Value {
@@ -249,6 +305,57 @@ fn handle_resources_read(id: Value, params: &Value, kernel: &AIKernel) -> Value 
             "mimeType": mime,
             "text": contents,
         }]
+    }))
+}
+
+/// Remote-mode tools/call: dispatch via KernelClient (limited feature set)
+fn handle_tools_call_remote(id: Value, params: &Value, client: &dyn KernelClient) -> Value {
+    let name = params.get("name").and_then(|n| n.as_str()).unwrap_or("");
+    let args = params.get("arguments").cloned().unwrap_or(serde_json::json!({}));
+
+    let result = dispatch::dispatch_tool_remote(name, &args, client);
+    match result {
+        Ok(text) => make_result(id, serde_json::json!({
+            "content": [{ "type": "text", "text": text }]
+        })),
+        Err(e) => make_result(id, serde_json::json!({
+            "content": [{ "type": "text", "text": e }],
+            "isError": true
+        })),
+    }
+}
+
+fn handle_resources_list_remote(id: Value, _client: &dyn KernelClient) -> Value {
+    let resources: Vec<Value> = tools::RESOURCES.iter().map(|(uri, name, mime)| {
+        serde_json::json!({ "uri": uri, "name": name, "mimeType": mime })
+    }).collect();
+    make_result(id, serde_json::json!({ "resources": resources }))
+}
+
+fn handle_resources_read_remote(id: Value, params: &Value, client: &dyn KernelClient) -> Value {
+    let uri = params.get("uri").and_then(|u| u.as_str()).unwrap_or("");
+    let (contents, mime) = match uri {
+        "plico://status" => {
+            let resp = client.request(ApiRequest::SystemStatus);
+            let json = serde_json::to_value(&resp).unwrap_or(Value::Null);
+            (serde_json::to_string_pretty(&json).unwrap_or_default(), "application/json")
+        }
+        "plico://delta" => {
+            let resp = client.request(ApiRequest::DeltaSince {
+                agent_id: DEFAULT_AGENT.to_string(),
+                since_seq: 0, watch_cids: vec![], watch_tags: vec![], limit: Some(20),
+            });
+            let delta_json = serde_json::to_value(&resp.delta_result).unwrap_or(Value::Null);
+            (serde_json::to_string_pretty(&delta_json).unwrap_or_default(), "application/json")
+        }
+        "plico://instructions" => (tools::generate_instructions(), "text/plain"),
+        "plico://actions" => (dispatch::generate_help_response(), "application/json"),
+        _ => {
+            return make_error_response(id, -32602, &format!("resource '{uri}' not available in daemon mode"));
+        }
+    };
+    make_result(id, serde_json::json!({
+        "contents": [{ "uri": uri, "mimeType": mime, "text": contents }]
     }))
 }
 

@@ -112,17 +112,22 @@ impl HookRegistry {
         HookResult::Continue
     }
 
+    /// List registered hooks as (point_name, priority) pairs.
+    pub fn list_hooks(&self) -> Vec<(String, i32)> {
+        let hooks = self.hooks.read().unwrap();
+        hooks.iter().map(|(p, prio, _)| (format!("{:?}", p), *prio)).collect()
+    }
+
+    /// Number of registered hooks.
+    pub fn count(&self) -> usize {
+        self.hooks.read().unwrap().len()
+    }
+
     /// Clear all registered hooks. Useful for testing.
     #[cfg(test)]
     pub fn clear(&self) {
         let mut hooks = self.hooks.write().unwrap();
         hooks.clear();
-    }
-
-    /// Number of registered hooks. Useful for testing.
-    #[cfg(test)]
-    pub fn len(&self) -> usize {
-        self.hooks.read().unwrap().len()
     }
 }
 
@@ -192,7 +197,6 @@ mod tests {
         let registry = HookRegistry::new();
         let call_order = Arc::new(std::sync::Mutex::new(Vec::new()));
 
-        let call_order_clone = call_order.clone();
         struct OrderHandler(Arc<std::sync::Mutex<Vec<i32>>>, i32);
         impl HookHandler for OrderHandler {
             fn handle(&self, _point: HookPoint, _context: &HookContext) -> HookResult {

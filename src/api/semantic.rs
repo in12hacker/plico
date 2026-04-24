@@ -1081,6 +1081,36 @@ pub enum ApiRequest {
         #[serde(default)]
         dry_run: bool,
     },
+
+    // ── Hook Management (Daemon-First) ──────────────────────────────
+
+    /// List all registered lifecycle hooks.
+    #[serde(rename = "hook_list")]
+    HookList,
+
+    /// Register a lifecycle hook via API (block or log action).
+    #[serde(rename = "hook_register")]
+    HookRegister {
+        /// Hook interception point: "PreToolCall", "PostToolCall", "PreWrite", "PreDelete", "PreSessionStart"
+        point: String,
+        /// Action to take: "block" or "log"
+        action: String,
+        /// Optional tool name pattern to match (substring match).
+        #[serde(default)]
+        tool_pattern: Option<String>,
+        /// Reason string for block actions.
+        #[serde(default)]
+        reason: Option<String>,
+        /// Priority (lower = earlier). Default: 50.
+        #[serde(default)]
+        priority: Option<i32>,
+    },
+
+    // ── Health Report (Daemon-First) ────────────────────────────────
+
+    /// Query system health report with detailed subsystem status.
+    #[serde(rename = "health_report")]
+    HealthReport,
 }
 
 /// A JSON API response.
@@ -1258,6 +1288,9 @@ pub struct ApiResponse {
     /// Health report (F-7).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub health_report: Option<HealthReport>,
+    /// Hook list result (Daemon-First).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hook_list: Option<Vec<HookEntryDto>>,
 }
 
 
@@ -1310,6 +1343,7 @@ impl ApiResponse {
             storage_stats: None,
             evict_result: None,
             health_report: None,
+            hook_list: None,
         }
     }
 
@@ -1398,6 +1432,7 @@ impl ApiResponse {
             storage_stats: None,
             evict_result: None,
             health_report: None,
+            hook_list: None,
         }
     }
 

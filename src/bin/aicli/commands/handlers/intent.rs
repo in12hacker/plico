@@ -14,8 +14,25 @@ fn make_router() -> ChainRouter {
 }
 
 pub fn cmd_intent(kernel: &AIKernel, args: &[String]) -> ApiResponse {
-    if extract_arg(args, "--description").is_some() {
-        let description = extract_arg(args, "--description").unwrap_or_default();
+    let is_submit = args.get(1).map(|s| s.as_str()) == Some("submit");
+
+    if is_submit || extract_arg(args, "--description").is_some() {
+        let description = if is_submit {
+            args.iter().skip(2)
+                .filter(|a| !a.starts_with("--"))
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .trim()
+                .to_string()
+        } else {
+            extract_arg(args, "--description").unwrap_or_default()
+        };
+
+        if description.is_empty() {
+            return ApiResponse::error("Usage: intent submit \"<description>\" [--priority high] [--action <action>] [--agent <id>]");
+        }
+
         let priority_str = extract_arg(args, "--priority").unwrap_or_else(|| "medium".to_string());
         let action = extract_arg(args, "--action");
         let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
@@ -31,7 +48,6 @@ pub fn cmd_intent(kernel: &AIKernel, args: &[String]) -> ApiResponse {
             Ok(id) => id,
             Err(e) => return ApiResponse::error(e),
         };
-        println!("Intent submitted: {}", id);
         let mut r = ApiResponse::ok();
         r.intent_id = Some(id);
         return r;

@@ -8,8 +8,8 @@
 
 use plico::fs::search::Bm25Index;
 use plico::fs::embedding::circuit_breaker::EmbeddingCircuitBreaker;
-use plico::fs::embedding::{EmbeddingProvider, StubEmbeddingProvider};
-use plico::kernel::ops::checkpoint::{CheckpointMemory, AgentCheckpoint};
+use plico::fs::embedding::EmbeddingProvider;
+use plico::kernel::ops::checkpoint::CheckpointMemory;
 use plico::memory::layered::{MemoryEntry, MemoryTier, MemoryContent, MemoryScope, Procedure, ProcedureStep, KnowledgePiece};
 use plico::api::semantic::SearchResultDto;
 use plico::cas::{AIObject, AIObjectMeta, ContentType};
@@ -373,8 +373,8 @@ fn test_bm25_integration_with_search_result() {
     ).unwrap();
 
     // Create test objects
-    let cid1 = fs.create(b"login authentication failure in module".to_vec(), vec!["auth".to_string()], "test".to_string(), None).unwrap();
-    let cid2 = fs.create(b"unrelated cooking recipe chocolate cake".to_vec(), vec!["cooking".to_string()], "test".to_string(), None).unwrap();
+    let _cid1 = fs.create(b"login authentication failure in module".to_vec(), vec!["auth".to_string()], "test".to_string(), None).unwrap();
+    let _cid2 = fs.create(b"unrelated cooking recipe chocolate cake".to_vec(), vec!["cooking".to_string()], "test".to_string(), None).unwrap();
 
     let results = fs.search("login auth", 10);
 

@@ -45,7 +45,7 @@ impl AIKernel {
     }
 
     /// Persist all in-memory tiers to CAS now.
-    pub fn persist_memories(&self) -> usize {
+    pub(crate) fn persist_memories(&self) -> usize {
         self.memory.persist_all()
     }
 
@@ -68,7 +68,7 @@ impl AIKernel {
         tracing::info!("All kernel state persisted to disk");
     }
 
-    pub fn persist_sessions(&self) {
+    pub(crate) fn persist_sessions(&self) {
         if let Err(e) = self.session_store.persist(&self.root) {
             tracing::warn!("Failed to persist sessions: {}", e);
         }
@@ -81,9 +81,36 @@ impl AIKernel {
     }
 
     /// Persist all registered agents to a JSON index file.
-    pub fn persist_agents(&self) {
+    pub(crate) fn persist_agents(&self) {
         let agents = self.scheduler.snapshot_agents();
         atomic_write_json(&self.agent_index_path(), &agents);
+        self.persist_usage();
+    }
+
+    fn usage_index_path(&self) -> PathBuf {
+        self.root.join("usage_index.json")
+    }
+
+    pub(crate) fn persist_usage(&self) {
+        let usage = self.scheduler.snapshot_usage();
+        atomic_write_json(&self.usage_index_path(), &usage);
+    }
+
+    fn restore_usage(&self) {
+        let path = self.usage_index_path();
+        if !path.exists() {
+            return;
+        }
+        match std::fs::read_to_string(&path) {
+            Ok(json) => match serde_json::from_str::<std::collections::HashMap<String, crate::scheduler::AgentUsage>>(&json) {
+                Ok(data) => {
+                    self.scheduler.restore_usage(data);
+                    tracing::info!("Restored agent usage counters from persistent storage");
+                }
+                Err(e) => tracing::warn!("Failed to parse usage index: {e}"),
+            },
+            Err(e) => tracing::warn!("Failed to read usage index: {e}"),
+        }
     }
 
     /// Restore agents from the persisted index (called during `new()`).
@@ -103,6 +130,7 @@ impl AIKernel {
             },
             Err(e) => tracing::warn!("Failed to read agent index: {e}"),
         }
+        self.restore_usage();
     }
 
     // ─── Intent Persistence ─────────────────────────────────────────────
@@ -112,7 +140,7 @@ impl AIKernel {
     }
 
     /// Persist all pending intents to a JSON index file.
-    pub fn persist_intents(&self) {
+    pub(crate) fn persist_intents(&self) {
         let intents = self.scheduler.snapshot_intents();
         atomic_write_json(&self.intent_index_path(), &intents);
     }
@@ -142,7 +170,7 @@ impl AIKernel {
     // ─── Search Index Persistence ─────────────────────────────────────
 
     /// Persist the search index via the backend's trait method.
-    pub fn persist_search_index(&self) {
+    pub(crate) fn persist_search_index(&self) {
         if let Err(e) = self.search_backend.persist_to(&self.root) {
             tracing::warn!("Failed to persist search index: {e}");
         }
@@ -154,7 +182,7 @@ impl AIKernel {
         self.root.join("permission_index.json")
     }
 
-    pub fn persist_permissions(&self) {
+    pub(crate) fn persist_permissions(&self) {
         let grants = self.permissions.snapshot();
         if grants.is_empty() {
             let _ = std::fs::remove_file(self.permission_index_path());
@@ -189,7 +217,7 @@ impl AIKernel {
         self.root.join("event_log.jsonl")
     }
 
-    pub fn persist_event_log(&self) {
+    pub(crate) fn persist_event_log(&self) {
         // JSONL persistence is handled inline on each emit() call in EventBus.
         // This method is used for periodic batch snapshots and shutdown saves.
         let events = self.event_bus.snapshot_events();
@@ -230,13 +258,13 @@ impl AIKernel {
 
     // ─── Checkpoint Persistence (P-2) ────────────────────────────────
 
-    pub fn persist_checkpoints(&self) {
+    pub(crate) fn persist_checkpoints(&self) {
         self.checkpoint_store.persist(&self.root, &self.cas);
     }
 
     // ─── Task Persistence (F-14) ────────────────────────────────────────
 
-    pub fn persist_task_store(&self) {
+    pub(crate) fn persist_task_store(&self) {
         self.task_store.persist();
     }
 
@@ -262,13 +290,13 @@ impl AIKernel {
 
     // ─── Tenant Persistence (P-3) ─────────────────────────────────────
 
-    pub fn persist_tenants(&self) {
+    pub(crate) fn persist_tenants(&self) {
         self.tenant_store.persist(&self.root);
     }
 
     // ─── AgentKeyStore Persistence (P-4) ─────────────────────────────
 
-    pub fn persist_key_store(&self) {
+    pub(crate) fn persist_key_store(&self) {
         self.key_store.persist(&self.root);
     }
 }

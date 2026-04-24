@@ -240,7 +240,7 @@ impl IntentPlan {
     /// Operation types: "read", "search", "call", "create", "read_batch".
     pub fn optimized_sort(&self, avg_times: &HashMap<String, u64>) -> Result<Vec<usize>, PlanError> {
         // First get dependency-respecting order
-        let mut sorted = self.topological_sort()?;
+        let sorted = self.topological_sort()?;
 
         let n = sorted.len();
         if n <= 1 {
@@ -471,17 +471,6 @@ impl IntentTree {
     pub fn detect_conflicts(&self) -> Vec<ConflictRecord> {
         let conflicts = self.conflicts.read().unwrap();
         conflicts.clone()
-    }
-
-    /// Record a conflict.
-    fn add_conflict(&self, step_id: &str, agent_id: &str, conflict_type: ConflictType) {
-        let mut conflicts = self.conflicts.write().unwrap();
-        conflicts.push(ConflictRecord {
-            step_id: step_id.to_string(),
-            agent_id: agent_id.to_string(),
-            conflict_type,
-            detected_at_ms: now_ms(),
-        });
     }
 
     /// Get unclaimed steps.

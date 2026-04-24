@@ -1,6 +1,6 @@
 # Module: bin/aicli/commands/handlers
 
-CLI command handlers — one file per command group, each translating CLI args into `ApiRequest` calls via `AIKernel`.
+CLI command handlers — one file per command group. In `--embedded` mode, handlers translate CLI args into `ApiRequest` calls via `AIKernel` directly. In daemon mode (default), the `build_remote_request` function in `main.rs` constructs `ApiRequest` variants sent to `plicod` via `RemoteClient`.
 
 Status: active | Fan-in: 1 | Fan-out: 2
 
@@ -53,12 +53,13 @@ Status: active | Fan-in: 1 | Fan-out: 2
 | `tool.rs` | ~31 | 0 | Tool management |
 | `delta.rs` | ~29 | 0 | Delta tracking |
 | `hybrid.rs` | ~43 | 0 | Hybrid retrieval |
+| `hook.rs` | ~87 | 4 | Hook register/list |
 
 ## Interface Contract
 
-- All `cmd_*` functions: `fn(kernel: &AIKernel, args: &HashMap<String, String>) -> Result<serde_json::Value, std::io::Error>`
-- Return JSON for machine-readable output
-- Errors are converted to `std::io::Error` at the CLI boundary
+- All `cmd_*` functions: `fn(kernel: &AIKernel, args: &[String]) -> ApiResponse`
+- Handlers call `kernel.handle_api_request(ApiRequest::...)` and return `ApiResponse`
+- In daemon mode, `build_remote_request` in `main.rs` constructs `ApiRequest` directly from CLI args
 
 ## Modification Risk
 

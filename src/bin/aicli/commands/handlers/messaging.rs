@@ -1,42 +1,30 @@
-//! Messaging commands.
+//! Messaging commands — all operations route through handle_api_request.
 
 use plico::kernel::AIKernel;
-use plico::api::semantic::ApiResponse;
+use plico::api::semantic::{ApiRequest, ApiResponse};
 use super::{extract_arg, extract_agent_id};
 
 pub fn cmd_send_message(kernel: &AIKernel, args: &[String]) -> ApiResponse {
-    let from = extract_agent_id(args); // F-2: reads --agent or --from
+    let from = extract_agent_id(args);
     let to = extract_arg(args, "--to").unwrap_or_default();
     let payload_str = extract_arg(args, "--payload").unwrap_or_else(|| "{}".to_string());
     let payload: serde_json::Value = serde_json::from_str(&payload_str).unwrap_or_default();
 
-    match kernel.send_message(&from, &to, payload) {
-        Ok(msg_id) => {
-            let mut r = ApiResponse::ok_with_message(format!("Message sent to '{}'", to));
-            r.data = Some(msg_id);
-            r
-        }
-        Err(e) => ApiResponse::error(e.to_string()),
-    }
+    kernel.handle_api_request(ApiRequest::SendMessage { from, to, payload })
 }
 
 pub fn cmd_read_messages(kernel: &AIKernel, args: &[String]) -> ApiResponse {
     let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
     let unread_only = args.iter().any(|a| a == "--unread");
 
-    let msgs = kernel.read_messages(&agent_id, unread_only);
-    let mut r = ApiResponse::ok();
-    r.messages = Some(msgs);
-    r
+    kernel.handle_api_request(ApiRequest::ReadMessages {
+        agent_id, unread_only, limit: None, offset: None,
+    })
 }
 
 pub fn cmd_ack_message(kernel: &AIKernel, args: &[String]) -> ApiResponse {
     let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
     let message_id = args.get(1).cloned().unwrap_or_default();
 
-    if kernel.ack_message(&agent_id, &message_id) {
-        ApiResponse::ok_with_message(format!("Message {} acknowledged", message_id))
-    } else {
-        ApiResponse::error(format!("Message not found: {}", message_id))
-    }
+    kernel.handle_api_request(ApiRequest::AckMessage { agent_id, message_id })
 }

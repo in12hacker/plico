@@ -24,6 +24,7 @@ use std::time::{Duration, Instant};
 /// With EMBEDDING_BACKEND=stub, we use conservative estimates based on
 /// the design doc's baseline measurements. Real embeddings would use
 /// actual token counts from the LLM provider.
+#[allow(dead_code)]
 pub struct TokenEstimator {
     /// Average tokens per text character (conservative estimate)
     tokens_per_char: f32,
@@ -43,7 +44,7 @@ impl TokenEstimator {
         }
     }
 
-    /// Estimate tokens for a given text content.
+    #[allow(dead_code)]
     pub fn estimate_text_tokens(&self, text: &str) -> usize {
         (text.len() as f32 * self.tokens_per_char) as usize
     }
@@ -138,6 +139,7 @@ impl Default for BenchmarkMetrics {
 
 /// Benchmark result with pass/fail against targets.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct BenchmarkResult {
     /// Name of the scenario being measured
     pub scenario_name: String,

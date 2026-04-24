@@ -170,7 +170,6 @@ impl EmbeddingProvider for EmbeddingCircuitBreaker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fs::embedding::stub::StubEmbeddingProvider;
 
     struct FailingProvider {
         calls: std::sync::atomic::AtomicU32,

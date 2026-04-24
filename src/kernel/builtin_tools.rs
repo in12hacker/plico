@@ -231,19 +231,15 @@ impl AIKernel {
     fn execute_tool_impl(&self, name: &str, params: &serde_json::Value, agent_id: &str) -> ToolResult {
         use serde_json::json;
 
-        // F-1: result initialized; early exits below assign before returning
-        let mut result = ToolResult::error("unreachable".to_string());
-
         let aid = crate::scheduler::AgentId(agent_id.to_string());
         if let Some(resources) = self.scheduler.get_resources(&aid) {
             if !resources.allowed_tools.is_empty()
                 && !resources.allowed_tools.iter().any(|t| t == name)
             {
-                result = ToolResult::error(format!(
+                return ToolResult::error(format!(
                     "Tool '{}' not in agent's allowed list: {:?}",
                     name, resources.allowed_tools
                 ));
-                return result;
             }
         }
 
@@ -253,16 +249,14 @@ impl AIKernel {
             let ctx = crate::api::permission::PermissionContext::new(agent_id.to_string(), "default".to_string());
             let scope = format!("tool:{}", name);
             if self.permissions.check_scoped(&ctx, crate::api::permission::PermissionAction::Execute, Some(&scope)).is_err() {
-                result = ToolResult::error(format!(
+                return ToolResult::error(format!(
                     "Agent '{}' lacks Execute permission for external tool '{}'", agent_id, name
                 ));
-                return result;
             }
-            result = handler.execute(params, agent_id);
-            return result;
+            return handler.execute(params, agent_id);
         }
 
-        result = match name {
+        let result = match name {
             "cas.create" => {
                 let content = params.get("content").and_then(|v| v.as_str()).unwrap_or("");
                 let tags: Vec<String> = params.get("tags")

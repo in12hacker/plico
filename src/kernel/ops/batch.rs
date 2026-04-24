@@ -239,7 +239,6 @@ fn decode_content(content: &str, encoding: &ContentEncoding) -> Result<Vec<u8>, 
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::kernel::tests::make_kernel;
     use crate::api::semantic::{BatchCreateItem, ContentEncoding};
 
@@ -310,9 +309,6 @@ mod tests {
             },
         ];
         let resp = kernel.handle_batch_create(items, "TestAgent", "default");
-        // At least one should succeed
-        assert!(resp.successful >= 0);
-        assert!(resp.failed >= 0);
         assert_eq!(resp.successful + resp.failed, 2);
     }
 

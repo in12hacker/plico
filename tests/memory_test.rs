@@ -298,7 +298,7 @@ fn test_promotion_working_to_longterm() {
     // Working entry with access_count >= 10 && importance >= 50 should be promoted
     let mem = LayeredMemory::new();
 
-    let mut entry = MemoryEntry {
+    let entry = MemoryEntry {
         id: uuid::Uuid::new_v4().to_string(),
         agent_id: "a1".to_string(),
         tenant_id: "default".to_string(),
@@ -451,7 +451,7 @@ fn test_longterm_entries_not_promoted() {
     // LongTerm and Procedural entries should never be promoted
     let mem = LayeredMemory::new();
 
-    let mut lt_entry = MemoryEntry {
+    let lt_entry = MemoryEntry {
         id: uuid::Uuid::new_v4().to_string(),
         agent_id: "a1".to_string(),
         tenant_id: "default".to_string(),
@@ -475,7 +475,7 @@ fn test_longterm_entries_not_promoted() {
     };
     mem.store(lt_entry);
 
-    let mut proc_entry = MemoryEntry {
+    let proc_entry = MemoryEntry {
         id: uuid::Uuid::new_v4().to_string(),
         agent_id: "a1".to_string(),
         tenant_id: "default".to_string(),

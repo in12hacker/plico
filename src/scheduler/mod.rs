@@ -199,6 +199,22 @@ impl AgentScheduler {
         false
     }
 
+    /// Snapshot all usage data for persistence.
+    pub fn snapshot_usage(&self) -> HashMap<String, AgentUsage> {
+        self.usage.read().unwrap()
+            .iter()
+            .map(|(id, usage)| (id.0.clone(), usage.clone()))
+            .collect()
+    }
+
+    /// Restore usage data from a persisted snapshot.
+    pub fn restore_usage(&self, data: HashMap<String, AgentUsage>) {
+        let mut usage = self.usage.write().unwrap();
+        for (id, u) in data {
+            usage.insert(AgentId(id), u);
+        }
+    }
+
     /// Get an agent's runtime usage counters.
     pub fn get_usage(&self, agent_id: &AgentId) -> AgentUsage {
         self.usage.read().unwrap()

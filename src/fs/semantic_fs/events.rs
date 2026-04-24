@@ -284,7 +284,7 @@ mod tests {
     fn test_create_event_with_tags() {
         // Requires KG for list_events to work
         let (fs, _dir) = make_fs_with_kg();
-        let id = fs.create_event(
+        let _id = fs.create_event(
             "tagged-event",
             EventType::Task,
             None,

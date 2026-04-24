@@ -58,9 +58,6 @@ mod tests {
             self.modules.values().map(|m| m.unit + m.integration + m.e2e).sum()
         }
 
-        pub fn get_module(&self, name: &str) -> Option<&ModuleCoverage> {
-            self.modules.get(name)
-        }
     }
 
     impl Default for IntegrationMatrix {

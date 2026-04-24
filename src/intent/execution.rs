@@ -290,7 +290,7 @@ mod tests {
         // Heuristic router may not resolve this to an exact action, but should not panic
         assert!(result.is_ok(), "execute_sync should not return error");
         let r = result.unwrap();
-        assert!(r.executed || !r.executed, "executed flag should be set");
+        let _ = r.executed;
     }
 
     #[test]
@@ -303,7 +303,7 @@ mod tests {
         let result = execute_sync(&kernel, &router, "put test1 --tags a and put test2 --tags b", "MultiAgent", 0.0, false);
         assert!(result.is_ok());
         let r = result.unwrap();
-        assert!(r.executed || !r.executed, "should handle multi-action text");
+        let _ = r.executed;
     }
 
     #[test]
@@ -319,7 +319,7 @@ mod tests {
         if result.is_ok() {
             let r = result.unwrap();
             // Below threshold means not executed
-            assert!(!r.executed || r.executed);
+            let _ = r.executed;
         }
     }
 
@@ -376,8 +376,8 @@ mod tests {
 
         let (all_ok, output) = execute_actions_sequence(&kernel, &actions);
         // At least one should succeed (kernel processes sequentially)
-        assert!(all_ok || !all_ok, "execute_actions_sequence should complete");
-        assert!(!output.is_empty() || output.is_empty(), "output should be determined");
+        let _ = all_ok;
+        let _ = output;
     }
 
     #[test]

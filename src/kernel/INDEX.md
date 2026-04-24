@@ -4,11 +4,12 @@ AI Kernel — the central orchestrator that wires together all Plico subsystems 
 
 Status: active | Fan-in: 3 | Fan-out: 7
 
-## Dependents (Fan-in: 3)
+## Dependents (Fan-in: 4)
 
-- `src/bin/plicod.rs` → AIKernel (daemon creates kernel, handles API requests)
-- `src/bin/plico_mcp.rs` → AIKernel (MCP server creates kernel for JSON-RPC dispatch)
-- `src/bin/aicli/main.rs` → AIKernel (CLI creates kernel for local operations)
+- `src/bin/plicod.rs` → AIKernel (daemon hosts kernel, serves via UDS + TCP)
+- `src/bin/plico_mcp/` → AIKernel (MCP server creates kernel for JSON-RPC dispatch)
+- `src/bin/aicli/main.rs` → AIKernel via `KernelClient` (daemon-first, `--embedded` fallback)
+- `src/client.rs` → `EmbeddedClient` wraps AIKernel directly
 
 ## Modification Risk
 
@@ -38,8 +39,9 @@ Key methods (non-exhaustive): `new`, `handle_api_request`, `execute_tool`, `inte
 
 | File | Lines | Purpose |
 |------|-------|---------|
-| `mod.rs` | ⚠ ~1839 | AIKernel struct, API dispatch, orchestration — needs split |
-| `builtin_tools.rs` | ~434 | `register_builtin_tools`, `execute_tool` (allowlist + memory quota) |
+| `mod.rs` | ~1935 | AIKernel struct, API dispatch (85+ routes), orchestration |
+| `builtin_tools.rs` | ~434 | `register_builtin_tools`, `execute_tool` (37 tools, allowlist + quota) |
+| `hook.rs` | ~266 | HookRegistry — 5 interception points, Block/Continue results |
 | `persistence.rs` | ~366 | Persist/restore agents, intents, memories, search index, event log |
 | `event_bus.rs` | ~959 | EventBus — typed pub/sub, JSONL persistence, restore |
 | `ops/` | 24 files | Operation groups — see `ops/INDEX.md` |

@@ -349,7 +349,6 @@ fn get_memory_usage() -> (u64, u64) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::kernel::tests::make_kernel;
 
     // ─── System Status ─────────────────────────────────────────────────────
@@ -360,8 +359,6 @@ mod tests {
         let status = kernel.system_status();
         assert!(status.timestamp_ms > 0, "timestamp should be set");
         assert_eq!(status.agent_count, 0, "new kernel has no agents");
-        assert!(status.cas_object_count >= 0);
-        assert!(status.tag_count >= 0);
     }
 
     #[test]
@@ -398,8 +395,9 @@ mod tests {
     fn test_intent_cache_stats_returns_valid_structure() {
         let (kernel, _dir) = make_kernel();
         let stats = kernel.intent_cache_stats();
-        assert!(stats.entries >= 0, "entries should be non-negative");
-        assert!(stats.memory_bytes >= 0, "memory_bytes should be non-negative");
+        // entries and memory_bytes are usize — always non-negative
+        let _ = stats.entries;
+        let _ = stats.memory_bytes;
     }
 
     // ─── Health Indicators ──────────────────────────────────────────────────
@@ -412,12 +410,11 @@ mod tests {
         assert!(health.memory_usage_percent >= 0.0);
         // Cache
         assert!(health.cache_hit_rate_percent >= 0.0 && health.cache_hit_rate_percent <= 100.0);
-        // EventBus
-        assert!(health.eventbus_queue_depth >= 0);
-        assert!(health.eventbus_subscriber_count >= 0);
-        // Scheduler
-        assert!(health.scheduler_active_agents >= 0);
-        assert!(health.scheduler_pending_intents >= 0);
+        // usize fields are always >= 0, just verify they exist
+        let _ = health.eventbus_queue_depth;
+        let _ = health.eventbus_subscriber_count;
+        let _ = health.scheduler_active_agents;
+        let _ = health.scheduler_pending_intents;
         // Overall
         assert!(health.health_score >= 0.0 && health.health_score <= 1.0);
     }
@@ -447,8 +444,8 @@ mod tests {
         let (kernel, _dir) = make_kernel();
         let report = kernel.health_report();
         assert!(report.timestamp_ms > 0);
-        assert!(report.cas_objects >= 0);
-        assert!(report.agents >= 0);
+        let _ = report.cas_objects;
+        let _ = report.agents;
     }
 
     #[test]
@@ -466,7 +463,7 @@ mod tests {
         let (kernel, _dir) = make_kernel();
         let report = kernel.health_report();
         // Roundtrip should succeed in test environment
-        assert!(report.roundtrip_ms >= 0);
+        let _ = report.roundtrip_ms;
     }
 
     // ─── Node Ping ──────────────────────────────────────────────────────────

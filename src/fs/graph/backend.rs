@@ -519,6 +519,7 @@ impl KnowledgeGraph for PetgraphBackend {
     ) -> Result<Vec<Vec<KGNode>>, KGError> {
         let nodes = self.nodes.read().unwrap();
         let out = self.out_edges.read().unwrap();
+        let in_e = self.in_edges.read().unwrap();
         let mut visited = HashSet::new();
         let mut stack: Vec<(String, Vec<String>)> = vec![(src.into(), vec![src.into()])];
         let mut results = Vec::new();
@@ -544,6 +545,15 @@ impl KnowledgeGraph for PetgraphBackend {
                     let mut new_path = path.clone();
                     new_path.push(next_dst.clone());
                     stack.push((next_dst.clone(), new_path));
+                }
+            }
+            if let Some(edges) = in_e.get(&current) {
+                for (next_src, _) in edges {
+                    if !path.contains(next_src) {
+                        let mut new_path = path.clone();
+                        new_path.push(next_src.clone());
+                        stack.push((next_src.clone(), new_path));
+                    }
                 }
             }
         }
