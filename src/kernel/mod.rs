@@ -652,7 +652,7 @@ impl AIKernel {
                             }).collect()
                     }
                     _ => {
-                        let entries = if let Some(tier_str) = tier.as_deref() {
+                        let all_entries = if let Some(tier_str) = tier.as_deref() {
                             let parsed_tier = match tier_str.to_lowercase().replace(['-', '_'], "").as_str() {
                                 "ephemeral" | "l0" => crate::memory::MemoryTier::Ephemeral,
                                 "working" | "l1" => crate::memory::MemoryTier::Working,
@@ -674,6 +674,14 @@ impl AIKernel {
                             self.memory.get_tier(&agent_id, parsed_tier)
                         } else {
                             self.recall(&agent_id, "default")
+                        };
+                        // Filter by query if provided (substring match in content)
+                        let entries = if let Some(q) = query.as_ref().filter(|q| !q.is_empty()) {
+                            all_entries.into_iter()
+                                .filter(|e| e.content.display().to_lowercase().contains(&q.to_lowercase()))
+                                .collect()
+                        } else {
+                            all_entries
                         };
                         entries.into_iter()
                             .filter_map(|m| match m.content {
