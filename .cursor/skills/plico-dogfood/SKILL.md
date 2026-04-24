@@ -7,6 +7,8 @@ description: PROACTIVE skill — the agent MUST automatically store architectura
 
 This skill captures architectural decisions, progress, and insights into Plico's own CAS + Knowledge Graph during development. Plico manages itself.
 
+**Project stats**: 132 source files | 50,487 lines | 1,435 tests | 17 KG edge types
+
 ## When to Record
 
 Batch at natural pause points (feature complete, session end, milestone). Don't interrupt flow.
@@ -22,6 +24,8 @@ Batch at natural pause points (feature complete, session end, milestone). Don't 
 
 Every command uses this wrapper — sets env, suppresses logs, enables JSON for parsing.
 **CRITICAL**: `--embedded` is required (daemon-first architecture; without it, CLI tries to connect to plicod).
+
+Storage persists to `~/.plico/dogfood` (survives reboots, not `/tmp`).
 
 ```bash
 pcli() {
@@ -78,6 +82,22 @@ print(matches[0] if matches else '')" 2>/dev/null
 | `plico:status:<S>` | accepted, active, superseded, resolved, wip |
 | `plico:milestone:<V>` | v0.1 .. v8.0 |
 | `plico:severity:<L>` | critical, high, medium, low (bugs only) |
+
+## KG Edge Types (17)
+
+When linking KG nodes, use the appropriate edge type:
+
+| Edge Type | Purpose |
+|-----------|---------|
+| `related_to` | General relation (default for ADR→module) |
+| `caused_by` | Causal: this was caused by that (Soul Axiom 8) |
+| `depends_on` | Dependency: A's execution depended on B's result |
+| `produces` | Production: process → output artifact |
+| `part_of` | Hierarchy: component belongs to parent |
+| `causes` | Forward causation |
+| `supersedes` | Version: new replaces old |
+
+Other types: `associates_with`, `follows`, `mentions`, `reminds`, `similar_to`, `has_participant`, `has_artifact`, `has_recording`, `has_resolution`, `has_fact`
 
 ## Storage Templates
 
@@ -150,12 +170,23 @@ pcli_human paths --src <id1> --dst <id2> --depth 3
 Note: With `EMBEDDING_BACKEND=stub`, search falls back to tag-substring matching.
 Use `--require-tags` / `-t` with `--query` for precise filtering.
 
+## Daemon Lifecycle (plicod)
+
+When testing daemon-related features, use lifecycle commands:
+
+```bash
+cargo run --bin plicod -- start --port 7878    # start with PID-file multi-instance protection
+cargo run --bin plicod -- status               # JSON status (pid, uptime, socket)
+cargo run --bin plicod -- stop                 # graceful shutdown via PID file
+```
+
 ## Principles
 
 - Generic KG types only (Entity/Fact) — domain semantics live in `plico:` tags
 - All operations via `aicli --embedded` — no kernel-layer hacks
 - Model-agnostic — any AI agent can use the same API
 - Batch over interrupt — record at pause points, not mid-flow
+- Persistent storage at `~/.plico/dogfood` — survives reboots (not `/tmp`)
 - **ALWAYS bootstrap before first storage** — entity anchors are required for graph structure
 - **ALWAYS link ADRs to KG** — unlinked facts are invisible islands
 - **ALWAYS use `--embedded` flag** — daemon-first architecture requires it for direct kernel access

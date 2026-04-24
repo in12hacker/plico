@@ -3,7 +3,7 @@
 **版本**: Genesis (Node 25)
 **日期**: 2026-04-24
 **灵魂**: `system-v2.md` (Soul 2.0)
-**代码**: 132 files | 50,671 lines | 1,405 tests
+**代码**: 132 files | 50,487 lines | 1,435 tests
 
 > 本文档是 Plico 从 Node 1 到 Node 25 全部设计决策、API、架构的统一参考。
 > 取代散布在 24 份 Node 设计文档中的碎片化信息。
@@ -66,7 +66,7 @@ Plico 是一个**为 AI Agent 设计的操作系统内核**。
 | 5 | **机制，不是策略** | 内核提供原语，不替 agent 决策 |
 | 6 | **结构先于语言** | JSON 是唯一内核接口，NL 在接口层 |
 | 7 | **主动先于被动** | DeclareIntent → 后台预取 → 上下文就绪 |
-| 8 | **因果先于关联** | KG 记录 CausedBy 因果链 |
+| 8 | **因果先于关联** | KG 记录 CausedBy / DependsOn / Produces 因果链 |
 | 9 | **越用越好** | AgentProfile 累积，技能发现，自我修复 |
 | 10 | **会话是一等公民** | session-start/end，warm_context，变更通知 |
 
@@ -78,7 +78,7 @@ Plico 是一个**为 AI Agent 设计的操作系统内核**。
 
 | 模块 | 路径 | 行数 | 测试 | 职责 |
 |------|------|------|------|------|
-| **kernel** | `src/kernel/` | 21,014 | 339 | 核心调度、Hook、意图、执行、预取、学习 |
+| **kernel** | `src/kernel/` | 20,800 | 339 | 核心调度、Hook、意图、执行、预取、学习 |
 | **fs** | `src/fs/` | 7,647 | 167 | CAS、语义搜索、KG(redb)、向量索引 |
 | **bin** | `src/bin/` | 7,857 | 161 | aicli + plicod + plico_mcp + plico_sse |
 | **api** | `src/api/` | 4,130 | 81 | DTO、语义 API、版本、鉴权 |
@@ -96,7 +96,7 @@ Plico 是一个**为 AI Agent 设计的操作系统内核**。
 | 子模块 | 文件 | 行数 | 测试 | 引入节点 |
 |--------|------|------|------|---------|
 | intent | `intent.rs` | 1,370 | 29 | N21 |
-| prefetch | `prefetch.rs` | 1,843 | 27 | N8→N20 |
+| prefetch | `prefetch.rs` | 1,680 | 27 | N8→N20 |
 | intent_executor | `intent_executor.rs` | 605 | 6 | N21 |
 | prefetch_cache | `prefetch_cache.rs` | 530 | 16 | N20 |
 | causal_hook | `causal_hook.rs` | 300 | 3 | N20 |
@@ -116,11 +116,16 @@ Plico 是一个**为 AI Agent 设计的操作系统内核**。
 ### 4.1 Daemon-First（默认）
 
 ```bash
+# plicod 生命周期管理
+plicod start [--port PORT] [--root PATH]   # 启动（默认子命令）
+plicod stop  [--root PATH]                 # 停止（通过 PID 文件定位进程）
+plicod status [--root PATH]                # 状态查询（JSON 输出）
+
+# PID 文件: <root>/plicod.pid — 防止多实例冲突
+# UDS: <root>/plico.sock — 本地客户端默认连接点
+
 # 默认：连接 plicod daemon via UDS
 aicli agent --name my-agent
-
-# plicod 在后台运行，管理持久化状态
-plicod --root ~/.plico
 ```
 
 ### 4.2 Embedded（测试/调试）
@@ -170,12 +175,12 @@ JSON 是唯一接口格式。
 | 操作 | API | CLI | 说明 |
 |------|-----|-----|------|
 | 添加节点 | `add_node` | `node --label X --type entity` | Entity / Fact |
-| 添加边 | `add_edge` | `edge --src A --dst B --type causes` | 14 种边类型 |
+| 添加边 | `add_edge` | `edge --src A --dst B --type causes` | 17 种边类型 |
 | 探索 | `explore` | `explore --cid <node_id>` | 邻居 + authority |
 | 路径 | `find_paths` | `paths --src A --dst B --depth 3` | 双向遍历 |
 | 因果路径 | `kg_causal_path` | — | CausedBy 专用查询 |
 
-**边类型**: `associates_with`, `follows`, `mentions`, `causes`, `reminds`, `part_of`, `similar_to`, `related_to`, `has_participant`, `has_artifact`, `has_recording`, `has_resolution`, `has_fact`, `supersedes`
+**边类型** (17): `associates_with`, `follows`, `mentions`, `causes`, `reminds`, `part_of`, `similar_to`, `related_to`, `has_participant`, `has_artifact`, `has_recording`, `has_resolution`, `has_fact`, `caused_by`, `depends_on`, `produces`, `supersedes`
 
 **存储引擎**: redb（嵌入式 B-tree，零外部依赖）
 
@@ -299,7 +304,8 @@ JSON 是唯一接口格式。
 ├── prefetch_cache.json            # 意图缓存
 ├── agent_profiles.json            # Agent 行为画像
 ├── usage.json                     # 资源使用量追踪
-└── plico.sock                     # plicod UDS socket
+├── plico.sock                     # plicod UDS socket
+└── plicod.pid                     # Daemon PID 文件（多实例保护）
 ```
 
 ### 6.2 存储引擎
@@ -385,14 +391,14 @@ JSON 是唯一接口格式。
 cargo build               # debug
 cargo build --release      # release
 
-cargo test                 # 全量测试 (1388 tests)
+cargo test                 # 全量测试 (1,435 tests)
 ```
 
 ### 10.2 运行
 
 ```bash
 # Daemon 模式 (推荐)
-plicod --root ~/.plico --port 7878
+plicod start --root ~/.plico --port 7878
 aicli agent --name my-agent
 
 # Embedded 模式 (测试)
@@ -467,13 +473,13 @@ plico-mcp --root ~/.plico
 
 | 指标 | 值 |
 |------|-----|
-| 源代码 | 50,671 行 (132 files) |
+| 源代码 | 50,487 行 (132 files) |
 | 测试代码 | 16,218 行 (33 files) |
-| 测试数 | 1,405 (0 failed) |
+| 测试数 | 1,435 (0 failed) |
 | 代码:测试比 | 3:1 |
 | API 变体 | 85+ |
 | 内置工具 | 37 |
-| KG 边类型 | 14 |
+| KG 边类型 | 17 |
 | Hook 拦截点 | 5 |
 | 记忆层 | 4 |
 | 断路器 | 3 (Embedding + LLM + MCP) |
@@ -485,4 +491,4 @@ plico-mcp --root ~/.plico
 
 *太初是旅程的终点，也是新旅程的起点。*
 
-*本文档生成于 2026-04-24，基于 131 个源文件的客观代码扫描和 26 项真实 CLI 执行测试。*
+*本文档更新于 2026-04-20，基于 132 个源文件的客观代码扫描和 1,435 项测试验证。*

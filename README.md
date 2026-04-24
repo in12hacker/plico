@@ -8,9 +8,9 @@ An operating system kernel designed **entirely from an AI perspective**. No huma
 
 ## Status
 
-**Genesis (Node 25) — 132 source files, 50,671 lines of Rust, 1,405 tests (0 failures).**
+**Genesis (Node 25) — 132 source files, 50,487 lines of Rust, 1,435 tests (0 failures).**
 
-Core stack: CAS, semantic filesystem (vectors + BM25 + knowledge graph with redb), layered memory (4-tier + MemoryScope), agent scheduler, kernel event bus (pub/sub + filtering + persistent log), permission guardrails, hook system (5 interception points), intent system (DAG decomposition + autonomous execution), context budget engine (L0/L1/L2), tool registry (37 built-in + external MCP), agent lifecycle (checkpoint/restore/discover/delegate), learning loop (execution stats + skill discovery + self-healing), `plicod` (TCP+UDS daemon), `plico-mcp` (stdio JSON-RPC), and `aicli` (semantic CLI).
+Core stack: CAS, semantic filesystem (vectors + BM25 + knowledge graph with redb, 17 edge types), layered memory (4-tier + MemoryScope), agent scheduler, kernel event bus (pub/sub + filtering + persistent log), permission guardrails, hook system (5 interception points), intent system (DAG decomposition + autonomous execution), context budget engine (L0/L1/L2), tool registry (37 built-in + external MCP), agent lifecycle (checkpoint/restore/discover/delegate), learning loop (execution stats + skill discovery + self-healing), `plicod` (TCP+UDS daemon with `start/stop/status` lifecycle), `plico-mcp` (stdio JSON-RPC), and `aicli` (semantic CLI).
 
 Soul 2.0 alignment: **94.7%**. Architecture red lines: **8/8 (100%)**.
 
@@ -42,12 +42,12 @@ External AI agents / MCP clients
 │  AI-Native File System                             │
 │  ├─ Content-Addressed Storage (CAS, SHA-256)      │
 │  ├─ Semantic search (BM25 + HNSW vectors)         │
-│  ├─ Knowledge graph (redb, 14 edge types)         │
+│  ├─ Knowledge graph (redb, 17 edge types)         │
 │  └─ Layered context loader (L0/L1/L2)             │
 └────────────────────────────────────────────────────┘
 ```
 
-**Daemon-First**: `plicod` hosts the kernel. Clients connect via UDS or TCP using length-prefixed JSON framing. `--embedded` mode available for testing.
+**Daemon-First**: `plicod` hosts the kernel with `start/stop/status` lifecycle commands and PID-file multi-instance protection. Clients connect via UDS or TCP using length-prefixed JSON framing. `--embedded` mode available for testing.
 
 ## Quick start
 
@@ -55,11 +55,15 @@ External AI agents / MCP clients
 # Build
 cargo build --release
 
-# Run all tests (1,405 tests)
+# Run all tests (1,435 tests)
 cargo test
 
 # Start the daemon (recommended)
-cargo run --bin plicod -- --port 7878
+cargo run --bin plicod -- start --port 7878
+
+# Daemon lifecycle
+cargo run --bin plicod -- stop       # graceful shutdown
+cargo run --bin plicod -- status     # JSON status output
 
 # CLI (connects to daemon by default)
 aicli agent --name my-agent
@@ -86,7 +90,7 @@ cargo run --bin plico-mcp
 | 5 | **Mechanism, not policy** | Kernel provides primitives, never decides for agents |
 | 6 | **Structure before language** | JSON is the only kernel interface |
 | 7 | **Proactive before reactive** | Intent prefetch, warm context, goal generation |
-| 8 | **Causation before correlation** | KG records CausedBy chains |
+| 8 | **Causation before correlation** | KG records CausedBy / DependsOn / Produces chains |
 | 9 | **Better with use** | AgentProfile accumulates, skills discovered |
 | 10 | **Sessions are first-class** | session-start/end, warm_context, delta tracking |
 
@@ -101,7 +105,7 @@ src/
 ├── fs/             # Semantic store: tags, embeddings, graph, context loader
 │   ├── embedding/  # EmbeddingProvider (OpenAI-compatible, Ollama, ONNX, stub)
 │   ├── search/     # SemanticSearch (BM25, HNSW)
-│   └── graph/      # KnowledgeGraph (redb backend, 14 edge types)
+│   └── graph/      # KnowledgeGraph (redb backend, 17 edge types)
 ├── kernel/         # AIKernel — orchestration, tools, hooks, persistence
 │   ├── hook.rs     # Hook registry (5 interception points)
 │   ├── event_bus.rs # Typed pub/sub + persistent event log
@@ -112,7 +116,7 @@ src/
 ├── mcp/            # MCP client — external tool integration
 ├── client.rs       # KernelClient trait (Embedded / UDS / TCP)
 └── bin/
-    ├── plicod.rs       # Daemon (TCP + UDS, length-prefixed JSON)
+    ├── plicod.rs       # Daemon (TCP + UDS, start/stop/status lifecycle, PID file)
     ├── plico_mcp/      # MCP stdio server (JSON-RPC 2.0)
     └── aicli/          # Semantic CLI (daemon-first, --embedded fallback)
 

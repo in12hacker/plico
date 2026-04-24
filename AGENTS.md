@@ -90,7 +90,7 @@ src/
 │   │   ├── tools_external.rs # External tool provider integration (MCP)
 │   │   ├── session.rs   # Session lifecycle (start, end, orchestrate, compound response)
 │   │   ├── delta.rs     # Delta tracking (changes since seq, watch CIDs/tags)
-│   │   ├── prefetch.rs  # ⚠ 1842 lines — Intent prefetcher + feedback + async assembly
+│   │   ├── prefetch.rs  # ⚠ 1680 lines — Intent prefetcher + feedback + async assembly
 │   │   ├── hybrid.rs    # Graph-RAG hybrid retrieval (vector + KG)
 │   │   ├── model.rs     # LLM model management (hot-swap, list providers)
 │   │   ├── cache.rs     # Multi-layer caching (intent, search, embedding)
@@ -114,7 +114,7 @@ src/
 │   ├── procedure_provider.rs # Procedural memory → tool bridge
 │   └── INDEX.md
 ├── temporal/            # Temporal reasoning — natural language time → time ranges
-│   ├── resolver.rs      # TemporalResolver trait, OllamaTemporalResolver, StubTemporalResolver
+│   ├── resolver.rs      # TemporalResolver trait, StubTemporalResolver
 │   ├── rules.rs         # HeuristicTemporalResolver, pre-defined temporal rules
 │   ├── mod.rs           # Re-exports
 │   └── INDEX.md
@@ -129,7 +129,7 @@ src/
 │   └── tests.rs         # Unit tests
 ├── client.rs            # KernelClient trait + EmbeddedClient + RemoteClient (UDS/TCP framing)
 ├── bin/
-│   ├── plicod.rs        # Daemon — hosts AIKernel, listens on TCP + UDS, PID file lifecycle
+│   ├── plicod.rs        # Daemon — hosts AIKernel, TCP + UDS, start/stop/status lifecycle, PID file multi-instance protection
 │   ├── plico_mcp.rs     # MCP stdio server (JSON-RPC 2.0 over stdin/stdout)
 │   ├── plico_sse.rs     # SSE streaming adapter for A2A protocol compatibility
 │   └── aicli/           # AI-friendly semantic CLI (daemon-first, --embedded fallback)
@@ -157,7 +157,7 @@ src/
 ├── lib.rs               # Crate root: pub mod declarations + PlicoError + re-exports (includes `pub mod client`)
 └── main.rs              # Stub — directs to plicod/aicli/plico-mcp
 
-tests/                   # Integration tests (28 files)
+tests/                   # Integration tests (33 files)
 ├── kernel_test.rs       # AIKernel full integration (agents, CRUD, tools, events, dispatch, status)
 ├── ai_experience_test.rs # C-6: Multi-session AI agent workflow (cross-agent search, auto-reg)
 ├── fs_test.rs           # SemanticFS CRUD + event tests
@@ -225,7 +225,9 @@ docs/                    # Tier B — iteration-end human docs (not maintained p
 | `cargo build --release` | Release build (LTO + single codegen unit) |
 | `cargo run --bin aicli -- --embedded put --content "test" --tags "test"` | Quick CLI test, embedded mode |
 | `cargo run --bin aicli -- system-status` | Check kernel health (requires running daemon) |
-| `cargo run --bin plicod -- --port 7878` | Run daemon on TCP + UDS (defaults to ~/.plico) |
+| `cargo run --bin plicod -- start --port 7878` | Start daemon on TCP + UDS (defaults to ~/.plico) |
+| `cargo run --bin plicod -- stop` | Graceful daemon shutdown via PID file |
+| `cargo run --bin plicod -- status` | JSON daemon status (pid, uptime, socket) |
 | `cargo run --bin plicod -- --no-uds` | Run daemon TCP-only (disable UDS) |
 
 ## Conventions
@@ -245,7 +247,7 @@ docs/                    # Tier B — iteration-end human docs (not maintained p
 - Binaries (`bin/`) import only `kernel/`, `api/`, and `client`, never subsystem modules directly
 - CAS is the only module that touches the host filesystem directly
 - No `unsafe` blocks in library code without a `# Safety` doc comment
-- `plicod` listens on **TCP + UDS** — no HTTP endpoints; UDS is primary for local clients, TCP for remote
+- `plicod` listens on **TCP + UDS** — no HTTP endpoints; UDS is primary for local clients, TCP for remote; supports `start/stop/status` subcommands with PID-file multi-instance protection
 - `aicli` defaults to daemon mode (connects via UDS); use `--embedded` for direct kernel access
 - Agent lifecycle requests (`AgentStatus`, `AgentSuspend`, etc.) do NOT auto-register agents — they fail if the agent does not exist
 - All known soul violations from prior iterations have been resolved:

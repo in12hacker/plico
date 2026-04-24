@@ -128,7 +128,7 @@ export EMBEDDING_BACKEND=stub
 # Build
 cargo build
 
-# Run tests (1,405 tests)
+# Run tests (1,435 tests)
 cargo test
 
 # Build release
@@ -140,8 +140,10 @@ cargo run --bin aicli -- --embedded put --content "test" --tags "test"
 # Run CLI (daemon mode — default, requires running plicod)
 cargo run --bin aicli -- put --content "test" --tags "test"
 
-# Run daemon
-cargo run --bin plicod -- --port 7878
+# Run daemon (start/stop/status lifecycle)
+cargo run --bin plicod -- start --port 7878
+cargo run --bin plicod -- stop
+cargo run --bin plicod -- status
 ```
 
 ## Related Prior Art

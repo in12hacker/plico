@@ -8,9 +8,9 @@
 
 ## 状态
 
-**太初 (Node 25) — 132 个源文件, 50,671 行 Rust, 1,405 个测试 (0 失败)**
+**太初 (Node 25) — 132 个源文件, 50,487 行 Rust, 1,435 个测试 (0 失败)**
 
-核心栈：CAS、语义文件系统（向量 + BM25 + redb 知识图谱）、分层记忆（四层 + MemoryScope）、智能体调度器、内核事件总线（类型化发布/订阅 + 过滤 + 持久化日志）、权限护栏、Hook 系统（5 个拦截点）、意图系统（DAG 分解 + 自主执行）、上下文预算引擎（L0/L1/L2）、工具注册表（37 个内置 + 外部 MCP）、智能体生命周期（检查点/恢复/发现/委派）、学习闭环（执行统计 + 技能发现 + 自我修复）、`plicod`（TCP+UDS 守护进程）、`plico-mcp`（stdio JSON-RPC）、`aicli`（语义 CLI）。
+核心栈：CAS、语义文件系统（向量 + BM25 + redb 知识图谱，17 种边类型）、分层记忆（四层 + MemoryScope）、智能体调度器、内核事件总线（类型化发布/订阅 + 过滤 + 持久化日志）、权限护栏、Hook 系统（5 个拦截点）、意图系统（DAG 分解 + 自主执行）、上下文预算引擎（L0/L1/L2）、工具注册表（37 个内置 + 外部 MCP）、智能体生命周期（检查点/恢复/发现/委派）、学习闭环（执行统计 + 技能发现 + 自我修复）、`plicod`（TCP+UDS 守护进程 + start/stop/status 生命周期管理）、`plico-mcp`（stdio JSON-RPC）、`aicli`（语义 CLI）。
 
 灵魂 2.0 对齐度：**94.7%**。架构红线：**8/8 (100%)**。
 
@@ -42,12 +42,12 @@
 │  AI 原生文件系统                                    │
 │  ├─ 内容寻址存储（CAS, SHA-256）                   │
 │  ├─ 语义搜索（BM25 + HNSW 向量）                  │
-│  ├─ 知识图谱（redb, 14 种边类型）                  │
+│  ├─ 知识图谱（redb, 17 种边类型）                  │
 │  └─ 分层上下文加载（L0/L1/L2）                     │
 └────────────────────────────────────────────────────┘
 ```
 
-**守护进程优先**: `plicod` 托管内核。客户端通过 UDS 或 TCP 连接，使用长度前缀 JSON 帧协议。`--embedded` 模式可用于测试。
+**守护进程优先**: `plicod` 托管内核，支持 `start/stop/status` 生命周期命令和 PID 文件多实例保护。客户端通过 UDS 或 TCP 连接，使用长度前缀 JSON 帧协议。`--embedded` 模式可用于测试。
 
 ## 快速开始
 
@@ -55,11 +55,15 @@
 # 构建
 cargo build --release
 
-# 运行全部测试 (1,405 个)
+# 运行全部测试 (1,435 个)
 cargo test
 
 # 启动守护进程（推荐）
-cargo run --bin plicod -- --port 7878
+cargo run --bin plicod -- start --port 7878
+
+# 守护进程生命周期
+cargo run --bin plicod -- stop       # 优雅停止
+cargo run --bin plicod -- status     # JSON 状态输出
 
 # CLI（默认连接守护进程）
 aicli agent --name my-agent
@@ -86,7 +90,7 @@ cargo run --bin plico-mcp
 | 5 | **机制，不是策略** | 内核提供原语，不替 Agent 决策 |
 | 6 | **结构先于语言** | JSON 是唯一内核接口，NL 在接口层 |
 | 7 | **主动先于被动** | 意图预取、warm context、目标自生成 |
-| 8 | **因果先于关联** | KG 记录 CausedBy 因果链 |
+| 8 | **因果先于关联** | KG 记录 CausedBy / DependsOn / Produces 因果链 |
 | 9 | **越用越好** | AgentProfile 累积，技能发现，自我修复 |
 | 10 | **会话是一等公民** | session-start/end、warm_context、变更通知 |
 
@@ -101,7 +105,7 @@ src/
 ├── fs/             # 语义存储：标签、嵌入、图、上下文
 │   ├── embedding/  # EmbeddingProvider（OpenAI-compatible、Ollama、ONNX、stub）
 │   ├── search/     # SemanticSearch（BM25、HNSW）
-│   └── graph/      # KnowledgeGraph（redb，14 种边类型）
+│   └── graph/      # KnowledgeGraph（redb，17 种边类型）
 ├── kernel/         # AIKernel — 编排、工具、Hook、持久化
 │   ├── hook.rs     # Hook 注册表（5 个拦截点）
 │   ├── event_bus.rs # 类型化发布/订阅 + 持久化事件日志
@@ -112,7 +116,7 @@ src/
 ├── mcp/            # MCP 客户端 — 外部工具集成
 ├── client.rs       # KernelClient trait（嵌入 / UDS / TCP）
 └── bin/
-    ├── plicod.rs       # 守护进程（TCP + UDS）
+    ├── plicod.rs       # 守护进程（TCP + UDS，start/stop/status 生命周期，PID 文件）
     ├── plico_mcp/      # MCP stdio 服务（JSON-RPC 2.0）
     └── aicli/          # 语义 CLI（守护进程优先）
 
