@@ -540,21 +540,33 @@ impl AIKernel {
                     Err(e) => ApiResponse::error(e.to_string()),
                 }
             }
-            ApiRequest::Search { query, agent_id, agent_token, tenant_id, limit, offset, require_tags, exclude_tags, since, until, .. } => {
+            ApiRequest::Search { query, agent_id, agent_token, tenant_id, limit, offset, require_tags, exclude_tags, since, until, intent_context } => {
                 if let Err(e) = self.key_store.verify_agent_token(&agent_id, agent_token.as_deref()) {
                     return ApiResponse::error(e);
                 }
                 let tenant = tenant_id.unwrap_or_else(|| "default".to_string());
-                let results = match self.semantic_search_with_time(
-                    &query, &agent_id, &tenant, limit.unwrap_or(10) + offset.unwrap_or(0),
-                    require_tags, exclude_tags, since, until,
-                ) {
-                    Ok(r) => r,
-                    Err(e) => return ApiResponse::error(e.to_string()),
+                let lim = limit.unwrap_or(10);
+                let off = offset.unwrap_or(0);
+                let results = if intent_context.is_some() {
+                    // F-6: Context-dependent gravity — use intent-aware search
+                    match self.semantic_search_with_intent(
+                        &query, &agent_id, &tenant, lim + off,
+                        require_tags, exclude_tags, intent_context,
+                    ) {
+                        Ok(r) => r,
+                        Err(e) => return ApiResponse::error(e.to_string()),
+                    }
+                } else {
+                    // Standard search with time bounds
+                    match self.semantic_search_with_time(
+                        &query, &agent_id, &tenant, lim + off,
+                        require_tags, exclude_tags, since, until,
+                    ) {
+                        Ok(r) => r,
+                        Err(e) => return ApiResponse::error(e.to_string()),
+                    }
                 };
                 let total = results.len();
-                let off = offset.unwrap_or(0);
-                let lim = limit.unwrap_or(10);
                 let page: Vec<SearchResultDto> = results.into_iter().skip(off).take(lim).map(|r| {
                     let snippet = r.snippet.clone();
                     SearchResultDto {
@@ -2056,6 +2068,7 @@ mod kernel_mod_tests {
             exclude_tags: vec![],
             since: None,
             until: None,
+            intent_context: None,
         };
         let resp = kernel.handle_api_request(search_req);
         // Should return without error (may have 0 results with stub backend)

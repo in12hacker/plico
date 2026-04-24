@@ -33,6 +33,7 @@ fn cmd_context_load(kernel: &AIKernel, args: &[String]) -> ApiResponse {
             exclude_tags: vec![],
             since: None,
             until: None,
+            intent_context: None,
         });
         let results = search_resp.results.unwrap_or_default();
         if results.is_empty() {

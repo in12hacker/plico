@@ -205,6 +205,7 @@ fn to_api_request(m: PatternMatch, agent_id: &str) -> ResolvedIntent {
                 exclude_tags: vec![],
                 since,
                 until,
+                intent_context: None,
             };
             let time_note = if since.is_some() || until.is_some() {
                 " with time filter"
@@ -329,6 +330,7 @@ impl IntentRouter for HeuristicRouter {
                                 exclude_tags: vec![],
                                 since,
                                 until,
+                                intent_context: None,
                             };
                             Some(ResolvedIntent {
                                 routing_action: RoutingAction::LowConfidence,
@@ -372,6 +374,7 @@ impl IntentRouter for HeuristicRouter {
                     exclude_tags: vec![],
                     since,
                     until,
+                    intent_context: None,
                 };
                 Ok(vec![ResolvedIntent {
                     routing_action: RoutingAction::LowConfidence,

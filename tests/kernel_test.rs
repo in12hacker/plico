@@ -4354,6 +4354,7 @@ fn test_kernel_handle_search_via_api() {
         exclude_tags: vec![],
         since: None,
         until: None,
+        intent_context: None,
     });
     assert!(resp.ok, "Search should succeed, error: {:?}", resp.error);
     assert!(resp.results.is_some(), "Search should return results");

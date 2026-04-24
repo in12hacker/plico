@@ -637,6 +637,7 @@ fn benchmark_token_cost_transparency() {
         exclude_tags: vec![],
         since: None,
         until: None,
+        intent_context: None,
     };
     let search_resp = call_api(&kernel, search_req);
     check_response("Search", &search_resp);

@@ -249,7 +249,7 @@ fn build_remote_request(args: &[String]) -> Option<ApiRequest> {
             let since = commands::extract_arg(args, "--since").and_then(|s| s.parse::<i64>().ok());
             let until = commands::extract_arg(args, "--until").and_then(|s| s.parse::<i64>().ok());
             let offset = commands::extract_arg(args, "--offset").and_then(|s| s.parse().ok());
-            Some(ApiRequest::Search { query, agent_id: agent_id(), tenant_id: None, agent_token: None, limit, offset, require_tags, exclude_tags, since, until })
+            Some(ApiRequest::Search { query, agent_id: agent_id(), tenant_id: None, agent_token: None, limit, offset, require_tags, exclude_tags, since, until, intent_context: None })
         }
         Some("update") => {
             let cid = commands::extract_arg(args, "--cid").unwrap_or_default();

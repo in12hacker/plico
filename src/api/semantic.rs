@@ -130,6 +130,11 @@ pub enum ApiRequest {
         /// Inclusive upper bound on creation time (Unix ms).
         #[serde(default)]
         until: Option<i64>,
+        /// Optional intent context for context-dependent gravity re-ranking (F-6).
+        /// When provided, search results are boosted based on hot objects from
+        /// the agent's profile and current intent alignment.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        intent_context: Option<String>,
     },
 
     #[serde(rename = "update")]

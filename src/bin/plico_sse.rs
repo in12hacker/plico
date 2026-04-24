@@ -669,6 +669,7 @@ fn build_api_request(method: &str, params: Option<&serde_json::Value>) -> Result
                     .unwrap_or_default(),
                 since: None,
                 until: None,
+                intent_context: None,
             })
         }
 

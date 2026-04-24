@@ -58,7 +58,7 @@ fn dispatch_plico_action_remote(action: &str, args: &Value, client: &dyn plico::
         "search" => {
             let query = args.get("query").and_then(|q| q.as_str()).ok_or("search requires query")?;
             let limit = args.get("limit").and_then(|l| l.as_u64()).map(|l| l as usize);
-            ApiRequest::Search { query: query.to_string(), agent_id: agent.to_string(), tenant_id: None, agent_token: None, limit, offset: None, require_tags: vec![], exclude_tags: vec![], since: None, until: None }
+            ApiRequest::Search { query: query.to_string(), agent_id: agent.to_string(), tenant_id: None, agent_token: None, limit, offset: None, require_tags: vec![], exclude_tags: vec![], since: None, until: None, intent_context: None }
         }
         "remember" => {
             let content = args.get("content").and_then(|c| c.as_str()).ok_or("remember requires content")?;
@@ -265,6 +265,7 @@ fn assemble_handover(kernel: &AIKernel, mode: &str) -> Value {
         exclude_tags: vec![],
         since: None,
         until: None,
+        intent_context: None,
     });
 
     let recent: Vec<Value> = resp.results.unwrap_or_default().into_iter().map(|h| {
@@ -505,6 +506,7 @@ fn dispatch_plico_action(action: &str, args: &Value, kernel: &AIKernel) -> Resul
                 exclude_tags,
                 since: None,
                 until: None,
+                intent_context: None,
             };
             format_plico_response(kernel.handle_api_request(req), args)
         }

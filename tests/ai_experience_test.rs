@@ -145,6 +145,7 @@ fn test_ai_agent_multi_session_experience() {
                 exclude_tags: vec![],
                 since: None,
                 until: None,
+                intent_context: None,
             },
         );
         assert!(
@@ -230,6 +231,7 @@ fn test_ai_agent_multi_session_experience() {
                 exclude_tags: vec![],
                 since: None,
                 until: None,
+                intent_context: None,
             },
         );
         assert!(
@@ -386,6 +388,7 @@ fn test_session_checkpoint_persistence() {
             exclude_tags: vec![],
             since: None,
             until: None,
+            intent_context: None,
         });
         tracing::info!(
             "Search after checkpoint restore: ok={}",

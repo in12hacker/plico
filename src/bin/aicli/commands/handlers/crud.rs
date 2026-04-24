@@ -91,6 +91,7 @@ pub fn cmd_search(kernel: &AIKernel, args: &[String]) -> ApiResponse {
         exclude_tags,
         since,
         until,
+        intent_context: None,
     })
 }
 

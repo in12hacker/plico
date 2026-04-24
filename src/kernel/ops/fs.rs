@@ -163,7 +163,6 @@ impl crate::kernel::AIKernel {
     /// When intent_context is provided, results are re-ranked based on:
     /// - Hot objects from the agent's profile (boosted by 1.5x)
     /// - Current intent alignment (gravity toward related CIDs)
-    #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn semantic_search_with_intent(
         &self,
