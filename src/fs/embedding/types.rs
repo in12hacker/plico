@@ -28,6 +28,9 @@ pub enum EmbedError {
     #[error("Ollama API error: {0}")]
     Ollama(String),
 
+    #[error("API error: {0}")]
+    Api(String),
+
     #[error("ONNX inference error: {0}")]
     Onnx(String),
 

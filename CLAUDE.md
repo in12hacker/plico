@@ -100,19 +100,27 @@ Tools are registered at user scope — available in all sessions. Use `claude mc
 
 ## Embedding Backend
 
-Local embeddings are powered by `bge-small-en-v1.5` (384d, 24MB, MTEB 62.17) via Python subprocess with ONNX Runtime. Configure via environment:
+Embedding and LLM backends are **inference-framework-agnostic**. Any server exposing an OpenAI-compatible `/v1/embeddings` or `/v1/chat/completions` endpoint works (llama.cpp, vLLM, SGLang, TensorRT-LLM, Ollama, OpenAI, etc.).
 
 ```bash
-export EMBEDDING_BACKEND=local          # "local" (default) | "ollama" | "stub"
-export EMBEDDING_MODEL_ID=BAAI/bge-small-en-v1.5   # HuggingFace model ID
-export EMBEDDING_PYTHON=python3       # python interpreter path
+# Recommended: OpenAI-compatible backend (works with llama.cpp, vLLM, etc.)
+export EMBEDDING_BACKEND=openai
+export EMBEDDING_API_BASE=http://127.0.0.1:8080/v1
+export EMBEDDING_MODEL=your-model-name
 
-# Setup (one-time):
-pip install transformers huggingface_hub onnxruntime
-# Model auto-downloads (~24MB for bge-small-en-v1.5)
+# LLM: llama.cpp shorthand
+export LLM_BACKEND=llama
+export LLAMA_URL=http://127.0.0.1:8080/v1
+export LLAMA_MODEL=qwen2.5
+
+# Alternative: local Python subprocess (slower cold start per CLI call)
+export EMBEDDING_BACKEND=local          # "local" | "openai" | "ollama" | "stub"
+export EMBEDDING_MODEL_ID=BAAI/bge-small-en-v1.5
+export EMBEDDING_PYTHON=python3
+
+# For tests: stub backend (no real embeddings, tag-only search)
+export EMBEDDING_BACKEND=stub
 ```
-
-The subprocess uses JSON-RPC over stdio — fully decoupled, no shared memory.
 
 ## Build & Test Commands
 
@@ -120,7 +128,7 @@ The subprocess uses JSON-RPC over stdio — fully decoupled, no shared memory.
 # Build
 cargo build
 
-# Run tests (all 38 tests)
+# Run tests (1,405 tests)
 cargo test
 
 # Build release

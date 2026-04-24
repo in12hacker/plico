@@ -3,7 +3,7 @@
 **版本**: Genesis (Node 25)
 **日期**: 2026-04-24
 **灵魂**: `system-v2.md` (Soul 2.0)
-**代码**: 131 files | 49,489 lines | 1388 tests
+**代码**: 132 files | 50,671 lines | 1,405 tests
 
 > 本文档是 Plico 从 Node 1 到 Node 25 全部设计决策、API、架构的统一参考。
 > 取代散布在 24 份 Node 设计文档中的碎片化信息。
@@ -48,7 +48,7 @@ Plico 是一个**为 AI Agent 设计的操作系统内核**。
 │  AI-Native File System  │                            │
 │  ┌───────┐ ┌────────┐ ┌┴──────┐ ┌────────────┐     │
 │  │  CAS  │ │ Search │ │  KG   │ │ Embedding  │     │
-│  │SHA-256│ │BM25+Vec│ │ redb  │ │ ONNX/Stub  │     │
+│  │SHA-256│ │BM25+Vec│ │ redb  │ │ OpenAI/ORT │     │
 │  └───────┘ └────────┘ └───────┘ └────────────┘     │
 └─────────────────────────────────────────────────────┘
 ```
@@ -86,7 +86,7 @@ Plico 是一个**为 AI Agent 设计的操作系统内核**。
 | **scheduler** | `src/scheduler/` | 1,781 | 23 | Agent 调度、配额、生命周期 |
 | **intent** | `src/intent/` | 1,439 | 31 | IntentRouter（接口层，非内核） |
 | **cas** | `src/cas/` | 702 | 10 | SHA-256 内容寻址存储 |
-| **llm** | `src/llm/` | 682 | 13 | LlmProvider trait + 断路器 |
+| **llm** | `src/llm/` | 682 | 13 | LlmProvider trait + OpenAI-compatible + 断路器 |
 | **tool** | `src/tool/` | 572 | 15 | ExternalToolProvider trait |
 | **mcp** | `src/mcp/` | 395 | 9 | MCP client adapter |
 | **client** | `src/client.rs` | 118 | — | KernelClient trait (传输抽象) |
@@ -404,15 +404,38 @@ plico-mcp --root ~/.plico
 
 ### 10.3 环境变量
 
+**通用**
+
 | 变量 | 说明 | 默认值 |
 |------|------|--------|
 | `PLICO_ROOT` | 存储根目录 | `~/.plico` |
-| `EMBEDDING_BACKEND` | 嵌入模型后端 | `local` |
-| `EMBEDDING_MODEL_ID` | HuggingFace 模型 ID | `BAAI/bge-small-en-v1.5` |
 | `AICLI_OUTPUT` | CLI 输出格式 | `json` |
 | `RUST_LOG` | 日志级别 | `info` |
+
+**Embedding 后端** — `EMBEDDING_BACKEND` 选择: `local` | `openai` | `ollama` | `ort` | `stub`
+
+| 变量 | 说明 | 默认值 |
+|------|------|--------|
+| `EMBEDDING_BACKEND` | 嵌入模型后端 | `local` |
+| `EMBEDDING_API_BASE` | OpenAI-compatible 端点 (openai 后端) | `http://127.0.0.1:8080/v1` |
+| `EMBEDDING_MODEL` | 模型名 (openai 后端) | `default` |
+| `EMBEDDING_API_KEY` | API 密钥 (openai 后端，可选) | — |
+| `EMBEDDING_MODEL_ID` | HuggingFace 模型 ID (local 后端) | `BAAI/bge-small-en-v1.5` |
+
+**LLM 后端** — `LLM_BACKEND` 选择: `ollama` | `openai` | `llama` | `stub`
+
+| 变量 | 说明 | 默认值 |
+|------|------|--------|
+| `LLM_BACKEND` | 推理后端 | `ollama` |
+| `LLAMA_URL` | llama.cpp server URL (llama 后端) | `http://127.0.0.1:8080/v1` |
+| `LLAMA_MODEL` | 模型名 (llama 后端) | — |
+| `OPENAI_API_BASE` | OpenAI-compatible 端点 (openai 后端) | `https://api.openai.com/v1` |
+| `OPENAI_API_KEY` | API 密钥 (openai 后端，可选) | — |
 | `PLICO_SUMMARIZER_MODEL` | 摘要模型 | — |
 | `PLICO_INTENT_MODEL` | 意图模型 | — |
+
+`"openai"` 和 `"llama"` 后端均通过 OpenAI-compatible API 实现，支持任意推理框架
+（llama.cpp、vLLM、SGLang、TensorRT-LLM、text-embeddings-inference 等）。
 
 ---
 
@@ -444,9 +467,9 @@ plico-mcp --root ~/.plico
 
 | 指标 | 值 |
 |------|-----|
-| 源代码 | 49,489 行 (131 files) |
+| 源代码 | 50,671 行 (132 files) |
 | 测试代码 | 16,218 行 (33 files) |
-| 测试数 | 1,388 (0 failed) |
+| 测试数 | 1,405 (0 failed) |
 | 代码:测试比 | 3:1 |
 | API 变体 | 85+ |
 | 内置工具 | 37 |

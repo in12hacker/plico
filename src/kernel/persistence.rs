@@ -6,7 +6,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::fs::{OllamaBackend, EmbeddingProvider, LocalEmbeddingBackend, StubEmbeddingProvider, EmbedError, OrtEmbeddingBackend, EmbeddingCircuitBreaker};
+use crate::fs::{OllamaBackend, OpenAIEmbeddingBackend, EmbeddingProvider, LocalEmbeddingBackend, StubEmbeddingProvider, EmbedError, OrtEmbeddingBackend, EmbeddingCircuitBreaker};
 use crate::llm::{LlmProvider, LlmError, OllamaProvider, StubProvider, OpenAICompatibleProvider, CircuitBreakerLlmProvider};
 use crate::scheduler::Agent;
 use crate::scheduler::agent::Intent;
@@ -308,12 +308,15 @@ impl AIKernel {
 /// Create the embedding provider based on EMBEDDING_BACKEND env var.
 ///
 /// Priority when unset: local → ollama → stub
-/// Explicit values: "local" | "ollama" | "stub" | "ort"
+/// Explicit values: "local" | "ollama" | "openai" | "stub" | "ort"
+///
+/// The `"openai"` backend is framework-agnostic — it calls any server
+/// exposing the OpenAI `/v1/embeddings` endpoint (llama.cpp, vLLM,
+/// SGLang, TensorRT-LLM, text-embeddings-inference, OpenAI, etc.).
 pub(crate) fn create_embedding_provider() -> Result<Arc<dyn EmbeddingProvider>, EmbedError> {
     let backend = std::env::var("EMBEDDING_BACKEND")
         .unwrap_or_else(|_| "local".to_string());
 
-    // Create the base provider (potentially with fallback to stub on error)
     let base_provider: Arc<dyn EmbeddingProvider> = match backend.as_str() {
         "ort" => {
             let model_dir = std::env::var("PLICO_MODEL_DIR")
@@ -353,6 +356,23 @@ pub(crate) fn create_embedding_provider() -> Result<Arc<dyn EmbeddingProvider>, 
                 Err(e) => {
                     tracing::warn!("LocalEmbeddingBackend error: {e}. Falling back.");
                     return try_ollama_circuitbreaker();
+                }
+            }
+        }
+        "openai" => {
+            let base_url = std::env::var("EMBEDDING_API_BASE")
+                .unwrap_or_else(|_| "http://127.0.0.1:8080/v1".to_string());
+            let model = std::env::var("EMBEDDING_MODEL")
+                .unwrap_or_else(|_| "default".to_string());
+            let api_key = std::env::var("EMBEDDING_API_KEY").ok();
+            match OpenAIEmbeddingBackend::new(&base_url, &model, api_key) {
+                Ok(b) => {
+                    tracing::info!("Embedding backend: openai-compatible ({} via {})", model, base_url);
+                    Arc::new(b) as Arc<dyn EmbeddingProvider>
+                }
+                Err(e) => {
+                    tracing::warn!("OpenAI embedding backend error: {e}. Falling back to stub.");
+                    Arc::new(StubEmbeddingProvider::new()) as Arc<dyn EmbeddingProvider>
                 }
             }
         }
@@ -408,7 +428,12 @@ fn try_ollama() -> Result<Arc<dyn EmbeddingProvider>, EmbedError> {
 
 /// Create an LLM provider based on `LLM_BACKEND` env var.
 ///
-/// Backends: "ollama" (default) | "stub"
+/// Backends: "ollama" (default) | "openai" | "llama" | "stub"
+///
+/// The `"llama"` backend is an alias for `"openai"` with llama.cpp-specific
+/// defaults (`LLAMA_URL`, `LLAMA_MODEL`). The `"openai"` backend works with
+/// any server exposing the OpenAI `/v1/chat/completions` endpoint (llama.cpp,
+/// vLLM, SGLang, TensorRT-LLM, DeepSeek, Groq, Together, etc.).
 pub(crate) fn create_llm_provider(model_env: &str, default_model: &str) -> Result<Arc<dyn LlmProvider>, LlmError> {
     let backend = std::env::var("LLM_BACKEND")
         .unwrap_or_else(|_| "ollama".to_string());
@@ -437,14 +462,25 @@ pub(crate) fn create_llm_provider(model_env: &str, default_model: &str) -> Resul
             tracing::info!("LLM backend: openai-compatible ({} via {})", model, base_url);
             Arc::new(provider) as Arc<dyn LlmProvider>
         }
-        other => {
-            tracing::warn!("Unknown LLM_BACKEND={other}, falling back to ollama");
-            let url = std::env::var("OLLAMA_URL")
-                .unwrap_or_else(|_| "http://localhost:11434".to_string());
-            let model = std::env::var(model_env)
+        "llama" => {
+            let base_url = std::env::var("LLAMA_URL")
+                .or_else(|_| std::env::var("OPENAI_API_BASE"))
+                .unwrap_or_else(|_| "http://127.0.0.1:8080/v1".to_string());
+            let base_url = if !base_url.contains("/v1") {
+                format!("{}/v1", base_url.trim_end_matches('/'))
+            } else {
+                base_url
+            };
+            let model = std::env::var("LLAMA_MODEL")
+                .or_else(|_| std::env::var(model_env))
                 .unwrap_or_else(|_| default_model.to_string());
-            let provider = OllamaProvider::new(&url, &model)?;
+            let provider = OpenAICompatibleProvider::new(&base_url, &model, None)?;
+            tracing::info!("LLM backend: llama.cpp ({} via {})", model, base_url);
             Arc::new(provider) as Arc<dyn LlmProvider>
+        }
+        other => {
+            tracing::warn!("Unknown LLM_BACKEND={other}, falling back to stub");
+            Arc::new(StubProvider::empty()) as Arc<dyn LlmProvider>
         }
     };
 

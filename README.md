@@ -2,13 +2,13 @@
 
 **Languages / 语言：** [English](README.md) · [简体中文](README_zh.md)
 
-An operating system kernel designed **entirely from an AI perspective**. No human-first CLI/GUI, no path-centric filesystem. Upper-layer agents interact through **semantic APIs** (content, tags, intents, graphs). The stack is **model-agnostic**: embeddings and optional LLM routing can use local backends (Ollama, ONNX) or stubs for tests.
+An operating system kernel designed **entirely from an AI perspective**. No human-first CLI/GUI, no path-centric filesystem. Upper-layer agents interact through **semantic APIs** (content, tags, intents, graphs). The stack is **inference-framework-agnostic**: both embedding and LLM backends support any server exposing an OpenAI-compatible API (llama.cpp, vLLM, SGLang, TensorRT-LLM, Ollama, etc.), plus local ONNX or stubs for tests.
 
 "太初" means "Genesis / In the Beginning" — the primordial state where an AI-OS becomes self-aware.
 
 ## Status
 
-**Genesis (Node 25) — 131 source files, 49,489 lines of Rust, 1,388 tests (0 failures).**
+**Genesis (Node 25) — 132 source files, 50,671 lines of Rust, 1,405 tests (0 failures).**
 
 Core stack: CAS, semantic filesystem (vectors + BM25 + knowledge graph with redb), layered memory (4-tier + MemoryScope), agent scheduler, kernel event bus (pub/sub + filtering + persistent log), permission guardrails, hook system (5 interception points), intent system (DAG decomposition + autonomous execution), context budget engine (L0/L1/L2), tool registry (37 built-in + external MCP), agent lifecycle (checkpoint/restore/discover/delegate), learning loop (execution stats + skill discovery + self-healing), `plicod` (TCP+UDS daemon), `plico-mcp` (stdio JSON-RPC), and `aicli` (semantic CLI).
 
@@ -55,7 +55,7 @@ External AI agents / MCP clients
 # Build
 cargo build --release
 
-# Run all tests (1,388 tests)
+# Run all tests (1,405 tests)
 cargo test
 
 # Start the daemon (recommended)
@@ -99,7 +99,7 @@ src/
 ├── intent/         # NL → structured ApiRequest (interface layer, NOT kernel)
 ├── scheduler/      # Agents, priorities, messaging, execution dispatch
 ├── fs/             # Semantic store: tags, embeddings, graph, context loader
-│   ├── embedding/  # EmbeddingProvider (Ollama, local ONNX, stub)
+│   ├── embedding/  # EmbeddingProvider (OpenAI-compatible, Ollama, ONNX, stub)
 │   ├── search/     # SemanticSearch (BM25, HNSW)
 │   └── graph/      # KnowledgeGraph (redb backend, 14 edge types)
 ├── kernel/         # AIKernel — orchestration, tools, hooks, persistence
@@ -108,7 +108,7 @@ src/
 │   └── ops/        # 24 operation modules
 ├── api/            # ApiRequest / ApiResponse + permission + auth
 ├── tool/           # Tool trait and registry ("everything is a tool")
-├── llm/            # LlmProvider trait (Ollama / OpenAI-compatible / stub)
+├── llm/            # LlmProvider trait (OpenAI-compatible / Ollama / llama.cpp / stub)
 ├── mcp/            # MCP client — external tool integration
 ├── client.rs       # KernelClient trait (Embedded / UDS / TCP)
 └── bin/

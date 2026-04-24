@@ -962,7 +962,7 @@ pub enum ApiRequest {
     /// Switch embedding model at runtime without restart.
     #[serde(rename = "switch_embedding_model")]
     SwitchEmbeddingModel {
-        /// Backend type: "local", "ollama", "stub"
+        /// Backend type: "local", "ollama", "openai", "stub"
         model_type: String,
         /// Model identifier, e.g. "BAAI/bge-small-en-v1.5"
         model_id: String,
@@ -974,7 +974,7 @@ pub enum ApiRequest {
     /// Switch LLM model at runtime without restart.
     #[serde(rename = "switch_llm_model")]
     SwitchLlmModel {
-        /// Backend: "ollama", "openai", "stub"
+        /// Backend: "ollama", "openai", "llama", "stub"
         backend: String,
         /// Model name, e.g. "llama3.2"
         model: String,

@@ -2,13 +2,13 @@
 
 **语言：** [简体中文](README_zh.md) · [English](README.md)
 
-从 **AI 视角** 设计的操作系统内核——不以人类优先的 CLI/GUI 为中心，也不把「路径型文件系统」当作主要抽象。上层智能体通过 **语义 API**（内容、标签、意图、图）与系统交互。实现 **与具体模型解耦**：向量与可选 LLM 路由可使用本地后端（Ollama、ONNX），测试时也可用 stub。
+从 **AI 视角** 设计的操作系统内核——不以人类优先的 CLI/GUI 为中心，也不把「路径型文件系统」当作主要抽象。上层智能体通过 **语义 API**（内容、标签、意图、图）与系统交互。实现 **推理框架无关**：Embedding 和 LLM 后端均支持任何 OpenAI-compatible API 的推理服务（llama.cpp、vLLM、SGLang、TensorRT-LLM、Ollama 等），也可使用本地 ONNX 或 stub 测试。
 
 "太初"——一切就绪，等待被使用。AI-OS 从意识觉醒到自主进化的起点。
 
 ## 状态
 
-**太初 (Node 25) — 131 个源文件, 49,489 行 Rust, 1,388 个测试 (0 失败)**
+**太初 (Node 25) — 132 个源文件, 50,671 行 Rust, 1,405 个测试 (0 失败)**
 
 核心栈：CAS、语义文件系统（向量 + BM25 + redb 知识图谱）、分层记忆（四层 + MemoryScope）、智能体调度器、内核事件总线（类型化发布/订阅 + 过滤 + 持久化日志）、权限护栏、Hook 系统（5 个拦截点）、意图系统（DAG 分解 + 自主执行）、上下文预算引擎（L0/L1/L2）、工具注册表（37 个内置 + 外部 MCP）、智能体生命周期（检查点/恢复/发现/委派）、学习闭环（执行统计 + 技能发现 + 自我修复）、`plicod`（TCP+UDS 守护进程）、`plico-mcp`（stdio JSON-RPC）、`aicli`（语义 CLI）。
 
@@ -55,7 +55,7 @@
 # 构建
 cargo build --release
 
-# 运行全部测试 (1,388 个)
+# 运行全部测试 (1,405 个)
 cargo test
 
 # 启动守护进程（推荐）
@@ -99,7 +99,7 @@ src/
 ├── intent/         # NL → 结构化 ApiRequest（接口层，非内核）
 ├── scheduler/      # 智能体、优先级、消息、执行派发
 ├── fs/             # 语义存储：标签、嵌入、图、上下文
-│   ├── embedding/  # EmbeddingProvider（Ollama、ONNX、stub）
+│   ├── embedding/  # EmbeddingProvider（OpenAI-compatible、Ollama、ONNX、stub）
 │   ├── search/     # SemanticSearch（BM25、HNSW）
 │   └── graph/      # KnowledgeGraph（redb，14 种边类型）
 ├── kernel/         # AIKernel — 编排、工具、Hook、持久化
@@ -108,7 +108,7 @@ src/
 │   └── ops/        # 24 个操作模块
 ├── api/            # ApiRequest / ApiResponse + 权限 + 认证
 ├── tool/           # Tool trait 与注册表（「一切皆工具」）
-├── llm/            # LlmProvider trait（Ollama / OpenAI 兼容 / stub）
+├── llm/            # LlmProvider trait（OpenAI-compatible / Ollama / llama.cpp / stub）
 ├── mcp/            # MCP 客户端 — 外部工具集成
 ├── client.rs       # KernelClient trait（嵌入 / UDS / TCP）
 └── bin/

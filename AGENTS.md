@@ -301,12 +301,16 @@ No project-specific KGNodeType or KGEdgeType — all semantics via tags + proper
 
 | Variable | Purpose | Required |
 |----------|---------|----------|
-| `EMBEDDING_BACKEND` | `"local"` (default) / `"ollama"` / `"stub"` | No |
-| `EMBEDDING_MODEL_ID` | HuggingFace model ID (default: `BAAI/bge-small-en-v1.5`) | No |
+| `EMBEDDING_BACKEND` | `"local"` / `"openai"` / `"ollama"` / `"ort"` / `"stub"` | No |
+| `EMBEDDING_API_BASE` | OpenAI-compatible embedding endpoint (default: `http://127.0.0.1:8080/v1`) | No |
+| `EMBEDDING_MODEL` | Model name for openai backend (default: `default`) | No |
+| `EMBEDDING_MODEL_ID` | HuggingFace model ID for local backend (default: `BAAI/bge-small-en-v1.5`) | No |
 | `EMBEDDING_PYTHON` | Python interpreter path (default: `python3`) | No |
+| `LLM_BACKEND` | `"ollama"` / `"openai"` / `"llama"` / `"stub"` | No |
+| `LLAMA_URL` | llama.cpp server URL (default: `http://127.0.0.1:8080/v1`) | No |
+| `LLAMA_MODEL` | Model name for llama backend | No |
+| `OPENAI_API_BASE` | OpenAI-compatible LLM endpoint | No |
 | `OLLAMA_URL` | Ollama daemon URL (default: `http://localhost:11434`) | No |
-| `OLLAMA_EMBEDDING_MODEL` | Ollama embedding model (default: `all-minilm-l6-v2`) | No |
-| `OLLAMA_SUMMARIZER_MODEL` | Ollama chat model for summaries (default: `llama3.2`) | No |
 | `PLICO_ROOT` | Storage root for all binaries (default: `~/.plico`) | No |
 | `RUST_LOG` | Tracing log level filter (default: `info`) | No |
 | `AICLI_OUTPUT` | CLI output format: `json` (default) / `human` | No |

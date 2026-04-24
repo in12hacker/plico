@@ -139,10 +139,18 @@ pub(crate) fn create_embedding_provider(
                 .map(|b| Arc::new(b) as Arc<dyn EmbeddingProvider>)
                 .map_err(|e| format!("ollama embedding error: {}", e))
         }
+        "openai" => {
+            let base_url = std::env::var("EMBEDDING_API_BASE")
+                .unwrap_or_else(|_| "http://127.0.0.1:8080/v1".to_string());
+            let api_key = std::env::var("EMBEDDING_API_KEY").ok();
+            crate::fs::OpenAIEmbeddingBackend::new(&base_url, model_id, api_key)
+                .map(|b| Arc::new(b) as Arc<dyn EmbeddingProvider>)
+                .map_err(|e| format!("openai embedding error: {}", e))
+        }
         "stub" => {
             Ok(Arc::new(crate::fs::StubEmbeddingProvider::new()) as Arc<dyn EmbeddingProvider>)
         }
-        other => Err(format!("unknown embedding backend type: {}. Use 'local', 'ollama', or 'stub'", other)),
+        other => Err(format!("unknown embedding backend type: {}. Use 'local', 'ollama', 'openai', or 'stub'", other)),
     }
 }
 
@@ -170,10 +178,23 @@ pub(crate) fn create_llm_provider(
                 .map(|p| Arc::new(p) as Arc<dyn LlmProvider>)
                 .map_err(|e| format!("openai error: {}", e))
         }
+        "llama" => {
+            let base_url = url
+                .map(String::from)
+                .unwrap_or_else(|| {
+                    let u = std::env::var("LLAMA_URL")
+                        .or_else(|_| std::env::var("OPENAI_API_BASE"))
+                        .unwrap_or_else(|_| "http://127.0.0.1:8080/v1".into());
+                    if u.contains("/v1") { u } else { format!("{}/v1", u.trim_end_matches('/')) }
+                });
+            crate::llm::OpenAICompatibleProvider::new(&base_url, model, None)
+                .map(|p| Arc::new(p) as Arc<dyn LlmProvider>)
+                .map_err(|e| format!("llama error: {}", e))
+        }
         "stub" => {
             Ok(Arc::new(crate::llm::StubProvider::empty()) as Arc<dyn LlmProvider>)
         }
-        other => Err(format!("unknown LLM backend: {}. Use 'ollama', 'openai', or 'stub'", other)),
+        other => Err(format!("unknown LLM backend: {}. Use 'ollama', 'openai', 'llama', or 'stub'", other)),
     }
 }
 
@@ -240,7 +261,7 @@ impl AIKernel {
     /// If the health check fails, the current model remains active and an error is returned.
     ///
     /// # Arguments
-    /// * `model_type` - Backend type: "local", "ollama", or "stub"
+    /// * `model_type` - Backend type: "local", "ollama", "openai", or "stub"
     /// * `model_id` - Model identifier (e.g., "BAAI/bge-small-en-v1.5")
     /// * `python_path` - Optional Python interpreter path for local backend
     ///
@@ -291,7 +312,7 @@ impl AIKernel {
     /// If the health check fails, the current model remains active and an error is returned.
     ///
     /// # Arguments
-    /// * `backend` - Backend type: "ollama", "openai", or "stub"
+    /// * `backend` - Backend type: "ollama", "openai", "llama", or "stub"
     /// * `model` - Model name (e.g., "llama3.2")
     /// * `url` - Optional URL override
     ///
