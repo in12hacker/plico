@@ -1165,11 +1165,13 @@ impl AIKernel {
             }
             // ── Memory tier management (v0.7) ────────────────────────────
             ApiRequest::MemoryMove { agent_id, entry_id, target_tier, .. } => {
-                let tier = match target_tier.as_str() {
-                    "ephemeral" => crate::memory::MemoryTier::Ephemeral,
-                    "working" => crate::memory::MemoryTier::Working,
-                    "long_term" => crate::memory::MemoryTier::LongTerm,
-                    "procedural" => crate::memory::MemoryTier::Procedural,
+                // Normalize tier name (support both "long-term" and "long_term")
+                let normalized = target_tier.to_lowercase().replace('-', "_");
+                let tier = match normalized.as_str() {
+                    "ephemeral" | "l0" => crate::memory::MemoryTier::Ephemeral,
+                    "working" | "l1" => crate::memory::MemoryTier::Working,
+                    "long_term" | "longterm" | "l2" | "lt" => crate::memory::MemoryTier::LongTerm,
+                    "procedural" | "l3" => crate::memory::MemoryTier::Procedural,
                     _ => return ApiResponse::error(format!("unknown tier: {}", target_tier)),
                 };
                 // Note: memory_move doesn't have tenant_id in current signature, using "default"

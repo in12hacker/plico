@@ -109,6 +109,12 @@ fn run_daemon(args: &[String], root: &PathBuf) -> bool {
     let sock_path = root.join("plico.sock");
     let filtered = filter_args(args);
 
+    // Handle --help locally in daemon mode
+    if filtered.iter().any(|a| a == "--help" || a == "-h") {
+        print_help();
+        return true;
+    }
+
     let client = RemoteClient::uds(sock_path.clone());
     if client.is_reachable() {
         return execute_via_client(&client, &filtered);
