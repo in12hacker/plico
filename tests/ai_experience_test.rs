@@ -23,6 +23,7 @@ fn call_api(kernel: &AIKernel, req: ApiRequest) -> ApiResponse {
 #[test]
 fn test_ai_agent_multi_session_experience() {
     let _ = std::env::set_var("EMBEDDING_BACKEND", "stub");
+    let _ = std::env::set_var("LLM_BACKEND", "stub");
     let root = tempdir().unwrap();
 
     // === Session 1: Agent A creates data ===
@@ -257,6 +258,7 @@ fn test_ai_agent_multi_session_experience() {
 #[test]
 fn test_explicit_agent_registration_and_usage() {
     let _ = std::env::set_var("EMBEDDING_BACKEND", "stub");
+    let _ = std::env::set_var("LLM_BACKEND", "stub");
     let root = tempdir().unwrap();
 
     let kernel = AIKernel::new(root.path().to_path_buf()).unwrap();
@@ -308,6 +310,7 @@ fn test_explicit_agent_registration_and_usage() {
 #[test]
 fn test_session_checkpoint_persistence() {
     let _ = std::env::set_var("EMBEDDING_BACKEND", "stub");
+    let _ = std::env::set_var("LLM_BACKEND", "stub");
     let root = tempdir().unwrap();
 
     // Session 1: Create data and checkpoint

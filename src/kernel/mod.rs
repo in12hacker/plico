@@ -110,7 +110,7 @@ impl AIKernel {
             Arc::new(RwLock::new(embedding_raw));
         let embedding = HotSwapEmbeddingProvider::new(embedding_inner.clone());
 
-        let llm_raw: Arc<dyn LlmProvider> = match persistence::create_llm_provider("PLICO_SUMMARIZER_MODEL", "llama3.2") {
+        let llm_raw: Arc<dyn LlmProvider> = match persistence::create_llm_provider("PLICO_SUMMARIZER_MODEL", "qwen2.5-coder-7b-instruct") {
             Ok(provider) => {
                 tracing::info!("LLM summarizer enabled: {}", provider.model_name());
                 provider
@@ -2027,6 +2027,7 @@ mod kernel_mod_tests {
     #[test]
     fn test_kernel_new_creates_valid_kernel() {
         let _ = std::env::set_var("EMBEDDING_BACKEND", "stub");
+        let _ = std::env::set_var("LLM_BACKEND", "stub");
         let dir = tempfile::tempdir().unwrap();
         let kernel = AIKernel::new(dir.path().to_path_buf()).expect("kernel init");
         assert!(!kernel.root.as_os_str().is_empty());

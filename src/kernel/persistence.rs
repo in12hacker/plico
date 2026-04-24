@@ -13,6 +13,48 @@ use crate::scheduler::agent::Intent;
 
 use super::AIKernel;
 
+/// Resolve llama.cpp server URL from multiple sources (priority order):
+/// 1. `LLAMA_URL` env var (explicit override)
+/// 2. `OPENAI_API_BASE` env var (generic OpenAI-compatible)
+/// 3. `~/.plico/llama.url` file (persistent user config)
+/// 4. Auto-detect from running llama-server process (`--port` flag)
+/// 5. Fallback: `http://127.0.0.1:8080/v1`
+pub(crate) fn resolve_llama_url() -> String {
+    if let Ok(url) = std::env::var("LLAMA_URL") {
+        return ensure_v1_suffix(&url);
+    }
+    if let Ok(url) = std::env::var("OPENAI_API_BASE") {
+        return ensure_v1_suffix(&url);
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        let config_path = PathBuf::from(&home).join(".plico/llama.url");
+        if let Ok(url) = std::fs::read_to_string(&config_path) {
+            let url = url.trim();
+            if !url.is_empty() {
+                return ensure_v1_suffix(url);
+            }
+        }
+    }
+    if let Some(port) = detect_llama_server_port() {
+        return format!("http://127.0.0.1:{port}/v1");
+    }
+    "http://127.0.0.1:8080/v1".to_string()
+}
+
+pub(crate) fn ensure_v1_suffix(url: &str) -> String {
+    if url.contains("/v1") { url.to_string() } else { format!("{}/v1", url.trim_end_matches('/')) }
+}
+
+/// Try to detect the port of a running llama-server process.
+fn detect_llama_server_port() -> Option<u16> {
+    let output = std::process::Command::new("sh")
+        .args(["-c", "ps aux | grep -oP 'llama-server.*--port \\K[0-9]+' | head -1"])
+        .output()
+        .ok()?;
+    let s = String::from_utf8_lossy(&output.stdout);
+    s.trim().parse().ok()
+}
+
 /// Atomically write a serializable value to a JSON file.
 ///
 /// Writes to a `.json.tmp` file first, then renames on success.
@@ -307,15 +349,15 @@ impl AIKernel {
 
 /// Create the embedding provider based on EMBEDDING_BACKEND env var.
 ///
-/// Priority when unset: local → ollama → stub
-/// Explicit values: "local" | "ollama" | "openai" | "stub" | "ort"
+/// Explicit values: "openai" (default) | "local" | "ollama" | "stub" | "ort"
 ///
 /// The `"openai"` backend is framework-agnostic — it calls any server
 /// exposing the OpenAI `/v1/embeddings` endpoint (llama.cpp, vLLM,
 /// SGLang, TensorRT-LLM, text-embeddings-inference, OpenAI, etc.).
+/// Default endpoint: auto-detected from running llama-server, or `http://127.0.0.1:8080/v1`.
 pub(crate) fn create_embedding_provider() -> Result<Arc<dyn EmbeddingProvider>, EmbedError> {
     let backend = std::env::var("EMBEDDING_BACKEND")
-        .unwrap_or_else(|_| "local".to_string());
+        .unwrap_or_else(|_| "openai".to_string());
 
     let base_provider: Arc<dyn EmbeddingProvider> = match backend.as_str() {
         "ort" => {
@@ -361,7 +403,8 @@ pub(crate) fn create_embedding_provider() -> Result<Arc<dyn EmbeddingProvider>, 
         }
         "openai" => {
             let base_url = std::env::var("EMBEDDING_API_BASE")
-                .unwrap_or_else(|_| "http://127.0.0.1:8080/v1".to_string());
+                .map(|u| ensure_v1_suffix(&u))
+                .unwrap_or_else(|_| resolve_llama_url());
             let model = std::env::var("EMBEDDING_MODEL")
                 .unwrap_or_else(|_| "default".to_string());
             let api_key = std::env::var("EMBEDDING_API_KEY").ok();
@@ -428,7 +471,7 @@ fn try_ollama() -> Result<Arc<dyn EmbeddingProvider>, EmbedError> {
 
 /// Create an LLM provider based on `LLM_BACKEND` env var.
 ///
-/// Backends: "ollama" (default) | "openai" | "llama" | "stub"
+/// Backends: "llama" (default) | "ollama" | "openai" | "stub"
 ///
 /// The `"llama"` backend is an alias for `"openai"` with llama.cpp-specific
 /// defaults (`LLAMA_URL`, `LLAMA_MODEL`). The `"openai"` backend works with
@@ -436,7 +479,7 @@ fn try_ollama() -> Result<Arc<dyn EmbeddingProvider>, EmbedError> {
 /// vLLM, SGLang, TensorRT-LLM, DeepSeek, Groq, Together, etc.).
 pub(crate) fn create_llm_provider(model_env: &str, default_model: &str) -> Result<Arc<dyn LlmProvider>, LlmError> {
     let backend = std::env::var("LLM_BACKEND")
-        .unwrap_or_else(|_| "ollama".to_string());
+        .unwrap_or_else(|_| "llama".to_string());
 
     let inner: Arc<dyn LlmProvider> = match backend.as_str() {
         "ollama" => {
@@ -463,14 +506,7 @@ pub(crate) fn create_llm_provider(model_env: &str, default_model: &str) -> Resul
             Arc::new(provider) as Arc<dyn LlmProvider>
         }
         "llama" => {
-            let base_url = std::env::var("LLAMA_URL")
-                .or_else(|_| std::env::var("OPENAI_API_BASE"))
-                .unwrap_or_else(|_| "http://127.0.0.1:8080/v1".to_string());
-            let base_url = if !base_url.contains("/v1") {
-                format!("{}/v1", base_url.trim_end_matches('/'))
-            } else {
-                base_url
-            };
+            let base_url = resolve_llama_url();
             let model = std::env::var("LLAMA_MODEL")
                 .or_else(|_| std::env::var(model_env))
                 .unwrap_or_else(|_| default_model.to_string());
@@ -554,6 +590,7 @@ mod tests {
     #[test]
     fn test_persist_and_restore_agents() {
         let _ = std::env::set_var("EMBEDDING_BACKEND", "stub");
+        let _ = std::env::set_var("LLM_BACKEND", "stub");
         let dir = tempdir().unwrap();
         let kernel = crate::kernel::AIKernel::new(dir.path().to_path_buf()).expect("kernel init");
 
@@ -573,6 +610,7 @@ mod tests {
     #[test]
     fn test_persist_and_restore_permissions() {
         let _ = std::env::set_var("EMBEDDING_BACKEND", "stub");
+        let _ = std::env::set_var("LLM_BACKEND", "stub");
         let dir = tempdir().unwrap();
         let kernel = crate::kernel::AIKernel::new(dir.path().to_path_buf()).expect("kernel init");
 
@@ -589,6 +627,7 @@ mod tests {
     #[test]
     fn test_restore_from_empty_dir() {
         let _ = std::env::set_var("EMBEDDING_BACKEND", "stub");
+        let _ = std::env::set_var("LLM_BACKEND", "stub");
         let dir = tempdir().unwrap();
         // Fresh directory with no persisted state - should not panic
         let kernel = crate::kernel::AIKernel::new(dir.path().to_path_buf()).expect("kernel init from empty");

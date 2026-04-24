@@ -98,24 +98,24 @@ Tools are registered at user scope — available in all sessions. Use `claude mc
 
 **Important**: The built-in `WebSearch` tool does NOT work with MiniMax API (MiniMax does not support it). Always use `web_search` from the MiniMax MCP server instead.
 
-## Embedding Backend
+## Inference Backend
 
 Embedding and LLM backends are **inference-framework-agnostic**. Any server exposing an OpenAI-compatible `/v1/embeddings` or `/v1/chat/completions` endpoint works (llama.cpp, vLLM, SGLang, TensorRT-LLM, Ollama, OpenAI, etc.).
 
+**Defaults (auto-detect llama-server port from running process, fallback :8080):**
+- `LLM_BACKEND=llama` → auto-detected llama-server URL
+- `EMBEDDING_BACKEND=openai` → same auto-detected URL
+- Model: `qwen2.5-coder-7b-instruct` (override via `LLAMA_MODEL`)
+
+URL resolution priority: `LLAMA_URL` env > `OPENAI_API_BASE` env > `~/.plico/llama.url` file > auto-detect from `ps` > `:8080` fallback.
+
 ```bash
-# LLM: llama.cpp (qwen2.5-coder-7b-instruct-q4_k_m.gguf @ :18920)
-export LLM_BACKEND=llama
-export LLAMA_URL=http://127.0.0.1:18920/v1
-export LLAMA_MODEL=qwen2.5-coder-7b-instruct-q4_k_m.gguf
-
-# Embedding: local Python subprocess (bge-small-en-v1.5, 384d)
-export EMBEDDING_BACKEND=local
-export EMBEDDING_MODEL_ID=BAAI/bge-small-en-v1.5
-export EMBEDDING_PYTHON=python3
-
-# For tests: stub backend (tag-only search, no real embeddings)
+# Only for unit tests: stub backend (no external service)
 export EMBEDDING_BACKEND=stub
+export LLM_BACKEND=stub
 ```
+
+**DO NOT** use `EMBEDDING_BACKEND=local` — it spawns a Python subprocess calling Ollama, extremely slow.
 
 ## Build & Test Commands
 

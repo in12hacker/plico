@@ -28,18 +28,26 @@ Every command uses this wrapper — sets env, suppresses logs, enables JSON for 
 Storage persists to `~/.plico/dogfood` (survives reboots, not `/tmp`).
 
 ```bash
+# Auto-detect llama-server port from running process
+LLAMA_PORT=$(ps aux | grep -oP 'llama-server.*--port \K[0-9]+' | head -1)
+LLAMA_PORT=${LLAMA_PORT:-8080}
+LLAMA_ENDPOINT="http://127.0.0.1:${LLAMA_PORT}/v1"
+
 pcli() {
+  LLAMA_URL="$LLAMA_ENDPOINT" EMBEDDING_API_BASE="$LLAMA_ENDPOINT" \
   RUST_LOG=off AICLI_OUTPUT=json \
     cargo run --quiet --bin aicli -- --root "${HOME}/.plico/dogfood" --embedded "$@" 2>/dev/null
 }
 pcli_human() {
+  LLAMA_URL="$LLAMA_ENDPOINT" EMBEDDING_API_BASE="$LLAMA_ENDPOINT" \
   RUST_LOG=off \
     cargo run --quiet --bin aicli -- --root "${HOME}/.plico/dogfood" --embedded "$@" 2>/dev/null
 }
 AGENT="plico-dev"
 ```
 
-> **Note**: 默认使用 `EMBEDDING_BACKEND=local`（bge-small-en-v1.5, 384维）。若需 tag-only 搜索（无真实 embedding），显式设置 `EMBEDDING_BACKEND=stub`。
+The port is auto-detected from the running `llama-server` process (falls back to 8080).
+Defaults: `LLM_BACKEND=llama`, `EMBEDDING_BACKEND=openai` — both route to llama.cpp.
 
 ### Bootstrap — MANDATORY first step
 
@@ -169,8 +177,8 @@ pcli_human explore --cid <node-id> --agent $AGENT
 pcli_human paths --src <id1> --dst <id2> --depth 3
 ```
 
-Note: With `EMBEDDING_BACKEND=stub`, search falls back to tag-substring matching.
-Use `--require-tags` / `-t` with `--query` for precise filtering.
+When llama-server is running, search uses real vector embeddings for semantic matching.
+Use `--require-tags` / `-t` for precise tag filtering (e.g. `-t "plico:type:adr"`).
 
 ## Daemon Lifecycle (plicod)
 

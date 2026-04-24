@@ -518,6 +518,7 @@ mod tests {
     /// Helper to create a kernel for async tests.
     fn make_test_kernel() -> (std::sync::Arc<AIKernel>, std::path::PathBuf) {
         let _ = std::env::set_var("EMBEDDING_BACKEND", "stub");
+        let _ = std::env::set_var("LLM_BACKEND", "stub");
         let dir = std::env::temp_dir().join(format!("plico_test_{}_{}", std::process::id(), rand::random::<u32>()));
         std::fs::create_dir_all(&dir).expect("temp dir");
         let kernel = std::sync::Arc::new(AIKernel::new(dir.clone()).expect("kernel init"));
@@ -913,6 +914,7 @@ async fn test_learning_loop_methods_called() {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_execution_writes_to_profile() {
         let _ = std::env::set_var("EMBEDDING_BACKEND", "stub");
+        let _ = std::env::set_var("LLM_BACKEND", "stub");
         let dir = std::env::temp_dir().join(format!("plico_test_{}_{}", std::process::id(), rand::random::<u32>()));
         std::fs::create_dir_all(&dir).expect("temp dir");
         let kernel = std::sync::Arc::new(AIKernel::new(dir.clone()).expect("kernel init"));
@@ -957,6 +959,7 @@ async fn test_learning_loop_methods_called() {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_predictive_prefetch_triggered() {
         let _ = std::env::set_var("EMBEDDING_BACKEND", "stub");
+        let _ = std::env::set_var("LLM_BACKEND", "stub");
         let dir = std::env::temp_dir().join(format!("plico_test_{}_{}", std::process::id(), rand::random::<u32>()));
         std::fs::create_dir_all(&dir).expect("temp dir");
         let kernel = std::sync::Arc::new(AIKernel::new(dir.clone()).expect("kernel init"));
@@ -1002,6 +1005,7 @@ async fn test_learning_loop_methods_called() {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_hot_objects_updated_after_execution() {
         let _ = std::env::set_var("EMBEDDING_BACKEND", "stub");
+        let _ = std::env::set_var("LLM_BACKEND", "stub");
         let dir = std::env::temp_dir().join(format!("plico_test_{}_{}", std::process::id(), rand::random::<u32>()));
         std::fs::create_dir_all(&dir).expect("temp dir");
         let kernel = std::sync::Arc::new(AIKernel::new(dir.clone()).expect("kernel init"));
@@ -1039,6 +1043,7 @@ async fn test_learning_loop_methods_called() {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_learning_loop_closure() {
         let _ = std::env::set_var("EMBEDDING_BACKEND", "stub");
+        let _ = std::env::set_var("LLM_BACKEND", "stub");
         let dir = std::env::temp_dir().join(format!("plico_test_{}_{}", std::process::id(), rand::random::<u32>()));
         std::fs::create_dir_all(&dir).expect("temp dir");
         let kernel = std::sync::Arc::new(AIKernel::new(dir.clone()).expect("kernel init"));

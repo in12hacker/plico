@@ -8,6 +8,7 @@ use tempfile::tempdir;
 
 fn run_cli(root: &std::path::Path, args: &[&str]) -> Output {
     std::env::set_var("EMBEDDING_BACKEND", "stub");
+    std::env::set_var("LLM_BACKEND", "stub");
     std::env::set_var("RUST_LOG", "off");
 
     Command::new("cargo")
@@ -20,6 +21,7 @@ fn run_cli(root: &std::path::Path, args: &[&str]) -> Output {
 
 fn run_cli_json(root: &std::path::Path, args: &[&str]) -> serde_json::Value {
     std::env::set_var("EMBEDDING_BACKEND", "stub");
+    std::env::set_var("LLM_BACKEND", "stub");
     std::env::set_var("RUST_LOG", "off");
     std::env::set_var("AICLI_OUTPUT", "json");
 
@@ -38,6 +40,7 @@ fn run_cli_json(root: &std::path::Path, args: &[&str]) -> serde_json::Value {
 fn setup_root() -> tempfile::TempDir {
     let dir = tempdir().unwrap();
     std::env::set_var("EMBEDDING_BACKEND", "stub");
+    std::env::set_var("LLM_BACKEND", "stub");
     std::env::set_var("RUST_LOG", "off");
     let _ = Command::new("cargo")
         .args(&["run", "--quiet", "--bin", "aicli", "--", "--embedded", "--root"])

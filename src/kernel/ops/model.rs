@@ -141,7 +141,8 @@ pub(crate) fn create_embedding_provider(
         }
         "openai" => {
             let base_url = std::env::var("EMBEDDING_API_BASE")
-                .unwrap_or_else(|_| "http://127.0.0.1:8080/v1".to_string());
+                .map(|u| crate::kernel::persistence::ensure_v1_suffix(&u))
+                .unwrap_or_else(|_| crate::kernel::persistence::resolve_llama_url());
             let api_key = std::env::var("EMBEDDING_API_KEY").ok();
             crate::fs::OpenAIEmbeddingBackend::new(&base_url, model_id, api_key)
                 .map(|b| Arc::new(b) as Arc<dyn EmbeddingProvider>)
@@ -181,12 +182,7 @@ pub(crate) fn create_llm_provider(
         "llama" => {
             let base_url = url
                 .map(String::from)
-                .unwrap_or_else(|| {
-                    let u = std::env::var("LLAMA_URL")
-                        .or_else(|_| std::env::var("OPENAI_API_BASE"))
-                        .unwrap_or_else(|_| "http://127.0.0.1:8080/v1".into());
-                    if u.contains("/v1") { u } else { format!("{}/v1", u.trim_end_matches('/')) }
-                });
+                .unwrap_or_else(|| crate::kernel::persistence::resolve_llama_url());
             crate::llm::OpenAICompatibleProvider::new(&base_url, model, None)
                 .map(|p| Arc::new(p) as Arc<dyn LlmProvider>)
                 .map_err(|e| format!("llama error: {}", e))

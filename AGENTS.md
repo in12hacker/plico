@@ -303,12 +303,12 @@ No project-specific KGNodeType or KGEdgeType — all semantics via tags + proper
 
 | Variable | Purpose | Required |
 |----------|---------|----------|
-| `EMBEDDING_BACKEND` | `"local"` / `"openai"` / `"ollama"` / `"ort"` / `"stub"` | No |
+| `EMBEDDING_BACKEND` | `"openai"` (default) / `"local"` / `"ollama"` / `"ort"` / `"stub"` | No |
 | `EMBEDDING_API_BASE` | OpenAI-compatible embedding endpoint (default: `http://127.0.0.1:8080/v1`) | No |
 | `EMBEDDING_MODEL` | Model name for openai backend (default: `default`) | No |
 | `EMBEDDING_MODEL_ID` | HuggingFace model ID for local backend (default: `BAAI/bge-small-en-v1.5`) | No |
 | `EMBEDDING_PYTHON` | Python interpreter path (default: `python3`) | No |
-| `LLM_BACKEND` | `"ollama"` / `"openai"` / `"llama"` / `"stub"` | No |
+| `LLM_BACKEND` | `"llama"` (default) / `"ollama"` / `"openai"` / `"stub"` | No |
 | `LLAMA_URL` | llama.cpp server URL (default: `http://127.0.0.1:8080/v1`) | No |
 | `LLAMA_MODEL` | Model name for llama backend | No |
 | `OPENAI_API_BASE` | OpenAI-compatible LLM endpoint | No |

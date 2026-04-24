@@ -57,6 +57,7 @@ fn spawn_plico_mcp() -> (
     let mut child = Command::new(env!("CARGO_BIN_EXE_plico-mcp"))
         .env("PLICO_ROOT", dir.path())
         .env("EMBEDDING_BACKEND", "stub")
+        .env("LLM_BACKEND", "stub")
         .env("RUST_LOG", "error")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

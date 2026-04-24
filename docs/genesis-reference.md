@@ -418,21 +418,21 @@ plico-mcp --root ~/.plico
 | `AICLI_OUTPUT` | CLI 输出格式 | `json` |
 | `RUST_LOG` | 日志级别 | `info` |
 
-**Embedding 后端** — `EMBEDDING_BACKEND` 选择: `local` | `openai` | `ollama` | `ort` | `stub`
+**Embedding 后端** — `EMBEDDING_BACKEND` 选择: `openai` | `local` | `ollama` | `ort` | `stub`
 
 | 变量 | 说明 | 默认值 |
 |------|------|--------|
-| `EMBEDDING_BACKEND` | 嵌入模型后端 | `local` |
+| `EMBEDDING_BACKEND` | 嵌入模型后端 | `openai` |
 | `EMBEDDING_API_BASE` | OpenAI-compatible 端点 (openai 后端) | `http://127.0.0.1:8080/v1` |
 | `EMBEDDING_MODEL` | 模型名 (openai 后端) | `default` |
 | `EMBEDDING_API_KEY` | API 密钥 (openai 后端，可选) | — |
 | `EMBEDDING_MODEL_ID` | HuggingFace 模型 ID (local 后端) | `BAAI/bge-small-en-v1.5` |
 
-**LLM 后端** — `LLM_BACKEND` 选择: `ollama` | `openai` | `llama` | `stub`
+**LLM 后端** — `LLM_BACKEND` 选择: `llama` | `ollama` | `openai` | `stub`
 
 | 变量 | 说明 | 默认值 |
 |------|------|--------|
-| `LLM_BACKEND` | 推理后端 | `ollama` |
+| `LLM_BACKEND` | 推理后端 | `llama` |
 | `LLAMA_URL` | llama.cpp server URL (llama 后端) | `http://127.0.0.1:8080/v1` |
 | `LLAMA_MODEL` | 模型名 (llama 后端) | — |
 | `OPENAI_API_BASE` | OpenAI-compatible 端点 (openai 后端) | `https://api.openai.com/v1` |

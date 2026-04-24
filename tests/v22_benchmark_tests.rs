@@ -34,6 +34,7 @@ use tempfile::tempdir;
 /// Helper to create a kernel with stub embedding backend.
 fn make_kernel() -> (AIKernel, tempfile::TempDir) {
     let _ = std::env::set_var("EMBEDDING_BACKEND", "stub");
+    let _ = std::env::set_var("LLM_BACKEND", "stub");
     let dir = tempdir().unwrap();
     let kernel = AIKernel::new(dir.path().to_path_buf()).expect("kernel init");
     (kernel, dir)

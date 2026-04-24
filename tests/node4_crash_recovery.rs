@@ -35,6 +35,7 @@ fn test_crash_recovery_cas_data_persists() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().to_path_buf();
     let _ = std::env::set_var("EMBEDDING_BACKEND", "stub");
+    let _ = std::env::set_var("LLM_BACKEND", "stub");
 
     // Create kernel and ingest articles
     let kernel1 = AIKernel::new(root.clone()).expect("kernel init");
@@ -84,6 +85,7 @@ fn test_crash_recovery_kg_data_persists() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().to_path_buf();
     let _ = std::env::set_var("EMBEDDING_BACKEND", "stub");
+    let _ = std::env::set_var("LLM_BACKEND", "stub");
 
     let kernel1 = AIKernel::new(root.clone()).expect("kernel init");
     let agent_id = kernel1.register_agent("kg-agent".to_string());
@@ -149,6 +151,7 @@ fn test_crash_recovery_memories_persist() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().to_path_buf();
     let _ = std::env::set_var("EMBEDDING_BACKEND", "stub");
+    let _ = std::env::set_var("LLM_BACKEND", "stub");
 
     let kernel1 = AIKernel::new(root.clone()).expect("kernel init");
     let agent_id = kernel1.register_agent("memory-agent".to_string());
@@ -197,6 +200,7 @@ fn test_crash_recovery_task_operations_within_session() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().to_path_buf();
     let _ = std::env::set_var("EMBEDDING_BACKEND", "stub");
+    let _ = std::env::set_var("LLM_BACKEND", "stub");
 
     let kernel1 = AIKernel::new(root.clone()).expect("kernel init");
 
@@ -250,6 +254,7 @@ fn test_full_ingest_kg_query_sequence() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().to_path_buf();
     let _ = std::env::set_var("EMBEDDING_BACKEND", "stub");
+    let _ = std::env::set_var("LLM_BACKEND", "stub");
 
     let kernel = AIKernel::new(root).expect("kernel init");
     let agent_id = kernel.register_agent("full-test-agent".to_string());

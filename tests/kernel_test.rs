@@ -13,6 +13,7 @@ use tempfile::tempdir;
 
 fn make_kernel() -> (AIKernel, tempfile::TempDir) {
     let _ = std::env::set_var("EMBEDDING_BACKEND", "stub");
+    let _ = std::env::set_var("LLM_BACKEND", "stub");
     let dir = tempdir().unwrap();
     let kernel = AIKernel::new(dir.path().to_path_buf()).expect("kernel init");
     (kernel, dir)
@@ -20,6 +21,7 @@ fn make_kernel() -> (AIKernel, tempfile::TempDir) {
 
 fn make_kernel_arc() -> (Arc<AIKernel>, tempfile::TempDir) {
     let _ = std::env::set_var("EMBEDDING_BACKEND", "stub");
+    let _ = std::env::set_var("LLM_BACKEND", "stub");
     let dir = tempdir().unwrap();
     let kernel = Arc::new(AIKernel::new(dir.path().to_path_buf()).expect("kernel init"));
     (kernel, dir)
@@ -522,6 +524,7 @@ fn test_kernel_agent_lifecycle() {
 #[test]
 fn test_kernel_agent_persists_across_restart() {
     let _ = std::env::set_var("EMBEDDING_BACKEND", "stub");
+    let _ = std::env::set_var("LLM_BACKEND", "stub");
     let dir = tempdir().unwrap();
     let root = dir.path().to_path_buf();
 
@@ -549,6 +552,7 @@ fn test_kernel_intent_persists_across_restart() {
     use plico::api::semantic::{ApiRequest, ContentEncoding};
 
     let _ = std::env::set_var("EMBEDDING_BACKEND", "stub");
+    let _ = std::env::set_var("LLM_BACKEND", "stub");
     let dir = tempdir().unwrap();
     let root = dir.path().to_path_buf();
 
@@ -756,6 +760,7 @@ fn test_e2e_agent_autonomy_cycle() {
     use plico::scheduler::agent::IntentPriority;
 
     let _ = std::env::set_var("EMBEDDING_BACKEND", "stub");
+    let _ = std::env::set_var("LLM_BACKEND", "stub");
     let dir = tempdir().unwrap();
     let root = dir.path().to_path_buf();
 
@@ -3363,6 +3368,7 @@ fn test_event_history_monotonic_sequence() {
 fn test_event_log_persists_across_restart() {
     let dir = tempdir().unwrap();
     let _ = std::env::set_var("EMBEDDING_BACKEND", "stub");
+    let _ = std::env::set_var("LLM_BACKEND", "stub");
 
     let event_count_before;
     {
@@ -3402,6 +3408,7 @@ fn test_event_log_persists_across_restart() {
 fn test_event_log_sequence_continues_after_restore() {
     let dir = tempdir().unwrap();
     let _ = std::env::set_var("EMBEDDING_BACKEND", "stub");
+    let _ = std::env::set_var("LLM_BACKEND", "stub");
 
     let max_seq_before;
     {
@@ -4386,6 +4393,7 @@ fn test_kernel_handle_agent_register_via_api() {
 fn test_kernel_new_creates_valid_instance() {
     // AIKernel::new returns Result, so a successful result means a valid instance
     let _ = std::env::set_var("EMBEDDING_BACKEND", "stub");
+    let _ = std::env::set_var("LLM_BACKEND", "stub");
     let dir = tempdir().unwrap();
     let kernel = AIKernel::new(dir.path().to_path_buf());
     assert!(kernel.is_ok(), "AIKernel::new should succeed");
