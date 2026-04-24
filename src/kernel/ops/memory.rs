@@ -455,7 +455,6 @@ impl crate::kernel::AIKernel {
 
         let mut results = self.memory.get_shared_entries_all_agents();
 
-        let caller_uuid = self.resolve_agent(caller_id);
         if let Some(target) = target_agent_id {
             let target_uuid = self.resolve_agent(target);
             results.retain(|e| {

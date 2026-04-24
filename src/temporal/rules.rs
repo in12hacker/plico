@@ -276,14 +276,6 @@ impl super::resolver::TemporalResolver for HeuristicTemporalResolver {
     }
 }
 
-/// Convert Unix milliseconds to (year, month, day) for debugging.
-#[allow(dead_code)]
-pub fn ms_to_ymd(ms: i64) -> (i32, u32, u32) {
-    use chrono::{TimeZone, Utc};
-    let dt = Utc.timestamp_millis_opt(ms).single().unwrap_or_default();
-    (dt.date_naive().year(), dt.date_naive().month(), dt.date_naive().day())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

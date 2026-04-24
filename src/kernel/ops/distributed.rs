@@ -223,8 +223,6 @@ pub struct ClusterManager {
     membership: RwLock<ClusterMembership>,
     message_log: RwLock<Vec<NodeMessage>>,
     pending_migrations: RwLock<HashMap<String, MigrationTicket>>,
-    #[allow(dead_code)]
-    heartbeat_interval_ms: u64,
     stale_threshold_ms: u64,
 }
 
@@ -241,7 +239,6 @@ impl ClusterManager {
             membership: RwLock::new(membership),
             message_log: RwLock::new(Vec::new()),
             pending_migrations: RwLock::new(HashMap::new()),
-            heartbeat_interval_ms: 5000,  // 5 seconds
             stale_threshold_ms: 15000,     // 15 seconds
         }
     }

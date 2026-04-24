@@ -204,19 +204,6 @@ impl SseEvent {
         }
     }
 
-    /// Create an SSE event for text/message chunks
-    #[allow(dead_code)]
-    fn text_chunk(task_id: &str, chunk: &str, done: bool) -> Self {
-        SseEvent {
-            event_type: "text_chunk".to_string(),
-            task_id: Some(task_id.to_string()),
-            data: serde_json::json!({
-                "chunk": chunk,
-                "done": done,
-            }),
-        }
-    }
-
     /// Create an SSE error event
     fn error(task_id: Option<String>, message: &str) -> Self {
         SseEvent {
@@ -227,7 +214,6 @@ impl SseEvent {
     }
 
     /// Create an SSE cancelled event
-    #[allow(dead_code)]
     fn cancelled(task_id: &str) -> Self {
         SseEvent {
             event_type: "cancelled".to_string(),

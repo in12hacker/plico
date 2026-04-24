@@ -37,7 +37,7 @@ use crate::fs::embedding::EmbeddingProvider;
 use crate::fs::graph::KnowledgeGraph;
 use crate::fs::search::SearchFilter;
 use crate::kernel::event_bus::EventBus;
-use crate::kernel::ops::session::{AgentProfile, IntentKeyStrategy};
+use crate::kernel::ops::session::AgentProfile;
 use crate::memory::LayeredMemory;
 use crate::memory::MemoryTier;
 
@@ -242,38 +242,6 @@ impl IntentPrefetcher {
             max_age_ms: 3_600_000, // 1 hour
             intent_cache: Arc::new(IntentAssemblyCache::default()),
             profile_store: Arc::new(AgentProfileStore::default()),
-            feedback_history: RwLock::new(Vec::new()),
-            max_feedback_entries: DEFAULT_MAX_FEEDBACK_ENTRIES,
-            root,
-            total_lookups: std::sync::atomic::AtomicU64::new(0),
-            cache_hits: std::sync::atomic::AtomicU64::new(0),
-        }
-    }
-
-    /// Create a new prefetcher with a custom profile strategy (for testing).
-    #[allow(dead_code)]
-    pub fn new_with_strategy(
-        search: Arc<dyn crate::fs::SemanticSearch>,
-        kg: Option<Arc<dyn KnowledgeGraph>>,
-        memory: Arc<LayeredMemory>,
-        event_bus: Arc<EventBus>,
-        embedding: Arc<dyn EmbeddingProvider>,
-        ctx_loader: Arc<ContextLoader>,
-        strategy: IntentKeyStrategy,
-        root: std::path::PathBuf,
-    ) -> Self {
-        Self {
-            assemblies: Arc::new(RwLock::new(HashMap::new())),
-            allocation_cache: Arc::new(AllocationCache::new()),
-            search,
-            kg,
-            memory,
-            event_bus,
-            embedding,
-            ctx_loader,
-            max_age_ms: 3_600_000, // 1 hour
-            intent_cache: Arc::new(IntentAssemblyCache::default()),
-            profile_store: Arc::new(AgentProfileStore::new(strategy)),
             feedback_history: RwLock::new(Vec::new()),
             max_feedback_entries: DEFAULT_MAX_FEEDBACK_ENTRIES,
             root,
@@ -905,39 +873,6 @@ impl IntentPrefetcher {
         }
     }
 
-    #[allow(dead_code)]
-    /// Multi-path recall: semantic + KG + procedural + events → fused candidates.
-    /// DEPRECATED: Use multi_path_recall_async for concurrent execution.
-    fn multi_path_recall(
-        search: &Arc<dyn crate::fs::SemanticSearch>,
-        kg: &Option<Arc<dyn KnowledgeGraph>>,
-        memory: &Arc<LayeredMemory>,
-        event_bus: &Arc<EventBus>,
-        embedding: &Arc<dyn EmbeddingProvider>,
-        intent: &str,
-        related_cids: &[String],
-    ) -> Result<Vec<ContextCandidate>, String> {
-        // Step 1: Embed the intent
-        let intent_emb = embedding.embed(intent)
-            .map_err(|e| format!("failed to embed intent: {}", e))?;
-        let emb_slice: Vec<f32> = intent_emb;
-
-        // Step 2: Four-path recall
-        // Path A: semantic search
-        let path_a = Self::recall_semantic(search, &emb_slice);
-        // Path B: KG neighbors
-        let path_b = Self::recall_kg(kg, related_cids, intent);
-        // Path C: shared procedural memory
-        let path_c = Self::recall_procedural(memory);
-        // Path D: recent events with related tags
-        let path_d = Self::recall_events(event_bus, intent);
-
-        // Step 3: RRF fusion
-        let fused = Self::rrf_fuse(path_a, path_b, path_c, path_d);
-
-        Ok(fused)
-    }
-
     /// Multi-path recall (async concurrent): semantic + KG + procedural + events → fused candidates.
     async fn multi_path_recall_async(
         search: &Arc<dyn crate::fs::SemanticSearch>,
@@ -1122,105 +1057,6 @@ impl IntentPrefetcher {
         }).await.unwrap_or_else(|_| Vec::new())
     }
 
-    /// Path A: semantic vector search.
-    fn recall_semantic(
-        search: &Arc<dyn crate::fs::SemanticSearch>,
-        intent_emb: &[f32],
-    ) -> Vec<(String, f32)> {
-        let filter = SearchFilter::default();
-        search
-            .search(intent_emb, PATH_LIMIT, &filter)
-            .into_iter()
-            .map(|hit| (hit.cid.clone(), hit.score))
-            .collect()
-    }
-
-    /// Path B: KG topology neighbors of related CIDs.
-    fn recall_kg(
-        kg: &Option<Arc<dyn KnowledgeGraph>>,
-        related_cids: &[String],
-        intent: &str,
-    ) -> Vec<(String, f32)> {
-        let Some(ref kg) = kg else { return Vec::new(); };
-        let mut results: HashMap<String, f32> = HashMap::new();
-
-        // Keyword matching for intent-based scoring
-        let keywords: Vec<&str> = intent
-            .split_whitespace()
-            .filter(|w| w.len() > 2)
-            .collect();
-
-        for cid in related_cids {
-            if let Ok(neighbors) = kg.get_neighbors(cid, None, 2) {
-                for (node, edge) in neighbors {
-                    // Use edge weight as relevance proxy
-                    let score = edge.weight;
-                    // Depth bonus for direct neighbors
-                    let depth_bonus = if edge.created_at > 0 { 0.1_f32 } else { 0.0_f32 };
-                    // Intent keyword match bonus on node label
-                    let label_lower = node.label.to_lowercase();
-                    let keyword_matches: usize = keywords
-                        .iter()
-                        .filter(|kw| label_lower.contains(&kw.to_lowercase()))
-                        .count();
-                    let keyword_bonus = (keyword_matches as f32) * 0.05;
-                    let final_score = score + depth_bonus + keyword_bonus;
-                    results
-                        .entry(node.id.clone())
-                        .and_modify(|s| *s = (*s + final_score) / 2.0)
-                        .or_insert(final_score);
-                }
-            }
-        }
-
-        let mut cids_with_scores: Vec<(String, f32)> = results.into_iter().collect();
-        cids_with_scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        cids_with_scores.truncate(PATH_LIMIT);
-        cids_with_scores
-    }
-
-    /// Path C: shared procedural memories matching the intent.
-    fn recall_procedural(memory: &Arc<LayeredMemory>) -> Vec<(String, f32)> {
-        let entries = memory.get_shared(MemoryTier::Procedural);
-        entries
-            .into_iter()
-            .map(|e| {
-                let desc = e.content.display().to_string();
-                // Score by importance (already stored in entry)
-                let score = e.importance as f32 / 100.0_f32;
-                (desc, score)
-            })
-            .take(PATH_LIMIT)
-            .collect()
-    }
-
-    /// Path D: recent events with tags related to the intent.
-    fn recall_events(event_bus: &Arc<EventBus>, intent: &str) -> Vec<(String, f32)> {
-        let events = event_bus.snapshot_events();
-        // Extract simple keywords from intent (split on spaces, filter short)
-        let keywords: Vec<&str> = intent
-            .split_whitespace()
-            .filter(|w| w.len() > 2)
-            .collect();
-
-        let mut results: Vec<(String, f32)> = Vec::new();
-        for ev in events.iter().rev().take(PATH_LIMIT * 2) {
-            let label = format!("{:?}", ev.event);
-            // Count keyword matches in the event label
-            let matches: usize = keywords
-                .iter()
-                .filter(|kw| label.to_lowercase().contains(&kw.to_lowercase()))
-                .count();
-            if matches > 0 {
-                let score = matches as f32 / keywords.len().max(1) as f32;
-                results.push((label, score));
-            }
-        }
-
-        results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        results.truncate(PATH_LIMIT);
-        results
-    }
 
     /// Reciprocal Rank Fusion — combines ranked lists from multiple recall paths.
     fn rrf_fuse(

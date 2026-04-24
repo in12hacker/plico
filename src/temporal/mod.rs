@@ -7,7 +7,6 @@
 //!
 //! ```text
 //! TemporalResolver (trait)
-//! ├── OllamaTemporalResolver  — LLM-based, handles novel expressions
 //! └── HeuristicTemporalResolver — fast rule-based fallback
 //! ```
 //!
@@ -31,5 +30,5 @@
 mod resolver;
 mod rules;
 
-pub use resolver::{TemporalResolver, TemporalRange, OllamaTemporalResolver, StubTemporalResolver};
+pub use resolver::{TemporalResolver, TemporalRange, StubTemporalResolver};
 pub use rules::{Granularity, TemporalRule, RULE_BASED_RESOLVER, HeuristicTemporalResolver, resolve_heuristic};
