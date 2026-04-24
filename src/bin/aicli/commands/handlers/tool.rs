@@ -19,7 +19,13 @@ pub fn cmd_tool(kernel: &AIKernel, args: &[String]) -> ApiResponse {
             let name = args.get(2).cloned().unwrap_or_default();
             let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
             let params_str = extract_arg(args, "--params").unwrap_or_else(|| "{}".to_string());
-            let params: serde_json::Value = serde_json::from_str(&params_str).unwrap_or_default();
+            let mut params: serde_json::Value = serde_json::from_str(&params_str).unwrap_or_default();
+            // F-2: Support --tier flag for memory.recall tier filtering
+            if let Some(tier) = extract_arg(args, "--tier") {
+                if let Some(obj) = params.as_object_mut() {
+                    obj.insert("tier".to_string(), serde_json::Value::String(tier));
+                }
+            }
             let req = ApiRequest::ToolCall { tool: name, params, agent_id };
             kernel.handle_api_request(req)
         }
