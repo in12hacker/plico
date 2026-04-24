@@ -639,7 +639,7 @@ impl AIKernel {
                     Err(e) => ApiResponse::error(e),
                 }
             }
-            ApiRequest::Recall { agent_id, scope, query, limit } => {
+            ApiRequest::Recall { agent_id, scope, query, limit, tier } => {
                 let memories: Vec<String> = match scope.as_deref() {
                     Some("shared") => {
                         let lim = limit.unwrap_or(20);
@@ -652,7 +652,30 @@ impl AIKernel {
                             }).collect()
                     }
                     _ => {
-                        self.recall(&agent_id, "default").into_iter()
+                        let entries = if let Some(tier_str) = tier.as_deref() {
+                            let parsed_tier = match tier_str.to_lowercase().replace(['-', '_'], "").as_str() {
+                                "ephemeral" | "l0" => crate::memory::MemoryTier::Ephemeral,
+                                "working" | "l1" => crate::memory::MemoryTier::Working,
+                                "longterm" | "l2" | "lt" => crate::memory::MemoryTier::LongTerm,
+                                "procedural" | "l3" => crate::memory::MemoryTier::Procedural,
+                                other => {
+                                    tracing::warn!("Unknown tier '{}', falling back to all tiers", other);
+                                    return {
+                                        let mut r = ApiResponse::ok();
+                                        r.memory = Some(self.recall(&agent_id, "default").into_iter()
+                                            .filter_map(|m| match m.content {
+                                                crate::memory::MemoryContent::Text(t) => Some(t),
+                                                _ => None,
+                                            }).collect());
+                                        r
+                                    };
+                                }
+                            };
+                            self.memory.get_tier(&agent_id, parsed_tier)
+                        } else {
+                            self.recall(&agent_id, "default")
+                        };
+                        entries.into_iter()
                             .filter_map(|m| match m.content {
                                 crate::memory::MemoryContent::Text(t) => Some(t),
                                 _ => None,

@@ -298,7 +298,8 @@ fn build_remote_request(args: &[String]) -> Option<ApiRequest> {
             let scope = commands::extract_arg(args, "--scope");
             let query = commands::extract_arg(args, "--query");
             let limit = commands::extract_arg(args, "--limit").and_then(|l| l.parse().ok());
-            Some(ApiRequest::Recall { agent_id: agent_id(), scope, query, limit })
+            let tier = commands::extract_arg(args, "--tier");
+            Some(ApiRequest::Recall { agent_id: agent_id(), scope, query, limit, tier })
         }
         Some("explore") => {
             let cid = commands::extract_arg(args, "--cid").unwrap_or_default();

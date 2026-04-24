@@ -64,12 +64,14 @@ pub fn cmd_recall(kernel: &AIKernel, args: &[String]) -> ApiResponse {
     let scope = extract_arg(args, "--scope");
     let query = extract_arg(args, "--query");
     let limit = extract_arg(args, "--limit").and_then(|l| l.parse::<usize>().ok());
+    let tier = extract_arg(args, "--tier");
 
     kernel.handle_api_request(ApiRequest::Recall {
         agent_id,
         scope,
         query,
         limit,
+        tier,
     })
 }
 

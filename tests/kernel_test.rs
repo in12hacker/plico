@@ -4217,6 +4217,7 @@ fn test_b53_recall_shared_via_api() {
 
     // Agent B recalls with scope=shared via API (the B53 fix path)
     let resp = kernel.handle_api_request(ApiRequest::Recall {
+        tier: None,
         agent_id: agent_b.clone(),
         scope: Some("shared".into()),
         query: None,
@@ -4238,6 +4239,7 @@ fn test_b53_recall_without_scope_returns_own_memories() {
     kernel.remember(&agent_a, "default", "my private note".into()).unwrap();
 
     let resp = kernel.handle_api_request(ApiRequest::Recall {
+        tier: None,
         agent_id: agent_a.clone(),
         scope: None,
         query: None,
@@ -4409,6 +4411,7 @@ fn test_kernel_handle_remember_via_api() {
 
     // Verify memory was stored by recalling
     let recall_resp = kernel.handle_api_request(ApiRequest::Recall {
+        tier: None,
         agent_id: agent_id.clone(),
         scope: None,
         query: None,
@@ -4434,6 +4437,7 @@ fn test_kernel_handle_recall_via_api() {
 
     // Recall via API
     let resp = kernel.handle_api_request(ApiRequest::Recall {
+        tier: None,
         agent_id: agent_id.clone(),
         scope: None,
         query: None,
@@ -4927,6 +4931,7 @@ fn test_full_ai_os_loop_convergence() {
     ).expect("remember failed");
 
     let recall_resp = kernel.handle_api_request(ApiRequest::Recall {
+        tier: None,
         agent_id: agent_id.clone(),
         scope: None,
         query: None,

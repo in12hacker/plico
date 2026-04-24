@@ -185,6 +185,8 @@ pub enum ApiRequest {
         query: Option<String>,
         #[serde(default)]
         limit: Option<usize>,
+        #[serde(default)]
+        tier: Option<String>,
     },
 
     #[serde(rename = "remember_long_term")]

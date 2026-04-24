@@ -163,6 +163,7 @@ fn test_batch_memory_store() {
 
     // Verify memories can be recalled
     let recall_req = ApiRequest::Recall {
+        tier: None,
         agent_id: "MemAgent".to_string(),
         scope: None,
         query: None,

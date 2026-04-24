@@ -259,6 +259,7 @@ fn to_api_request(m: PatternMatch, agent_id: &str) -> ResolvedIntent {
                 scope: None,
                 query: None,
                 limit: None,
+                tier: None,
             }, "Recall all memories".to_string())
         }
         ActionType::ListAgents => {

@@ -205,6 +205,7 @@ fn test_ai_agent_multi_session_experience() {
         // so ephemeral memory from Remember is lost. However, CAS objects
         // (created via Create) persist across sessions.
         let recall_resp = call_api(&kernel, ApiRequest::Recall {
+        tier: None,
             agent_id: "agent-a".into(),
             scope: None,
             query: None,

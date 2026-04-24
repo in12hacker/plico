@@ -68,7 +68,8 @@ fn dispatch_plico_action_remote(action: &str, args: &Value, client: &dyn plico::
             let scope = args.get("scope").and_then(|s| s.as_str()).map(String::from);
             let query = args.get("query").and_then(|q| q.as_str()).map(String::from);
             let limit = args.get("limit").and_then(|l| l.as_u64()).map(|l| l as usize);
-            ApiRequest::Recall { agent_id: agent.to_string(), scope, query, limit }
+            let tier = args.get("tier").and_then(|t| t.as_str()).map(String::from);
+            ApiRequest::Recall { agent_id: agent.to_string(), scope, query, limit, tier }
         }
         "status" => ApiRequest::SystemStatus,
         "session_start" => {
@@ -458,11 +459,13 @@ fn dispatch_plico_action(action: &str, args: &Value, kernel: &AIKernel) -> Resul
             let scope = args.get("scope").and_then(|s| s.as_str()).map(String::from);
             let query = args.get("query").and_then(|q| q.as_str()).map(String::from);
             let limit = args.get("limit").and_then(|l| l.as_u64()).map(|l| l as usize);
+            let tier = args.get("tier").and_then(|t| t.as_str()).map(String::from);
             let req = ApiRequest::Recall {
                 agent_id: agent.to_string(),
                 scope,
                 query,
                 limit,
+                tier,
             };
             format_plico_response(kernel.handle_api_request(req), args)
         }
