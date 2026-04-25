@@ -440,6 +440,126 @@ impl ObservabilityContext {
     }
 }
 
+// ── F-5: SessionObserver ────────────────────────────────────────────────────
+
+/// Session observation data — per-session cost, hit rate, and feedback aggregation.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SessionObservation {
+    pub session_id: String,
+    pub agent_id: String,
+    pub started_at_ms: u64,
+    pub duration_ms: u64,
+    pub total_tokens: u64,
+    pub cache_hits: u32,
+    pub cache_misses: u32,
+    pub cache_hit_rate: f32,
+    pub verifications_passed: u32,
+    pub verifications_failed: u32,
+    pub improvement_suggestions: Vec<String>,
+}
+
+impl SessionObservation {
+    /// Generate improvement suggestions based on observation data.
+    pub fn generate_suggestions(obs: &SessionObservation) -> Vec<String> {
+        let mut suggestions = Vec::new();
+        if obs.cache_hit_rate < 0.1 {
+            suggestions.push("Cache hit rate <10%: consider registering common intents".into());
+        }
+        if obs.verifications_failed > 0 {
+            suggestions.push(format!("{} verification failures: review tool call parameters", obs.verifications_failed));
+        }
+        if obs.total_tokens > 100_000 {
+            suggestions.push("High token usage: consider using L1 context layer for better compression".into());
+        }
+        suggestions
+    }
+}
+
+// ── F-6: HealthScoreDecomposition ─────────────────────────────────────────
+
+/// Decomposed health score — breaks down overall health into actionable components.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct DecomposedHealth {
+    pub overall: f32,
+    pub cache_effectiveness: f32,
+    pub feedback_loop_active: bool,
+    pub cost_visibility: bool,
+    pub actionable_items: Vec<HealthAction>,
+}
+
+/// A specific health action an agent can take.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct HealthAction {
+    pub component: String,
+    pub severity: String,  // "critical" | "warning" | "info"
+    pub suggestion: String,
+}
+
+impl DecomposedHealth {
+    /// Calculate decomposed health from cache stats and other indicators.
+    pub fn from_cache_and_profile(
+        cache_stats: &crate::kernel::ops::prefetch_cache::IntentCacheStats,
+        profile_len: usize,
+    ) -> Self {
+        let cache_hit_rate = if cache_stats.total_lookups > 0 {
+            cache_stats.hits as f32 / cache_stats.total_lookups as f32
+        } else {
+            0.0
+        };
+
+        let cache_effectiveness = if cache_stats.entries > 0 {
+            (cache_hit_rate * 0.6 + (cache_stats.entries as f32 / 64.0).min(1.0) * 0.4)
+        } else {
+            0.0
+        };
+
+        let feedback_loop_active = profile_len > 0;
+        let cost_visibility = true; // Always true once cost ledger is integrated
+
+        let mut overall = cache_effectiveness * 0.4;
+        if feedback_loop_active { overall += 0.3; }
+        if cost_visibility { overall += 0.3; }
+        overall = overall.min(1.0);
+
+        let mut actionable_items = Vec::new();
+
+        if cache_hit_rate < 0.1 && cache_stats.total_lookups > 10 {
+            actionable_items.push(HealthAction {
+                component: "intent_cache".into(),
+                severity: "warning".into(),
+                suggestion: format!(
+                    "Cache hit rate {:.1}% with {} lookups — warm up cache with repeated intents",
+                    cache_hit_rate * 100.0, cache_stats.total_lookups
+                ),
+            });
+        }
+
+        if !feedback_loop_active {
+            actionable_items.push(HealthAction {
+                component: "feedback_loop".into(),
+                severity: "warning".into(),
+                suggestion: "No agent profile activity detected — use remember_long_term to build profile".into(),
+            });
+        }
+
+        if cache_effectiveness < 0.3 {
+            actionable_items.push(HealthAction {
+                component: "prefetch".into(),
+                severity: "info".into(),
+                suggestion: "Cache effectiveness low — prefetch is warming but not yet hitting".into(),
+            });
+        }
+
+        Self {
+            overall,
+            cache_effectiveness,
+            feedback_loop_active,
+            cost_visibility,
+            actionable_items,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -560,6 +680,68 @@ mod tests {
         let id = CorrelationId::new();
         let ctx_with_id = ObservabilityContext::with_correlation_id(id.clone());
         assert_eq!(ctx_with_id.correlation_id, Some(id));
+    }
+
+    #[test]
+    fn test_decomposed_health_all_green() {
+        use crate::kernel::ops::prefetch_cache::IntentCacheStats;
+        let cache_stats = IntentCacheStats {
+            entries: 10,
+            memory_bytes: 1024,
+            hits: 80,
+            total_lookups: 100,
+        };
+        let health = DecomposedHealth::from_cache_and_profile(&cache_stats, 5);
+        assert!(health.overall > 0.5);
+        assert!(health.feedback_loop_active);
+    }
+
+    #[test]
+    fn test_decomposed_health_cache_cold() {
+        use crate::kernel::ops::prefetch_cache::IntentCacheStats;
+        let cache_stats = IntentCacheStats {
+            entries: 0,
+            memory_bytes: 0,
+            hits: 0,
+            total_lookups: 0,
+        };
+        let health = DecomposedHealth::from_cache_and_profile(&cache_stats, 0);
+        assert!(health.overall < 0.5);
+        assert!(!health.feedback_loop_active);
+    }
+
+    #[test]
+    fn test_decomposed_health_generates_actions() {
+        use crate::kernel::ops::prefetch_cache::IntentCacheStats;
+        let cache_stats = IntentCacheStats {
+            entries: 0,
+            memory_bytes: 0,
+            hits: 0,
+            total_lookups: 50,  // cold cache with lookups = warning
+        };
+        let health = DecomposedHealth::from_cache_and_profile(&cache_stats, 0);
+        assert!(!health.actionable_items.is_empty());
+    }
+
+    #[test]
+    fn test_session_observation_suggestions() {
+        let obs = SessionObservation {
+            session_id: "s1".into(),
+            agent_id: "a1".into(),
+            started_at_ms: 0,
+            duration_ms: 5000,
+            total_tokens: 200_000,
+            cache_hits: 0,
+            cache_misses: 10,
+            cache_hit_rate: 0.0,
+            verifications_passed: 5,
+            verifications_failed: 2,
+            improvement_suggestions: vec![],
+        };
+        let suggestions = SessionObservation::generate_suggestions(&obs);
+        assert!(!suggestions.is_empty());
+        assert!(suggestions.iter().any(|s| s.contains("verification")));
+        assert!(suggestions.iter().any(|s| s.contains("token")));
     }
 }
 

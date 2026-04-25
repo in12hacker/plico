@@ -79,6 +79,7 @@ fn execute_local_inner(kernel: &AIKernel, args: &[String]) -> ApiResponse {
         Some("hybrid") => cmd_hybrid(kernel, args),
         Some("permission") | Some("perm") => cmd_permission(kernel, args),
         Some("hook") => cmd_hook(kernel, args),
+        Some("cost") => cmd_cost(kernel, args),
         Some("system-status") => {
             kernel.handle_api_request(plico::api::semantic::ApiRequest::SystemStatus)
         }

@@ -35,6 +35,8 @@ pub struct AgentProfile {
     /// Hot objects — (CID, access_count)
     pub hot_objects: Vec<(String, u64)>,
     pub updated_at_ms: u64,
+    /// Last intent observed (for transition tracking).
+    pub last_intent: Option<String>,
 }
 
 impl AgentProfile {
@@ -44,6 +46,7 @@ impl AgentProfile {
             intent_transitions: HashMap::new(),
             hot_objects: Vec::new(),
             updated_at_ms: now_ms(),
+            last_intent: None,
         }
     }
 
@@ -101,6 +104,19 @@ impl AgentProfile {
         for cid in cids {
             self.record_cid_usage(cid);
         }
+    }
+
+    /// Decay the access count for an object (used when feedback shows it was unused).
+    pub fn decay_object(&mut self, cid: &str) {
+        self.updated_at_ms = now_ms();
+        if let Some(existing) = self.hot_objects.iter_mut().find(|(c, _)| c == cid) {
+            existing.1 = existing.1.saturating_sub(1);
+        }
+        // Remove objects with zero count
+        self.hot_objects.retain(|(_, count)| *count > 0);
+        // Re-sort and truncate
+        self.hot_objects.sort_by(|a, b| b.1.cmp(&a.1));
+        self.hot_objects.truncate(50);
     }
 }
 

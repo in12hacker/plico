@@ -879,6 +879,9 @@ mod tests {
             evict_result: None,
             health_report: None,
             hook_list: None,
+            cost_session_summary: None,
+            cost_agent_trend: None,
+            cost_anomaly: None,
         }
     }
 

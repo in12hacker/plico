@@ -1118,6 +1118,27 @@ pub enum ApiRequest {
     /// Query system health report with detailed subsystem status.
     #[serde(rename = "health_report")]
     HealthReport,
+
+    // ── Token Cost Ledger (F-2) ─────────────────────────────────────
+
+    /// Get cost summary for a session (F-2).
+    #[serde(rename = "cost_session_summary")]
+    CostSessionSummary {
+        session_id: String,
+    },
+
+    /// Get cost trend for an agent (F-2).
+    #[serde(rename = "cost_agent_trend")]
+    CostAgentTrend {
+        agent_id: String,
+        last_n_sessions: usize,
+    },
+
+    /// Check for cost anomaly (F-2).
+    #[serde(rename = "cost_anomaly_check")]
+    CostAnomalyCheck {
+        agent_id: String,
+    },
 }
 
 /// A JSON API response.
@@ -1298,8 +1319,40 @@ pub struct ApiResponse {
     /// Hook list result (Daemon-First).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hook_list: Option<Vec<HookEntryDto>>,
+    /// Cost session summary (F-2).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cost_session_summary: Option<SessionCostSummary>,
+    /// Cost agent trend (F-2).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cost_agent_trend: Option<Vec<SessionCostSummary>>,
+    /// Cost anomaly result (F-2).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cost_anomaly: Option<CostAnomalyResult>,
 }
 
+
+/// Cost summary for a session (F-2).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SessionCostSummary {
+    pub session_id: String,
+    pub agent_id: String,
+    pub total_input_tokens: u64,
+    pub total_output_tokens: u64,
+    pub total_cost_millicents: u64,
+    pub operations_count: u32,
+    pub cache_hits: u32,
+    pub cache_misses: u32,
+}
+
+/// Cost anomaly detection result (F-2).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct CostAnomalyResult {
+    pub agent_id: String,
+    pub severity: String,
+    pub message: String,
+    pub avg_cost_per_session_before: u64,
+    pub avg_cost_per_session_after: u64,
+}
 
 impl ApiResponse {
     pub fn ok() -> Self {
@@ -1351,6 +1404,9 @@ impl ApiResponse {
             evict_result: None,
             health_report: None,
             hook_list: None,
+            cost_session_summary: None,
+            cost_agent_trend: None,
+            cost_anomaly: None,
         }
     }
 
@@ -1440,6 +1496,9 @@ impl ApiResponse {
             evict_result: None,
             health_report: None,
             hook_list: None,
+            cost_session_summary: None,
+            cost_agent_trend: None,
+            cost_anomaly: None,
         }
     }
 

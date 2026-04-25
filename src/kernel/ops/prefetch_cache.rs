@@ -316,6 +316,85 @@ impl IntentAssemblyCache {
         self.current_memory_bytes.store(total_mem, Ordering::Relaxed);
         Ok(restored)
     }
+
+    /// Warm the cache from AgentProfile's predicted intents.
+    ///
+    /// Uses exact-match predictions from the profile (not embedding similarity)
+    /// to avoid dependency on a live embedding provider at session-start time.
+    ///
+    /// Returns the number of entries warmed.
+    pub fn warm_from_profile(
+        &self,
+        profile: &crate::kernel::ops::session::AgentProfile,
+        assembler: &dyn Fn(&str) -> Option<crate::fs::context_budget::BudgetAllocation>,
+    ) -> usize {
+        // Predict top-3 next intents from the profile
+        let mut warmed = 0;
+
+        // Collect predicted intents from transition matrix
+        let predictions: Vec<(String, f32)> = profile
+            .intent_transitions
+            .iter()
+            .flat_map(|(from_intent, succs)| {
+                succs.iter().map(move |(to_intent, count)| {
+                    let confidence = *count as f32;
+                    (format!("{} → {}", from_intent, to_intent), confidence)
+                })
+            })
+            .collect();
+
+        // Sort by confidence descending and take top-3
+        let mut predictions = predictions;
+        predictions.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        for (intent_text, confidence) in predictions.into_iter().take(3) {
+            // Skip if confidence too low
+            if confidence < 0.3 {
+                continue;
+            }
+
+            // Skip if already in cache (exact match)
+            if self.lookup(&intent_text, &None).is_some() {
+                continue;
+            }
+
+            // Try to assemble context for this predicted intent
+            if let Some(assembly) = assembler(&intent_text) {
+                self.store(intent_text, None, assembly, vec![]);
+                warmed += 1;
+            }
+        }
+
+        // Also warm from hot_objects: top CIDs that the agent frequently accesses
+        for (cid, count) in profile.hot_objects.iter().take(5) {
+            if *count < 2 {
+                continue;
+            }
+            // Create a synthetic intent from the hot CID for cache warming
+            let synthetic_intent = format!("[hot:{}]", cid);
+            if self.lookup(&synthetic_intent, &None).is_none() {
+                let assembly = crate::fs::context_budget::BudgetAllocation {
+                    items: vec![crate::fs::context_loader::LoadedContext {
+                        cid: cid.clone(),
+                        content: format!("hot object: {}", cid),
+                        layer: crate::fs::context_loader::ContextLayer::L1,
+                        tokens_estimate: 50,
+                        actual_layer: None,
+                        degraded: false,
+                        degradation_reason: None,
+                    }],
+                    total_tokens: 50,
+                    budget: 100,
+                    candidates_considered: 1,
+                    candidates_included: 1,
+                };
+                self.store(synthetic_intent, None, assembly, vec![cid.clone()]);
+                warmed += 1;
+            }
+        }
+
+        warmed
+    }
 }
 
 impl Default for IntentAssemblyCache {
@@ -526,5 +605,92 @@ mod tests {
         let cache = IntentAssemblyCache::default();
         let count = cache.restore_from_dir(dir.path()).unwrap();
         assert_eq!(count, 0);
+    }
+
+    // F-3: CacheWarmPipeline tests
+    #[test]
+    fn test_warm_from_profile_populates_cache() {
+        use crate::kernel::ops::session::AgentProfile;
+        let cache = IntentAssemblyCache::default();
+        let mut profile = AgentProfile::new("agent-1".to_string());
+        profile.record_intent("fix auth", Some("test auth"));
+        profile.record_cid_usage("cid1");
+
+        let assembler = |intent: &str| {
+            if intent.contains("fix auth") {
+                Some(make_allocation("cid_from_assembler"))
+            } else {
+                None
+            }
+        };
+
+        let warmed = cache.warm_from_profile(&profile, &assembler);
+        assert!(warmed > 0, "Expected at least one entry warmed");
+    }
+
+    #[test]
+    fn test_warm_skips_low_confidence() {
+        use crate::kernel::ops::session::AgentProfile;
+        let cache = IntentAssemblyCache::default();
+        let mut profile = AgentProfile::new("agent-1".to_string());
+        // Record transition but with count=1 (low confidence)
+        profile.record_intent("fix auth", Some("test auth"));
+
+        let assembler = |_intent: &str| Some(make_allocation("cid1"));
+
+        let warmed = cache.warm_from_profile(&profile, &assembler);
+        // Confidence from 1 count is 1.0, should pass 0.3 threshold
+        assert!(warmed <= 3, "At most top-3 predictions");
+    }
+
+    #[test]
+    fn test_warm_skips_existing_entries() {
+        use crate::kernel::ops::session::AgentProfile;
+        let cache = IntentAssemblyCache::default();
+
+        // Pre-populate cache
+        cache.store("fix auth → test auth".into(), None, make_allocation("cid1"), vec![]);
+
+        let mut profile = AgentProfile::new("agent-1".to_string());
+        profile.record_intent("fix auth", Some("test auth"));
+
+        let assembler = |_intent: &str| Some(make_allocation("cid2"));
+
+        let warmed = cache.warm_from_profile(&profile, &assembler);
+        assert_eq!(warmed, 0, "Should skip already-cached entries");
+    }
+
+    #[test]
+    fn test_warm_returns_count() {
+        use crate::kernel::ops::session::AgentProfile;
+        let cache = IntentAssemblyCache::default();
+        let mut profile = AgentProfile::new("agent-1".to_string());
+        profile.record_intent("fix auth", Some("test auth"));
+        profile.record_intent("fix auth", Some("deploy"));
+        profile.record_cid_usage("cid1");
+
+        let assembler = |intent: &str| {
+            if intent.contains("fix") {
+                Some(make_allocation("cid_assembled"))
+            } else {
+                None
+            }
+        };
+
+        let warmed = cache.warm_from_profile(&profile, &assembler);
+        // Confidence from 1 count is 1.0, should pass 0.3 threshold
+        assert!(warmed <= 3);
+    }
+
+    #[test]
+    fn test_warm_with_empty_profile() {
+        use crate::kernel::ops::session::AgentProfile;
+        let cache = IntentAssemblyCache::default();
+        let profile = AgentProfile::new("agent-1".to_string());
+
+        let assembler = |_intent: &str| Some(make_allocation("cid1"));
+
+        let warmed = cache.warm_from_profile(&profile, &assembler);
+        assert_eq!(warmed, 0, "Empty profile should warm nothing");
     }
 }

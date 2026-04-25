@@ -19,6 +19,7 @@ pub mod delta;
 pub mod hybrid;
 pub mod permission;
 pub mod hook;
+pub mod cost;
 
 // Re-export shared utilities for handler submodules.
 // Re-export shared utilities for handler submodules (defined in parent commands/mod.rs).
@@ -56,3 +57,4 @@ pub use delta::cmd_delta;
 pub use hybrid::cmd_hybrid;
 pub use permission::cmd_permission;
 pub use hook::cmd_hook;
+pub use cost::cmd_cost;

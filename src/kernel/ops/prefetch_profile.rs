@@ -166,6 +166,31 @@ impl AgentProfileStore {
             .unwrap_or_default()
             .as_millis() as u64;
     }
+
+    /// Close the feedback loop: update profile from actual usage data.
+    pub fn apply_feedback(&self, agent_id: &str, feedback: &IntentFeedbackEntry) {
+        let mut profiles = self.profiles.write().unwrap();
+        let profile = profiles
+            .entry(agent_id.to_string())
+            .or_insert_with(|| AgentProfile::new(agent_id.to_string()));
+
+        // Update hot_objects from used_cids
+        for cid in &feedback.used_cids {
+            profile.record_cid_usage(cid);
+        }
+
+        // Update transition matrix: current intent → next intent
+        let prev_intent = profile.last_intent.clone();
+        if let Some(prev) = prev_intent {
+            profile.record_intent(&prev, Some(&feedback.normalized_intent));
+        }
+        profile.last_intent = Some(feedback.normalized_intent.clone());
+
+        // Decay unused CIDs
+        for cid in &feedback.unused_cids {
+            profile.decay_object(cid);
+        }
+    }
 }
 
 impl Default for AgentProfileStore {
@@ -276,5 +301,106 @@ mod tests {
         let store = AgentProfileStore::default();
         let count = store.restore_from_dir(dir.path()).unwrap();
         assert_eq!(count, 0);
+    }
+
+    // F-1: FeedbackPipeline tests
+    fn now_ms() -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64
+    }
+
+    #[test]
+    fn test_feedback_updates_hot_objects() {
+        let store = AgentProfileStore::default();
+        let feedback = IntentFeedbackEntry {
+            normalized_intent: "fix auth".into(),
+            used_cids: vec!["cid1".into(), "cid2".into()],
+            unused_cids: vec![],
+            recorded_at_ms: now_ms(),
+        };
+        store.apply_feedback("agent-1", &feedback);
+        let profile = store.get_or_create("agent-1");
+        assert!(profile.hot_objects.iter().any(|(c, _)| c == "cid1"));
+        assert!(profile.hot_objects.iter().any(|(c, _)| c == "cid2"));
+    }
+
+    #[test]
+    fn test_feedback_updates_transition_matrix() {
+        let store = AgentProfileStore::default();
+        // First feedback sets last_intent
+        let f1 = IntentFeedbackEntry {
+            normalized_intent: "fix auth".into(),
+            used_cids: vec![],
+            unused_cids: vec![],
+            recorded_at_ms: now_ms(),
+        };
+        store.apply_feedback("agent-1", &f1);
+        // Second feedback should create transition
+        let f2 = IntentFeedbackEntry {
+            normalized_intent: "test auth".into(),
+            used_cids: vec![],
+            unused_cids: vec![],
+            recorded_at_ms: now_ms(),
+        };
+        store.apply_feedback("agent-1", &f2);
+        let profile = store.get_or_create("agent-1");
+        let successors = profile.intent_transitions.get("fix auth");
+        assert!(successors.is_some());
+        assert!(successors.unwrap().iter().any(|(k, _)| k == "test auth"));
+    }
+
+    #[test]
+    fn test_feedback_decays_unused_cids() {
+        let store = AgentProfileStore::default();
+        // First add a hot object via used_cids
+        let f1 = IntentFeedbackEntry {
+            normalized_intent: "fix auth".into(),
+            used_cids: vec!["cid1".into()],
+            unused_cids: vec![],
+            recorded_at_ms: now_ms(),
+        };
+        store.apply_feedback("agent-1", &f1);
+        // Then mark it as unused
+        let f2 = IntentFeedbackEntry {
+            normalized_intent: "test auth".into(),
+            used_cids: vec![],
+            unused_cids: vec!["cid1".into()],
+            recorded_at_ms: now_ms(),
+        };
+        store.apply_feedback("agent-1", &f2);
+        let profile = store.get_or_create("agent-1");
+        // Should be decayed to 0 and removed
+        assert!(!profile.hot_objects.iter().any(|(c, _)| c == "cid1"));
+    }
+
+    #[test]
+    fn test_feedback_records_last_intent() {
+        let store = AgentProfileStore::default();
+        let feedback = IntentFeedbackEntry {
+            normalized_intent: "fix auth".into(),
+            used_cids: vec![],
+            unused_cids: vec![],
+            recorded_at_ms: now_ms(),
+        };
+        store.apply_feedback("agent-1", &feedback);
+        let profile = store.get_or_create("agent-1");
+        assert_eq!(profile.last_intent, Some("fix auth".into()));
+    }
+
+    #[test]
+    fn test_feedback_idempotent_on_empty() {
+        let store = AgentProfileStore::default();
+        let feedback = IntentFeedbackEntry {
+            normalized_intent: "fix auth".into(),
+            used_cids: vec![],
+            unused_cids: vec![],
+            recorded_at_ms: now_ms(),
+        };
+        // Should not panic on empty profile
+        store.apply_feedback("agent-new", &feedback);
+        let profile = store.get_or_create("agent-new");
+        assert_eq!(profile.last_intent, Some("fix auth".into()));
     }
 }

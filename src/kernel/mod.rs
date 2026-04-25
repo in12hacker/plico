@@ -32,6 +32,7 @@ use ops::prefetch::IntentPrefetcher;
 use ops::model::{HotSwapEmbeddingProvider, HotSwapLlmProvider};
 use ops::observability::{KernelMetrics, OperationTimer, OpType};
 use ops::cache::EdgeCache;
+use ops::cost_ledger::{TokenCostLedger, CostOperation, CostEntry};
 use ops::distributed::{ClusterManager, NodeId};
 
 use crate::api::semantic::{ApiRequest, ApiResponse};
@@ -93,6 +94,8 @@ pub struct AIKernel {
     pub(crate) checkpoint_store: Arc<CheckpointStore>,
     /// Task store — manages multi-agent task delegation with state tracking (F-14).
     pub(crate) task_store: Arc<ops::task::TaskStore>,
+    /// Token cost ledger — tracks LLM/embedding token consumption (F-2).
+    pub(crate) cost_ledger: Arc<TokenCostLedger>,
 }
 
 impl AIKernel {
@@ -265,6 +268,9 @@ impl AIKernel {
         // Task store — manages multi-agent task delegation with state tracking (F-14)
         let task_store = Arc::new(ops::task::TaskStore::restore(root.clone(), event_bus.clone()));
 
+        // Token cost ledger — tracks LLM/embedding token consumption (F-2)
+        let cost_ledger = Arc::new(TokenCostLedger::new());
+
         let kernel = Self {
             root: root.clone(),
             cas,
@@ -292,6 +298,7 @@ impl AIKernel {
             session_store,
             checkpoint_store,
             task_store,
+            cost_ledger,
         };
 
         kernel.register_builtin_tools();
@@ -466,6 +473,9 @@ impl AIKernel {
             ApiRequest::HookList => None,
             ApiRequest::HookRegister { .. } => None,
             ApiRequest::HealthReport => None,
+            ApiRequest::CostSessionSummary { .. } => None,
+            ApiRequest::CostAgentTrend { agent_id, .. } => Some(agent_id.clone()),
+            ApiRequest::CostAnomalyCheck { agent_id, .. } => Some(agent_id.clone()),
         }
     }
 
@@ -2003,6 +2013,59 @@ impl AIKernel {
                 let mut r = ApiResponse::ok();
                 r.health_report = Some(report);
                 r
+            }
+
+            // ── Token Cost Ledger (F-2) ─────────────────────────────────
+
+            ApiRequest::CostSessionSummary { session_id } => {
+                if let Some(summary) = self.cost_ledger.session_summary(&session_id) {
+                    let mut r = ApiResponse::ok();
+                    r.cost_session_summary = Some(crate::api::semantic::SessionCostSummary {
+                        session_id: summary.session_id,
+                        agent_id: summary.agent_id,
+                        total_input_tokens: summary.total_input_tokens,
+                        total_output_tokens: summary.total_output_tokens,
+                        total_cost_millicents: summary.total_cost_millicents,
+                        operations_count: summary.operations_count,
+                        cache_hits: summary.cache_hits,
+                        cache_misses: summary.cache_misses,
+                    });
+                    r
+                } else {
+                    ApiResponse::error(format!("No cost data for session {}", session_id))
+                }
+            }
+
+            ApiRequest::CostAgentTrend { agent_id, last_n_sessions } => {
+                let trend = self.cost_ledger.agent_trend(&agent_id, last_n_sessions);
+                let mut r = ApiResponse::ok();
+                r.cost_agent_trend = Some(trend.into_iter().map(|s| crate::api::semantic::SessionCostSummary {
+                    session_id: s.session_id,
+                    agent_id: s.agent_id,
+                    total_input_tokens: s.total_input_tokens,
+                    total_output_tokens: s.total_output_tokens,
+                    total_cost_millicents: s.total_cost_millicents,
+                    operations_count: s.operations_count,
+                    cache_hits: s.cache_hits,
+                    cache_misses: s.cache_misses,
+                }).collect());
+                r
+            }
+
+            ApiRequest::CostAnomalyCheck { agent_id } => {
+                if let Some(anomaly) = self.cost_ledger.cost_anomaly_check(&agent_id) {
+                    let mut r = ApiResponse::ok();
+                    r.cost_anomaly = Some(crate::api::semantic::CostAnomalyResult {
+                        agent_id: anomaly.agent_id,
+                        severity: anomaly.severity,
+                        message: anomaly.message,
+                        avg_cost_per_session_before: anomaly.avg_cost_per_session_before,
+                        avg_cost_per_session_after: anomaly.avg_cost_per_session_after,
+                    });
+                    r
+                } else {
+                    ApiResponse::ok()
+                }
             }
         };
         self.maybe_persist_event_log();
