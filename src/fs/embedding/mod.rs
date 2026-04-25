@@ -17,7 +17,7 @@ pub use openai::OpenAIEmbeddingBackend;
 pub use local::LocalEmbeddingBackend;
 pub use ort_backend::OrtEmbeddingBackend;
 pub use stub::StubEmbeddingProvider;
-pub use types::{EmbeddingProvider, EmbedError, Embedding, EmbeddingMeta};
+pub use types::{EmbeddingProvider, EmbedError, Embedding, EmbeddingMeta, EmbedResult};
 
 #[cfg(test)]
 mod tests {

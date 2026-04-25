@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use crate::fs::embedding::types::{EmbedError, Embedding, EmbeddingProvider};
+use crate::fs::embedding::types::{EmbedError, Embedding, EmbeddingProvider, EmbedResult};
 
 pub struct OpenAIEmbeddingBackend {
     rt: Arc<tokio::runtime::Runtime>,
@@ -54,12 +54,12 @@ impl OpenAIEmbeddingBackend {
         api_key: Option<&str>,
     ) -> Result<usize, EmbedError> {
         let embedding = Self::embed_request(client, base_url, model, api_key, "dimension probe").await?;
-        if embedding.is_empty() {
+        if embedding.embedding.is_empty() {
             return Err(EmbedError::ServerUnavailable(
                 "probe returned empty embedding".to_string(),
             ));
         }
-        Ok(embedding.len())
+        Ok(embedding.embedding.len())
     }
 
     async fn embed_request(
@@ -68,7 +68,7 @@ impl OpenAIEmbeddingBackend {
         model: &str,
         api_key: Option<&str>,
         input: &str,
-    ) -> Result<Embedding, EmbedError> {
+    ) -> Result<EmbedResult, EmbedError> {
         let body = serde_json::json!({
             "model": model,
             "input": input,
@@ -101,11 +101,11 @@ impl OpenAIEmbeddingBackend {
         parse_embedding_response(&body_bytes)
     }
 
-    async fn embed_async(&self, text: &str) -> Result<Embedding, EmbedError> {
+    async fn embed_async(&self, text: &str) -> Result<EmbedResult, EmbedError> {
         Self::embed_request(&self.client, &self.base_url, &self.model, self.api_key.as_deref(), text).await
     }
 
-    async fn embed_batch_async(&self, texts: &[String]) -> Result<Vec<Embedding>, EmbedError> {
+    async fn embed_batch_async(&self, texts: &[String]) -> Result<Vec<EmbedResult>, EmbedError> {
         let body = serde_json::json!({
             "model": self.model,
             "input": texts,
@@ -137,45 +137,62 @@ impl OpenAIEmbeddingBackend {
     }
 }
 
-fn parse_embedding_response(body: &[u8]) -> Result<Embedding, EmbedError> {
+fn parse_embedding_response(body: &[u8]) -> Result<EmbedResult, EmbedError> {
     #[derive(serde::Deserialize)]
     struct Response {
         data: Vec<EmbeddingData>,
+        usage: Option<Usage>,
     }
     #[derive(serde::Deserialize)]
     struct EmbeddingData {
         embedding: Vec<f32>,
+    }
+    #[derive(serde::Deserialize)]
+    struct Usage {
+        prompt_tokens: u32,
     }
 
     let parsed: Response = serde_json::from_slice(body)
         .map_err(|e| EmbedError::Api(format!("response parse error: {e}")))?;
 
-    parsed
+    let embedding = parsed
         .data
         .into_iter()
         .next()
         .map(|d| d.embedding)
-        .ok_or_else(|| EmbedError::Api("empty data array in response".into()))
+        .ok_or_else(|| EmbedError::Api("empty data array in response".into()))?;
+
+    let input_tokens = parsed.usage.map(|u| u.prompt_tokens).unwrap_or(0);
+    Ok(EmbedResult::new(embedding, input_tokens))
 }
 
-fn parse_embedding_batch_response(body: &[u8]) -> Result<Vec<Embedding>, EmbedError> {
+fn parse_embedding_batch_response(body: &[u8]) -> Result<Vec<EmbedResult>, EmbedError> {
     #[derive(serde::Deserialize)]
     struct Response {
         data: Vec<EmbeddingData>,
+        usage: Option<Usage>,
     }
     #[derive(serde::Deserialize)]
     struct EmbeddingData {
         embedding: Vec<f32>,
     }
+    #[derive(serde::Deserialize)]
+    struct Usage {
+        prompt_tokens: u32,
+    }
 
     let parsed: Response = serde_json::from_slice(body)
         .map_err(|e| EmbedError::Api(format!("batch response parse error: {e}")))?;
 
-    Ok(parsed.data.into_iter().map(|d| d.embedding).collect())
+    let total_tokens = parsed.usage.map(|u| u.prompt_tokens).unwrap_or(0);
+    let count = parsed.data.len();
+    let tokens_per = if count == 0 { 0 } else { total_tokens / count as u32 };
+
+    Ok(parsed.data.into_iter().map(|d| EmbedResult::new(d.embedding, tokens_per)).collect())
 }
 
 impl EmbeddingProvider for OpenAIEmbeddingBackend {
-    fn embed(&self, text: &str) -> Result<Embedding, EmbedError> {
+    fn embed(&self, text: &str) -> Result<EmbedResult, EmbedError> {
         match tokio::runtime::Handle::try_current() {
             Ok(handle) => {
                 tokio::task::block_in_place(|| handle.block_on(self.embed_async(text)))
@@ -184,7 +201,7 @@ impl EmbeddingProvider for OpenAIEmbeddingBackend {
         }
     }
 
-    fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Embedding>, EmbedError> {
+    fn embed_batch(&self, texts: &[&str]) -> Result<Vec<EmbedResult>, EmbedError> {
         let owned: Vec<String> = texts.iter().map(|s| s.to_string()).collect();
         match tokio::runtime::Handle::try_current() {
             Ok(handle) => {
@@ -226,8 +243,8 @@ mod tests {
         let result = parse_embedding_response(json);
         assert!(result.is_ok());
         let emb = result.unwrap();
-        assert_eq!(emb.len(), 3);
-        assert!((emb[0] - 0.1).abs() < 1e-6);
+        assert_eq!(emb.embedding.len(), 3);
+        assert!((emb.embedding[0] - 0.1).abs() < 1e-6);
     }
 
     #[test]
@@ -252,8 +269,8 @@ mod tests {
         assert!(result.is_ok());
         let embs = result.unwrap();
         assert_eq!(embs.len(), 2);
-        assert_eq!(embs[0].len(), 2);
-        assert_eq!(embs[1].len(), 2);
+        assert_eq!(embs[0].embedding.len(), 2);
+        assert_eq!(embs[1].embedding.len(), 2);
     }
 
     const LLAMA_EMBEDDING_URL: &str = "http://127.0.0.1:18920/v1";
@@ -271,9 +288,9 @@ mod tests {
         let result = backend.embed("Hello world");
         assert!(result.is_ok(), "embed should succeed: {:?}", result);
         let emb = result.unwrap();
-        assert!(!emb.is_empty(), "embedding should not be empty");
-        assert!(emb.len() > 10, "embedding dimension should be reasonable, got {}", emb.len());
-        println!("[llama-embedding] dim={}", emb.len());
+        assert!(!emb.embedding.is_empty(), "embedding should not be empty");
+        assert!(emb.embedding.len() > 10, "embedding dimension should be reasonable, got {}", emb.embedding.len());
+        println!("[llama-embedding] dim={}", emb.embedding.len());
     }
 
     #[test]

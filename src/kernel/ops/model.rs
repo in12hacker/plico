@@ -7,7 +7,7 @@ use std::sync::{Arc, RwLock};
 use std::time::Instant;
 
 use crate::api::semantic::{ModelSwitchResponse, ModelHealthResponse};
-use crate::fs::{EmbeddingProvider, Embedding, EmbedError};
+use crate::fs::{EmbeddingProvider, Embedding, EmbedError, EmbedResult};
 use crate::llm::{LlmProvider, ChatMessage, ChatOptions};
 
 use super::super::AIKernel;
@@ -48,11 +48,11 @@ impl Clone for HotSwapEmbeddingProvider {
 }
 
 impl EmbeddingProvider for HotSwapEmbeddingProvider {
-    fn embed(&self, text: &str) -> Result<Embedding, EmbedError> {
+    fn embed(&self, text: &str) -> Result<EmbedResult, EmbedError> {
         self.inner.read().unwrap().embed(text)
     }
 
-    fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Embedding>, EmbedError> {
+    fn embed_batch(&self, texts: &[&str]) -> Result<Vec<EmbedResult>, EmbedError> {
         self.inner.read().unwrap().embed_batch(texts)
     }
 

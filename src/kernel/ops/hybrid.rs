@@ -13,7 +13,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::api::semantic::{HybridHit, HybridResult, ProvenanceStep};
-use crate::fs::embedding::types::EmbeddingProvider;
+use crate::fs::embedding::types::{EmbeddingProvider, EmbedResult};
 use crate::fs::{KGEdgeType, SearchFilter, SearchHit};
 use crate::kernel::AIKernel;
 
@@ -202,7 +202,7 @@ impl AIKernel {
     fn vector_search(&self, query_text: &str, limit: usize) -> Vec<SearchHit> {
         // Get embedding for the query
         let embedding: Vec<f32> = match self.embedding.embed(query_text) {
-            Ok(e) => e,
+            Ok(e) => e.embedding,
             Err(e) => {
                 tracing::warn!("embedding failed: {}", e);
                 return Vec::new();

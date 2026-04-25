@@ -337,7 +337,7 @@ impl IntentPrefetcher {
 
         // F-9: Try to get embedding and check cache first
         let model_name = self.embedding.model_name();
-        let intent_embedding: Option<Vec<f32>> = self.embedding.embed(intent).ok();
+        let intent_embedding: Option<Vec<f32>> = self.embedding.embed(intent).ok().map(|r| r.embedding);
 
         // F-2: Record embedding cost if cost ledger is available
         self.record_embedding_cost(intent, model_name);
@@ -443,7 +443,7 @@ impl IntentPrefetcher {
 
         // F-9: Try to get embedding and check cache first
         let model_name = self.embedding.model_name();
-        let intent_embedding: Option<Vec<f32>> = self.embedding.embed(intent).ok();
+        let intent_embedding: Option<Vec<f32>> = self.embedding.embed(intent).ok().map(|r| r.embedding);
 
         // F-2: Record embedding cost if cost ledger is available
         self.record_embedding_cost(intent, model_name);
@@ -727,7 +727,7 @@ impl IntentPrefetcher {
         // Check if this is already being prefetched or cached
         // Skip if already in cache (F-9 would handle it)
         let model_name = self.embedding.model_name();
-        let intent_embedding: Option<Vec<f32>> = self.embedding.embed(&predicted_intent).ok();
+        let intent_embedding: Option<Vec<f32>> = self.embedding.embed(&predicted_intent).ok().map(|r| r.embedding);
 
         // F-2: Record embedding cost if cost ledger is available
         self.record_embedding_cost(&predicted_intent, model_name);
@@ -929,7 +929,8 @@ impl IntentPrefetcher {
                     // Get embedding for cache storage (Path A)
                     let intent_embedding: Option<Vec<f32>> = embedding
                         .embed(&intent)
-                        .ok();
+                        .ok()
+                        .map(|r| r.embedding);
                     cache.store(intent, intent_embedding, allocation.clone(), related_cids);
                 }
 
@@ -971,7 +972,7 @@ impl IntentPrefetcher {
         }).await
         .map_err(|e| format!("embed task panicked: {}", e))?
         .map_err(|e| format!("failed to embed intent: {}", e))?;
-        let emb_slice: Vec<f32> = emb;
+        let emb_slice: Vec<f32> = emb.embedding;
 
         // Clone data needed for async tasks
         let related_cids_owned = related_cids.to_vec();

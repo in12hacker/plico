@@ -7,7 +7,7 @@
 
 #[cfg(feature = "ort-backend")]
 mod inner {
-    use super::super::types::{EmbedError, Embedding, EmbeddingProvider};
+    use super::super::types::{EmbedError, Embedding, EmbeddingProvider, EmbedResult};
     use ndarray::Array2;
     use std::path::Path;
     use std::sync::Mutex;
@@ -139,7 +139,7 @@ mod inner {
             sum
         }
 
-        fn embed_single(&self, text: &str) -> Result<Embedding, EmbedError> {
+        fn embed_single(&self, text: &str) -> Result<EmbedResult, EmbedError> {
             let (input_ids, attention_mask) = self.encode(text)?;
             let batch_size = 1;
             let seq_len = input_ids.len();
@@ -188,16 +188,18 @@ mod inner {
             let hidden_2d: Array2<f32> = Array2::from_shape_vec((1, flat.len()), flat)
                 .map_err(|e| EmbedError::Onnx(format!("bad hidden shape: {e}")))?;
 
-            Ok(self.pool_2d(&hidden_2d, &attention_mask, seq_len))
+            let embedding = self.pool_2d(&hidden_2d, &attention_mask, seq_len);
+            let input_tokens = input_ids.len() as u32;
+            Ok(EmbedResult::new(embedding, input_tokens))
         }
     }
 
     impl EmbeddingProvider for OrtEmbeddingBackend {
-        fn embed(&self, text: &str) -> Result<Embedding, EmbedError> {
+        fn embed(&self, text: &str) -> Result<EmbedResult, EmbedError> {
             self.embed_single(text)
         }
 
-        fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Embedding>, EmbedError> {
+        fn embed_batch(&self, texts: &[&str]) -> Result<Vec<EmbedResult>, EmbedError> {
             texts.iter().map(|t| self.embed_single(t)).collect()
         }
 
@@ -214,7 +216,7 @@ mod inner {
 // Always re-export (the inner impl is feature-gated)
 #[cfg(not(feature = "ort-backend"))]
 mod inner {
-    use super::super::types::{EmbedError, Embedding, EmbeddingProvider};
+    use super::super::types::{EmbedError, Embedding, EmbeddingProvider, EmbedResult};
     use std::path::Path;
 
     /// Stub for when `ort-backend` feature is not enabled.
@@ -232,10 +234,10 @@ mod inner {
     }
 
     impl EmbeddingProvider for OrtEmbeddingBackend {
-        fn embed(&self, _text: &str) -> Result<Embedding, EmbedError> {
+        fn embed(&self, _text: &str) -> Result<EmbedResult, EmbedError> {
             unreachable!("ort-backend feature not enabled")
         }
-        fn embed_batch(&self, _texts: &[&str]) -> Result<Vec<Embedding>, EmbedError> {
+        fn embed_batch(&self, _texts: &[&str]) -> Result<Vec<EmbedResult>, EmbedError> {
             unreachable!("ort-backend feature not enabled")
         }
         fn dimension(&self) -> usize {

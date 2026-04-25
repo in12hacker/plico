@@ -6,7 +6,7 @@ use std::thread;
 use std::io::{BufReader, Write};
 use std::process::{Child, Stdio};
 
-use crate::fs::embedding::types::{EmbedError, Embedding, EmbeddingProvider};
+use crate::fs::embedding::types::{EmbedError, Embedding, EmbeddingProvider, EmbedResult};
 use crate::fs::embedding::json_rpc::{JsonRpcRequest, JsonRpcResponse};
 
 /// Local embedding backend via Python subprocess.
@@ -171,7 +171,7 @@ impl LocalEmbeddingBackend {
             .map_err(|e| EmbedError::Subprocess(format!("parse error: {e}: {line}")))
     }
 
-    fn embed_single(&self, text: &str) -> Result<Embedding, EmbedError> {
+    fn embed_single(&self, text: &str) -> Result<EmbedResult, EmbedError> {
         let id = self.counter.fetch_add(1, Ordering::SeqCst) as i64;
         let req = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
@@ -182,7 +182,8 @@ impl LocalEmbeddingBackend {
 
         let resp = self.send_rpc(req)?;
 
-        resp.result
+        let embedding = resp
+            .result
             .and_then(|r| r.get("embedding").and_then(|e| {
                 e.as_array().map(|arr| {
                     arr.iter()
@@ -194,16 +195,20 @@ impl LocalEmbeddingBackend {
                 EmbedError::Subprocess(
                     resp.error.map(|e| e.message).unwrap_or_else(|| "embed failed".into()),
                 )
-            })
+            })?;
+
+        // Local subprocess doesn't return token counts — estimate
+        let estimated_tokens = (text.len() / 4).max(1) as u32;
+        Ok(EmbedResult::new(embedding, estimated_tokens))
     }
 }
 
 impl EmbeddingProvider for LocalEmbeddingBackend {
-    fn embed(&self, text: &str) -> Result<Embedding, EmbedError> {
+    fn embed(&self, text: &str) -> Result<EmbedResult, EmbedError> {
         self.embed_single(text)
     }
 
-    fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Embedding>, EmbedError> {
+    fn embed_batch(&self, texts: &[&str]) -> Result<Vec<EmbedResult>, EmbedError> {
         let mut results = Vec::with_capacity(texts.len());
         for text in texts {
             results.push(self.embed_single(text)?);

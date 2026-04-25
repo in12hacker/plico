@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use crate::fs::embedding::types::{EmbedError, Embedding, EmbeddingProvider};
+use crate::fs::embedding::types::{EmbedError, Embedding, EmbeddingProvider, EmbedResult};
 
 /// Ollama daemon backend for text embeddings.
 ///
@@ -86,7 +86,7 @@ impl OllamaBackend {
         Ok(dim)
     }
 
-    async fn embed_async(&self, text: &str) -> Result<Embedding, EmbedError> {
+    async fn embed_async(&self, text: &str) -> Result<EmbedResult, EmbedError> {
         #[derive(serde::Serialize)]
         struct Request<'a> {
             model: &'a str,
@@ -124,7 +124,9 @@ impl OllamaBackend {
 
         let Response { embedding } = serde_json::from_slice(&body_bytes)
             .map_err(|e| EmbedError::ollama(format!("parse error: {e}")))?;
-        Ok(embedding)
+        // Ollama doesn't return token counts — estimate based on character count
+        let estimated_tokens = (text.len() / 4).max(1) as u32;
+        Ok(EmbedResult::new(embedding, estimated_tokens))
     }
 
     /// Send a chat request to Ollama with JSON structured output mode.
@@ -231,7 +233,7 @@ impl OllamaBackend {
 }
 
 impl EmbeddingProvider for OllamaBackend {
-    fn embed(&self, text: &str) -> Result<Embedding, EmbedError> {
+    fn embed(&self, text: &str) -> Result<EmbedResult, EmbedError> {
         match tokio::runtime::Handle::try_current() {
             Ok(handle) => {
                 tokio::task::block_in_place(|| handle.block_on(self.embed_async(text)))
@@ -240,7 +242,7 @@ impl EmbeddingProvider for OllamaBackend {
         }
     }
 
-    fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Embedding>, EmbedError> {
+    fn embed_batch(&self, texts: &[&str]) -> Result<Vec<EmbedResult>, EmbedError> {
         let this = self.clone();
         let texts: Vec<String> = texts.iter().map(|s| s.to_string()).collect();
         let fut = async move {

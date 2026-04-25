@@ -136,8 +136,8 @@ impl SemanticFS {
 
             if embed_available {
                 match self.embedding.embed(&text) {
-                    Ok(emb) => {
-                        self.search_index.upsert(cid, &emb, SearchIndexMeta {
+                    Ok(result) => {
+                        self.search_index.upsert(cid, &result.embedding, SearchIndexMeta {
                             cid: cid.clone(),
                             tags: obj.meta.tags.clone(),
                             content_type: obj.meta.content_type.to_string(),
@@ -248,7 +248,7 @@ impl SemanticFS {
             Query::Semantic { text, filter } => {
                 let filter = filter.clone().unwrap_or_default();
                 let query_emb = match self.embedding.embed(text) {
-                    Ok(emb) => emb,
+                    Ok(result) => result.embedding,
                     Err(e) => {
                         tracing::warn!("Embedding failed for query '{text}': {e}. Falling back to tag search.");
                         let tags = text.split_whitespace().map(String::from).collect();
@@ -283,7 +283,7 @@ impl SemanticFS {
 
                 if let Some(text) = semantic {
                     let query_emb = match self.embedding.embed(text) {
-                        Ok(emb) => emb,
+                        Ok(result) => result.embedding,
                         Err(e) => {
                             tracing::warn!("Embedding failed in Hybrid query: {e}. Falling back to filter scan.");
                             let cids = self.search_index.list_by_filter(&filter);
@@ -439,7 +439,7 @@ impl SemanticFS {
     }
 
     pub fn search_with_filter(&self, query: &str, limit: usize, filter: SearchFilter) -> Vec<SearchResult> {
-        let query_emb = self.embedding.embed(query).ok();
+        let query_emb = self.embedding.embed(query).ok().map(|r| r.embedding);
 
         let vector_hits: HashMap<String, f32> = match &query_emb {
             Some(emb) => self
@@ -654,9 +654,9 @@ impl SemanticFS {
             vec![0.0f32; self.embedding.dimension()]
         } else {
             match self.embedding.embed(&text) {
-                Ok(emb) => {
+                Ok(result) => {
                     is_real_embedding = true;
-                    emb
+                    result.embedding
                 }
                 Err(e) => {
                     tracing::warn!("Failed to embed CID={}: {e}. Indexing with zero vector.", cid);

@@ -8,7 +8,7 @@
 
 use plico::fs::search::Bm25Index;
 use plico::fs::embedding::circuit_breaker::EmbeddingCircuitBreaker;
-use plico::fs::embedding::EmbeddingProvider;
+use plico::fs::embedding::{EmbeddingProvider, EmbedResult};
 use plico::kernel::ops::checkpoint::CheckpointMemory;
 use plico::memory::layered::{MemoryEntry, MemoryTier, MemoryContent, MemoryScope, Procedure, ProcedureStep, KnowledgePiece};
 use plico::api::semantic::SearchResultDto;
@@ -87,10 +87,10 @@ fn test_snippet_length_enforcement() {
 fn test_circuit_breaker_opens_after_threshold() {
     struct FailingProvider;
     impl EmbeddingProvider for FailingProvider {
-        fn embed(&self, _: &str) -> Result<Vec<f32>, plico::fs::embedding::EmbedError> {
+        fn embed(&self, _: &str) -> Result<EmbedResult, plico::fs::embedding::EmbedError> {
             Err(plico::fs::embedding::EmbedError::ServerUnavailable("test".into()))
         }
-        fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, plico::fs::embedding::EmbedError> {
+        fn embed_batch(&self, texts: &[&str]) -> Result<Vec<EmbedResult>, plico::fs::embedding::EmbedError> {
             texts.iter().map(|t| self.embed(t)).collect()
         }
         fn dimension(&self) -> usize { 384 }
@@ -123,15 +123,15 @@ fn test_circuit_breaker_recovery() {
         fn new() -> Self { Self { calls: std::sync::atomic::AtomicU32::new(0) } }
     }
     impl EmbeddingProvider for OnceFailingProvider {
-        fn embed(&self, _: &str) -> Result<Vec<f32>, plico::fs::embedding::EmbedError> {
+        fn embed(&self, _: &str) -> Result<EmbedResult, plico::fs::embedding::EmbedError> {
             let c = self.calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             if c == 0 {
                 Err(plico::fs::embedding::EmbedError::ServerUnavailable("test".into()))
             } else {
-                Ok(vec![0.1; 384])
+                Ok(EmbedResult::new(vec![0.1; 384], 10))
             }
         }
-        fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, plico::fs::embedding::EmbedError> {
+        fn embed_batch(&self, texts: &[&str]) -> Result<Vec<EmbedResult>, plico::fs::embedding::EmbedError> {
             texts.iter().map(|t| self.embed(t)).collect()
         }
         fn dimension(&self) -> usize { 384 }

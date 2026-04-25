@@ -244,7 +244,7 @@ impl crate::kernel::AIKernel {
 
         let ctx = PermissionContext::new(agent_id.to_string(), tenant_id.to_string());
         self.permissions.check(&ctx, PermissionAction::Write).map_err(|e| e.to_string())?;
-        let embedding = self.embedding.embed(&content).ok();
+        let embedding = self.embedding.embed(&content).ok().map(|r| r.embedding);
         let entry_id = uuid::Uuid::new_v4().to_string();
         let created_at = crate::memory::layered::now_ms();
         let entry = MemoryEntry {
@@ -323,7 +323,7 @@ impl crate::kernel::AIKernel {
         let ctx = PermissionContext::new(agent_id.to_string(), tenant_id.to_string());
         self.permissions.check(&ctx, PermissionAction::Read).map_err(|e| e.to_string())?;
         let query_emb = self.embedding.embed(query).map_err(|e| e.to_string())?;
-        let results = self.memory.recall_semantic(agent_id, &query_emb, k);
+        let results = self.memory.recall_semantic(agent_id, &query_emb.embedding, k);
         Ok(results.into_iter()
             .map(|(entry, _score)| entry)
             .filter(|e| e.tenant_id == tenant_id)
@@ -344,7 +344,7 @@ impl crate::kernel::AIKernel {
         }
         let tenant_id_owned = tenant_id.to_string();
         match self.embedding.embed(query) {
-            Ok(emb) => self.memory.recall_relevant_semantic(agent_id, &emb, budget_tokens)
+            Ok(emb) => self.memory.recall_relevant_semantic(agent_id, &emb.embedding, budget_tokens)
                 .into_iter()
                 .filter(|e| e.tenant_id == tenant_id_owned)
                 .collect(),

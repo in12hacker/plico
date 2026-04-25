@@ -59,14 +59,28 @@ impl EmbedError {
 /// Thread-safe provider for generating text embeddings.
 pub trait EmbeddingProvider: Send + Sync {
     /// Generate an embedding for a single text.
-    fn embed(&self, text: &str) -> Result<Embedding, EmbedError>;
+    fn embed(&self, text: &str) -> Result<EmbedResult, EmbedError>;
 
     /// Generate embeddings for multiple texts in a batch.
-    fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Embedding>, EmbedError>;
+    fn embed_batch(&self, texts: &[&str]) -> Result<Vec<EmbedResult>, EmbedError>;
 
     /// Embedding vector dimension (e.g. 384 for all-MiniLM-L6-v2).
     fn dimension(&self) -> usize;
 
     /// Name of the model used.
     fn model_name(&self) -> &str;
+}
+
+/// Result of an embedding operation, including token usage.
+#[derive(Debug, Clone)]
+pub struct EmbedResult {
+    pub embedding: Embedding,
+    pub input_tokens: u32,
+}
+
+/// Result of a batch embedding operation.
+impl EmbedResult {
+    pub fn new(embedding: Embedding, input_tokens: u32) -> Self {
+        Self { embedding, input_tokens }
+    }
 }

@@ -412,7 +412,7 @@ fn bm25_search_with_tag_filter_and_stub_embeddings() {
 struct DeterministicEmbedding;
 
 impl crate::fs::embedding::EmbeddingProvider for DeterministicEmbedding {
-    fn embed(&self, text: &str) -> Result<Vec<f32>, crate::fs::embedding::EmbedError> {
+    fn embed(&self, text: &str) -> Result<crate::fs::embedding::EmbedResult, crate::fs::embedding::EmbedError> {
         let mut vec = vec![0.0f32; 8];
         for (i, b) in text.bytes().enumerate() {
             vec[i % 8] += b as f32 / 255.0;
@@ -421,9 +421,9 @@ impl crate::fs::embedding::EmbeddingProvider for DeterministicEmbedding {
         if norm > 0.0 {
             for x in &mut vec { *x /= norm; }
         }
-        Ok(vec)
+        Ok(crate::fs::embedding::EmbedResult::new(vec, text.len() as u32 / 4))
     }
-    fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, crate::fs::embedding::EmbedError> {
+    fn embed_batch(&self, texts: &[&str]) -> Result<Vec<crate::fs::embedding::EmbedResult>, crate::fs::embedding::EmbedError> {
         texts.iter().map(|t| self.embed(t)).collect()
     }
     fn dimension(&self) -> usize { 8 }

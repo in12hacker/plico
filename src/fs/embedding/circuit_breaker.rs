@@ -12,7 +12,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::fs::embedding::stub::StubEmbeddingProvider;
-use crate::fs::embedding::{EmbedError, Embedding, EmbeddingProvider};
+use crate::fs::embedding::{EmbedError, Embedding, EmbeddingProvider, EmbedResult};
 
 /// Circuit breaker states.
 const STATE_CLOSED: u8 = 0;
@@ -66,7 +66,7 @@ impl EmbeddingCircuitBreaker {
 }
 
 impl EmbeddingProvider for EmbeddingCircuitBreaker {
-    fn embed(&self, text: &str) -> Result<Embedding, EmbedError> {
+    fn embed(&self, text: &str) -> Result<EmbedResult, EmbedError> {
         let state = self.state();
 
         if state == STATE_OPEN {
@@ -82,12 +82,12 @@ impl EmbeddingProvider for EmbeddingCircuitBreaker {
 
         if state == STATE_HALF_OPEN || state == STATE_OPEN {
             match self.inner.embed(text) {
-                Ok(emb) => {
+                Ok(result) => {
                     // Success → close circuit
                     self.state.store(STATE_CLOSED, Ordering::Relaxed);
                     self.failure_count.store(0, Ordering::Relaxed);
                     tracing::info!("Embedding circuit breaker CLOSED — provider recovered");
-                    Ok(emb)
+                    Ok(result)
                 }
                 Err(e) => {
                     // Failure in HalfOpen → re-open circuit
@@ -100,9 +100,9 @@ impl EmbeddingProvider for EmbeddingCircuitBreaker {
         } else {
             // STATE_CLOSED — normal operation
             match self.inner.embed(text) {
-                Ok(emb) => {
+                Ok(result) => {
                     self.failure_count.store(0, Ordering::Relaxed);
-                    Ok(emb)
+                    Ok(result)
                 }
                 Err(e) => {
                     let count = self.failure_count.fetch_add(1, Ordering::Relaxed) + 1;
@@ -117,7 +117,7 @@ impl EmbeddingProvider for EmbeddingCircuitBreaker {
         }
     }
 
-    fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Embedding>, EmbedError> {
+    fn embed_batch(&self, texts: &[&str]) -> Result<Vec<EmbedResult>, EmbedError> {
         let state = self.state();
         if state == STATE_OPEN {
             let elapsed = Self::now_ms() - self.last_failure_ms.load(Ordering::Relaxed);
@@ -129,10 +129,10 @@ impl EmbeddingProvider for EmbeddingCircuitBreaker {
         // For batch, just delegate — circuit breaker state is per-call
         if state == STATE_HALF_OPEN {
             match self.inner.embed_batch(texts) {
-                Ok(embs) => {
+                Ok(results) => {
                     self.state.store(STATE_CLOSED, Ordering::Relaxed);
                     self.failure_count.store(0, Ordering::Relaxed);
-                    Ok(embs)
+                    Ok(results)
                 }
                 Err(_e) => {
                     self.state.store(STATE_OPEN, Ordering::Relaxed);
@@ -142,9 +142,9 @@ impl EmbeddingProvider for EmbeddingCircuitBreaker {
             }
         } else {
             match self.inner.embed_batch(texts) {
-                Ok(embs) => {
+                Ok(results) => {
                     self.failure_count.store(0, Ordering::Relaxed);
-                    Ok(embs)
+                    Ok(results)
                 }
                 Err(e) => {
                     let count = self.failure_count.fetch_add(1, Ordering::Relaxed) + 1;
@@ -186,17 +186,17 @@ mod tests {
     }
 
     impl EmbeddingProvider for FailingProvider {
-        fn embed(&self, _text: &str) -> Result<Embedding, EmbedError> {
+        fn embed(&self, _text: &str) -> Result<EmbedResult, EmbedError> {
             self.calls.fetch_add(1, Ordering::Relaxed);
             if self.fail_for.load(Ordering::Relaxed) > 0 {
                 self.fail_for.fetch_sub(1, Ordering::Relaxed);
                 Err(EmbedError::ServerUnavailable("test".into()))
             } else {
-                Ok(vec![0.1; 384])
+                Ok(EmbedResult::new(vec![0.1; 384], 10))
             }
         }
 
-        fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Embedding>, EmbedError> {
+        fn embed_batch(&self, texts: &[&str]) -> Result<Vec<EmbedResult>, EmbedError> {
             texts.iter().map(|t| self.embed(t)).collect()
         }
 

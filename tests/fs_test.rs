@@ -5,7 +5,7 @@
 
 use plico::fs::{
     SemanticFS, Query, ContextLoader, ContextLayer, AuditAction,
-    EmbeddingProvider, InMemoryBackend, EmbedError,
+    EmbeddingProvider, InMemoryBackend, EmbedError, EmbedResult,
 };
 use plico::cas::CASStorage;
 use std::sync::Arc;
@@ -14,10 +14,10 @@ use tempfile::tempdir;
 /// A stub embedding provider that always fails — forces tag-based fallback in tests.
 struct StubProvider;
 impl EmbeddingProvider for StubProvider {
-    fn embed(&self, _: &str) -> Result<Vec<f32>, EmbedError> {
+    fn embed(&self, _: &str) -> Result<EmbedResult, EmbedError> {
         Err(EmbedError::ServerUnavailable("stub".to_string()))
     }
-    fn embed_batch(&self, _: &[&str]) -> Result<Vec<Vec<f32>>, EmbedError> {
+    fn embed_batch(&self, _: &[&str]) -> Result<Vec<EmbedResult>, EmbedError> {
         Err(EmbedError::ServerUnavailable("stub".to_string()))
     }
     fn dimension(&self) -> usize { 384 }
