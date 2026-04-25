@@ -502,6 +502,8 @@ pub fn start_session_orchestrate(
 
     // 5b. F-3: Warm intent cache from agent profile (cache preheat at session-start)
     // This uses historical hot_objects to pre-populate the cache
+    // F-2: Set session_id for cost tracking before any embedding calls
+    prefetch.set_session_id(Some(session_id.clone()));
     let cache_warmed = prefetch.warm_cache_for_agent(agent_id);
     if cache_warmed > 0 {
         tracing::debug!("warmed {} cache entries from agent profile for {}", cache_warmed, agent_id);
@@ -602,6 +604,7 @@ pub fn end_session_orchestrate(
     session_store: &SessionStore,
     memory: &Arc<LayeredMemory>,
     root: &Path,
+    prefetch: Option<&crate::kernel::ops::prefetch::IntentPrefetcher>,
 ) -> Result<EndSessionResult, String> {
     // 1. Validate session exists
     let session = session_store.get(session_id)
@@ -647,6 +650,11 @@ pub fn end_session_orchestrate(
     // 5. Persist immediately (A-1)
     if let Err(e) = session_store.persist(root) {
         tracing::warn!("Failed to persist session end: {}", e);
+    }
+
+    // F-2: Clear session_id from prefetcher to stop cost tracking
+    if let Some(p) = prefetch {
+        p.set_session_id(None);
     }
 
     // 6. Return last_seq — this is the current event count at EndSession time
@@ -715,6 +723,7 @@ pub fn spawn_session_timeout_scanner(
                     &session_store,
                     &memory,
                     &root_clone,
+                    None, // no prefetch in timeout scanner
                 );
             }
         }

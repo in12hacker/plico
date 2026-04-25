@@ -1584,6 +1584,7 @@ impl AIKernel {
                     &self.session_store,
                     &self.memory,
                     &self.root,
+                    Some(&self.prefetch),
                 ) {
                     Ok(result) => {
                         // F-1: Apply pending feedback from feedback_history to agent profile
