@@ -64,7 +64,7 @@ impl CircuitBreakerLlmProvider {
 }
 
 impl LlmProvider for CircuitBreakerLlmProvider {
-    fn chat(&self, messages: &[ChatMessage], options: &ChatOptions) -> Result<String, LlmError> {
+    fn chat(&self, messages: &[ChatMessage], options: &ChatOptions) -> Result<(String, u32, u32), LlmError> {
         let state = self.state();
 
         if state == STATE_OPEN {
@@ -80,11 +80,11 @@ impl LlmProvider for CircuitBreakerLlmProvider {
         if state == STATE_HALF_OPEN || state == STATE_OPEN {
             // Already checked OPEN case above; here we handle HALF_OPEN transitioning from OPEN
             match self.inner.chat(messages, options) {
-                Ok(r) => {
+                Ok((r, in_tok, out_tok)) => {
                     self.state.store(STATE_CLOSED, Ordering::Relaxed);
                     self.failure_count.store(0, Ordering::Relaxed);
                     tracing::info!("LLM circuit breaker CLOSED — provider recovered");
-                    Ok(r)
+                    Ok((r, in_tok, out_tok))
                 }
                 Err(e) => {
                     self.state.store(STATE_OPEN, Ordering::Relaxed);
@@ -96,9 +96,9 @@ impl LlmProvider for CircuitBreakerLlmProvider {
         } else {
             // STATE_CLOSED — normal operation
             match self.inner.chat(messages, options) {
-                Ok(r) => {
+                Ok((r, in_tok, out_tok)) => {
                     self.failure_count.store(0, Ordering::Relaxed);
-                    Ok(r)
+                    Ok((r, in_tok, out_tok))
                 }
                 Err(e) => {
                     let count = self.failure_count.fetch_add(1, Ordering::Relaxed) + 1;
@@ -138,12 +138,12 @@ mod tests {
     }
 
     impl LlmProvider for FailingLlm {
-        fn chat(&self, _messages: &[ChatMessage], _options: &ChatOptions) -> Result<String, LlmError> {
+        fn chat(&self, _messages: &[ChatMessage], _options: &ChatOptions) -> Result<(String, u32, u32), LlmError> {
             let n = self.fail_count.fetch_add(1, Ordering::Relaxed) + 1;
             if n <= self.fail_for.load(Ordering::Relaxed) {
                 Err(LlmError::Api("test failure".into()))
             } else {
-                Ok("success response".into())
+                Ok(("success response".into(), 0, 0))
             }
         }
         fn model_name(&self) -> &str { "failing-llm" }

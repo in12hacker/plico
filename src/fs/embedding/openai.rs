@@ -193,22 +193,17 @@ fn parse_embedding_batch_response(body: &[u8]) -> Result<Vec<EmbedResult>, Embed
 
 impl EmbeddingProvider for OpenAIEmbeddingBackend {
     fn embed(&self, text: &str) -> Result<EmbedResult, EmbedError> {
-        match tokio::runtime::Handle::try_current() {
-            Ok(handle) => {
-                tokio::task::block_in_place(|| handle.block_on(self.embed_async(text)))
-            }
-            Err(_) => self.rt.block_on(self.embed_async(text)),
-        }
+        // Always use our OWN dedicated runtime, never try_current().
+        // The panic "Cannot start a runtime from within a runtime" occurs when
+        // AIKernel::new() (which starts a multi-threaded runtime) tries to
+        // block_on a provider's single-threaded runtime from a worker thread.
+        // By always using self.rt, we avoid nested block_on on the outer runtime.
+        self.rt.block_on(self.embed_async(text))
     }
 
     fn embed_batch(&self, texts: &[&str]) -> Result<Vec<EmbedResult>, EmbedError> {
         let owned: Vec<String> = texts.iter().map(|s| s.to_string()).collect();
-        match tokio::runtime::Handle::try_current() {
-            Ok(handle) => {
-                tokio::task::block_in_place(|| handle.block_on(self.embed_batch_async(&owned)))
-            }
-            Err(_) => self.rt.block_on(self.embed_batch_async(&owned)),
-        }
+        self.rt.block_on(self.embed_batch_async(&owned))
     }
 
     fn dimension(&self) -> usize {

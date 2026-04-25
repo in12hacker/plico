@@ -117,9 +117,10 @@ impl Summarizer for LlmSummarizer {
         ];
         let options = ChatOptions { temperature: 0.3, max_tokens: None };
 
-        self.provider
+        let (summary, _input_tokens, _output_tokens) = self.provider
             .chat(&messages, &options)
-            .map_err(|e| SummarError::Llm(e.to_string()))
+            .map_err(|e| SummarError::Llm(e.to_string()))?;
+        Ok(summary)
     }
 
     fn model_name(&self) -> &str {

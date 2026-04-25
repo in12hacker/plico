@@ -234,12 +234,7 @@ impl OllamaBackend {
 
 impl EmbeddingProvider for OllamaBackend {
     fn embed(&self, text: &str) -> Result<EmbedResult, EmbedError> {
-        match tokio::runtime::Handle::try_current() {
-            Ok(handle) => {
-                tokio::task::block_in_place(|| handle.block_on(self.embed_async(text)))
-            }
-            Err(_) => self.rt.block_on(self.embed_async(text)),
-        }
+        self.rt.block_on(self.embed_async(text))
     }
 
     fn embed_batch(&self, texts: &[&str]) -> Result<Vec<EmbedResult>, EmbedError> {
@@ -252,10 +247,7 @@ impl EmbeddingProvider for OllamaBackend {
             }
             Ok(results)
         };
-        match tokio::runtime::Handle::try_current() {
-            Ok(handle) => tokio::task::block_in_place(|| handle.block_on(fut)),
-            Err(_) => self.rt.block_on(fut),
-        }
+        self.rt.block_on(fut)
     }
 
     fn dimension(&self) -> usize {

@@ -288,6 +288,13 @@ impl IntentPrefetcher {
         let json = serde_json::to_string_pretty(&*feedback)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
         std::fs::write(prefetch_dir.join("feedback.json"), json)?;
+        // Persist cost ledger
+        let ledger_guard = self.cost_ledger.read().unwrap();
+        if let Some(ref ledger) = *ledger_guard {
+            if let Err(e) = ledger.persist_to_dir(&prefetch_dir) {
+                tracing::warn!("cost ledger persist failed: {}", e);
+            }
+        }
         tracing::debug!("prefetch state persisted ({} cache, {} profiles, {} feedback)",
             self.intent_cache.stats().entries,
             self.profile_store.len(),
@@ -313,6 +320,13 @@ impl IntentPrefetcher {
             let mut feedback = self.feedback_history.write().unwrap();
             // Keep most recent entries up to max_feedback_entries
             *feedback = loaded.into_iter().rev().take(self.max_feedback_entries).rev().collect();
+        }
+        // Restore cost ledger
+        let ledger_guard = self.cost_ledger.read().unwrap();
+        if let Some(ref ledger) = *ledger_guard {
+            if let Err(e) = ledger.restore_from_dir(&prefetch_dir) {
+                tracing::warn!("cost ledger restore failed (ok if first run): {}", e);
+            }
         }
         tracing::info!("prefetch state restored: {} cache entries, {} profiles",
             cache_count, profile_count);

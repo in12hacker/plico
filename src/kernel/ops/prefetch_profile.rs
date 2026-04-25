@@ -168,7 +168,7 @@ impl AgentProfileStore {
     }
 
     /// Close the feedback loop: update profile from actual usage data.
-    pub fn apply_feedback(&self, agent_id: &str, feedback: &IntentFeedbackEntry) {
+    pub(crate) fn apply_feedback(&self, agent_id: &str, feedback: &IntentFeedbackEntry) {
         let mut profiles = self.profiles.write().unwrap();
         let profile = profiles
             .entry(agent_id.to_string())

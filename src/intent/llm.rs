@@ -115,7 +115,7 @@ impl IntentRouter for LlmRouter {
         ];
         let options = ChatOptions { temperature: 0.1, max_tokens: None };
 
-        let content = self.provider
+        let (content, _input_tokens, _output_tokens) = self.provider
             .chat(&messages, &options)
             .map_err(|e| IntentError::LlmUnavailable(format!("LLM request failed: {}", e)))?;
 

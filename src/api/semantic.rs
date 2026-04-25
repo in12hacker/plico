@@ -1613,7 +1613,7 @@ mod tests {
     #[test]
     fn test_version_constants() {
         assert_eq!(ApiVersion::V1.major, 1);
-        assert_eq!(ApiVersion::CURRENT.major, 18);
+        assert_eq!(ApiVersion::CURRENT.major, 26);
     }
 
     #[test]

@@ -17,8 +17,8 @@ impl StubProvider {
 }
 
 impl LlmProvider for StubProvider {
-    fn chat(&self, _messages: &[ChatMessage], _options: &ChatOptions) -> Result<String, LlmError> {
-        Ok(self.response.clone())
+    fn chat(&self, _messages: &[ChatMessage], _options: &ChatOptions) -> Result<(String, u32, u32), LlmError> {
+        Ok((self.response.clone(), 0, 0))
     }
 
     fn model_name(&self) -> &str {

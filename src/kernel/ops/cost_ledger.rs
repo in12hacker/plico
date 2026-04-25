@@ -191,6 +191,31 @@ impl TokenCostLedger {
     pub fn entry_count(&self) -> usize {
         self.entries.read().unwrap().len()
     }
+
+    /// Persist session_totals to `dir/cost_ledger.json`.
+    pub fn persist_to_dir(&self, dir: &std::path::Path) -> std::io::Result<()> {
+        let totals = self.session_totals.read().unwrap();
+        let json = serde_json::to_string_pretty(&*totals)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        std::fs::write(dir.join("cost_ledger.json"), json)
+    }
+
+    /// Restore session_totals from `dir/cost_ledger.json`.
+    /// Missing file is not an error.
+    pub fn restore_from_dir(&self, dir: &std::path::Path) -> std::io::Result<usize> {
+        let path = dir.join("cost_ledger.json");
+        if !path.exists() {
+            return Ok(0);
+        }
+        let json = std::fs::read_to_string(&path)?;
+        let loaded: std::collections::HashMap<String, SessionCostSummary> = serde_json::from_str(&json)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        let mut totals = self.session_totals.write().unwrap();
+        for (id, summary) in loaded {
+            totals.insert(id, summary);
+        }
+        Ok(totals.len())
+    }
 }
 
 impl Default for TokenCostLedger {
@@ -307,5 +332,16 @@ mod tests {
         ledger.record(CostEntry::new("s1".into(), "a1".into(), CostOperation::EmbeddingCall, 50, 0, "qwen".into(), 10));
         let summary = ledger.session_summary("s1").unwrap();
         assert_eq!(summary.operations_count, 2);
+    }
+
+    #[test]
+    fn test_llm_token_tracking() {
+        // Verify LLM calls are tracked with correct token counts
+        let ledger = TokenCostLedger::new();
+        ledger.record_llm(150, 80, "gpt-4", "s1", "agent1");
+        let summary = ledger.session_summary("s1").unwrap();
+        assert_eq!(summary.total_input_tokens, 150);
+        assert_eq!(summary.total_output_tokens, 80);
+        assert_eq!(summary.operations_count, 1);
     }
 }

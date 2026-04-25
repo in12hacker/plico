@@ -34,7 +34,7 @@ impl OllamaProvider {
         &self,
         messages: &[ChatMessage],
         options: &ChatOptions,
-    ) -> Result<String, LlmError> {
+    ) -> Result<(String, u32, u32), LlmError> {
         let api_messages: Vec<serde_json::Value> = messages
             .iter()
             .map(|m| serde_json::json!({"role": m.role, "content": m.content}))
@@ -87,18 +87,18 @@ impl OllamaProvider {
         let parsed: ChatResponse = serde_json::from_slice(&body_bytes)
             .map_err(|e| LlmError::Parse(format!("response parse error: {e}")))?;
 
-        Ok(parsed.message.content.trim().to_string())
+        let content = parsed.message.content.trim().to_string();
+        // Ollama doesn't return token counts — estimate from content length
+        let input_tokens = messages.iter().map(|m| m.content.len() as u32 / 4).sum::<u32>().max(1);
+        let output_tokens = (content.len() as u32 / 4).max(1);
+
+        Ok((content, input_tokens, output_tokens))
     }
 }
 
 impl LlmProvider for OllamaProvider {
-    fn chat(&self, messages: &[ChatMessage], options: &ChatOptions) -> Result<String, LlmError> {
-        match tokio::runtime::Handle::try_current() {
-            Ok(handle) => {
-                tokio::task::block_in_place(|| handle.block_on(self.chat_async(messages, options)))
-            }
-            Err(_) => self.rt.block_on(self.chat_async(messages, options)),
-        }
+    fn chat(&self, messages: &[ChatMessage], options: &ChatOptions) -> Result<(String, u32, u32), LlmError> {
+        self.rt.block_on(self.chat_async(messages, options))
     }
 
     fn model_name(&self) -> &str {

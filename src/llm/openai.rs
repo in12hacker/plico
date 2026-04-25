@@ -63,7 +63,7 @@ impl OpenAICompatibleProvider {
         &self,
         messages: &[ChatMessage],
         options: &ChatOptions,
-    ) -> Result<String, LlmError> {
+    ) -> Result<(String, u32, u32), LlmError> {
         let body = self.build_request_body(messages, options);
 
         let mut req = self
@@ -100,10 +100,11 @@ impl OpenAICompatibleProvider {
     }
 }
 
-pub(crate) fn parse_response(body: &[u8]) -> Result<String, LlmError> {
+pub(crate) fn parse_response(body: &[u8]) -> Result<(String, u32, u32), LlmError> {
     #[derive(serde::Deserialize)]
     struct ChatCompletionResponse {
         choices: Vec<Choice>,
+        usage: Option<Usage>,
     }
     #[derive(serde::Deserialize)]
     struct Choice {
@@ -113,25 +114,38 @@ pub(crate) fn parse_response(body: &[u8]) -> Result<String, LlmError> {
     struct ChoiceMessage {
         content: String,
     }
+    #[derive(serde::Deserialize)]
+    struct Usage {
+        prompt_tokens: u32,
+        completion_tokens: u32,
+    }
 
     let parsed: ChatCompletionResponse = serde_json::from_slice(body)
         .map_err(|e| LlmError::Parse(format!("response parse error: {e}")))?;
 
-    parsed
+    let content = parsed
         .choices
         .into_iter()
         .next()
         .map(|c| c.message.content.trim().to_string())
-        .ok_or_else(|| LlmError::Parse("empty choices array".into()))
+        .ok_or_else(|| LlmError::Parse("empty choices array".into()))?;
+
+    let input_tokens = parsed.usage.as_ref().map(|u| u.prompt_tokens).unwrap_or(0);
+    let output_tokens = parsed.usage.as_ref().map(|u| u.completion_tokens).unwrap_or(0);
+
+    Ok((content, input_tokens, output_tokens))
 }
 
 impl LlmProvider for OpenAICompatibleProvider {
-    fn chat(&self, messages: &[ChatMessage], options: &ChatOptions) -> Result<String, LlmError> {
+    fn chat(&self, messages: &[ChatMessage], options: &ChatOptions) -> Result<(String, u32, u32), LlmError> {
         match tokio::runtime::Handle::try_current() {
             Ok(handle) => {
-                tokio::task::block_in_place(|| handle.block_on(self.chat_async(messages, options)))
+                // Already inside a Tokio runtime — drive our async method from here.
+                handle.block_on(self.chat_async(messages, options))
             }
-            Err(_) => self.rt.block_on(self.chat_async(messages, options)),
+            Err(_) => {
+                self.rt.block_on(self.chat_async(messages, options))
+            }
         }
     }
 
@@ -158,10 +172,13 @@ mod tests {
 
     #[test]
     fn test_parse_response_valid() {
-        let json = br#"{"id":"chatcmpl-1","choices":[{"message":{"role":"assistant","content":" hello world "}}]}"#;
+        let json = br#"{"id":"chatcmpl-1","choices":[{"message":{"role":"assistant","content":" hello world "}}],"usage":{"prompt_tokens":10,"completion_tokens":5}}"#;
         let result = parse_response(json);
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), "hello world");
+        let (content, in_tok, out_tok) = result.unwrap();
+        assert_eq!(content, "hello world");
+        assert_eq!(in_tok, 10);
+        assert_eq!(out_tok, 5);
     }
 
     #[test]
@@ -221,9 +238,9 @@ mod tests {
         let opts = ChatOptions { temperature: 0.7, max_tokens: Some(20) };
         let result = provider.chat(&msgs, &opts);
         assert!(result.is_ok(), "chat should succeed: {:?}", result);
-        let reply = result.unwrap();
+        let (reply, input_tokens, output_tokens) = result.unwrap();
         assert!(!reply.is_empty(), "reply should not be empty, got: {:?}", reply);
-        println!("[llama-server] simple reply: {:?}", reply);
+        println!("[llama-server] simple reply: {:?}, tokens: in={} out={}", reply, input_tokens, output_tokens);
     }
 
     #[test]
@@ -239,9 +256,9 @@ mod tests {
         let opts = ChatOptions { temperature: 0.5, max_tokens: Some(20) };
         let result = provider.chat(&msgs, &opts);
         assert!(result.is_ok(), "chat should succeed: {:?}", result);
-        let reply = result.unwrap();
+        let (reply, input_tokens, output_tokens) = result.unwrap();
         assert!(!reply.is_empty(), "reply should not be empty, got: {:?}", reply);
-        println!("[llama-server] system-prompt reply: {:?}", reply);
+        println!("[llama-server] system-prompt reply: {:?}, tokens: in={} out={}", reply, input_tokens, output_tokens);
     }
 
     #[test]
@@ -256,7 +273,8 @@ mod tests {
         let opts = ChatOptions { temperature: 0.0, max_tokens: Some(30) };
         let result = provider.chat(&msgs, &opts);
         assert!(result.is_ok(), "chat should succeed: {:?}", result);
-        let reply = result.unwrap().to_lowercase();
+        let (reply, _, _) = result.unwrap();
+        let reply = reply.to_lowercase();
         // 0.5B model may not have perfect context but should mention blue.
         assert!(reply.contains("blue"), "reply should mention 'blue', got: {:?}", reply);
         println!("[llama-server] multi-turn reply: {:?}", reply);
@@ -272,7 +290,8 @@ mod tests {
         let r1 = provider.chat(&msgs, &opts);
         let r2 = provider.chat(&msgs, &opts);
         assert!(r1.is_ok() && r2.is_ok());
-        let (c1, c2) = (r1.unwrap(), r2.unwrap());
+        let (c1, _, _) = r1.unwrap();
+        let (c2, _, _) = r2.unwrap();
         assert!(c1.contains('2') && c2.contains('2'),
             "both replies should contain '2', got r1={:?} r2={:?}", c1, c2);
         println!("[llama-server] temp=0 replies: r1={:?} r2={:?}", c1, c2);

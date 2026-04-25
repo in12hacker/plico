@@ -74,7 +74,9 @@ pub enum LlmError {
 /// ensuring the system does not depend on any specific AI provider.
 pub trait LlmProvider: Send + Sync {
     /// Send a chat completion request and return the assistant's response.
-    fn chat(&self, messages: &[ChatMessage], options: &ChatOptions) -> Result<String, LlmError>;
+    ///
+    /// Returns `(response, input_tokens, output_tokens)` on success.
+    fn chat(&self, messages: &[ChatMessage], options: &ChatOptions) -> Result<(String, u32, u32), LlmError>;
 
     /// Name of the model used.
     fn model_name(&self) -> &str;
@@ -100,7 +102,10 @@ mod tests {
             &ChatOptions::default(),
         );
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), "test response");
+        let (response, input_tokens, output_tokens) = result.unwrap();
+        assert_eq!(response, "test response");
+        assert_eq!(input_tokens, 0);
+        assert_eq!(output_tokens, 0);
     }
 
     #[test]

@@ -92,7 +92,8 @@ fn pick_layer(
     }
 
     if let Ok(l2) = loader.load(cid, ContextLayer::L2) {
-        if l2.tokens_estimate <= remaining_tokens {
+        // Reject empty content — summarization failed and content is not useful
+        if l2.tokens_estimate > 0 && l2.tokens_estimate <= remaining_tokens {
             return Some(ContextLayer::L2);
         }
     }
@@ -102,13 +103,15 @@ fn pick_layer(
     }
 
     if let Ok(l1) = loader.load(cid, ContextLayer::L1) {
-        if l1.tokens_estimate <= remaining_tokens {
+        // Reject empty content — summarization failed and content is not useful
+        if l1.tokens_estimate > 0 && l1.tokens_estimate <= remaining_tokens {
             return Some(ContextLayer::L1);
         }
     }
 
     if let Ok(l0) = loader.load(cid, ContextLayer::L0) {
-        if l0.tokens_estimate <= remaining_tokens {
+        // Reject empty content — summarization failed and content is not useful
+        if l0.tokens_estimate > 0 && l0.tokens_estimate <= remaining_tokens {
             return Some(ContextLayer::L0);
         }
     }

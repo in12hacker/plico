@@ -79,7 +79,7 @@ impl ApiVersion {
     /// Version 1.0.0 — initial stable release.
     pub const V1: ApiVersion = ApiVersion { major: 1, minor: 0, patch: 0 };
     /// Current stable version.
-    pub const CURRENT: ApiVersion = ApiVersion { major: 18, minor: 0, patch: 0 };
+    pub const CURRENT: ApiVersion = ApiVersion { major: 26, minor: 0, patch: 0 };
 
     /// Parse a version string like "1.2.0" into an ApiVersion.
     pub fn parse(s: &str) -> Result<Self, String> {

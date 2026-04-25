@@ -106,7 +106,7 @@ impl Clone for HotSwapLlmProvider {
 }
 
 impl LlmProvider for HotSwapLlmProvider {
-    fn chat(&self, messages: &[ChatMessage], options: &ChatOptions) -> Result<String, crate::llm::LlmError> {
+    fn chat(&self, messages: &[ChatMessage], options: &ChatOptions) -> Result<(String, u32, u32), crate::llm::LlmError> {
         self.inner.read().unwrap().chat(messages, options)
     }
 
