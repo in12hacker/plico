@@ -217,6 +217,10 @@ pub struct IntentPrefetcher {
     total_lookups: std::sync::atomic::AtomicU64,
     /// F-4: Total cache hits (for hit rate calculation).
     cache_hits: std::sync::atomic::AtomicU64,
+    /// F-2: Token cost ledger for tracking embedding costs.
+    cost_ledger: Arc<std::sync::RwLock<Option<Arc<crate::kernel::ops::cost_ledger::TokenCostLedger>>>>,
+    /// F-2: Current session ID for cost tracking.
+    current_session_id: std::sync::RwLock<Option<String>>,
 }
 
 impl IntentPrefetcher {
@@ -247,6 +251,28 @@ impl IntentPrefetcher {
             root,
             total_lookups: std::sync::atomic::AtomicU64::new(0),
             cache_hits: std::sync::atomic::AtomicU64::new(0),
+            cost_ledger: Arc::new(std::sync::RwLock::new(None)),
+            current_session_id: std::sync::RwLock::new(None),
+        }
+    }
+
+    /// Set the token cost ledger for tracking embedding costs.
+    pub fn set_cost_ledger(&self, ledger: Arc<crate::kernel::ops::cost_ledger::TokenCostLedger>) {
+        *self.cost_ledger.write().unwrap() = Some(ledger);
+    }
+
+    /// Set the current session ID for cost tracking.
+    pub fn set_session_id(&self, session_id: Option<String>) {
+        *self.current_session_id.write().unwrap() = session_id;
+    }
+
+    /// Record an embedding call cost if cost ledger is available.
+    pub fn record_embedding_cost(&self, text: &str, model_id: &str) {
+        let ledger_guard = self.cost_ledger.read().unwrap();
+        if let Some(ref ledger) = *ledger_guard {
+            let session_id = self.current_session_id.read().unwrap().clone();
+            let agent_id = "unknown".to_string(); // Will be enhanced when agent context is available
+            ledger.record_embedding(text, model_id, session_id.as_deref().unwrap_or(""), &agent_id);
         }
     }
 
@@ -310,7 +336,11 @@ impl IntentPrefetcher {
         let now = crate::memory::layered::now_ms();
 
         // F-9: Try to get embedding and check cache first
+        let model_name = self.embedding.model_name();
         let intent_embedding: Option<Vec<f32>> = self.embedding.embed(intent).ok();
+
+        // F-2: Record embedding cost if cost ledger is available
+        self.record_embedding_cost(intent, model_name);
 
         if let Some(cached_allocation) = self.intent_cache.lookup(intent, &intent_embedding) {
             // B51 Fix: Cache hit! Store allocation in allocation_cache so fetch_assembled_context
@@ -412,7 +442,11 @@ impl IntentPrefetcher {
         let now = crate::memory::layered::now_ms();
 
         // F-9: Try to get embedding and check cache first
+        let model_name = self.embedding.model_name();
         let intent_embedding: Option<Vec<f32>> = self.embedding.embed(intent).ok();
+
+        // F-2: Record embedding cost if cost ledger is available
+        self.record_embedding_cost(intent, model_name);
 
         // F-4: Track intent cache lookups and hits
         self.total_lookups.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -692,7 +726,12 @@ impl IntentPrefetcher {
 
         // Check if this is already being prefetched or cached
         // Skip if already in cache (F-9 would handle it)
+        let model_name = self.embedding.model_name();
         let intent_embedding: Option<Vec<f32>> = self.embedding.embed(&predicted_intent).ok();
+
+        // F-2: Record embedding cost if cost ledger is available
+        self.record_embedding_cost(&predicted_intent, model_name);
+
         if self.intent_cache.lookup(&predicted_intent, &intent_embedding).is_some() {
             tracing::debug!("F-10: predicted intent already cached, skipping prefetch");
             return None;

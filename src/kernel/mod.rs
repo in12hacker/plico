@@ -218,6 +218,10 @@ impl AIKernel {
             verification_handler,
         );
 
+        // Token cost ledger — tracks LLM/embedding token consumption (F-2)
+        // Created early so it can be passed to IntentPrefetcher for cost tracking
+        let cost_ledger = Arc::new(TokenCostLedger::new());
+
         // Proactive context assembly (semantic prefetch)
         let prefetch = Arc::new(IntentPrefetcher::new(
             search_backend.clone(),
@@ -228,6 +232,9 @@ impl AIKernel {
             fs.ctx_loader_arc(),
             root.clone(),
         ));
+
+        // F-2: Wire cost ledger into prefetcher for embedding cost tracking
+        prefetch.set_cost_ledger(Arc::clone(&cost_ledger));
 
         // F-20 M1: Restore prefetch state from disk (intent cache + agent profiles)
         if let Err(e) = prefetch.restore() {
@@ -280,9 +287,6 @@ impl AIKernel {
 
         // Task store — manages multi-agent task delegation with state tracking (F-14)
         let task_store = Arc::new(ops::task::TaskStore::restore(root.clone(), event_bus.clone()));
-
-        // Token cost ledger — tracks LLM/embedding token consumption (F-2)
-        let cost_ledger = Arc::new(TokenCostLedger::new());
 
         let kernel = Self {
             root: root.clone(),
