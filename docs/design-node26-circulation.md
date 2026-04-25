@@ -652,7 +652,7 @@ Node 26 完成后，系统将首次具备 **运行时自适应能力**：
 
 | 特性 | 状态 | 说明 |
 |------|------|------|
-| TokenCostLedger 实际记录 | ⚠️ 基础设施就绪 | 基础设施完善，record_embedding/record_llm helpers 已添加；实际调用追踪需要 EmbeddingProvider/LlmProvider trait 返回 token 计数 |
+| TokenCostLedger 实际记录 | ✅ 基本完成 | cost_ledger 已集成到 IntentPrefetcher，declare_intent/prefetch_async/trigger_cognitive_prefetch 会自动记录 embedding 成本；使用字符估计 |
 | Hook 集成验证门控 | ✅ 已完成 | VerificationHookHandler 已在 PostToolCall 注册，cas.create/update 后验证 CID 可检索性 |
 
 ### 📊 测试结果
