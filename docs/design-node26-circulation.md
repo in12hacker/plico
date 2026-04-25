@@ -652,14 +652,13 @@ Node 26 完成后，系统将首次具备 **运行时自适应能力**：
 
 | 特性 | 状态 | 说明 |
 |------|------|------|
-| TokenCostLedger 实际记录 | ✅ 基本完成 | cost_ledger 已集成到 IntentPrefetcher，declare_intent/prefetch_async/trigger_cognitive_prefetch 会自动记录 embedding 成本；使用字符估计 |
+| TokenCostLedger 实际记录 | ✅ 完成 | EmbeddingProvider::embed() 返回 EmbedResult { embedding, input_tokens }；OpenAI 后端从 API 响应解析 usage.prompt_tokens；Ollama/Local 使用字符估计；ORT 使用 tokenizer 真实 token 数 |
 | Hook 集成验证门控 | ✅ 已完成 | VerificationHookHandler 已在 PostToolCall 注册，cas.create/update 后验证 CID 可检索性 |
 
 ### 📊 测试结果
 
 ```
-cargo test --lib: 803 passed ✅ (1 pre-existing failing test: test_context_assemble_tight_budget_downgrades)
-cargo test --bin aicli: 60 passed ✅
+cargo test: 203 passed, 1 failed (pre-existing: test_context_assemble_tight_budget_downgrades)
 ```
 
 ### 🔧 新增代码
@@ -667,8 +666,9 @@ cargo test --bin aicli: 60 passed ✅
 - `src/kernel/ops/cost_ledger.rs` — ~180 行
 - `src/kernel/ops/verification.rs` — ~200 行 (含 VerificationHookHandler)
 - `src/bin/aicli/commands/handlers/cost.rs` — ~60 行
-- 修改: `prefetch_profile.rs`, `prefetch_cache.rs`, `observability.rs`, `session.rs`, `kernel/mod.rs`, `api/semantic.rs`
-- **总计: ~1800+ 行新增/修改**
+- `src/fs/embedding/types.rs` — EmbedResult 类型定义 (+25 行)
+- 修改: `prefetch_profile.rs`, `prefetch_cache.rs`, `observability.rs`, `session.rs`, `kernel/mod.rs`, `api/semantic.rs`, `semantic_fs/mod.rs`, `kernel/ops/model.rs`, `kernel/ops/hybrid.rs`, `kernel/ops/memory.rs`, `fs/embedding/openai.rs`, `fs/embedding/ollama.rs`, `fs/embedding/local.rs`, `fs/embedding/ort_backend.rs`, `fs/embedding/circuit_breaker.rs`, `fs/embedding/stub.rs`
+- **总计: ~2000+ 行新增/修改**
 
 ### 🐕 Dogfood 验证
 
