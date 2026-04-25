@@ -205,6 +205,19 @@ impl AIKernel {
             );
         }
 
+        // F-4: Register VerificationHookHandler for postcondition verification
+        let verification_handler = Arc::new(
+            ops::verification::VerificationHookHandler::new(
+                Arc::clone(&fs),
+                Arc::clone(&event_bus),
+            )
+        );
+        hook_registry.register(
+            hook::HookPoint::PostToolCall,
+            90, // Medium priority — runs after causal but before other handlers
+            verification_handler,
+        );
+
         // Proactive context assembly (semantic prefetch)
         let prefetch = Arc::new(IntentPrefetcher::new(
             search_backend.clone(),

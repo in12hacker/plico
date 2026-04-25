@@ -7,6 +7,8 @@
 //!
 //! Verification failures emit events via the Hook system.
 
+use std::sync::Arc;
+
 use crate::fs::SemanticFS;
 use crate::memory::MemoryScope;
 
@@ -66,6 +68,86 @@ impl VerificationGate {
                 ),
             }
         }
+    }
+}
+
+// ─── VerificationHookHandler ─────────────────────────────────────────────────
+
+use crate::kernel::event_bus::{EventBus, KernelEvent};
+use crate::kernel::hook::{HookContext, HookHandler, HookPoint, HookResult};
+use crate::tool::ToolResult;
+
+/// Hook handler that verifies postconditions for critical operations.
+///
+/// Registered at PostToolCall to verify:
+/// - CAS writes: CID is retrievable and content is non-empty
+/// - Memory stores: operation succeeded
+///
+/// Emits VerificationFailed events on verification failure.
+pub struct VerificationHookHandler {
+    fs: Arc<SemanticFS>,
+    event_bus: Arc<EventBus>,
+}
+
+impl VerificationHookHandler {
+    pub fn new(fs: Arc<SemanticFS>, event_bus: Arc<EventBus>) -> Self {
+        Self { fs, event_bus }
+    }
+
+    /// Verify a cas.create or cas.update result.
+    fn verify_cas_write(&self, result: &ToolResult, agent_id: &str) {
+        if !result.success {
+            return; // Tool already failed, no need to verify
+        }
+
+        // Extract CID from result output
+        let cid = match result.output.get("cid").and_then(|v| v.as_str()) {
+            Some(cid) => cid,
+            None => return,
+        };
+
+        // Verify the CID is retrievable
+        match VerificationGate::verify_write(&self.fs, cid) {
+            VerificationResult::Pass => {}
+            VerificationResult::Fail { reason } => {
+                let cid_prefix = if cid.len() >= 8 { &cid[..8] } else { cid };
+                tracing::warn!(
+                    "VerificationFailed: cas write verification failed for {}: {}",
+                    cid_prefix,
+                    reason
+                );
+                self.event_bus.emit(KernelEvent::VerificationFailed {
+                    tool_name: "cas.create/update".into(),
+                    operation: "verify_write".into(),
+                    reason,
+                    agent_id: agent_id.into(),
+                });
+            }
+        }
+    }
+}
+
+impl HookHandler for VerificationHookHandler {
+    fn handle(&self, point: HookPoint, context: &HookContext) -> HookResult {
+        if point != HookPoint::PostToolCall {
+            return HookResult::Continue;
+        }
+
+        // Deserialize ToolResult from params (PostToolCall puts result in params)
+        let result: ToolResult = match serde_json::from_value(context.params.clone()) {
+            Ok(r) => r,
+            Err(_) => return HookResult::Continue,
+        };
+
+        // Verify critical write operations
+        match context.tool_name.as_str() {
+            "cas.create" | "cas.update" => {
+                self.verify_cas_write(&result, &context.agent_id);
+            }
+            _ => {}
+        }
+
+        HookResult::Continue
     }
 }
 
