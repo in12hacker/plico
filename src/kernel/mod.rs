@@ -1569,6 +1569,9 @@ impl AIKernel {
                     &self.root,
                 ) {
                     Ok(result) => {
+                        // F-1: Apply pending feedback from feedback_history to agent profile
+                        self.prefetch.apply_feedback_from_history(&agent_id);
+
                         let mut r = ApiResponse::ok();
                         r.session_ended = Some(crate::api::semantic::SessionEnded {
                             checkpoint_id: result.checkpoint_id,

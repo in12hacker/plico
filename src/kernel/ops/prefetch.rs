@@ -780,6 +780,47 @@ impl IntentPrefetcher {
         profile.hot_objects.iter().map(|(cid, _)| cid.clone()).collect()
     }
 
+    /// F-3: Warm intent cache from agent profile (cache preheat at session-start).
+    ///
+    /// Uses the agent's hot_objects to pre-populate the cache with frequently
+    /// accessed CIDs before the first declare_intent call.
+    /// This improves cache hit rate on repeated operations.
+    ///
+    /// Returns the number of entries warmed.
+    pub fn warm_cache_for_agent(&self, agent_id: &str) -> usize {
+        let profile = self.profile_store.get_or_create(agent_id);
+
+        // No-op assembler: actual assembly will happen on demand via declare_intent
+        // Hot objects warming doesn't require assembler
+        let noop_assembler = |_: &str| None;
+
+        self.intent_cache.warm_from_profile(&profile, &noop_assembler)
+    }
+
+    /// F-1: Apply pending feedback entries from feedback_history to agent profile.
+    ///
+    /// Called at session-end to close the feedback loop:
+    /// - used_cids → record_cid_usage (hot_objects updated)
+    /// - unused_cids → decay_object
+    /// - transition matrix updated from last_intent → current intent
+    ///
+    /// Returns the number of feedback entries applied.
+    pub fn apply_feedback_from_history(&self, agent_id: &str) -> usize {
+        let feedback_history = self.feedback_history.read().unwrap();
+        let mut applied = 0;
+
+        // Apply the most recent feedback entries (up to last 10)
+        for entry in feedback_history.iter().rev().take(10) {
+            self.profile_store.apply_feedback(agent_id, entry);
+            applied += 1;
+        }
+
+        if applied > 0 {
+            tracing::debug!("applied {} feedback entries to profile for {}", applied, agent_id);
+        }
+        applied
+    }
+
     /// F-10: Get the profile store for external access (e.g., by intent_executor).
     pub fn profile_store(&self) -> &Arc<AgentProfileStore> {
         &self.profile_store
