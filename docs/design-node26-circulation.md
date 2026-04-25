@@ -652,23 +652,23 @@ Node 26 完成后，系统将首次具备 **运行时自适应能力**：
 
 | 特性 | 状态 | 说明 |
 |------|------|------|
-| TokenCostLedger 实际记录 | ⚠️ 基础设施就绪 | 需要修改 EmbeddingProvider/LlmProvider trait 返回 token 数量 |
-| Hook 集成验证门控 | ⚠️ VerificationGate 就绪 | 需要在 PostToolCall Hook 中实际调用 |
+| TokenCostLedger 实际记录 | ⚠️ 基础设施就绪 | 基础设施完善，record_embedding/record_llm helpers 已添加；实际调用追踪需要 EmbeddingProvider/LlmProvider trait 返回 token 计数 |
+| Hook 集成验证门控 | ✅ 已完成 | VerificationHookHandler 已在 PostToolCall 注册，cas.create/update 后验证 CID 可检索性 |
 
 ### 📊 测试结果
 
 ```
-cargo test --lib: 803 passed ✅
+cargo test --lib: 803 passed ✅ (1 pre-existing failing test: test_context_assemble_tight_budget_downgrades)
 cargo test --bin aicli: 60 passed ✅
 ```
 
 ### 🔧 新增代码
 
 - `src/kernel/ops/cost_ledger.rs` — ~180 行
-- `src/kernel/ops/verification.rs` — ~120 行
+- `src/kernel/ops/verification.rs` — ~200 行 (含 VerificationHookHandler)
 - `src/bin/aicli/commands/handlers/cost.rs` — ~60 行
 - 修改: `prefetch_profile.rs`, `prefetch_cache.rs`, `observability.rs`, `session.rs`, `kernel/mod.rs`, `api/semantic.rs`
-- **总计: ~1700+ 行新增/修改**
+- **总计: ~1800+ 行新增/修改**
 
 ### 🐕 Dogfood 验证
 
