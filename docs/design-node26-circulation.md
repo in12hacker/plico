@@ -629,3 +629,60 @@ Node 26 完成后，系统将首次具备 **运行时自适应能力**：
 ---
 
 *Soul 2.0 定义原则。N1-N25 建造组件。N26"循"让组件开始呼吸。*
+
+---
+
+## 10. 实现状态 (2026-04-25)
+
+### ✅ 已完成
+
+| 特性 | 文件 | 状态 | 测试 |
+|------|------|------|------|
+| F-1: FeedbackPipeline | `prefetch_profile.rs` | ✅ | 5 tests |
+| F-2: TokenCostLedger | `cost_ledger.rs` (new) | ✅ | 7 tests |
+| F-3: CacheWarmPipeline | `prefetch_cache.rs` | ✅ | 5 tests |
+| F-4: VerificationGate | `verification.rs` (new) | ✅ | 5 tests |
+| F-5: SessionObserver | `observability.rs` | ✅ | 1 test |
+| F-6: HealthScoreDecomposition | `observability.rs` | ✅ | 3 tests |
+| 集成: session_start → warm_from_profile | `session.rs`, `prefetch.rs` | ✅ | - |
+| 集成: session_end → apply_feedback | `kernel/mod.rs`, `prefetch.rs` | ✅ | - |
+| CLI: cost 命令 | `cost.rs` (new) | ✅ | 1 test |
+
+### ⚠️ 部分完成
+
+| 特性 | 状态 | 说明 |
+|------|------|------|
+| TokenCostLedger 实际记录 | ⚠️ 基础设施就绪 | 需要修改 EmbeddingProvider/LlmProvider trait 返回 token 数量 |
+| Hook 集成验证门控 | ⚠️ VerificationGate 就绪 | 需要在 PostToolCall Hook 中实际调用 |
+
+### 📊 测试结果
+
+```
+cargo test --lib: 803 passed ✅
+cargo test --bin aicli: 60 passed ✅
+```
+
+### 🔧 新增代码
+
+- `src/kernel/ops/cost_ledger.rs` — ~180 行
+- `src/kernel/ops/verification.rs` — ~120 行
+- `src/bin/aicli/commands/handlers/cost.rs` — ~60 行
+- 修改: `prefetch_profile.rs`, `prefetch_cache.rs`, `observability.rs`, `session.rs`, `kernel/mod.rs`, `api/semantic.rs`
+- **总计: ~1700+ 行新增/修改**
+
+### 🐕 Dogfood 验证
+
+```bash
+# session-start with intent warm
+$ aicli --embedded session-start --agent test-agent --intent "audit code"
+✅ warm_context 返回 CAS CID
+
+# health 检查
+$ aicli --embedded health
+✅ health_report 返回
+
+# cost 查询
+$ aicli --embedded cost --agent test-agent
+✅ cost_agent_trend 返回（空，待实际使用后填充）
+```
+
