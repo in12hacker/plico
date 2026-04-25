@@ -87,6 +87,14 @@ pub fn change_entry_from_event(event: &SequencedEvent) -> ChangeEntry {
                 agent_id.clone(),
             )
         }
+        KernelEvent::VerificationFailed { tool_name, operation, reason, agent_id } => {
+            (
+                format!("verification:{}", tool_name),
+                format!("verification_failed:{}", operation),
+                vec![reason.clone()],
+                agent_id.clone(),
+            )
+        }
     };
 
     let summary = if tags.is_empty() {
