@@ -13,7 +13,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::api::semantic::{HybridHit, HybridResult, ProvenanceStep};
-use crate::fs::embedding::types::{EmbeddingProvider, EmbedResult};
+use crate::fs::embedding::types::EmbeddingProvider;
 use crate::fs::{KGEdgeType, SearchFilter, SearchHit};
 use crate::kernel::AIKernel;
 

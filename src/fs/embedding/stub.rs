@@ -1,6 +1,6 @@
 //! Stub embedding provider — returns errors, triggers tag-based fallback.
 
-use crate::fs::embedding::types::{EmbedError, Embedding, EmbeddingProvider, EmbedResult};
+use crate::fs::embedding::types::{EmbedError, EmbeddingProvider, EmbedResult};
 
 /// A stub embedding provider used when no backend is available.
 /// Always returns an error, triggering tag-based fallback in search.

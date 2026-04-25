@@ -12,7 +12,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::fs::embedding::stub::StubEmbeddingProvider;
-use crate::fs::embedding::{EmbedError, Embedding, EmbeddingProvider, EmbedResult};
+use crate::fs::embedding::{EmbedError, EmbeddingProvider, EmbedResult};
 
 /// Circuit breaker states.
 const STATE_CLOSED: u8 = 0;

@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use crate::fs::embedding::types::{EmbedError, Embedding, EmbeddingProvider, EmbedResult};
+use crate::fs::embedding::types::{EmbedError, EmbeddingProvider, EmbedResult};
 
 pub struct OpenAIEmbeddingBackend {
     rt: Arc<tokio::runtime::Runtime>,

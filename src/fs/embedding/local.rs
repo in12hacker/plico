@@ -6,7 +6,7 @@ use std::thread;
 use std::io::{BufReader, Write};
 use std::process::{Child, Stdio};
 
-use crate::fs::embedding::types::{EmbedError, Embedding, EmbeddingProvider, EmbedResult};
+use crate::fs::embedding::types::{EmbedError, EmbeddingProvider, EmbedResult};
 use crate::fs::embedding::json_rpc::{JsonRpcRequest, JsonRpcResponse};
 
 /// Local embedding backend via Python subprocess.

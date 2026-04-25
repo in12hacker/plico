@@ -7,7 +7,7 @@
 
 #[cfg(feature = "ort-backend")]
 mod inner {
-    use super::super::types::{EmbedError, Embedding, EmbeddingProvider, EmbedResult};
+    use super::super::types::{EmbedError, EmbeddingProvider, EmbedResult};
     use ndarray::Array2;
     use std::path::Path;
     use std::sync::Mutex;
@@ -216,7 +216,7 @@ mod inner {
 // Always re-export (the inner impl is feature-gated)
 #[cfg(not(feature = "ort-backend"))]
 mod inner {
-    use super::super::types::{EmbedError, Embedding, EmbeddingProvider, EmbedResult};
+    use super::super::types::{EmbedError, EmbeddingProvider, EmbedResult};
     use std::path::Path;
 
     /// Stub for when `ort-backend` feature is not enabled.

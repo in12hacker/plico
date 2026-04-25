@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use crate::fs::embedding::types::{EmbedError, Embedding, EmbeddingProvider, EmbedResult};
+use crate::fs::embedding::types::{EmbedError, EmbeddingProvider, EmbedResult};
 
 /// Ollama daemon backend for text embeddings.
 ///

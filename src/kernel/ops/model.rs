@@ -7,7 +7,7 @@ use std::sync::{Arc, RwLock};
 use std::time::Instant;
 
 use crate::api::semantic::{ModelSwitchResponse, ModelHealthResponse};
-use crate::fs::{EmbeddingProvider, Embedding, EmbedError, EmbedResult};
+use crate::fs::{EmbeddingProvider, EmbedError, EmbedResult};
 use crate::llm::{LlmProvider, ChatMessage, ChatOptions};
 
 use super::super::AIKernel;
