@@ -508,7 +508,7 @@ impl DecomposedHealth {
         };
 
         let cache_effectiveness = if cache_stats.entries > 0 {
-            (cache_hit_rate * 0.6 + (cache_stats.entries as f32 / 64.0).min(1.0) * 0.4)
+            cache_hit_rate * 0.6 + (cache_stats.entries as f32 / 64.0).min(1.0) * 0.4
         } else {
             0.0
         };
