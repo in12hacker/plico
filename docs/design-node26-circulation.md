@@ -639,7 +639,7 @@ Node 26 完成后，系统将首次具备 **运行时自适应能力**：
 | 特性 | 文件 | 状态 | 测试 |
 |------|------|------|------|
 | F-1: FeedbackPipeline | `prefetch_profile.rs` | ✅ | 5 tests |
-| F-2: TokenCostLedger | `cost_ledger.rs` (new) | ✅ | 7 tests |
+| F-2: TokenCostLedger | `cost_ledger.rs` (new) | ✅ | 8 tests |
 | F-3: CacheWarmPipeline | `prefetch_cache.rs` | ✅ | 5 tests |
 | F-4: VerificationGate | `verification.rs` (new) | ✅ | 5 tests |
 | F-5: SessionObserver | `observability.rs` | ✅ | 1 test |
@@ -652,7 +652,7 @@ Node 26 完成后，系统将首次具备 **运行时自适应能力**：
 
 | 特性 | 状态 | 说明 |
 |------|------|------|
-| TokenCostLedger 实际记录 | ✅ 完成 | EmbeddingProvider::embed() 返回 EmbedResult { embedding, input_tokens }；OpenAI 后端从 API 响应解析 usage.prompt_tokens；Ollama/Local 使用字符估计；ORT 使用 tokenizer 真实 token 数 |
+| TokenCostLedger 实际记录 | ✅ 完成 | LlmProvider::chat 返回 (String, u32, u32)；OpenAI 后端从 API 响应解析 usage；Ollama 字符估计；LLM 调用通过 cost_ledger.record_llm 记录；Cost Ledger 持久化到 prefetch/cost_ledger.json |
 | Hook 集成验证门控 | ✅ 已完成 | VerificationHookHandler 已在 PostToolCall 注册，cas.create/update 后验证 CID 可检索性 |
 
 ### 📊 测试结果
