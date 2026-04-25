@@ -656,6 +656,10 @@ impl SemanticFS {
             match self.embedding.embed(&text) {
                 Ok(result) => {
                     is_real_embedding = true;
+                    // Record embedding cost to global ledger
+                    if let Some(ledger) = crate::kernel::ops::cost_ledger::get_global_cost_ledger() {
+                        ledger.record_embedding(&text, self.embedding.model_name(), "", &meta.created_by);
+                    }
                     result.embedding
                 }
                 Err(e) => {

@@ -117,9 +117,21 @@ impl Summarizer for LlmSummarizer {
         ];
         let options = ChatOptions { temperature: 0.3, max_tokens: None };
 
-        let (summary, _input_tokens, _output_tokens) = self.provider
+        let (summary, input_tokens, output_tokens) = self.provider
             .chat(&messages, &options)
             .map_err(|e| SummarError::Llm(e.to_string()))?;
+
+        // Record LLM cost to global ledger
+        if let Some(ledger) = crate::kernel::ops::cost_ledger::get_global_cost_ledger() {
+            ledger.record_llm(
+                input_tokens,
+                output_tokens,
+                self.provider.model_name(),
+                "",  // session_id not available in this context
+                "kernel-summarizer",
+            );
+        }
+
         Ok(summary)
     }
 

@@ -32,7 +32,7 @@ use ops::prefetch::IntentPrefetcher;
 use ops::model::{HotSwapEmbeddingProvider, HotSwapLlmProvider};
 use ops::observability::{KernelMetrics, OperationTimer, OpType};
 use ops::cache::EdgeCache;
-use ops::cost_ledger::TokenCostLedger;
+use ops::cost_ledger::{TokenCostLedger, set_global_cost_ledger};
 use ops::distributed::{ClusterManager, NodeId};
 
 use crate::api::semantic::{ApiRequest, ApiResponse};
@@ -221,6 +221,8 @@ impl AIKernel {
         // Token cost ledger — tracks LLM/embedding token consumption (F-2)
         // Created early so it can be passed to IntentPrefetcher for cost tracking
         let cost_ledger = Arc::new(TokenCostLedger::new());
+        // Also set as global so LLM/embedding providers can record without DI
+        set_global_cost_ledger(Arc::clone(&cost_ledger));
 
         // Proactive context assembly (semantic prefetch)
         let prefetch = Arc::new(IntentPrefetcher::new(

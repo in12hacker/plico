@@ -6,9 +6,23 @@
 //! - Per-agent cost trend analysis
 //! - Cost anomaly detection
 
-use std::sync::RwLock;
+use std::sync::{RwLock, Arc};
 use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
+
+/// Global cost ledger registry — allows LLM/embedding providers to record costs
+/// without direct dependency injection. Set via `set_global()` at kernel startup.
+static GLOBAL_LEDGER: RwLock<Option<Arc<TokenCostLedger>>> = RwLock::new(None);
+
+/// Set the global cost ledger. Called once at kernel startup.
+pub fn set_global_cost_ledger(ledger: Arc<TokenCostLedger>) {
+    *GLOBAL_LEDGER.write().unwrap() = Some(ledger);
+}
+
+/// Get the global cost ledger if one is set.
+pub fn get_global_cost_ledger() -> Option<Arc<TokenCostLedger>> {
+    GLOBAL_LEDGER.read().unwrap().clone()
+}
 
 /// Operation types that incur token costs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

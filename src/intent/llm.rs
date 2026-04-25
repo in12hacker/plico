@@ -115,9 +115,20 @@ impl IntentRouter for LlmRouter {
         ];
         let options = ChatOptions { temperature: 0.1, max_tokens: None };
 
-        let (content, _input_tokens, _output_tokens) = self.provider
+        let (content, input_tokens, output_tokens) = self.provider
             .chat(&messages, &options)
             .map_err(|e| IntentError::LlmUnavailable(format!("LLM request failed: {}", e)))?;
+
+        // Record LLM cost to global ledger
+        if let Some(ledger) = crate::kernel::ops::cost_ledger::get_global_cost_ledger() {
+            ledger.record_llm(
+                input_tokens,
+                output_tokens,
+                self.provider.model_name(),
+                "",  // session_id not available in this context
+                agent_id,
+            );
+        }
 
         self.parse_llm_response(&content, agent_id)
     }
