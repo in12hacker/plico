@@ -63,6 +63,13 @@ pub enum KernelEvent {
         agent_id: String,
         result_cids: Vec<String>,
     },
+    /// F-4: Verification gate failure — a postcondition check failed.
+    VerificationFailed {
+        tool_name: String,
+        operation: String,
+        reason: String,
+        agent_id: String,
+    },
 }
 
 /// A durable event record with sequence number and timestamp.
@@ -86,6 +93,7 @@ impl KernelEvent {
             KernelEvent::KnowledgeSuperseded { .. } => "KnowledgeSuperseded",
             KernelEvent::TaskDelegated { .. } => "TaskDelegated",
             KernelEvent::TaskCompleted { .. } => "TaskCompleted",
+            KernelEvent::VerificationFailed { .. } => "VerificationFailed",
         }
     }
 
@@ -101,6 +109,7 @@ impl KernelEvent {
             KernelEvent::KnowledgeSuperseded { agent_id, .. } => Some(agent_id),
             KernelEvent::TaskDelegated { from_agent, .. } => Some(from_agent),
             KernelEvent::TaskCompleted { agent_id, .. } => Some(agent_id),
+            KernelEvent::VerificationFailed { agent_id, .. } => Some(agent_id),
         }
     }
 }

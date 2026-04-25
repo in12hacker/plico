@@ -81,6 +81,47 @@ impl TokenCostLedger {
         self.update_session_summary(&entry);
     }
 
+    /// Record an embedding call with estimated token usage.
+    ///
+    /// Uses character-based estimation: ~4 chars per token (English text).
+    /// For accurate counts, embedding providers should be modified to return actual counts.
+    pub fn record_embedding(&self, text: &str, model_id: &str, session_id: &str, agent_id: &str) {
+        // Estimate: ~4 characters per token for English text
+        let estimated_tokens = (text.len() / 4).max(1) as u32;
+        let entry = CostEntry {
+            timestamp_ms: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64,
+            session_id: session_id.to_string(),
+            agent_id: agent_id.to_string(),
+            operation: CostOperation::EmbeddingCall,
+            input_tokens: estimated_tokens,
+            output_tokens: 0, // Embeddings have no output tokens
+            model_id: model_id.to_string(),
+            duration_ms: 0,
+        };
+        self.record(entry);
+    }
+
+    /// Record an LLM call with token usage.
+    pub fn record_llm(&self, input_tokens: u32, output_tokens: u32, model_id: &str, session_id: &str, agent_id: &str) {
+        let entry = CostEntry {
+            timestamp_ms: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64,
+            session_id: session_id.to_string(),
+            agent_id: agent_id.to_string(),
+            operation: CostOperation::LlmCall,
+            input_tokens,
+            output_tokens,
+            model_id: model_id.to_string(),
+            duration_ms: 0,
+        };
+        self.record(entry);
+    }
+
     fn update_session_summary(&self, entry: &CostEntry) {
         let mut totals = self.session_totals.write().unwrap();
         let summary = totals.entry(entry.session_id.clone()).or_insert(SessionCostSummary {
