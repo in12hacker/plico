@@ -647,18 +647,19 @@ Node 26 完成后，系统将首次具备 **运行时自适应能力**：
 | 集成: session_start → warm_from_profile | `session.rs`, `prefetch.rs` | ✅ | - |
 | 集成: session_end → apply_feedback | `kernel/mod.rs`, `prefetch.rs` | ✅ | - |
 | CLI: cost 命令 | `cost.rs` (new) | ✅ | 1 test |
+| 集成: LLM/embedding 费用记录 | `intent/llm.rs`, `fs/summarizer.rs`, `fs/semantic_fs/mod.rs` | ✅ | - |
 
 ### ⚠️ 部分完成
 
 | 特性 | 状态 | 说明 |
 |------|------|------|
-| TokenCostLedger 实际记录 | ✅ 完成 | LlmProvider::chat 返回 (String, u32, u32)；OpenAI 后端从 API 响应解析 usage；Ollama 字符估计；LLM 调用通过 cost_ledger.record_llm 记录；Cost Ledger 持久化到 prefetch/cost_ledger.json |
 | Hook 集成验证门控 | ✅ 已完成 | VerificationHookHandler 已在 PostToolCall 注册，cas.create/update 后验证 CID 可检索性 |
+| TokenCostLedger 实际记录 | ✅ 完成 | LlmProvider::chat 返回 (String, u32, u32)；OpenAI 后端从 API 响应解析 usage；Ollama 字符估计；LLM 调用通过 cost_ledger.record_llm 记录；全局 cost_ledger 注册表已建立 |
 
 ### 📊 测试结果
 
 ```
-cargo test: 203 passed, 1 failed (pre-existing: test_context_assemble_tight_budget_downgrades)
+cargo test: 1463 passed, 0 failed
 ```
 
 ### 🔧 新增代码
@@ -667,8 +668,8 @@ cargo test: 203 passed, 1 failed (pre-existing: test_context_assemble_tight_budg
 - `src/kernel/ops/verification.rs` — ~200 行 (含 VerificationHookHandler)
 - `src/bin/aicli/commands/handlers/cost.rs` — ~60 行
 - `src/fs/embedding/types.rs` — EmbedResult 类型定义 (+25 行)
-- 修改: `prefetch_profile.rs`, `prefetch_cache.rs`, `observability.rs`, `session.rs`, `kernel/mod.rs`, `api/semantic.rs`, `semantic_fs/mod.rs`, `kernel/ops/model.rs`, `kernel/ops/hybrid.rs`, `kernel/ops/memory.rs`, `fs/embedding/openai.rs`, `fs/embedding/ollama.rs`, `fs/embedding/local.rs`, `fs/embedding/ort_backend.rs`, `fs/embedding/circuit_breaker.rs`, `fs/embedding/stub.rs`
-- **总计: ~2000+ 行新增/修改**
+- 修改: `prefetch_profile.rs`, `prefetch_cache.rs`, `observability.rs`, `session.rs`, `kernel/mod.rs`, `api/semantic.rs`, `semantic_fs/mod.rs`, `kernel/ops/model.rs`, `kernel/ops/hybrid.rs`, `kernel/ops/memory.rs`, `fs/embedding/openai.rs`, `fs/embedding/ollama.rs`, `fs/embedding/local.rs`, `fs/embedding/ort_backend.rs`, `fs/embedding/circuit_breaker.rs`, `fs/embedding/stub.rs`, `intent/llm.rs`, `fs/summarizer.rs`
+- **总计: ~2100+ 行新增/修改**
 
 ### 🐕 Dogfood 验证
 
@@ -679,10 +680,18 @@ $ aicli --embedded session-start --agent test-agent --intent "audit code"
 
 # health 检查
 $ aicli --embedded health
-✅ health_report 返回
+✅ health_report 返回 (含 CAS/KG/sessions 数据)
 
 # cost 查询
 $ aicli --embedded cost --agent test-agent
-✅ cost_agent_trend 返回（空，待实际使用后填充）
+✅ cost_agent_trend 返回（架构限制：每次 CLI 调用创建新进程，cost ledger 数据未持久化）
+
+# put 操作
+$ aicli --embedded put --content "test" --tags "test"
+✅ 返回 ok: true
 ```
 
+### ⚠️ 已知架构限制
+
+1. **Cost Ledger 持久化**: `prefetcher.persist()` 存在但从未被自动调用（无 Drop impl）。在 embedded CLI 模式下，每次命令创建新进程，ledger 数据丢失。需要实现 Drop trait 或 shutdown hook。
+2. **Intent Cache/Profile/Feedback 持久化**: 同上，`persist_to_dir` 只在显式调用时生效。
