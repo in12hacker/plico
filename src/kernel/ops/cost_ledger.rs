@@ -6,7 +6,7 @@
 //! - Per-agent cost trend analysis
 //! - Cost anomaly detection
 
-use std::sync::{RwLock, atomic::{AtomicU64, Ordering}};
+use std::sync::RwLock;
 use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 

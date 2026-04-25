@@ -32,7 +32,7 @@ use ops::prefetch::IntentPrefetcher;
 use ops::model::{HotSwapEmbeddingProvider, HotSwapLlmProvider};
 use ops::observability::{KernelMetrics, OperationTimer, OpType};
 use ops::cache::EdgeCache;
-use ops::cost_ledger::{TokenCostLedger, CostOperation, CostEntry};
+use ops::cost_ledger::TokenCostLedger;
 use ops::distributed::{ClusterManager, NodeId};
 
 use crate::api::semantic::{ApiRequest, ApiResponse};
