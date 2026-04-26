@@ -641,7 +641,7 @@ Node 26 完成后，系统将首次具备 **运行时自适应能力**：
 | F-1: FeedbackPipeline | `prefetch_profile.rs` | ✅ | 5 tests |
 | F-2: TokenCostLedger | `cost_ledger.rs` (new) | ✅ | 8 tests |
 | F-3: CacheWarmPipeline | `prefetch_cache.rs` | ✅ | 5 tests |
-| F-4: VerificationGate | `verification.rs` (new) | ✅ | 5 tests |
+| F-4: VerificationGate | `verification.rs` (new) | ✅ | 6 tests |
 | F-5: SessionObserver | `observability.rs` | ✅ | 1 test |
 | F-6: HealthScoreDecomposition | `observability.rs` | ✅ | 3 tests |
 | 集成: session_start → warm_from_profile | `session.rs`, `prefetch.rs` | ✅ | - |
@@ -672,50 +672,48 @@ cargo test: 1463 passed, 0 failed
 - 修改: `prefetch_profile.rs`, `prefetch_cache.rs`, `observability.rs`, `session.rs`, `kernel/mod.rs`, `api/semantic.rs`, `semantic_fs/mod.rs`, `kernel/ops/model.rs`, `kernel/ops/hybrid.rs`, `kernel/ops/memory.rs`, `fs/embedding/openai.rs`, `fs/embedding/ollama.rs`, `fs/embedding/local.rs`, `fs/embedding/ort_backend.rs`, `fs/embedding/circuit_breaker.rs`, `fs/embedding/stub.rs`, `intent/llm.rs`, `fs/summarizer.rs`, `llm/ollama.rs`, `bin/aicli/main.rs`
 - **总计: ~2100+ 行新增/修改**
 
-### 🐕 Dogfood 验证
+### 🐕 Dogfood 验证 (2026-04-26)
 
 ```bash
-# session-start with intent warm
-$ aicli --embedded session-start --agent test-agent --intent "audit code"
-✅ warm_context 返回 CAS CID
+# Hook list — 2 PostToolCall handlers registered
+$ aicli hook list
+✅ PostToolCall: priority 100 (causal), priority 90 (verification)
 
 # health 检查
 $ aicli health
-✅ health_report 返回 (含 CAS/KG/sessions 数据)
+✅ healthy: true, CAS objects: 150, KG nodes: 273
 
-# cost 查询 (daemon mode - now works after fix)
+# CAS create
+$ aicli put --content "verification test" --tags "node26:test"
+✅ ok: true, cid: fab9b3449a78...
+
+# hybrid retrieval (RRF fusion)
+$ aicli hybrid "verification"
+✅ 20 items returned with combined scores
+
+# cost 查询 (embedded mode — fresh kernel per invocation)
 $ aicli cost agent --agent cli
-✅ cost_agent_trend 返回非空数组
-
-# put 操作
-$ aicli put --content "test" --tags "test"
-✅ 返回 ok: true，cost ledger 记录 embedding 调用
-
-# hook list 验证
-$ aicli hook list
-✅ PostToolCall 上有 2 个 hook (包括 VerificationHookHandler)
+⚠️ entries: 0 (expected — embedded mode creates fresh kernel)
 ```
 
-### 🔧 本次修复 (2026-04-25)
+### 🔧 本次修复 (2026-04-25/26)
 
 1. **Runtime nesting panic 修复**: 所有 provider (`openai.rs`, `ollama.rs` LLM+embedding) 现在使用 `try_current()` + `block_in_place` 模式避免嵌套 panic
 2. **cost CLI daemon mode 修复**: `build_remote_request` 现在正确路由 `cost` 子命令 (`session`, `agent`, `anomaly`)
 3. **OnceLock lazy dimension probing**: embedding providers 延迟 dimension 探测，避免在构造时 block_on
 4. **Cost Ledger 集成到 Session 生命周期**: `end_session_orchestrate` 现在从 cost_ledger 获取实际 token 使用量，存储到 `CompletedSession.tokens_used`
+5. **RRF Hybrid Fusion** (`fb1a208`): `hybrid_retrieve` 现在对 vector + BM25 使用 proper RRF fusion，不再只是 fallback
 
 ### ✅ 验证结果
 
 ```bash
-$ aicli cost agent --agent cli
-✅ cost_agent_trend 返回实际数据:
-{
-  "total_input_tokens": 112,
-  "operations_count": 6,
-  ...
-}
+cargo test cost_ledger: 8 passed
+cargo test verification: 6 passed
+cargo test: 1463 passed, 0 failed
 ```
 
 ### ⚠️ 已知架构限制
 
 1. ~~**Cost Ledger 持久化**~~: ✅ 已解决 — `persist_all()` 显式调用 `cost_ledger.persist_to_dir()`，daemon shutdown 时自动持久化
 2. **Intent Cache/Profile/Feedback 持久化**: 通过 `prefetch.persist()` 和 `prefetch.restore()` 自动处理
+3. **Cost Ledger in embedded mode**: CLI `--embedded` 每次创建 fresh kernel，cost ledger 不跨调用持久化。需要 daemon mode 才能看到跨 session 聚合数据。
