@@ -664,9 +664,9 @@ impl SemanticFS {
             match self.embedding.embed(&text) {
                 Ok(result) => {
                     is_real_embedding = true;
-                    // Record embedding cost to global ledger
+                    // Record embedding cost to global ledger with actual token count from EmbedResult
                     if let Some(ledger) = crate::kernel::ops::cost_ledger::get_global_cost_ledger() {
-                        ledger.record_embedding(&text, self.embedding.model_name(), "", &meta.created_by);
+                        ledger.record_embedding_with_tokens(result.input_tokens, self.embedding.model_name(), "", &meta.created_by);
                     }
                     result.embedding
                 }
