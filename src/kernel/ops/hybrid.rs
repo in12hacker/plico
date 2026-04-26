@@ -101,66 +101,64 @@ impl AIKernel {
             .map(|r| (r.node.id.clone(), r.provenance.clone()))
             .collect();
 
-        // Step 4: Merge and deduplicate — build HybridHit list
-        // If vector results are sparse/empty, fall back to BM25 results directly
-        let mut all_cids: HashSet<String> = HashSet::new();
-        let mut hits: Vec<HybridHit> = Vec::new();
+        // Step 4: RRF fusion — proper Reciprocal Rank Fusion combining vector and BM25
+        // Both retrieval methods get rank-based scoring for fair fusion (not score-based)
+        // This ensures BM25 contributes even when vector search is strong
+        const RRF_K: usize = 60;
+        let mut rrf_scores: HashMap<String, (f32, f32)> = HashMap::new(); // cid -> (rrf_score, bm25_contribution)
 
-        // First add vector results
-        for hit in &vector_results {
-            if all_cids.contains(&hit.cid) {
-                continue;
+        // Add vector hits with rank-based scoring
+        let mut sorted_vector: Vec<_> = vector_results.iter().collect();
+        sorted_vector.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        for (rank, hit) in sorted_vector.iter().enumerate() {
+            let rrf = 1.0f32 / (RRF_K as f32 + rank as f32);
+            rrf_scores.insert(hit.cid.clone(), (rrf, 0.0));
+        }
+
+        // Add BM25 hits with rank-based scoring — ALWAYS fuse, not just as fallback
+        for (rank, (cid, _score)) in bm25_results.iter().enumerate() {
+            let rrf = 1.0f32 / (RRF_K as f32 + rank as f32);
+            if let Some((existing_rrf, _)) = rrf_scores.get_mut(cid) {
+                // Already in vector results — add BM25 RRF bonus
+                *existing_rrf += rrf;
+            } else {
+                // BM25-only result
+                rrf_scores.insert(cid.clone(), (rrf, rrf));
             }
-            all_cids.insert(hit.cid.clone());
+        }
 
-            let graph_score = graph_score_map.get(&hit.cid).copied().unwrap_or(0.0);
-            let combined_score = DEFAULT_ALPHA * hit.score + (1.0 - DEFAULT_ALPHA) * graph_score;
-            let provenance = provenance_map.get(&hit.cid).cloned().unwrap_or_default();
+        // Build HybridHit list with proper fusion
+        let mut hits: Vec<HybridHit> = Vec::new();
+        for (cid, (rrf_score, _bm25_contribution)) in rrf_scores {
+            let vector_score = vector_results.iter().find(|h| h.cid == cid).map(|h| h.score).unwrap_or(0.0);
+            let graph_score = graph_score_map.get(&cid).copied().unwrap_or(0.0);
+            let provenance = provenance_map.get(&cid).cloned().unwrap_or_default();
+
+            // Combine RRF fusion score with graph score
+            let combined_score = rrf_score + (1.0 - DEFAULT_ALPHA) * graph_score;
+
+            let content_preview = if vector_score > 0.0 {
+                vector_results.iter().find(|h| h.cid == cid).map(|h| h.meta.snippet.clone()).unwrap_or_default()
+            } else {
+                self.get_content_preview(&cid)
+            };
 
             hits.push(HybridHit {
-                cid: hit.cid.clone(),
-                content_preview: hit.meta.snippet.clone(),
-                vector_score: hit.score,
+                cid,
+                content_preview,
+                vector_score,
                 graph_score,
                 combined_score,
                 provenance,
             });
         }
 
-        // If vector results are sparse, supplement with BM25 results (F-44 fallback)
-        // This ensures non-empty results even when stub embedding returns nothing
-        if vector_results.len() < 3 && !bm25_results.is_empty() {
-            tracing::debug!("F-44: vector results sparse ({}), supplementing with {} BM25 results",
-                vector_results.len(), bm25_results.len());
-            for (cid, bm25_score) in bm25_results {
-                if all_cids.contains(&cid) {
-                    continue;
-                }
-                all_cids.insert(cid.clone());
-
-                let graph_score = graph_score_map.get(&cid).copied().unwrap_or(0.0);
-                // Use BM25 score as vector_score proxy since stub embedding
-                let combined_score = DEFAULT_ALPHA * bm25_score + (1.0 - DEFAULT_ALPHA) * graph_score;
-                let provenance = provenance_map.get(&cid).cloned().unwrap_or_default();
-
-                let content_preview = self.get_content_preview(&cid);
-                hits.push(HybridHit {
-                    cid,
-                    content_preview,
-                    vector_score: bm25_score,
-                    graph_score,
-                    combined_score,
-                    provenance,
-                });
-            }
-        }
-
-        // Then add graph-only results
+        // Then add graph-only results (skip CIDs already in fused results)
+        let fused_cids: HashSet<String> = hits.iter().map(|h| h.cid.clone()).collect();
         for result in &graph_hits {
-            if all_cids.contains(&result.node.id) {
+            if fused_cids.contains(&result.node.id) {
                 continue;
             }
-            all_cids.insert(result.node.id.clone());
 
             // Graph-only hits have no vector score
             let combined_score = (1.0 - DEFAULT_ALPHA) * result.graph_score;
