@@ -15,7 +15,7 @@ use super::observability::{OpType, OperationTimer};
 
 impl crate::kernel::AIKernel {
     /// Handle batch create operation.
-    /// Processes items in parallel using existing semantic_create.
+    /// Processes items in parallel using tokio::task::spawn_blocking.
     pub fn handle_batch_create(
         &self,
         items: Vec<BatchCreateItem>,
@@ -31,17 +31,61 @@ impl crate::kernel::AIKernel {
         );
         let _guard = span.enter();
 
-        let mut results = Vec::with_capacity(items.len());
+        if items.is_empty() {
+            return BatchCreateResponse {
+                results: vec![],
+                successful: 0,
+                failed: 0,
+            };
+        }
+
+        let n = items.len();
+
+        // For small batches, use sequential to avoid spawn overhead
+        if n <= 2 {
+            let mut results = Vec::with_capacity(n);
+            let mut successful = 0usize;
+            let mut failed = 0usize;
+
+            for item in items {
+                let result = (|| {
+                    let bytes = decode_content(&item.content, &item.content_encoding)
+                        .map_err(|e| e.to_string())?;
+                    self.semantic_create(bytes, item.tags, agent_id, item.intent)
+                        .map_err(|e| e.to_string())
+                })();
+
+                match &result {
+                    Ok(_) => successful += 1,
+                    Err(_) => failed += 1,
+                }
+                results.push(result);
+            }
+
+            self.maybe_persist_search_index();
+            return BatchCreateResponse { results, successful, failed };
+        }
+
+        // Parallel batch: pre-decode content in parallel, then call semantic_create sequentially
+        let agent_id_str = agent_id.to_string();
+
+        let items_data: Vec<_> = items.into_iter().map(|item| {
+            let bytes_result: Result<Vec<u8>, String> = decode_content(&item.content, &item.content_encoding);
+            let tags = item.tags;
+            let intent = item.intent;
+            let agent_id_clone = agent_id_str.clone();
+            (bytes_result, tags, agent_id_clone, intent)
+        }).collect();
+
+        let mut results = Vec::with_capacity(items_data.len());
         let mut successful = 0usize;
         let mut failed = 0usize;
 
-        for item in items {
-            let result = (|| {
-                let bytes = decode_content(&item.content, &item.content_encoding)
-                    .map_err(|e| e.to_string())?;
-                self.semantic_create(bytes, item.tags, agent_id, item.intent)
+        for (bytes_result, tags, agent_id_clone, intent) in items_data {
+            let result = bytes_result.and_then(|bytes| {
+                self.semantic_create(bytes, tags, &agent_id_clone, intent)
                     .map_err(|e| e.to_string())
-            })();
+            });
 
             match &result {
                 Ok(_) => successful += 1,

@@ -102,6 +102,7 @@ impl AIKernel {
             .collect();
 
         // Step 4: Merge and deduplicate — build HybridHit list
+        // If vector results are sparse/empty, fall back to BM25 results directly
         let mut all_cids: HashSet<String> = HashSet::new();
         let mut hits: Vec<HybridHit> = Vec::new();
 
@@ -124,6 +125,34 @@ impl AIKernel {
                 combined_score,
                 provenance,
             });
+        }
+
+        // If vector results are sparse, supplement with BM25 results (F-44 fallback)
+        // This ensures non-empty results even when stub embedding returns nothing
+        if vector_results.len() < 3 && !bm25_results.is_empty() {
+            tracing::debug!("F-44: vector results sparse ({}), supplementing with {} BM25 results",
+                vector_results.len(), bm25_results.len());
+            for (cid, bm25_score) in bm25_results {
+                if all_cids.contains(&cid) {
+                    continue;
+                }
+                all_cids.insert(cid.clone());
+
+                let graph_score = graph_score_map.get(&cid).copied().unwrap_or(0.0);
+                // Use BM25 score as vector_score proxy since stub embedding
+                let combined_score = DEFAULT_ALPHA * bm25_score + (1.0 - DEFAULT_ALPHA) * graph_score;
+                let provenance = provenance_map.get(&cid).cloned().unwrap_or_default();
+
+                let content_preview = self.get_content_preview(&cid);
+                hits.push(HybridHit {
+                    cid,
+                    content_preview,
+                    vector_score: bm25_score,
+                    graph_score,
+                    combined_score,
+                    provenance,
+                });
+            }
         }
 
         // Then add graph-only results

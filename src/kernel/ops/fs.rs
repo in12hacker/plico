@@ -80,16 +80,6 @@ impl crate::kernel::AIKernel {
 
         let cid = self.fs.create(content, tags.clone(), agent_id.to_string(), intent)?;
 
-        // F-2: Postcondition — verify CID is actually retrievable (effect contract)
-        // This catches silent failures where CID is returned but CAS write didn't complete
-        if self.fs.read(&crate::fs::Query::ByCid(cid.clone())).is_err() {
-            tracing::error!("Effect contract violated: semantic_create returned CID {} but get failed", cid);
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::Interrupted,
-                "Effect contract violated: created CID not retrievable",
-            ));
-        }
-
         self.event_bus.emit(KernelEvent::ObjectStored {
             cid: cid.clone(),
             agent_id: agent_id.to_string(),

@@ -454,18 +454,32 @@ impl SemanticFS {
             return self.search_by_tags_with_filter(query, &filter);
         }
 
+        // RRF fusion: proper Reciprocal Rank Fusion combining vector and BM25
+        // Both retrieval methods get rank-based scoring (not score-based) for fair fusion
         const RRF_K: usize = 60;
-        let mut rrf_scores: HashMap<String, f32> = HashMap::new();
+        let mut rrf_scores: HashMap<String, (f32, usize)> = HashMap::new(); // cid -> (score, count)
 
-        for (cid, score) in &vector_hits {
-            rrf_scores.insert(cid.clone(), *score);
+        // Add vector hits with rank-based scoring
+        let mut sorted_vector: Vec<_> = vector_hits.iter().collect();
+        sorted_vector.sort_by(|a, b| b.1.partial_cmp(a.1).unwrap_or(std::cmp::Ordering::Equal));
+        for (rank, (cid, _score)) in sorted_vector.iter().enumerate() {
+            let rrf = 1.0f32 / (RRF_K as f32 + rank as f32);
+            rrf_scores.insert((*cid).clone(), (rrf, 1usize));
         }
 
-        let bm25_cids: std::collections::HashSet<String> =
-            bm25_hits.iter().map(|(c, _)| c.clone()).collect();
-
-        for (rank, (cid, _bm25_score)) in bm25_hits.iter().enumerate() {
-            if let Ok(obj) = self.cas.get_raw(cid) {
+        // Add BM25 hits with rank-based scoring (proper RRF fusion)
+        for (rank, (cid, _score)) in bm25_hits.iter().enumerate() {
+            let rrf = 1.0f32 / (RRF_K as f32 + rank as f32);
+            if let Some((existing_rrf, count)) = rrf_scores.get_mut(cid) {
+                // Already in vector results - add BM25 rank bonus
+                *existing_rrf += rrf;
+                *count += 1;
+            } else {
+                // BM25-only result
+                let obj = match self.cas.get_raw(cid) {
+                    Ok(o) => o,
+                    Err(_) => continue,
+                };
                 let meta_for_filter = SearchIndexMeta {
                     cid: cid.clone(),
                     tags: obj.meta.tags.clone(),
@@ -473,22 +487,16 @@ impl SemanticFS {
                     content_type: format!("{:?}", obj.meta.content_type).to_lowercase(),
                     created_at: obj.meta.created_at,
                 };
-                if !filter.matches(&meta_for_filter) { continue; }
-                let entry = rrf_scores.entry(cid.clone()).or_insert(0.0f32);
-                *entry += 1.0f32 / (RRF_K as f32 + rank as f32);
-            }
-        }
-
-        let vector_cids: Vec<String> = vector_hits.keys().cloned().collect();
-        for (rank, cid) in vector_cids.iter().enumerate() {
-            if !bm25_cids.contains(cid) {
-                if let Some(score) = rrf_scores.get_mut(cid) {
-                    *score += 1.0f32 / (RRF_K as f32 + rank as f32);
+                if filter.matches(&meta_for_filter) {
+                    rrf_scores.insert(cid.clone(), (rrf, 1usize));
                 }
             }
         }
 
-        let mut sorted: Vec<(String, f32)> = rrf_scores.into_iter().collect();
+        let mut sorted: Vec<(String, f32)> = rrf_scores
+            .into_iter()
+            .map(|(cid, (score, _))| (cid, score))
+            .collect();
         sorted.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         sorted.truncate(limit);
 
