@@ -465,11 +465,13 @@ impl crate::kernel::AIKernel {
         }];
         let _ = self.remember_procedural(
             agent_id, "default",
-            name.to_string(),
-            description.to_string(),
-            steps,
-            "skill_register".to_string(),
-            tags.clone(),
+            super::memory::ProceduralEntry {
+                name: name.to_string(),
+                description: description.to_string(),
+                steps,
+                learned_from: "skill_register".to_string(),
+                tags: tags.clone(),
+            },
         );
 
         Ok(node_id)

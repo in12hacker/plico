@@ -7,7 +7,10 @@ use super::{make_result, make_error_response};
 
 // ── F-35: MCP Prompts — Skills as prompt templates ──
 
-const MCP_PROMPTS: &[(&str, &str, &[(&str, &str, bool)])] = &[
+type PromptArg = (&'static str, &'static str, bool);
+type PromptDef = (&'static str, &'static str, &'static [PromptArg]);
+
+const MCP_PROMPTS: &[PromptDef] = &[
     ("debug-issue", "Search related memories + causal chain + propose solution",
      &[("issue", "Description of the issue to debug", true)]),
     ("store-experience", "Store an experience with context: put + remember + causal link",

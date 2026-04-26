@@ -54,7 +54,7 @@ impl SkillDiscriminator {
         duration_ms: u64,
     ) {
         let mut sequences = self.sequences.write().unwrap();
-        let agent_sequences = sequences.entry(agent_id.to_string()).or_insert_with(Vec::new);
+        let agent_sequences = sequences.entry(agent_id.to_string()).or_default();
 
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

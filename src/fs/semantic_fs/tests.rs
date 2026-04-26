@@ -7,6 +7,7 @@ use crate::fs::embedding::StubEmbeddingProvider;
 use crate::fs::graph::{PetgraphBackend, KnowledgeGraph};
 use crate::fs::search::InMemoryBackend;
 use crate::fs::semantic_fs::{SemanticFS, Query, EventType, EventRelation};
+use crate::fs::semantic_fs::events::CreateEventParams;
 use crate::fs::context_loader::ContextLayer;
 
 fn make_fs() -> (SemanticFS, tempfile::TempDir) {
@@ -200,7 +201,7 @@ fn event_meta_in_range_filters_correctly() {
     let dir = TempDir::new().unwrap();
     let fs = make_fs_with_kg(&dir);
     let now = chrono::Utc::now().timestamp_millis() as u64;
-    let _id = fs.create_event("recent-meeting", EventType::Task, Some(now - 3_600_000), None, None, vec![], "a").unwrap();
+    let _id = fs.create_event(CreateEventParams { label: "recent-meeting", event_type: EventType::Task, start_time: Some(now - 3_600_000), end_time: None, location: None, tags: vec![], agent_id: "a" }).unwrap();
     let events = fs.list_events(Some(now - 86_400_000), Some(now), &[], None, None).unwrap();
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].label, "recent-meeting");
@@ -228,7 +229,7 @@ fn event_type_serialize_roundtrip() {
 #[test]
 fn create_event_without_kg_returns_id() {
     let (fs, _dir) = make_fs();
-    let id = fs.create_event("orphan-event", EventType::Task, None, None, None, vec![], "a").unwrap();
+    let id = fs.create_event(CreateEventParams { label: "orphan-event", event_type: EventType::Task, start_time: None, end_time: None, location: None, tags: vec![], agent_id: "a" }).unwrap();
     assert!(id.starts_with("evt:"));
 }
 
@@ -236,7 +237,7 @@ fn create_event_without_kg_returns_id() {
 fn create_and_list_event_with_kg() {
     let dir = TempDir::new().unwrap();
     let fs = make_fs_with_kg(&dir);
-    let _id = fs.create_event("team-sync", EventType::Task, None, None, None, vec!["sync".to_string()], "a").unwrap();
+    let _id = fs.create_event(CreateEventParams { label: "team-sync", event_type: EventType::Task, start_time: None, end_time: None, location: None, tags: vec!["sync".to_string()], agent_id: "a" }).unwrap();
     let events = fs.list_events(None, None, &[], None, None).unwrap();
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].label, "team-sync");
@@ -249,7 +250,7 @@ fn list_events_by_time_range() {
     let dir = TempDir::new().unwrap();
     let fs = make_fs_with_kg(&dir);
     let now = chrono::Utc::now().timestamp_millis() as u64;
-    fs.create_event("today", EventType::Task, Some(now - 3_600_000), None, None, vec![], "a").unwrap();
+    fs.create_event(CreateEventParams { label: "today", event_type: EventType::Task, start_time: Some(now - 3_600_000), end_time: None, location: None, tags: vec![], agent_id: "a" }).unwrap();
     let events = fs.list_events_by_time("几天前", &[], None, &crate::temporal::RULE_BASED_RESOLVER, None).unwrap();
     assert_eq!(events.len(), 1);
 }
@@ -258,7 +259,7 @@ fn list_events_by_time_range() {
 fn list_events_by_tag_intersection() {
     let dir = TempDir::new().unwrap();
     let fs = make_fs_with_kg(&dir);
-    fs.create_event("multi-tag", EventType::Task, None, None, None, vec!["a".to_string(), "b".to_string()], "a").unwrap();
+    fs.create_event(CreateEventParams { label: "multi-tag", event_type: EventType::Task, start_time: None, end_time: None, location: None, tags: vec!["a".to_string(), "b".to_string()], agent_id: "a" }).unwrap();
     assert_eq!(fs.list_events(None, None, &["a".to_string()], None, None).unwrap().len(), 1);
     assert_eq!(fs.list_events(None, None, &["a".to_string(), "b".to_string()], None, None).unwrap().len(), 1);
     assert_eq!(fs.list_events(None, None, &["a".to_string(), "c".to_string()], None, None).unwrap().len(), 0);
@@ -268,7 +269,7 @@ fn list_events_by_tag_intersection() {
 fn event_attach_updates_meta_and_edge() {
     let dir = TempDir::new().unwrap();
     let fs = make_fs_with_kg(&dir);
-    let event_id = fs.create_event("batch-indexing", EventType::Task, None, None, None, vec![], "a").unwrap();
+    let event_id = fs.create_event(CreateEventParams { label: "batch-indexing", event_type: EventType::Task, start_time: None, end_time: None, location: None, tags: vec![], agent_id: "a" }).unwrap();
     let person_id = "agent:worker-01";
     fs.event_attach(&event_id, person_id, EventRelation::Participant, "a").unwrap();
     let events = fs.list_events(None, None, &[], None, None).unwrap();
@@ -281,14 +282,14 @@ fn event_attach_updates_meta_and_edge() {
 #[test]
 fn list_events_returns_empty_without_kg() {
     let (fs, _dir) = make_fs();
-    fs.create_event("test", EventType::Task, None, None, None, vec![], "a").unwrap();
+    fs.create_event(CreateEventParams { label: "test", event_type: EventType::Task, start_time: None, end_time: None, location: None, tags: vec![], agent_id: "a" }).unwrap();
     assert!(fs.list_events(None, None, &[], None, None).unwrap().is_empty());
 }
 
 #[test]
 fn event_attach_fails_without_kg() {
     let (fs, _dir) = make_fs();
-    let id = fs.create_event("test", EventType::Task, None, None, None, vec![], "a").unwrap();
+    let id = fs.create_event(CreateEventParams { label: "test", event_type: EventType::Task, start_time: None, end_time: None, location: None, tags: vec![], agent_id: "a" }).unwrap();
     assert!(fs.event_attach(&id, "target", EventRelation::Participant, "a").is_err());
 }
 
@@ -302,7 +303,7 @@ fn list_events_by_time_resolves_expression() {
         .and_hms_opt(0, 0, 0).unwrap()
         .and_utc()
         .timestamp_millis() as u64;
-    fs.create_event("past-indexing-run", EventType::Task, Some(three_days_ago), None, None, vec!["indexing".to_string()], "a").unwrap();
+    fs.create_event(CreateEventParams { label: "past-indexing-run", event_type: EventType::Task, start_time: Some(three_days_ago), end_time: None, location: None, tags: vec!["indexing".to_string()], agent_id: "a" }).unwrap();
     let events = fs.list_events_by_time("几天前", &["indexing".to_string()], None, &RULE_BASED_RESOLVER, None).unwrap();
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].label, "past-indexing-run");

@@ -172,14 +172,11 @@ impl crate::kernel::AIKernel {
                 }
                 QuerySpec::Search { query, limit, require_tags, exclude_tags } => {
                     let results_vec = self.semantic_search_with_time(
-                        &query,
-                        agent_id,
-                        tenant_id,
-                        limit.unwrap_or(10),
-                        require_tags,
-                        exclude_tags,
-                        None,
-                        None,
+                        super::fs::SearchQuery {
+                            query: &query, agent_id, tenant_id,
+                            limit: limit.unwrap_or(10), require_tags, exclude_tags,
+                        },
+                        None, None,
                     );
 
                     match results_vec {

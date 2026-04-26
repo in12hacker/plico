@@ -267,7 +267,7 @@ fn handle_resources_read(id: Value, params: &Value, kernel: &AIKernel) -> Value 
         "plico://skills" => {
             // Fix: query both shared (system) and private (agent) procedural layers
             let shared_entries = kernel.recall_shared_procedural(None);
-            let private_entries = kernel.recall_procedural(DEFAULT_AGENT, "default", None);
+            let private_entries = kernel.recall_procedural(DEFAULT_AGENT, plico::DEFAULT_TENANT, None);
 
             // Combine and deduplicate by name (shared takes precedence for same name)
             let mut skills_map: std::collections::HashMap<String, Value> = std::collections::HashMap::new();

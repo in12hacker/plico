@@ -673,25 +673,28 @@ impl crate::kernel::AIKernel {
             matches!(et, KGEdgeType::Causes | KGEdgeType::HasFact | KGEdgeType::Follows)
         }
 
-        // DFS to find causal chains
+        struct DfsContext<'a> {
+            path: &'a mut Vec<String>,
+            edges: &'a mut Vec<KGEdge>,
+            visited: &'a mut HashSet<String>,
+            results: &'a mut Vec<CausalPath>,
+        }
+
         fn dfs(
             kg: &dyn KnowledgeGraph,
             current: &str,
             max_depth: u8,
             current_depth: u8,
-            path: &mut Vec<String>,
-            edges: &mut Vec<KGEdge>,
-            visited: &mut HashSet<String>,
-            results: &mut Vec<CausalPath>,
+            ctx: &mut DfsContext<'_>,
         ) {
             if current_depth >= max_depth {
                 return;
             }
 
-            if visited.contains(current) {
+            if ctx.visited.contains(current) {
                 return;
             }
-            visited.insert(current.to_string());
+            ctx.visited.insert(current.to_string());
 
             if let Ok(neighbors) = kg.get_neighbors(current, None, 1) {
                 for (neighbor_node, edge) in neighbors {
@@ -699,22 +702,21 @@ impl crate::kernel::AIKernel {
                         continue;
                     }
 
-                    path.push(neighbor_node.id.clone());
-                    edges.push(edge.clone());
+                    ctx.path.push(neighbor_node.id.clone());
+                    ctx.edges.push(edge.clone());
 
-                    // Found a chain of at least 2 edges
-                    if edges.len() >= 2 {
-                        let chain_nodes: Vec<KGNode> = path
+                    if ctx.edges.len() >= 2 {
+                        let chain_nodes: Vec<KGNode> = ctx.path
                             .iter()
                             .filter_map(|id| kg.get_node(id).ok().flatten())
                             .collect();
                         if !chain_nodes.is_empty() {
-                            let strength = edges.iter()
+                            let strength = ctx.edges.iter()
                                 .map(|e| e.weight)
-                                .sum::<f32>() / edges.len() as f32;
-                            results.push(CausalPath {
+                                .sum::<f32>() / ctx.edges.len() as f32;
+                            ctx.results.push(CausalPath {
                                 nodes: chain_nodes,
-                                edges: edges.clone(),
+                                edges: ctx.edges.clone(),
                                 causal_strength: strength,
                             });
                         }
@@ -725,18 +727,15 @@ impl crate::kernel::AIKernel {
                         &neighbor_node.id,
                         max_depth,
                         current_depth + 1,
-                        path,
-                        edges,
-                        visited,
-                        results,
+                        ctx,
                     );
 
-                    path.pop();
-                    edges.pop();
+                    ctx.path.pop();
+                    ctx.edges.pop();
                 }
             }
 
-            visited.remove(current);
+            ctx.visited.remove(current);
         }
 
         let mut path = vec![start_node_id.to_string()];
@@ -746,10 +745,12 @@ impl crate::kernel::AIKernel {
             start_node_id,
             max_depth,
             0,
-            &mut path,
-            &mut edges,
-            &mut visited,
-            &mut results,
+            &mut DfsContext {
+                path: &mut path,
+                edges: &mut edges,
+                visited: &mut visited,
+                results: &mut results,
+            },
         );
 
         // Sort by causal strength descending

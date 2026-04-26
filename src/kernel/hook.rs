@@ -68,8 +68,10 @@ pub trait HookHandler: Send + Sync {
 ///
 /// Hooks are stored as (point, priority, handler) tuples and executed in
 /// priority order (lower priority numbers run first). First Block wins.
+type HookEntry = (HookPoint, i32, Arc<dyn HookHandler>);
+
 pub struct HookRegistry {
-    hooks: RwLock<Vec<(HookPoint, i32, Arc<dyn HookHandler>)>>,
+    hooks: RwLock<Vec<HookEntry>>,
 }
 
 impl Default for HookRegistry {

@@ -92,7 +92,7 @@ impl PlanAdaptor {
 
         {
             let mut history = self.failure_history.write().unwrap();
-            let records = history.entry(step_id.to_string()).or_insert_with(Vec::new);
+            let records = history.entry(step_id.to_string()).or_default();
 
             // Update existing record or create new one
             if let Some(record) = records.iter_mut().find(|r| r.failure_type == *failure) {

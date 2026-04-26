@@ -87,9 +87,31 @@ impl PetgraphBackend {
                 Some(Arc::clone(existing))
             } else {
                 let database = if db_path.exists() {
-                    Database::open(&db_path).expect("Failed to open redb database")
+                    match Database::open(&db_path) {
+                        Ok(db) => db,
+                        Err(e) => {
+                            tracing::error!("Failed to open redb database: {e}. KG will run in-memory only.");
+                            return Self {
+                                nodes: RwLock::new(HashMap::new()),
+                                out_edges: RwLock::new(HashMap::new()),
+                                in_edges: RwLock::new(HashMap::new()),
+                                db: None,
+                            };
+                        }
+                    }
                 } else {
-                    Database::create(&db_path).expect("Failed to create redb database")
+                    match Database::create(&db_path) {
+                        Ok(db) => db,
+                        Err(e) => {
+                            tracing::error!("Failed to create redb database: {e}. KG will run in-memory only.");
+                            return Self {
+                                nodes: RwLock::new(HashMap::new()),
+                                out_edges: RwLock::new(HashMap::new()),
+                                in_edges: RwLock::new(HashMap::new()),
+                                db: None,
+                            };
+                        }
+                    }
                 };
                 let arc_db = Arc::new(database);
                 db_guard.insert(db_path.clone(), Arc::clone(&arc_db));
@@ -128,13 +150,19 @@ impl PetgraphBackend {
 
     fn persist_node(&self, node_id: &str, node: &KGNode) {
         let Some(ref db) = self.db else { return };
-        let write_txn = db.begin_write().expect("Failed to begin write txn");
-        {
-            let mut table = write_txn.open_table(KG_NODES).expect("Failed to open nodes table");
-            let data = serde_json::to_vec(node).expect("Failed to serialize node");
-            table.insert(node_id, data.as_slice()).expect("Failed to insert node");
+        let res = (|| -> Result<(), Box<dyn std::error::Error>> {
+            let write_txn = db.begin_write()?;
+            {
+                let mut table = write_txn.open_table(KG_NODES)?;
+                let data = serde_json::to_vec(node)?;
+                table.insert(node_id, data.as_slice())?;
+            }
+            write_txn.commit()?;
+            Ok(())
+        })();
+        if let Err(e) = res {
+            tracing::error!("KG persist_node failed: {e}");
         }
-        write_txn.commit().expect("Failed to commit node");
     }
 
     // ── Atomic batch persistence ───────────────────────────────────────────
@@ -142,52 +170,70 @@ impl PetgraphBackend {
     /// Persist a new edge + all invalidated predecessors in one ACID transaction.
     fn persist_add_edge_atomic(&self, new_edge: &KGEdge, invalidated: &[KGEdge]) {
         let Some(ref db) = self.db else { return };
-        let write_txn = db.begin_write().expect("Failed to begin write txn");
-        {
-            let mut table = write_txn.open_table(KG_EDGES).expect("Failed to open edges table");
-            for edge in invalidated {
-                let key = Self::edge_key(&edge.src, &edge.dst, &edge.edge_type, edge.created_at);
-                let data = serde_json::to_vec(edge).expect("Failed to serialize edge");
-                table.insert(key.as_str(), data.as_slice()).expect("Failed to insert edge");
+        let res = (|| -> Result<(), Box<dyn std::error::Error>> {
+            let write_txn = db.begin_write()?;
+            {
+                let mut table = write_txn.open_table(KG_EDGES)?;
+                for edge in invalidated {
+                    let key = Self::edge_key(&edge.src, &edge.dst, &edge.edge_type, edge.created_at);
+                    let data = serde_json::to_vec(edge)?;
+                    table.insert(key.as_str(), data.as_slice())?;
+                }
+                let key = Self::edge_key(&new_edge.src, &new_edge.dst, &new_edge.edge_type, new_edge.created_at);
+                let data = serde_json::to_vec(new_edge)?;
+                table.insert(key.as_str(), data.as_slice())?;
             }
-            let key = Self::edge_key(&new_edge.src, &new_edge.dst, &new_edge.edge_type, new_edge.created_at);
-            let data = serde_json::to_vec(new_edge).expect("Failed to serialize edge");
-            table.insert(key.as_str(), data.as_slice()).expect("Failed to insert edge");
+            write_txn.commit()?;
+            Ok(())
+        })();
+        if let Err(e) = res {
+            tracing::error!("KG persist_add_edge_atomic failed: {e}");
         }
-        write_txn.commit().expect("Failed to commit edge batch");
     }
 
     /// Batch-remove edges from redb in one transaction.
     fn remove_edges_from_db(&self, edges: &[KGEdge]) {
         let Some(ref db) = self.db else { return };
         if edges.is_empty() { return; }
-        let write_txn = db.begin_write().expect("Failed to begin write txn");
-        {
-            let mut table = write_txn.open_table(KG_EDGES).expect("Failed to open edges table");
-            for edge in edges {
-                let key = Self::edge_key(&edge.src, &edge.dst, &edge.edge_type, edge.created_at);
-                table.remove(key.as_str()).ok();
+        let res = (|| -> Result<(), Box<dyn std::error::Error>> {
+            let write_txn = db.begin_write()?;
+            {
+                let mut table = write_txn.open_table(KG_EDGES)?;
+                for edge in edges {
+                    let key = Self::edge_key(&edge.src, &edge.dst, &edge.edge_type, edge.created_at);
+                    table.remove(key.as_str()).ok();
+                }
             }
+            write_txn.commit()?;
+            Ok(())
+        })();
+        if let Err(e) = res {
+            tracing::error!("KG remove_edges_from_db failed: {e}");
         }
-        write_txn.commit().expect("Failed to commit edge removal");
     }
 
     /// Remove a node + all its edges in one ACID transaction.
     fn remove_node_and_edges_from_db(&self, node_id: &str, edges: &[KGEdge]) {
         let Some(ref db) = self.db else { return };
-        let write_txn = db.begin_write().expect("Failed to begin write txn");
-        {
-            let mut table = write_txn.open_table(KG_NODES).expect("Failed to open nodes table");
-            table.remove(node_id).ok();
-        }
-        if !edges.is_empty() {
-            let mut table = write_txn.open_table(KG_EDGES).expect("Failed to open edges table");
-            for edge in edges {
-                let key = Self::edge_key(&edge.src, &edge.dst, &edge.edge_type, edge.created_at);
-                table.remove(key.as_str()).ok();
+        let res = (|| -> Result<(), Box<dyn std::error::Error>> {
+            let write_txn = db.begin_write()?;
+            {
+                let mut table = write_txn.open_table(KG_NODES)?;
+                table.remove(node_id).ok();
             }
+            if !edges.is_empty() {
+                let mut table = write_txn.open_table(KG_EDGES)?;
+                for edge in edges {
+                    let key = Self::edge_key(&edge.src, &edge.dst, &edge.edge_type, edge.created_at);
+                    table.remove(key.as_str()).ok();
+                }
+            }
+            write_txn.commit()?;
+            Ok(())
+        })();
+        if let Err(e) = res {
+            tracing::error!("KG remove_node_and_edges_from_db failed: {e}");
         }
-        write_txn.commit().expect("Failed to commit node removal");
     }
 
     // ── Conflict invalidation (private) ────────────────────────────────────
@@ -232,7 +278,8 @@ impl PetgraphBackend {
     fn load_from_redb(
         database: &std::sync::Arc<Database>,
     ) -> Result<DiskGraph, KGError> {
-        let read_txn = database.begin_read().expect("Failed to begin read txn");
+        let read_txn = database.begin_read()
+            .map_err(|e| KGError::DatabaseError(format!("begin_read failed: {e}")))?;
 
         let mut nodes = HashMap::new();
         let mut out_edges: HashMap<String, Vec<(String, KGEdge)>> = HashMap::new();
@@ -310,7 +357,7 @@ impl PetgraphBackend {
             content_cid: Some(cid.to_string()),
             properties: serde_json::json!({ "tags": tags }),
             agent_id: agent_id.to_string(),
-            tenant_id: "default".to_string(),
+            tenant_id: crate::DEFAULT_TENANT.to_string(),
             created_at: now_ms(),
             valid_at: None,
             invalid_at: None,
@@ -799,16 +846,22 @@ impl KnowledgeGraph for PetgraphBackend {
         if !invalidated.is_empty() {
             // Persist the invalidated edges so `invalid_at` survives restart
             let Some(ref db) = self.db else { return Ok(count); };
-            let write_txn = db.begin_write().expect("Failed to begin write txn");
-            {
-                let mut table = write_txn.open_table(KG_EDGES).expect("Failed to open edges table");
-                for edge in &invalidated {
-                    let key = Self::edge_key(&edge.src, &edge.dst, &edge.edge_type, edge.created_at);
-                    let data = serde_json::to_vec(edge).expect("Failed to serialize edge");
-                    table.insert(key.as_str(), data.as_slice()).expect("Failed to insert edge");
+            let res = (|| -> Result<(), Box<dyn std::error::Error>> {
+                let write_txn = db.begin_write()?;
+                {
+                    let mut table = write_txn.open_table(KG_EDGES)?;
+                    for edge in &invalidated {
+                        let key = Self::edge_key(&edge.src, &edge.dst, &edge.edge_type, edge.created_at);
+                        let data = serde_json::to_vec(edge)?;
+                        table.insert(key.as_str(), data.as_slice())?;
+                    }
                 }
+                write_txn.commit()?;
+                Ok(())
+            })();
+            if let Err(e) = res {
+                tracing::error!("KG invalidate_conflicts persist failed: {e}");
             }
-            write_txn.commit().expect("Failed to commit invalidation");
         }
         Ok(count)
     }

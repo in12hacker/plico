@@ -108,7 +108,7 @@ Status: active | Fan-in: 2 | Fan-out: 2
 |------|-------|---------|
 | `mod.rs` | ~147 | SemanticSearch trait, SearchFilter, re-exports |
 | `memory.rs` | ~332 | InMemoryBackend (brute-force cosine) |
-| `hnsw.rs` | ~573 | HnswBackend (approximate NN via hnsw_rs) |
+| `hnsw.rs` | ~310 | HnswBackend (HNSW ANN via usearch, f16 quantization) |
 | `bm25.rs` | ~83 | BM25 keyword search index |
 
 ### `graph/` — Knowledge Graph (see `graph/INDEX.md`)

@@ -7,25 +7,20 @@ use crate::kernel::event_bus::KernelEvent;
 
 impl crate::kernel::AIKernel {
     /// Create an event and register it in the knowledge graph.
-    #[allow(clippy::too_many_arguments)]
     pub fn create_event(
         &self,
-        label: &str,
-        event_type: EventType,
-        start_time: Option<u64>,
-        end_time: Option<u64>,
-        location: Option<&str>,
-        tags: Vec<String>,
-        agent_id: &str,
+        params: crate::fs::semantic_fs::events::CreateEventParams<'_>,
     ) -> std::io::Result<String> {
-        let ctx = PermissionContext::new(agent_id.to_string(), "default".to_string());
+        let label = params.label.to_string();
+        let agent_id = params.agent_id.to_string();
+        let ctx = PermissionContext::new(agent_id.clone(), crate::DEFAULT_TENANT.to_string());
         self.permissions.check(&ctx, PermissionAction::Write)?;
-        let event_id = self.fs.create_event(label, event_type, start_time, end_time, location, tags, agent_id)
+        let event_id = self.fs.create_event(params)
             .map_err(|e| std::io::Error::other(e.to_string()))?;
         self.event_bus.emit(KernelEvent::EventCreated {
             event_id: event_id.clone(),
-            label: label.to_string(),
-            agent_id: agent_id.to_string(),
+            label,
+            agent_id,
         });
         Ok(event_id)
     }
@@ -63,7 +58,7 @@ impl crate::kernel::AIKernel {
         relation: EventRelation,
         agent_id: &str,
     ) -> std::io::Result<()> {
-        let ctx = PermissionContext::new(agent_id.to_string(), "default".to_string());
+        let ctx = PermissionContext::new(agent_id.to_string(), crate::DEFAULT_TENANT.to_string());
         self.permissions.check(&ctx, PermissionAction::Write)?;
         self.fs.event_attach(event_id, target_id, relation, agent_id)
             .map_err(|e| std::io::Error::other(e.to_string()))

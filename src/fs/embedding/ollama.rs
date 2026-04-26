@@ -1,20 +1,20 @@
 //! Ollama daemon backend for text embeddings.
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use crate::fs::embedding::types::{EmbedError, EmbeddingProvider, EmbedResult};
 
 /// Ollama daemon backend for text embeddings.
 ///
-/// Spawns a dedicated tokio runtime in a background thread for async HTTP calls.
-/// Thread-safe: the runtime handle is shared via Arc.
+/// In daemon mode (Tokio runtime active), HTTP calls use `block_in_place`.
+/// In standalone mode, a dedicated runtime is created.
 pub struct OllamaBackend {
-    /// Tokio runtime for making async HTTP calls.
-    rt: Arc<tokio::runtime::Runtime>,
+    /// Only created when no Tokio runtime is active (standalone/CLI mode).
+    rt: Option<Arc<tokio::runtime::Runtime>>,
     client: reqwest::Client,
     url: String,
     model: String,
-    dimension: usize,
+    dimension: OnceLock<usize>,
 }
 
 impl OllamaBackend {
@@ -23,28 +23,50 @@ impl OllamaBackend {
     /// `url` — Ollama server URL (e.g. `"http://localhost:11434"`).
     /// `model` — Model name (e.g. `"all-minilm-l6-v2"` or `"nomic-embed-text"`).
     pub fn new(url: &str, model: &str) -> Result<Self, EmbedError> {
-        let rt = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(1)
-            .enable_all()
-            .build()?;
+        let rt = match tokio::runtime::Handle::try_current() {
+            Ok(_) => None,
+            Err(_) => {
+                Some(Arc::new(tokio::runtime::Builder::new_multi_thread()
+                    .worker_threads(1)
+                    .enable_all()
+                    .build()?))
+            }
+        };
 
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
             .build()
             .map_err(EmbedError::Http)?;
 
-        let dimension = rt.block_on(Self::probe(&client, url, model)).unwrap_or_else(|e| {
-            tracing::warn!("Ollama probe failed: {e}. Using default dimension 384.");
-            384
-        });
-
         Ok(Self {
-            rt: Arc::new(rt),
+            rt,
             client,
             url: url.to_string(),
             model: model.to_string(),
-            dimension,
+            dimension: OnceLock::new(),
         })
+    }
+
+    fn block_on_async<F: std::future::Future>(&self, fut: F) -> F::Output {
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => tokio::task::block_in_place(|| handle.block_on(fut)),
+            Err(_) => self.rt.as_ref()
+                .expect("rt must exist when no Tokio runtime is active")
+                .block_on(fut),
+        }
+    }
+
+    fn get_dimension(&self) -> usize {
+        if let Some(d) = self.dimension.get() {
+            return *d;
+        }
+        let dim = self.block_on_async(Self::probe(&self.client, &self.url, &self.model))
+            .unwrap_or_else(|e| {
+                tracing::warn!("Ollama probe failed: {e}. Using default dimension 384.");
+                384
+            });
+        self.dimension.set(dim).ok();
+        dim
     }
 
     async fn probe(client: &reqwest::Client, url: &str, model: &str) -> Result<usize, EmbedError> {
@@ -124,15 +146,11 @@ impl OllamaBackend {
 
         let Response { embedding } = serde_json::from_slice(&body_bytes)
             .map_err(|e| EmbedError::ollama(format!("parse error: {e}")))?;
-        // Ollama doesn't return token counts — estimate based on character count
         let estimated_tokens = (text.len() / 4).max(1) as u32;
         Ok(EmbedResult::new(embedding, estimated_tokens))
     }
 
     /// Send a chat request to Ollama with JSON structured output mode.
-    ///
-    /// `model_override` — use a different model for chat (e.g. "llama3.2" for reasoning).
-    /// If None, uses the same model as embeddings.
     pub async fn chat_async(
         &self,
         prompt: &str,
@@ -221,37 +239,29 @@ impl OllamaBackend {
         system: Option<&str>,
         model_override: Option<&str>,
     ) -> Result<String, EmbedError> {
-        match tokio::runtime::Handle::try_current() {
-            Ok(handle) => {
-                tokio::task::block_in_place(|| {
-                    handle.block_on(self.chat_async(prompt, system, model_override))
-                })
-            }
-            Err(_) => self.rt.block_on(self.chat_async(prompt, system, model_override)),
-        }
+        self.block_on_async(self.chat_async(prompt, system, model_override))
     }
 }
 
 impl EmbeddingProvider for OllamaBackend {
     fn embed(&self, text: &str) -> Result<EmbedResult, EmbedError> {
-        self.rt.block_on(self.embed_async(text))
+        self.block_on_async(self.embed_async(text))
     }
 
     fn embed_batch(&self, texts: &[&str]) -> Result<Vec<EmbedResult>, EmbedError> {
         let this = self.clone();
         let texts: Vec<String> = texts.iter().map(|s| s.to_string()).collect();
-        let fut = async move {
+        self.block_on_async(async move {
             let mut results = Vec::with_capacity(texts.len());
             for text in &texts {
                 results.push(this.embed_async(text).await?);
             }
             Ok(results)
-        };
-        self.rt.block_on(fut)
+        })
     }
 
     fn dimension(&self) -> usize {
-        self.dimension
+        self.get_dimension()
     }
 
     fn model_name(&self) -> &str {
@@ -262,11 +272,11 @@ impl EmbeddingProvider for OllamaBackend {
 impl Clone for OllamaBackend {
     fn clone(&self) -> Self {
         Self {
-            rt: Arc::clone(&self.rt),
+            rt: self.rt.as_ref().map(Arc::clone),
             client: self.client.clone(),
             url: self.url.clone(),
             model: self.model.clone(),
-            dimension: self.dimension,
+            dimension: OnceLock::new(),
         }
     }
 }

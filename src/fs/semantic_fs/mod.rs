@@ -182,7 +182,7 @@ impl SemanticFS {
             created_by,
             created_at: now_ms(),
             intent,
-            tenant_id: "default".to_string(),
+            tenant_id: crate::DEFAULT_TENANT.to_string(),
         };
 
         let obj = AIObject::new(content.clone(), meta.clone());

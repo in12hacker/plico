@@ -646,8 +646,9 @@ Node 26 完成后，系统将首次具备 **运行时自适应能力**：
 | F-6: HealthScoreDecomposition | `observability.rs` | ✅ | 3 tests |
 | 集成: session_start → warm_from_profile | `session.rs`, `prefetch.rs` | ✅ | - |
 | 集成: session_end → apply_feedback | `kernel/mod.rs`, `prefetch.rs` | ✅ | - |
-| CLI: cost 命令 | `cost.rs` (new) | ✅ | 1 test |
+| CLI: cost 命令 | `cost.rs` + `main.rs` | ✅ | 1 test |
 | 集成: LLM/embedding 费用记录 | `intent/llm.rs`, `fs/summarizer.rs`, `fs/semantic_fs/mod.rs` | ✅ | - |
+| Runtime nesting fixes | `openai.rs`, `ollama.rs` (LLM+embedding) | ✅ | - |
 
 ### ⚠️ 部分完成
 
@@ -668,7 +669,7 @@ cargo test: 1463 passed, 0 failed
 - `src/kernel/ops/verification.rs` — ~200 行 (含 VerificationHookHandler)
 - `src/bin/aicli/commands/handlers/cost.rs` — ~60 行
 - `src/fs/embedding/types.rs` — EmbedResult 类型定义 (+25 行)
-- 修改: `prefetch_profile.rs`, `prefetch_cache.rs`, `observability.rs`, `session.rs`, `kernel/mod.rs`, `api/semantic.rs`, `semantic_fs/mod.rs`, `kernel/ops/model.rs`, `kernel/ops/hybrid.rs`, `kernel/ops/memory.rs`, `fs/embedding/openai.rs`, `fs/embedding/ollama.rs`, `fs/embedding/local.rs`, `fs/embedding/ort_backend.rs`, `fs/embedding/circuit_breaker.rs`, `fs/embedding/stub.rs`, `intent/llm.rs`, `fs/summarizer.rs`
+- 修改: `prefetch_profile.rs`, `prefetch_cache.rs`, `observability.rs`, `session.rs`, `kernel/mod.rs`, `api/semantic.rs`, `semantic_fs/mod.rs`, `kernel/ops/model.rs`, `kernel/ops/hybrid.rs`, `kernel/ops/memory.rs`, `fs/embedding/openai.rs`, `fs/embedding/ollama.rs`, `fs/embedding/local.rs`, `fs/embedding/ort_backend.rs`, `fs/embedding/circuit_breaker.rs`, `fs/embedding/stub.rs`, `intent/llm.rs`, `fs/summarizer.rs`, `llm/ollama.rs`, `bin/aicli/main.rs`
 - **总计: ~2100+ 行新增/修改**
 
 ### 🐕 Dogfood 验证
@@ -679,19 +680,42 @@ $ aicli --embedded session-start --agent test-agent --intent "audit code"
 ✅ warm_context 返回 CAS CID
 
 # health 检查
-$ aicli --embedded health
+$ aicli health
 ✅ health_report 返回 (含 CAS/KG/sessions 数据)
 
-# cost 查询
-$ aicli --embedded cost --agent test-agent
-✅ cost_agent_trend 返回（架构限制：每次 CLI 调用创建新进程，cost ledger 数据未持久化）
+# cost 查询 (daemon mode - now works after fix)
+$ aicli cost agent --agent cli
+✅ cost_agent_trend 返回非空数组
 
 # put 操作
-$ aicli --embedded put --content "test" --tags "test"
-✅ 返回 ok: true
+$ aicli put --content "test" --tags "test"
+✅ 返回 ok: true，cost ledger 记录 embedding 调用
+
+# hook list 验证
+$ aicli hook list
+✅ PostToolCall 上有 2 个 hook (包括 VerificationHookHandler)
+```
+
+### 🔧 本次修复 (2026-04-25)
+
+1. **Runtime nesting panic 修复**: 所有 provider (`openai.rs`, `ollama.rs` LLM+embedding) 现在使用 `try_current()` + `block_in_place` 模式避免嵌套 panic
+2. **cost CLI daemon mode 修复**: `build_remote_request` 现在正确路由 `cost` 子命令 (`session`, `agent`, `anomaly`)
+3. **OnceLock lazy dimension probing**: embedding providers 延迟 dimension 探测，避免在构造时 block_on
+4. **Cost Ledger 集成到 Session 生命周期**: `end_session_orchestrate` 现在从 cost_ledger 获取实际 token 使用量，存储到 `CompletedSession.tokens_used`
+
+### ✅ 验证结果
+
+```bash
+$ aicli cost agent --agent cli
+✅ cost_agent_trend 返回实际数据:
+{
+  "total_input_tokens": 112,
+  "operations_count": 6,
+  ...
+}
 ```
 
 ### ⚠️ 已知架构限制
 
-1. **Cost Ledger 持久化**: `prefetcher.persist()` 存在但从未被自动调用（无 Drop impl）。在 embedded CLI 模式下，每次命令创建新进程，ledger 数据丢失。需要实现 Drop trait 或 shutdown hook。
-2. **Intent Cache/Profile/Feedback 持久化**: 同上，`persist_to_dir` 只在显式调用时生效。
+1. ~~**Cost Ledger 持久化**~~: ✅ 已解决 — `persist_all()` 显式调用 `cost_ledger.persist_to_dir()`，daemon shutdown 时自动持久化
+2. **Intent Cache/Profile/Feedback 持久化**: 通过 `prefetch.persist()` 和 `prefetch.restore()` 自动处理

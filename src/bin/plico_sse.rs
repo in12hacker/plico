@@ -596,10 +596,7 @@ fn event_to_sse_event(event: ServerEvent) -> Event {
 /// Build an ApiRequest from method + params
 fn build_api_request(method: &str, params: Option<&serde_json::Value>) -> Result<ApiRequest, String> {
     // Handle methods that don't require params
-    match method {
-        "system_status" => return Ok(ApiRequest::SystemStatus),
-        _ => {}
-    }
+    if method == "system_status" { return Ok(ApiRequest::SystemStatus) }
 
     let params = params.ok_or("missing params")?;
 

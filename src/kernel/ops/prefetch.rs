@@ -276,6 +276,16 @@ impl IntentPrefetcher {
         }
     }
 
+    /// Record an embedding call cost with actual token count.
+    pub fn record_embedding_cost_with_tokens(&self, _text: &str, model_id: &str, tokens: u32) {
+        let ledger_guard = self.cost_ledger.read().unwrap();
+        if let Some(ref ledger) = *ledger_guard {
+            let session_id = self.current_session_id.read().unwrap().clone();
+            let agent_id = "unknown".to_string();
+            ledger.record_embedding_with_tokens(tokens, model_id, session_id.as_deref().unwrap_or(""), &agent_id);
+        }
+    }
+
     /// Persist intent cache, agent profiles, and feedback to disk.
     /// Called during shutdown or periodically.
     pub fn persist(&self) -> std::io::Result<()> {
@@ -300,6 +310,19 @@ impl IntentPrefetcher {
             self.profile_store.len(),
             feedback.len());
         Ok(())
+    }
+
+    /// Get session token cost from cost ledger (F-2: TokenCostLedger integration).
+    pub fn get_session_cost(&self, session_id: &str) -> (u32, u32) {
+        let ledger_guard = self.cost_ledger.read().unwrap();
+        match &*ledger_guard {
+            Some(ledger) => {
+                ledger.session_summary(session_id)
+                    .map(|s| (s.total_input_tokens as u32, s.total_output_tokens as u32))
+                    .unwrap_or((0, 0))
+            }
+            None => (0, 0),
+        }
     }
 
     /// Restore intent cache, agent profiles, and feedback from disk.
@@ -351,10 +374,12 @@ impl IntentPrefetcher {
 
         // F-9: Try to get embedding and check cache first
         let model_name = self.embedding.model_name();
-        let intent_embedding: Option<Vec<f32>> = self.embedding.embed(intent).ok().map(|r| r.embedding);
+        let embed_result = self.embedding.embed(intent);
+        let intent_embedding = embed_result.as_ref().ok().map(|r| r.embedding.clone());
+        let input_tokens = embed_result.as_ref().map(|r| r.input_tokens).unwrap_or(0);
 
-        // F-2: Record embedding cost if cost ledger is available
-        self.record_embedding_cost(intent, model_name);
+        // F-2: Record embedding cost with actual token count if cost ledger is available
+        self.record_embedding_cost_with_tokens(intent, model_name, input_tokens);
 
         if let Some(cached_allocation) = self.intent_cache.lookup(intent, &intent_embedding) {
             // B51 Fix: Cache hit! Store allocation in allocation_cache so fetch_assembled_context
@@ -457,10 +482,12 @@ impl IntentPrefetcher {
 
         // F-9: Try to get embedding and check cache first
         let model_name = self.embedding.model_name();
-        let intent_embedding: Option<Vec<f32>> = self.embedding.embed(intent).ok().map(|r| r.embedding);
+        let embed_result = self.embedding.embed(intent);
+        let intent_embedding = embed_result.as_ref().ok().map(|r| r.embedding.clone());
+        let input_tokens = embed_result.as_ref().map(|r| r.input_tokens).unwrap_or(0);
 
-        // F-2: Record embedding cost if cost ledger is available
-        self.record_embedding_cost(intent, model_name);
+        // F-2: Record embedding cost with actual token count if cost ledger is available
+        self.record_embedding_cost_with_tokens(intent, model_name, input_tokens);
 
         // F-4: Track intent cache lookups and hits
         self.total_lookups.fetch_add(1, std::sync::atomic::Ordering::Relaxed);

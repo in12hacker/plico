@@ -95,9 +95,9 @@ pub struct AIObjectMeta {
 }
 
 impl AIObjectMeta {
-    /// Default tenant ID for backward compatibility.
+    /// Default tenant ID when no tenant is specified.
     pub fn default_tenant() -> String {
-        "default".to_string()
+        crate::DEFAULT_TENANT.to_string()
     }
 
     /// Create a text metadata block.

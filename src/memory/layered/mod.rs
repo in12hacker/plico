@@ -181,9 +181,9 @@ pub struct KnowledgePiece {
 }
 
 impl MemoryEntry {
-    /// Default tenant ID used when no tenant is specified.
+    /// Default tenant ID when no tenant is specified.
     pub fn default_tenant() -> String {
-        "default".to_string()
+        crate::DEFAULT_TENANT.to_string()
     }
 
     /// Create a new ephemeral memory entry.

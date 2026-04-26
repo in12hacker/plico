@@ -3,7 +3,6 @@
 //! Registers all kernel capabilities as discoverable tools ("Everything is a Tool")
 //! and dispatches tool calls to the appropriate kernel methods.
 
-use crate::fs::{KGNodeType, KGEdgeType};
 use crate::tool::{ToolDescriptor, ToolResult};
 
 use super::AIKernel;
@@ -189,8 +188,6 @@ impl AIKernel {
             description: "Check if an agent has permission for a specific action".into(),
             schema: json!({"type":"object","properties":{"agent_id":{"type":"string"},"action":{"type":"string"}},"required":["agent_id","action"]}),
         });
-
-        // Procedural memory
         self.tool_registry.register(ToolDescriptor {
             name: "memory.store_procedure".into(),
             description: "Store a learned procedure (workflow/skill) in procedural memory (L3)".into(),
@@ -208,7 +205,6 @@ impl AIKernel {
     /// Enforces agent tool allowlist: if the agent has a non-empty `allowed_tools`
     /// list, only those tools can be called. Returns error for blocked/unknown tools.
     pub fn execute_tool(&self, name: &str, params: &serde_json::Value, agent_id: &str) -> ToolResult {
-        // F-1 Hook哨兵: PreToolCall interception
         let ctx = crate::kernel::hook::HookContext::new(agent_id, name, params.clone());
         if let crate::kernel::hook::HookResult::Block { reason } =
             self.hook_registry.run_hooks(crate::kernel::hook::HookPoint::PreToolCall, &ctx)
@@ -218,7 +214,6 @@ impl AIKernel {
 
         let result = self.execute_tool_impl(name, params, agent_id);
 
-        // F-1 Hook哨兵: PostToolCall interception
         let mut post_ctx = ctx;
         post_ctx.params = serde_json::to_value(&result).unwrap_or(params.clone());
         self.hook_registry.run_hooks(crate::kernel::hook::HookPoint::PostToolCall, &post_ctx);
@@ -226,11 +221,8 @@ impl AIKernel {
         result
     }
 
-    /// Internal tool dispatch — all built-in tool match arms live here.
-    /// This is wrapped by execute_tool() which adds PreToolCall/PostToolCall hooks.
+    /// Internal tool dispatch — routes to category-specific handler modules.
     fn execute_tool_impl(&self, name: &str, params: &serde_json::Value, agent_id: &str) -> ToolResult {
-        use serde_json::json;
-
         let aid = crate::scheduler::AgentId(agent_id.to_string());
         if let Some(resources) = self.scheduler.get_resources(&aid) {
             if !resources.allowed_tools.is_empty()
@@ -256,524 +248,17 @@ impl AIKernel {
             return handler.execute(params, agent_id);
         }
 
-        let result = match name {
-            "cas.create" => {
-                let content = params.get("content").and_then(|v| v.as_str()).unwrap_or("");
-                let tags: Vec<String> = params.get("tags")
-                    .and_then(|v| v.as_array())
-                    .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
-                    .unwrap_or_default();
-                let intent = params.get("intent").and_then(|v| v.as_str()).map(String::from);
-                match self.semantic_create(content.as_bytes().to_vec(), tags, agent_id, intent) {
-                    Ok(cid) => ToolResult::ok(json!({"cid": cid})),
-                    Err(e) => ToolResult::error(e.to_string()),
-                }
-            }
-            "cas.read" => {
-                let cid = params.get("cid").and_then(|v| v.as_str()).unwrap_or("");
-                match self.get_object(cid, agent_id, "default") {
-                    Ok(obj) => ToolResult::ok(json!({
-                        "cid": obj.cid,
-                        "data": String::from_utf8_lossy(&obj.data),
-                        "tags": obj.meta.tags,
-                        "content_type": obj.meta.content_type,
-                    })),
-                    Err(e) => ToolResult::error(e.to_string()),
-                }
-            }
-            "cas.search" => {
-                let query = params.get("query").and_then(|v| v.as_str()).unwrap_or("");
-                let limit = params.get("limit").and_then(|v| v.as_u64()).unwrap_or(10) as usize;
-                let require_tags: Vec<String> = params.get("require_tags")
-                    .and_then(|v| v.as_array())
-                    .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
-                    .unwrap_or_default();
-                let exclude_tags: Vec<String> = params.get("exclude_tags")
-                    .and_then(|v| v.as_array())
-                    .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
-                    .unwrap_or_default();
-                let since = params.get("since").and_then(|v| v.as_i64());
-                let until = params.get("until").and_then(|v| v.as_i64());
-                let mut results = match self.semantic_search_with_time(
-                    query, agent_id, "default", limit * 2, require_tags, exclude_tags, since, until,
-                ) {
-                    Ok(r) => r,
-                    Err(e) => return ToolResult::error(e.to_string()),
-                };
-                // Deduplicate by CID
-                let mut seen = std::collections::HashSet::new();
-                results.retain(|r| seen.insert(r.cid.clone()));
-                // Apply limit after deduplication
-                results.truncate(limit);
-                let dto: Vec<serde_json::Value> = results.into_iter().map(|r| json!({
-                    "cid": r.cid, "relevance": r.relevance, "tags": r.meta.tags,
-                })).collect();
-                ToolResult::ok(json!({"results": dto}))
-            }
-            "cas.update" => {
-                let cid = params.get("cid").and_then(|v| v.as_str()).unwrap_or("");
-                let content = params.get("content").and_then(|v| v.as_str()).unwrap_or("");
-                let new_tags: Option<Vec<String>> = params.get("new_tags")
-                    .and_then(|v| v.as_array())
-                    .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect());
-                match self.semantic_update(cid, content.as_bytes().to_vec(), new_tags, agent_id, "default") {
-                    Ok(new_cid) => ToolResult::ok(json!({"cid": new_cid})),
-                    Err(e) => ToolResult::error(e.to_string()),
-                }
-            }
-            "cas.delete" => {
-                let cid = params.get("cid").and_then(|v| v.as_str()).unwrap_or("");
-                match self.semantic_delete(cid, agent_id, "default") {
-                    Ok(()) => ToolResult::ok(json!({"deleted": cid})),
-                    Err(e) => ToolResult::error(e.to_string()),
-                }
-            }
-            "memory.store" => {
-                // F-3/F-8: Route through kernel tier methods for proper persistence
-                let content = params.get("content").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                let tier = params.get("tier").and_then(|v| v.as_str()).unwrap_or("working");
-                let tags: Vec<String> = params.get("tags")
-                    .and_then(|v| v.as_array())
-                    .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
-                    .unwrap_or_default();
-                let importance = params.get("importance").and_then(|v| v.as_u64()).unwrap_or(50) as u8;
-
-                match tier {
-                    "working" => {
-                        match self.remember_working(agent_id, "default", content, tags) {
-                            Ok(()) => ToolResult::ok(json!({"id": "", "tier": "working"})),
-                            Err(e) => ToolResult::error(e.to_string()),
-                        }
-                    }
-                    "long-term" => {
-                        match self.remember_long_term(agent_id, "default", content, tags.clone(), importance) {
-                            Ok(id) => {
-                                self.link_memory_to_kg(&id, agent_id, "default", &tags);
-                                ToolResult::ok(json!({"id": id, "tier": "long-term"}))
-                            }
-                            Err(e) => ToolResult::error(e.to_string()),
-                        }
-                    }
-                    "procedural" => {
-                        let steps = vec![crate::memory::layered::ProcedureStep {
-                            step_number: 0,
-                            description: content.clone(),
-                            action: content.clone(),
-                            expected_outcome: String::new(),
-                        }];
-                        match self.remember_procedural(agent_id, "default", "tool-procedure".into(), content, steps, "tool".into(), tags.clone()) {
-                            Ok(id) => {
-                                self.link_memory_to_kg(&id, agent_id, "default", &tags);
-                                ToolResult::ok(json!({"id": id, "tier": "procedural"}))
-                            }
-                            Err(e) => ToolResult::error(e.to_string()),
-                        }
-                    }
-                    _ => {
-                        // Ephemeral: support TTL via direct entry creation
-                        let ttl_ms = params.get("ttl_ms").and_then(|v| v.as_u64());
-                        let entry_id = uuid::Uuid::new_v4().to_string();
-                        let now = crate::memory::layered::now_ms();
-                        let entry = crate::memory::MemoryEntry {
-                            id: entry_id.clone(),
-                            agent_id: agent_id.to_string(),
-                            tenant_id: "default".to_string(),
-                            tier: crate::memory::MemoryTier::Ephemeral,
-                            content: crate::memory::MemoryContent::Text(content),
-                            importance,
-                            access_count: 0,
-                            last_accessed: now,
-                            created_at: now,
-                            tags: tags.clone(),
-                            embedding: None,
-                            ttl_ms,
-                            original_ttl_ms: ttl_ms,
-                            scope: crate::memory::MemoryScope::Private,
-                        };
-                        let quota = self.scheduler.get_resources(&aid)
-                            .map(|r| r.memory_quota)
-                            .unwrap_or(0);
-                        match self.memory.store_checked(entry, quota) {
-                            Ok(()) => {
-                                self.persist_memories();
-                                ToolResult::ok(json!({"id": entry_id, "tier": "ephemeral"}))
-                            }
-                            Err(e) => ToolResult::error(e.to_string()),
-                        }
-                    }
-                }
-            }
-            "memory.recall" => {
-                // F-3: Allow agent_id override from params (name or UUID)
-                let param_agent_id = params.get("agent_id").and_then(|v| v.as_str());
-                let effective_agent = if let Some(name_or_id) = param_agent_id {
-                    match self.resolve_agent(name_or_id) {
-                        Some(id) => id,
-                        None => {
-                            let available: Vec<String> = self.scheduler.list_agents().into_iter().map(|h| h.name).collect();
-                            return ToolResult::error(format!(
-                                "Contract violation: agent '{}' not found. Available agents: {:?}",
-                                name_or_id, available
-                            ));
-                        }
-                    }
-                } else {
-                    agent_id.to_string()
-                };
-                let tier_filter = params.get("tier").and_then(|v| v.as_str());
-                let memories = self.recall(&effective_agent, "default");
-                // F-2: Filter by tier if specified
-                let filtered: Vec<_> = match tier_filter {
-Some(t) => {
-                        let tier = match t.to_lowercase().replace(['-', '_'], "").as_str() {
-                            "ephemeral" | "l0" | "ephem" => crate::memory::MemoryTier::Ephemeral,
-                            "working" | "l1" | "wk" => crate::memory::MemoryTier::Working,
-                            "longterm" | "l2" | "lt" | "long" => crate::memory::MemoryTier::LongTerm,
-                            "procedural" | "l3" | "proc" => crate::memory::MemoryTier::Procedural,
-                            _ => return ToolResult::error(format!("Unknown tier: {}", t)),
-                        };
-                        memories.into_iter().filter(|m| m.tier == tier).collect()
-                    }
-                    None => memories,
-                };
-                let dto: Vec<serde_json::Value> = filtered.into_iter().map(|m| json!({
-                    "id": m.id,
-                    "tier": m.tier.name(),
-                    "content": m.content.display(),
-                    "importance": m.importance,
-                    "access_count": m.access_count,
-                    "tags": m.tags,
-                })).collect();
-                ToolResult::ok(json!({"memories": dto}))
-            }
-            "memory.forget" => {
-                self.forget_ephemeral(agent_id);
-                ToolResult::ok(json!({"forgotten": true}))
-            }
-            "kg.add_node" => {
-                let label = params.get("label").and_then(|v| v.as_str()).unwrap_or("");
-                let type_str = params.get("type").and_then(|v| v.as_str()).unwrap_or("entity");
-                let node_type = match type_str {
-                    "fact" => KGNodeType::Fact,
-                    "document" => KGNodeType::Document,
-                    "agent" => KGNodeType::Agent,
-                    "memory" => KGNodeType::Memory,
-                    _ => KGNodeType::Entity,
-                };
-                let props = params.get("properties").cloned().unwrap_or(serde_json::Value::Null);
-                match self.kg_add_node(label, node_type, props, agent_id, "default") {
-                    Ok(id) => ToolResult::ok(json!({"node_id": id})),
-                    Err(e) => ToolResult::error(e.to_string()),
-                }
-            }
-            "kg.add_edge" => {
-                let src = params.get("src").and_then(|v| v.as_str()).unwrap_or("");
-                let dst = params.get("dst").and_then(|v| v.as_str()).unwrap_or("");
-                let type_str = params.get("type").and_then(|v| v.as_str()).unwrap_or("related_to");
-                let edge_type = match type_str {
-                    "associates_with" => KGEdgeType::AssociatesWith,
-                    "mentions" => KGEdgeType::Mentions,
-                    "follows" => KGEdgeType::Follows,
-                    "causes" => KGEdgeType::Causes,
-                    "part_of" => KGEdgeType::PartOf,
-                    "similar_to" => KGEdgeType::SimilarTo,
-                    _ => KGEdgeType::RelatedTo,
-                };
-                let weight = params.get("weight").and_then(|v| v.as_f64()).map(|w| w as f32);
-                match self.kg_add_edge(src, dst, edge_type, weight, agent_id, "default") {
-                    Ok(()) => ToolResult::ok(json!({"created": true})),
-                    Err(e) => ToolResult::error(e.to_string()),
-                }
-            }
-            "kg.explore" => {
-                let cid = params.get("cid").and_then(|v| v.as_str()).unwrap_or("");
-                let edge_type = params.get("edge_type").and_then(|v| v.as_str());
-                let depth = params.get("depth").and_then(|v| v.as_u64()).unwrap_or(1) as u8;
-                let raw = self.graph_explore_raw(cid, edge_type, depth.min(3));
-                let neighbors: Vec<serde_json::Value> = raw.into_iter()
-                    .map(|(id, label, ntype, etype, auth)| json!({
-                        "node_id": id, "label": label, "node_type": ntype,
-                        "edge_type": etype, "authority_score": auth,
-                    }))
-                    .collect();
-                ToolResult::ok(json!({"neighbors": neighbors}))
-            }
-            "kg.paths" => {
-                let src = params.get("src").and_then(|v| v.as_str()).unwrap_or("");
-                let dst = params.get("dst").and_then(|v| v.as_str()).unwrap_or("");
-                let depth = params.get("depth").and_then(|v| v.as_u64()).unwrap_or(3) as u8;
-                let paths = self.kg_find_paths(src, dst, depth.min(5));
-                let dto: Vec<Vec<serde_json::Value>> = paths.into_iter()
-                    .map(|p| p.into_iter().map(|n| json!({"id": n.id, "label": n.label})).collect())
-                    .collect();
-                ToolResult::ok(json!({"paths": dto}))
-            }
-            "kg.get_node" => {
-                let node_id = params.get("node_id").and_then(|v| v.as_str()).unwrap_or("");
-                match self.kg_get_node(node_id, agent_id, "default") {
-                    Ok(Some(n)) => ToolResult::ok(json!({
-                        "id": n.id, "label": n.label, "node_type": format!("{:?}", n.node_type),
-                        "properties": n.properties, "agent_id": n.agent_id, "created_at": n.created_at,
-                    })),
-                    Ok(None) => ToolResult::error(format!("node not found: {}", node_id)),
-                    Err(e) => ToolResult::error(e.to_string()),
-                }
-            }
-            "kg.list_edges" => {
-                let node_id = params.get("node_id").and_then(|v| v.as_str());
-                match self.kg_list_edges(agent_id, "default", node_id) {
-                    Ok(edges) => {
-                        let dto: Vec<serde_json::Value> = edges.into_iter().map(|e| json!({
-                            "src": e.src, "dst": e.dst, "edge_type": format!("{:?}", e.edge_type),
-                            "weight": e.weight, "created_at": e.created_at,
-                        })).collect();
-                        ToolResult::ok(json!({"edges": dto}))
-                    }
-                    Err(e) => ToolResult::error(e.to_string()),
-                }
-            }
-            "kg.remove_node" => {
-                let node_id = params.get("node_id").and_then(|v| v.as_str()).unwrap_or("");
-                match self.kg_remove_node(node_id, agent_id, "default") {
-                    Ok(()) => ToolResult::ok(json!({"removed": node_id})),
-                    Err(e) => ToolResult::error(e.to_string()),
-                }
-            }
-            "kg.remove_edge" => {
-                let src = params.get("src").and_then(|v| v.as_str()).unwrap_or("");
-                let dst = params.get("dst").and_then(|v| v.as_str()).unwrap_or("");
-                let edge_type = params.get("type").and_then(|v| v.as_str()).map(|s| match s {
-                    "associates_with" => KGEdgeType::AssociatesWith,
-                    "mentions" => KGEdgeType::Mentions,
-                    "follows" => KGEdgeType::Follows,
-                    "causes" => KGEdgeType::Causes,
-                    "part_of" => KGEdgeType::PartOf,
-                    "similar_to" => KGEdgeType::SimilarTo,
-                    _ => KGEdgeType::RelatedTo,
-                });
-                match self.kg_remove_edge(src, dst, edge_type, agent_id, "default") {
-                    Ok(()) => ToolResult::ok(json!({"removed": true})),
-                    Err(e) => ToolResult::error(e.to_string()),
-                }
-            }
-            "kg.update_node" => {
-                let node_id = params.get("node_id").and_then(|v| v.as_str()).unwrap_or("");
-                let label = params.get("label").and_then(|v| v.as_str());
-                let properties = params.get("properties").cloned();
-                match self.kg_update_node(node_id, label, properties, agent_id, "default") {
-                    Ok(()) => ToolResult::ok(json!({"updated": node_id})),
-                    Err(e) => ToolResult::error(e.to_string()),
-                }
-            }
-            "agent.complete" => {
-                let target = params.get("agent_id").and_then(|v| v.as_str()).unwrap_or(agent_id);
-                match self.agent_complete(target) {
-                    Ok(()) => ToolResult::ok(json!({"completed": target})),
-                    Err(e) => ToolResult::error(e.to_string()),
-                }
-            }
-            "agent.fail" => {
-                let target = params.get("agent_id").and_then(|v| v.as_str()).unwrap_or(agent_id);
-                let reason = params.get("reason").and_then(|v| v.as_str()).unwrap_or("unspecified");
-                match self.agent_fail(target, reason) {
-                    Ok(()) => ToolResult::ok(json!({"failed": target, "reason": reason})),
-                    Err(e) => ToolResult::error(e.to_string()),
-                }
-            }
-            "agent.register" => {
-                let name = params.get("name").and_then(|v| v.as_str()).unwrap_or("unnamed");
-                let id = self.register_agent(name.to_string());
-                ToolResult::ok(json!({"agent_id": id}))
-            }
-            "agent.status" => {
-                let target = params.get("agent_id").and_then(|v| v.as_str()).unwrap_or(agent_id);
-                match self.agent_status(target) {
-                    Some((_id, state, pending)) => ToolResult::ok(json!({
-                        "agent_id": target, "state": state, "pending_intents": pending,
-                    })),
-                    None => ToolResult::error(format!("agent not found: {}", target)),
-                }
-            }
-            "agent.suspend" => {
-                let target = params.get("agent_id").and_then(|v| v.as_str()).unwrap_or(agent_id);
-                match self.agent_suspend(target) {
-                    Ok(()) => ToolResult::ok(json!({"suspended": target})),
-                    Err(e) => ToolResult::error(e.to_string()),
-                }
-            }
-            "agent.resume" => {
-                let target = params.get("agent_id").and_then(|v| v.as_str()).unwrap_or(agent_id);
-                match self.agent_resume(target) {
-                    Ok(()) => ToolResult::ok(json!({"resumed": target})),
-                    Err(e) => ToolResult::error(e.to_string()),
-                }
-            }
-            "agent.terminate" => {
-                let target = params.get("agent_id").and_then(|v| v.as_str()).unwrap_or(agent_id);
-                match self.agent_terminate(target) {
-                    Ok(()) => ToolResult::ok(json!({"terminated": target})),
-                    Err(e) => ToolResult::error(e.to_string()),
-                }
-            }
-            "tools.list" => {
-                let tools = self.tool_registry.list();
-                ToolResult::ok(serde_json::to_value(&tools).unwrap_or_default())
-            }
-            "tools.describe" => {
-                let tool_name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
-                match self.tool_registry.get(tool_name) {
-                    Some(desc) => ToolResult::ok(serde_json::to_value(&desc).unwrap_or_default()),
-                    None => ToolResult::error(format!("tool not found: {}", tool_name)),
-                }
-            }
-            "agent.set_resources" => {
-                let target = params.get("agent_id").and_then(|v| v.as_str()).unwrap_or(agent_id);
-                let mq = params.get("memory_quota").and_then(|v| v.as_u64());
-                let cq = params.get("cpu_time_quota").and_then(|v| v.as_u64());
-                let at: Option<Vec<String>> = params.get("allowed_tools")
-                    .and_then(|v| v.as_array())
-                    .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect());
-                match self.agent_set_resources(target, mq, cq, at) {
-                    Ok(()) => ToolResult::ok(json!({"updated": target})),
-                    Err(e) => ToolResult::error(e.to_string()),
-                }
-            }
-            "message.send" => {
-                let to = params.get("to").and_then(|v| v.as_str()).unwrap_or("");
-                let payload = params.get("payload").cloned().unwrap_or(serde_json::Value::Null);
-                match self.send_message(agent_id, to, payload) {
-                    Ok(id) => ToolResult::ok(json!({"message_id": id})),
-                    Err(e) => ToolResult::error(e.to_string()),
-                }
-            }
-            "message.read" => {
-                let unread = params.get("unread_only").and_then(|v| v.as_bool()).unwrap_or(false);
-                let msgs = self.read_messages(agent_id, unread);
-                ToolResult::ok(serde_json::to_value(&msgs).unwrap_or_default())
-            }
-            "message.ack" => {
-                let msg_id = params.get("message_id").and_then(|v| v.as_str()).unwrap_or("");
-                if self.ack_message(agent_id, msg_id) {
-                    ToolResult::ok(json!({"acked": msg_id}))
-                } else {
-                    ToolResult::error(format!("message not found: {}", msg_id))
-                }
-            }
-            "context.load" => {
-                let cid = params.get("cid").and_then(|v| v.as_str()).unwrap_or("");
-                let layer_str = params.get("layer").and_then(|v| v.as_str()).unwrap_or("L2");
-                let layer = match crate::fs::ContextLayer::parse_layer(layer_str) {
-                    Some(l) => l,
-                    None => return ToolResult::error(format!("Invalid layer '{}'. Use L0, L1, or L2.", layer_str)),
-                };
-                match self.context_load(cid, layer, agent_id) {
-                    Ok(loaded) => ToolResult::ok(json!({
-                        "cid": loaded.cid,
-                        "layer": loaded.layer.name(),
-                        "content": loaded.content,
-                        "tokens_estimate": loaded.tokens_estimate,
-                    })),
-                    Err(e) => ToolResult::error(e.to_string()),
-                }
-            }
-            "permission.grant" => {
-                let target = params.get("agent_id").and_then(|v| v.as_str()).unwrap_or("");
-                let action_str = params.get("action").and_then(|v| v.as_str()).unwrap_or("");
-                let scope = params.get("scope").and_then(|v| v.as_str()).map(String::from);
-                let expires_at = params.get("expires_at").and_then(|v| v.as_u64());
-                match crate::api::permission::PermissionGuard::parse_action(action_str) {
-                    Some(action) => {
-                        self.permission_grant(target, action, scope, expires_at);
-                        ToolResult::ok(json!({"granted": true, "agent_id": target, "action": action_str}))
-                    }
-                    None => ToolResult::error(format!("Unknown action: {}", action_str)),
-                }
-            }
-            "permission.revoke" => {
-                let target = params.get("agent_id").and_then(|v| v.as_str()).unwrap_or("");
-                let action_str = params.get("action").and_then(|v| v.as_str()).unwrap_or("");
-                match crate::api::permission::PermissionGuard::parse_action(action_str) {
-                    Some(action) => {
-                        self.permission_revoke(target, action);
-                        ToolResult::ok(json!({"revoked": true, "agent_id": target, "action": action_str}))
-                    }
-                    None => ToolResult::error(format!("Unknown action: {}", action_str)),
-                }
-            }
-            "permission.list" => {
-                let target = params.get("agent_id").and_then(|v| v.as_str()).unwrap_or(agent_id);
-                let grants = self.permission_list(target);
-                let dto: Vec<serde_json::Value> = grants.into_iter().map(|g| json!({
-                    "action": format!("{:?}", g.action),
-                    "scope": g.scope,
-                    "expires_at": g.expires_at,
-                })).collect();
-                ToolResult::ok(json!({"agent_id": target, "grants": dto}))
-            }
-            "permission.check" => {
-                let target = params.get("agent_id").and_then(|v| v.as_str()).unwrap_or(agent_id);
-                let action_str = params.get("action").and_then(|v| v.as_str()).unwrap_or("");
-                match crate::api::permission::PermissionGuard::parse_action(action_str) {
-                    Some(action) => {
-                        let allowed = self.permission_check(target, action).is_ok();
-                        ToolResult::ok(json!({"agent_id": target, "action": action_str, "allowed": allowed}))
-                    }
-                    None => ToolResult::error(format!("Unknown action: {}", action_str)),
-                }
-            }
-            "memory.store_procedure" => {
-                let name = params.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                let description = params.get("description").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                let learned_from = params.get("learned_from").and_then(|v| v.as_str()).unwrap_or("manual").to_string();
-                let tags: Vec<String> = params.get("tags")
-                    .and_then(|v| v.as_array())
-                    .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
-                    .unwrap_or_default();
-                let steps: Vec<crate::memory::layered::ProcedureStep> = params.get("steps")
-                    .and_then(|v| v.as_array())
-                    .map(|arr| arr.iter().enumerate().map(|(i, s)| {
-                        crate::memory::layered::ProcedureStep {
-                            step_number: (i + 1) as u32,
-                            description: s.get("description").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                            action: s.get("action").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                            expected_outcome: s.get("expected_outcome").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                        }
-                    }).collect())
-                    .unwrap_or_default();
-                match self.remember_procedural(agent_id, "default", name, description, steps, learned_from, tags) {
-                    Ok(entry_id) => ToolResult::ok(json!({"entry_id": entry_id, "stored": true})),
-                    Err(e) => ToolResult::error(e),
-                }
-            }
-            "memory.recall_procedure" => {
-                let name = params.get("name").and_then(|v| v.as_str());
-                let entries = self.recall_procedural(agent_id, "default", name);
-                let data: Vec<serde_json::Value> = entries.iter().map(|e| {
-                    match &e.content {
-                        crate::memory::MemoryContent::Procedure(p) => {
-                            json!({
-                                "id": e.id,
-                                "name": p.name,
-                                "description": p.description,
-                                "steps": p.steps.iter().map(|s| json!({
-                                    "step_number": s.step_number,
-                                    "description": s.description,
-                                    "action": s.action,
-                                    "expected_outcome": s.expected_outcome,
-                                })).collect::<Vec<_>>(),
-                                "learned_from": p.learned_from,
-                                "tags": e.tags,
-                                "importance": e.importance,
-                            })
-                        }
-                        _ => json!({"id": e.id, "content": e.content.display(), "tags": e.tags, "importance": e.importance})
-                    }
-                }).collect();
-                ToolResult::ok(json!({"procedures": data, "count": data.len()}))
-            }
+        match name {
+            n if n.starts_with("cas.") => super::tools::cas::handle(self, name, params, agent_id),
+            n if n.starts_with("memory.") => super::tools::memory::handle(self, name, params, agent_id),
+            n if n.starts_with("kg.") => super::tools::graph::handle(self, name, params, agent_id),
+            n if n.starts_with("agent.") => super::tools::agent::handle(self, name, params, agent_id),
+            n if n.starts_with("tools.") => super::tools::system::handle(self, name, params, agent_id),
+            n if n.starts_with("message.") => super::tools::messaging::handle(self, name, params, agent_id),
+            n if n.starts_with("context.") => super::tools::system::handle(self, name, params, agent_id),
+            n if n.starts_with("permission.") => super::tools::permission::handle(self, name, params, agent_id),
             _ => ToolResult::error(format!("unknown tool: {}", name)),
-        };
-        result
+        }
     }
 
     /// Number of registered tools.
@@ -811,10 +296,6 @@ mod tests {
         let result = dispatch(&kernel, "cas.create",
             serde_json::json!({"content": "", "tags": []}),
             "kernel");
-        // F-2: Kernel layer now rejects empty content (effect contract precondition)
-        assert!(!result.success || result.output["cid"].is_string(),
-            "cas.create with empty content should fail or return valid CID");
-        // When kernel rejects, error field is set
         if !result.success {
             assert!(result.error.is_some(), "error should be set on failure");
         }
@@ -823,7 +304,6 @@ mod tests {
     #[test]
     fn test_cas_read_existing() {
         let (kernel, _dir) = make_kernel();
-        // First create an object
         let create = dispatch(&kernel, "cas.create",
             serde_json::json!({"content": "read me", "tags": ["test"]}),
             "kernel");
@@ -990,9 +470,8 @@ mod tests {
         assert!(!result.success, "unknown tool should return error");
     }
 
-    // ─── F-1 Hook哨兵 Integration Tests ───────────────────────────────────────
+    // ─── Hook Integration Tests ───────────────────────────────────────────────
 
-    /// Handler that always blocks.
     struct BlockHook;
     impl crate::kernel::hook::HookHandler for BlockHook {
         fn handle(&self, _point: crate::kernel::hook::HookPoint, _ctx: &crate::kernel::hook::HookContext) -> crate::kernel::hook::HookResult {
@@ -1000,7 +479,6 @@ mod tests {
         }
     }
 
-    /// Handler that always continues.
     struct NoOpTestHook;
     impl crate::kernel::hook::HookHandler for NoOpTestHook {
         fn handle(&self, _point: crate::kernel::hook::HookPoint, _ctx: &crate::kernel::hook::HookContext) -> crate::kernel::hook::HookResult {
@@ -1008,7 +486,6 @@ mod tests {
         }
     }
 
-    /// Handler that records call info for PostToolCall verification.
     struct RecordingHook {
         calls: std::sync::Arc<std::sync::Mutex<Vec<(crate::kernel::hook::HookPoint, String)>>>,
     }
@@ -1027,7 +504,6 @@ mod tests {
     #[test]
     fn test_hook_registry_block_prevents_tool_call() {
         let (kernel, _dir) = make_kernel();
-        // Register a PreToolCall hook that blocks cas.delete
         kernel.hook_registry.register(
             crate::kernel::hook::HookPoint::PreToolCall,
             0,
@@ -1038,7 +514,6 @@ mod tests {
             serde_json::json!({"cid": "nonexistent"}),
             "kernel");
 
-        // Tool call should be blocked by the hook
         assert!(!result.success, "blocked tool should fail");
         let err_msg = result.error.unwrap_or_default();
         assert!(err_msg.contains("blocked by hook"),
@@ -1058,7 +533,6 @@ mod tests {
             serde_json::json!({"content": "hook test", "tags": ["test"]}),
             "kernel");
 
-        // NoOp hook allows execution
         assert!(result.success, "noop hook should allow tool call: {:?}", result.error);
     }
 
@@ -1088,7 +562,6 @@ mod tests {
     #[test]
     fn test_multiple_hooks_first_block_wins_in_execute() {
         let (kernel, _dir) = make_kernel();
-        // Register two hooks at different priorities
         kernel.hook_registry.register(
             crate::kernel::hook::HookPoint::PreToolCall,
             5,
@@ -1097,7 +570,7 @@ mod tests {
         kernel.hook_registry.register(
             crate::kernel::hook::HookPoint::PreToolCall,
             0,
-            std::sync::Arc::new(BlockHook),  // higher priority (lower number), blocks first
+            std::sync::Arc::new(BlockHook),
         );
 
         let result = dispatch(&kernel, "cas.read",
@@ -1111,7 +584,6 @@ mod tests {
     #[test]
     fn test_hook_registry_empty_passes_through() {
         let (kernel, _dir) = make_kernel();
-        // No hooks registered — should work normally
         let result = dispatch(&kernel, "cas.create",
             serde_json::json!({"content": "no hooks", "tags": ["test"]}),
             "kernel");

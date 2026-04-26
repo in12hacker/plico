@@ -457,11 +457,13 @@ fn test_shared_procedural_memory_cross_agent() {
     kernel.remember_procedural_scoped(
         &agent_a,
         "default",
-        "auth debugging procedure".to_string(),
-        "Step-by-step procedure for debugging auth module issues".to_string(),
-        proc_steps,
-        "debugging session".to_string(),
-        vec!["auth".to_string(), "debug".to_string(), "procedure".to_string()],
+        plico::kernel::ops::memory::ProceduralEntry {
+            name: "auth debugging procedure".to_string(),
+            description: "Step-by-step procedure for debugging auth module issues".to_string(),
+            steps: proc_steps,
+            learned_from: "debugging session".to_string(),
+            tags: vec!["auth".to_string(), "debug".to_string(), "procedure".to_string()],
+        },
         MemoryScope::Shared,
     ).expect("Agent A should store shared procedural memory");
 

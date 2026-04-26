@@ -267,11 +267,13 @@ fn test_kernel_remember_procedural_tier() {
     }];
     kernel.remember_procedural(
         "agent1", "default",
-        "test-procedure".to_string(),
-        "A test procedure".to_string(),
-        steps,
-        "unit-test".to_string(),
-        vec!["test".to_string()],
+        plico::kernel::ops::memory::ProceduralEntry {
+            name: "test-procedure".to_string(),
+            description: "A test procedure".to_string(),
+            steps,
+            learned_from: "unit-test".to_string(),
+            tags: vec!["test".to_string()],
+        },
     ).unwrap();
 
     let entries = kernel.recall_procedural("agent1", "default", Some("test-procedure"));
@@ -287,12 +289,16 @@ fn test_kernel_recall_procedural_no_filter() {
     let steps1 = vec![plico::memory::layered::ProcedureStep {
         step_number: 0, description: "proc1".to_string(), action: "action1".to_string(), expected_outcome: String::new(),
     }];
-    kernel.remember_procedural("agent1", "default", "proc1".to_string(), "description1".to_string(), steps1, "test".to_string(), vec![]).unwrap();
+    kernel.remember_procedural("agent1", "default", plico::kernel::ops::memory::ProceduralEntry {
+        name: "proc1".to_string(), description: "description1".to_string(), steps: steps1, learned_from: "test".to_string(), tags: vec![],
+    }).unwrap();
 
     let steps2 = vec![plico::memory::layered::ProcedureStep {
         step_number: 0, description: "proc2".to_string(), action: "action2".to_string(), expected_outcome: String::new(),
     }];
-    kernel.remember_procedural("agent1", "default", "proc2".to_string(), "description2".to_string(), steps2, "test".to_string(), vec![]).unwrap();
+    kernel.remember_procedural("agent1", "default", plico::kernel::ops::memory::ProceduralEntry {
+        name: "proc2".to_string(), description: "description2".to_string(), steps: steps2, learned_from: "test".to_string(), tags: vec![],
+    }).unwrap();
 
     // recall_procedural with None returns ALL procedural memories
     let all = kernel.recall_procedural("agent1", "default", None);
@@ -2193,16 +2199,18 @@ fn test_shared_procedural_memory_cross_agent() {
     kernel.remember_procedural_scoped(
         &agent_a,
         "default",
-        "deploy-workflow".to_string(),
-        "Standard deploy procedure".to_string(),
-        vec![plico::memory::layered::ProcedureStep {
-            step_number: 1,
-            description: "Run tests".to_string(),
-            action: "cargo test".to_string(),
-            expected_outcome: "pass".to_string(),
-        }],
-        "learned from experience".to_string(),
-        vec!["deploy".into(), "verified".into()],
+        plico::kernel::ops::memory::ProceduralEntry {
+            name: "deploy-workflow".to_string(),
+            description: "Standard deploy procedure".to_string(),
+            steps: vec![plico::memory::layered::ProcedureStep {
+                step_number: 1,
+                description: "Run tests".to_string(),
+                action: "cargo test".to_string(),
+                expected_outcome: "pass".to_string(),
+            }],
+            learned_from: "learned from experience".to_string(),
+            tags: vec!["deploy".into(), "verified".into()],
+        },
         MemoryScope::Shared,
     ).unwrap();
 
@@ -2302,11 +2310,13 @@ fn test_cross_agent_workflow_reuse_via_shared_scope() {
         kernel.remember_procedural_scoped(
             &agent_a,
             "default",
-            proc.name.clone(),
-            proc.description.clone(),
-            proc.steps.clone(),
-            proc.learned_from.clone(),
-            vec!["auto-learned".to_string(), "verified".to_string()],
+            plico::kernel::ops::memory::ProceduralEntry {
+                name: proc.name.clone(),
+                description: proc.description.clone(),
+                steps: proc.steps.clone(),
+                learned_from: proc.learned_from.clone(),
+                tags: vec!["auto-learned".to_string(), "verified".to_string()],
+            },
             MemoryScope::Shared,
         ).unwrap();
     } else {
@@ -2368,11 +2378,13 @@ fn test_shared_procedure_appears_as_tool() {
         kernel.remember_procedural_scoped(
             &agent_a,
             "default",
-            proc.name.clone(),
-            proc.description.clone(),
-            proc.steps.clone(),
-            proc.learned_from.clone(),
-            vec!["auto-learned".into(), "verified".into()],
+            plico::kernel::ops::memory::ProceduralEntry {
+                name: proc.name.clone(),
+                description: proc.description.clone(),
+                steps: proc.steps.clone(),
+                learned_from: proc.learned_from.clone(),
+                tags: vec!["auto-learned".into(), "verified".into()],
+            },
             MemoryScope::Shared,
         ).unwrap();
     }

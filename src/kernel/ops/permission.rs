@@ -36,7 +36,7 @@ impl crate::kernel::AIKernel {
     }
 
     pub fn permission_check(&self, agent_id: &str, action: PermissionAction) -> std::io::Result<()> {
-        let ctx = PermissionContext::new(agent_id.to_string(), "default".to_string());
+        let ctx = PermissionContext::new(agent_id.to_string(), crate::DEFAULT_TENANT.to_string());
         self.permissions.check(&ctx, action)
     }
 }

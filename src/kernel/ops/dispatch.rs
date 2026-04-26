@@ -71,15 +71,15 @@ impl crate::kernel::AIKernel {
                         vec!["execution-failure".to_string(), "dispatch".to_string()]
                     };
 
-                    let _ = kernel.create_event(
-                        &label,
-                        crate::fs::EventType::Work,
-                        Some(crate::memory::layered::now_ms().saturating_sub(result.elapsed_ms)),
-                        Some(crate::memory::layered::now_ms()),
-                        None,
+                    let _ = kernel.create_event(crate::fs::semantic_fs::events::CreateEventParams {
+                        label: &label,
+                        event_type: crate::fs::EventType::Work,
+                        start_time: Some(crate::memory::layered::now_ms().saturating_sub(result.elapsed_ms)),
+                        end_time: Some(crate::memory::layered::now_ms()),
+                        location: None,
                         tags,
                         agent_id,
-                    );
+                    });
 
                     tracing::debug!(
                         intent_id = %result.intent_id.0,

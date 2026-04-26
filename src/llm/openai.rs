@@ -10,7 +10,9 @@ use tokio::runtime::Runtime;
 use super::{LlmProvider, ChatMessage, ChatOptions, LlmError};
 
 pub struct OpenAICompatibleProvider {
-    rt: Arc<Runtime>,
+    /// Only created when no Tokio runtime is active (standalone/CLI mode).
+    /// In daemon mode, `chat()` uses `block_in_place` on the existing runtime.
+    rt: Option<Arc<Runtime>>,
     client: reqwest::Client,
     base_url: String,
     model: String,
@@ -19,16 +21,21 @@ pub struct OpenAICompatibleProvider {
 
 impl OpenAICompatibleProvider {
     pub fn new(base_url: &str, model: &str, api_key: Option<String>) -> Result<Self, LlmError> {
-        let rt = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(1)
-            .enable_all()
-            .build()?;
+        let rt = match tokio::runtime::Handle::try_current() {
+            Ok(_) => None,
+            Err(_) => {
+                Some(Arc::new(tokio::runtime::Builder::new_multi_thread()
+                    .worker_threads(1)
+                    .enable_all()
+                    .build()?))
+            }
+        };
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(120))
             .build()
             .map_err(LlmError::Http)?;
         Ok(Self {
-            rt: Arc::new(rt),
+            rt,
             client,
             base_url: base_url.trim_end_matches('/').to_string(),
             model: model.to_string(),
@@ -140,12 +147,13 @@ impl LlmProvider for OpenAICompatibleProvider {
     fn chat(&self, messages: &[ChatMessage], options: &ChatOptions) -> Result<(String, u32, u32), LlmError> {
         match tokio::runtime::Handle::try_current() {
             Ok(handle) => {
-                // Already inside a Tokio runtime — drive our async method from here.
-                handle.block_on(self.chat_async(messages, options))
+                tokio::task::block_in_place(|| {
+                    handle.block_on(self.chat_async(messages, options))
+                })
             }
-            Err(_) => {
-                self.rt.block_on(self.chat_async(messages, options))
-            }
+            Err(_) => self.rt.as_ref()
+                .expect("rt must exist when no Tokio runtime is active")
+                .block_on(self.chat_async(messages, options)),
         }
     }
 
@@ -157,7 +165,7 @@ impl LlmProvider for OpenAICompatibleProvider {
 impl Clone for OpenAICompatibleProvider {
     fn clone(&self) -> Self {
         Self {
-            rt: Arc::clone(&self.rt),
+            rt: self.rt.as_ref().map(Arc::clone),
             client: self.client.clone(),
             base_url: self.base_url.clone(),
             model: self.model.clone(),
@@ -226,13 +234,16 @@ mod tests {
 
     // ─── Integration tests against local llama-server ─────────────────────────
 
-    const LLAMA_SERVER_URL: &str = "http://127.0.0.1:18920/v1";
-    const LLAMA_MODEL: &str = "qwen2.5-0.5b-instruct-q4_k_m.gguf";
+    fn llama_server_url() -> String {
+        std::env::var("LLAMA_TEST_URL").unwrap_or_else(|_| "http://127.0.0.1:18920/v1".to_string())
+    }
+    fn llama_model() -> String {
+        std::env::var("LLAMA_TEST_MODEL").unwrap_or_else(|_| "qwen2.5-0.5b-instruct-q4_k_m.gguf".to_string())
+    }
 
     #[test]
     fn test_openai兼容_provider_llama_server_simple() {
-        // Smoke test: send a single-user message and verify we get a non-empty reply.
-        let provider = OpenAICompatibleProvider::new(LLAMA_SERVER_URL, LLAMA_MODEL, None)
+        let provider = OpenAICompatibleProvider::new(&llama_server_url(), &llama_model(), None)
             .expect("provider should be constructible");
         let msgs = vec![ChatMessage::user("Say hello in 3 words")];
         let opts = ChatOptions { temperature: 0.7, max_tokens: Some(20) };
@@ -245,9 +256,7 @@ mod tests {
 
     #[test]
     fn test_openai兼容_provider_llama_server_system_prompt() {
-        // Verify system prompt is passed (model may not strictly obey, so just check
-        // the reply is non-empty and the API call succeeds).
-        let provider = OpenAICompatibleProvider::new(LLAMA_SERVER_URL, LLAMA_MODEL, None)
+        let provider = OpenAICompatibleProvider::new(&llama_server_url(), &llama_model(), None)
             .expect("provider should be constructible");
         let msgs = vec![
             ChatMessage::system("You are a helpful assistant."),
@@ -263,8 +272,7 @@ mod tests {
 
     #[test]
     fn test_openai兼容_provider_llama_server_multi_turn() {
-        // Two messages: model should consider context from first in second response.
-        let provider = OpenAICompatibleProvider::new(LLAMA_SERVER_URL, LLAMA_MODEL, None)
+        let provider = OpenAICompatibleProvider::new(&llama_server_url(), &llama_model(), None)
             .expect("provider should be constructible");
         let msgs = vec![
             ChatMessage::user("My favorite color is blue."),
@@ -282,8 +290,7 @@ mod tests {
 
     #[test]
     fn test_openai兼容_provider_llama_server_temperature_zero() {
-        // Temperature=0 should produce consistent output for same input.
-        let provider = OpenAICompatibleProvider::new(LLAMA_SERVER_URL, LLAMA_MODEL, None)
+        let provider = OpenAICompatibleProvider::new(&llama_server_url(), &llama_model(), None)
             .expect("provider should be constructible");
         let msgs = vec![ChatMessage::user("What is 1+1?")];
         let opts = ChatOptions { temperature: 0.0, max_tokens: Some(10) };
@@ -299,9 +306,8 @@ mod tests {
 
     #[test]
     fn test_openai兼容_provider_llama_server_model_name() {
-        // Verify model_name() returns the configured model.
-        let provider = OpenAICompatibleProvider::new(LLAMA_SERVER_URL, LLAMA_MODEL, None)
+        let provider = OpenAICompatibleProvider::new(&llama_server_url(), &llama_model(), None)
             .expect("provider should be constructible");
-        assert_eq!(provider.model_name(), LLAMA_MODEL);
+        assert_eq!(provider.model_name(), llama_model());
     }
 }

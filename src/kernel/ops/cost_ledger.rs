@@ -98,10 +98,14 @@ impl TokenCostLedger {
     /// Record an embedding call with estimated token usage.
     ///
     /// Uses character-based estimation: ~4 chars per token (English text).
-    /// For accurate counts, embedding providers should be modified to return actual counts.
+    /// For accurate counts, use `record_embedding_with_tokens` instead.
     pub fn record_embedding(&self, text: &str, model_id: &str, session_id: &str, agent_id: &str) {
-        // Estimate: ~4 characters per token for English text
         let estimated_tokens = (text.len() / 4).max(1) as u32;
+        self.record_embedding_with_tokens(estimated_tokens, model_id, session_id, agent_id);
+    }
+
+    /// Record an embedding call with actual token count from EmbedResult.
+    pub fn record_embedding_with_tokens(&self, tokens: u32, model_id: &str, session_id: &str, agent_id: &str) {
         let entry = CostEntry {
             timestamp_ms: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -110,8 +114,8 @@ impl TokenCostLedger {
             session_id: session_id.to_string(),
             agent_id: agent_id.to_string(),
             operation: CostOperation::EmbeddingCall,
-            input_tokens: estimated_tokens,
-            output_tokens: 0, // Embeddings have no output tokens
+            input_tokens: tokens,
+            output_tokens: 0,
             model_id: model_id.to_string(),
             duration_ms: 0,
         };

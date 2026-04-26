@@ -12,6 +12,15 @@ use crate::kernel::event_bus::KernelEvent;
 use crate::fs::embedding::types::EmbeddingProvider;
 use super::observability::{OpType, OperationTimer};
 
+/// Bundled parameters for storing a procedural memory entry.
+pub struct ProceduralEntry {
+    pub name: String,
+    pub description: String,
+    pub steps: Vec<crate::memory::layered::ProcedureStep>,
+    pub learned_from: String,
+    pub tags: Vec<String>,
+}
+
 impl crate::kernel::AIKernel {
     fn agent_memory_quota(&self, agent_id: &str) -> u64 {
         self.scheduler
@@ -360,13 +369,9 @@ impl crate::kernel::AIKernel {
         &self,
         agent_id: &str,
         tenant_id: &str,
-        name: String,
-        description: String,
-        steps: Vec<crate::memory::layered::ProcedureStep>,
-        learned_from: String,
-        tags: Vec<String>,
+        entry: ProceduralEntry,
     ) -> Result<String, String> {
-        self.remember_procedural_scoped(agent_id, tenant_id, name, description, steps, learned_from, tags, MemoryScope::Private)
+        self.remember_procedural_scoped(agent_id, tenant_id, entry, MemoryScope::Private)
     }
 
     /// Store a procedural memory entry with explicit scope.
@@ -374,13 +379,10 @@ impl crate::kernel::AIKernel {
         &self,
         agent_id: &str,
         tenant_id: &str,
-        name: String,
-        description: String,
-        steps: Vec<crate::memory::layered::ProcedureStep>,
-        learned_from: String,
-        tags: Vec<String>,
+        entry: ProceduralEntry,
         scope: MemoryScope,
     ) -> Result<String, String> {
+        let ProceduralEntry { name, description, steps, learned_from, tags } = entry;
         let ctx = PermissionContext::new(agent_id.to_string(), tenant_id.to_string());
         self.permissions.check(&ctx, PermissionAction::Write).map_err(|e| e.to_string())?;
         let procedure = crate::memory::layered::Procedure {
@@ -448,7 +450,7 @@ impl crate::kernel::AIKernel {
         query: Option<&str>,
         limit: usize,
     ) -> Vec<MemoryEntry> {
-        let ctx = PermissionContext::new(caller_id.to_string(), "default".to_string());
+        let ctx = PermissionContext::new(caller_id.to_string(), crate::DEFAULT_TENANT.to_string());
         if self.permissions.check(&ctx, PermissionAction::Read).is_err() {
             return Vec::new();
         }
@@ -459,7 +461,7 @@ impl crate::kernel::AIKernel {
             let target_uuid = self.resolve_agent(target);
             results.retain(|e| {
                 e.agent_id == target
-                    || target_uuid.as_deref().map_or(false, |u| e.agent_id == u)
+                    || target_uuid.as_deref().is_some_and(|u| e.agent_id == u)
             });
         } else {
             // No target specified: return ALL shared memories from ALL agents,

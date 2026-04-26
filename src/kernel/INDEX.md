@@ -39,8 +39,11 @@ Key methods (non-exhaustive): `new`, `handle_api_request`, `execute_tool`, `inte
 
 | File | Lines | Purpose |
 |------|-------|---------|
-| `mod.rs` | ~1935 | AIKernel struct, API dispatch (85+ routes), orchestration |
-| `builtin_tools.rs` | ~434 | `register_builtin_tools`, `execute_tool` (37 tools, allowlist + quota) |
+| `mod.rs` | ~574 | AIKernel struct, orchestration core |
+| `api_dispatch.rs` | ~250 | Thin API dispatch → 14 handler modules in `handlers/` |
+| `handlers/` | 14 files | Domain-specific API request handlers (cas, memory, agent, graph, etc.) |
+| `builtin_tools.rs` | ~480 | Tool registration + dispatch → 7 tool modules in `tools/` |
+| `tools/` | 7 files | Built-in tool handlers (cas, memory, graph, agent, system, messaging, permission) |
 | `hook.rs` | ~266 | HookRegistry — 5 interception points, Block/Continue results |
 | `persistence.rs` | ~366 | Persist/restore agents, intents, memories, search index, event log |
 | `event_bus.rs` | ~959 | EventBus — typed pub/sub, JSONL persistence, restore |

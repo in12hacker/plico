@@ -45,26 +45,22 @@ impl IntentDecomposer {
             if has_keyword_match && *access_count > 0 {
                 // Infer operation type from CID patterns
                 let cid_lower = cid.to_lowercase();
-                if cid_lower.contains("code") || cid_lower.contains("src") {
-                    if !operations.contains(&"read".to_string()) {
+                if (cid_lower.contains("code") || cid_lower.contains("src"))
+                    && !operations.contains(&"read".to_string()) {
                         operations.push("read".to_string());
                     }
-                }
-                if cid_lower.contains("api") || cid_lower.contains("call") {
-                    if !operations.contains(&"call".to_string()) {
+                if (cid_lower.contains("api") || cid_lower.contains("call"))
+                    && !operations.contains(&"call".to_string()) {
                         operations.push("call".to_string());
                     }
-                }
-                if cid_lower.contains("search") || cid_lower.contains("query") {
-                    if !operations.contains(&"search".to_string()) {
+                if (cid_lower.contains("search") || cid_lower.contains("query"))
+                    && !operations.contains(&"search".to_string()) {
                         operations.push("search".to_string());
                     }
-                }
-                if cid_lower.contains("create") || cid_lower.contains("new") {
-                    if !operations.contains(&"create".to_string()) {
+                if (cid_lower.contains("create") || cid_lower.contains("new"))
+                    && !operations.contains(&"create".to_string()) {
                         operations.push("create".to_string());
                     }
-                }
             }
         }
 

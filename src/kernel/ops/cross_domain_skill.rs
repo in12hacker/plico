@@ -55,7 +55,7 @@ impl SkillGraph {
             format!("{}:{}", skill_b, skill_a)
         };
 
-        let cooccurrence = self.edges.entry(edge_key.clone()).or_insert_with(Vec::new);
+        let cooccurrence = self.edges.entry(edge_key.clone()).or_default();
 
         if let Some(existing) = cooccurrence.iter_mut().find(|c| c.skill_a == skill_a && c.skill_b == skill_b) {
             existing.total_count += 1;

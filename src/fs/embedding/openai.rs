@@ -3,17 +3,18 @@
 //! Works with: llama.cpp, vLLM, SGLang, TensorRT-LLM, text-embeddings-inference,
 //! OpenAI, Ollama (/v1 endpoint), and any server exposing the OpenAI embeddings API.
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use crate::fs::embedding::types::{EmbedError, EmbeddingProvider, EmbedResult};
 
 pub struct OpenAIEmbeddingBackend {
-    rt: Arc<tokio::runtime::Runtime>,
+    /// Only created when no Tokio runtime is active (standalone/CLI mode).
+    rt: Option<Arc<tokio::runtime::Runtime>>,
     client: reqwest::Client,
     base_url: String,
     model: String,
     api_key: Option<String>,
-    dimension: usize,
+    dimension: OnceLock<usize>,
 }
 
 impl OpenAIEmbeddingBackend {
@@ -23,10 +24,15 @@ impl OpenAIEmbeddingBackend {
     /// `model` — Model name sent in the request body.
     /// `api_key` — Optional Bearer token for authenticated endpoints.
     pub fn new(base_url: &str, model: &str, api_key: Option<String>) -> Result<Self, EmbedError> {
-        let rt = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(1)
-            .enable_all()
-            .build()?;
+        let rt = match tokio::runtime::Handle::try_current() {
+            Ok(_) => None,
+            Err(_) => {
+                Some(Arc::new(tokio::runtime::Builder::new_multi_thread()
+                    .worker_threads(1)
+                    .enable_all()
+                    .build()?))
+            }
+        };
 
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
@@ -35,16 +41,29 @@ impl OpenAIEmbeddingBackend {
 
         let base = base_url.trim_end_matches('/').to_string();
 
-        let dimension = rt.block_on(Self::probe_dimension(&client, &base, model, api_key.as_deref()))?;
-
         Ok(Self {
-            rt: Arc::new(rt),
+            rt,
             client,
             base_url: base,
             model: model.to_string(),
             api_key,
-            dimension,
+            dimension: OnceLock::new(),
         })
+    }
+
+    fn get_dimension(&self) -> Result<usize, EmbedError> {
+        if let Some(d) = self.dimension.get() {
+            return Ok(*d);
+        }
+        let probe = Self::probe_dimension(&self.client, &self.base_url, &self.model, self.api_key.as_deref());
+        let dim = match tokio::runtime::Handle::try_current() {
+            Ok(handle) => tokio::task::block_in_place(|| handle.block_on(probe))?,
+            Err(_) => self.rt.as_ref()
+                .expect("rt must exist when no Tokio runtime is active")
+                .block_on(probe)?,
+        };
+        self.dimension.set(dim).ok();
+        Ok(dim)
     }
 
     async fn probe_dimension(
@@ -193,21 +212,30 @@ fn parse_embedding_batch_response(body: &[u8]) -> Result<Vec<EmbedResult>, Embed
 
 impl EmbeddingProvider for OpenAIEmbeddingBackend {
     fn embed(&self, text: &str) -> Result<EmbedResult, EmbedError> {
-        // Always use our OWN dedicated runtime, never try_current().
-        // The panic "Cannot start a runtime from within a runtime" occurs when
-        // AIKernel::new() (which starts a multi-threaded runtime) tries to
-        // block_on a provider's single-threaded runtime from a worker thread.
-        // By always using self.rt, we avoid nested block_on on the outer runtime.
-        self.rt.block_on(self.embed_async(text))
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => {
+                tokio::task::block_in_place(|| handle.block_on(self.embed_async(text)))
+            }
+            Err(_) => self.rt.as_ref()
+                .expect("rt must exist when no Tokio runtime is active")
+                .block_on(self.embed_async(text)),
+        }
     }
 
     fn embed_batch(&self, texts: &[&str]) -> Result<Vec<EmbedResult>, EmbedError> {
         let owned: Vec<String> = texts.iter().map(|s| s.to_string()).collect();
-        self.rt.block_on(self.embed_batch_async(&owned))
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => {
+                tokio::task::block_in_place(|| handle.block_on(self.embed_batch_async(&owned)))
+            }
+            Err(_) => self.rt.as_ref()
+                .expect("rt must exist when no Tokio runtime is active")
+                .block_on(self.embed_batch_async(&owned)),
+        }
     }
 
     fn dimension(&self) -> usize {
-        self.dimension
+        self.get_dimension().unwrap_or(384)
     }
 
     fn model_name(&self) -> &str {
@@ -218,12 +246,12 @@ impl EmbeddingProvider for OpenAIEmbeddingBackend {
 impl Clone for OpenAIEmbeddingBackend {
     fn clone(&self) -> Self {
         Self {
-            rt: Arc::clone(&self.rt),
+            rt: self.rt.as_ref().map(Arc::clone),
             client: self.client.clone(),
             base_url: self.base_url.clone(),
             model: self.model.clone(),
             api_key: self.api_key.clone(),
-            dimension: self.dimension,
+            dimension: OnceLock::new(),
         }
     }
 }
@@ -268,12 +296,16 @@ mod tests {
         assert_eq!(embs[1].embedding.len(), 2);
     }
 
-    const LLAMA_EMBEDDING_URL: &str = "http://127.0.0.1:18920/v1";
-    const LLAMA_EMBEDDING_MODEL: &str = "qwen2.5-0.5b-instruct-q4_k_m.gguf";
+    fn llama_embedding_url() -> String {
+        std::env::var("LLAMA_TEST_URL").unwrap_or_else(|_| "http://127.0.0.1:18920/v1".to_string())
+    }
+    fn llama_embedding_model() -> String {
+        std::env::var("LLAMA_TEST_MODEL").unwrap_or_else(|_| "qwen2.5-0.5b-instruct-q4_k_m.gguf".to_string())
+    }
 
     #[test]
     fn test_openai_embedding_llama_server() {
-        let backend = match OpenAIEmbeddingBackend::new(LLAMA_EMBEDDING_URL, LLAMA_EMBEDDING_MODEL, None) {
+        let backend = match OpenAIEmbeddingBackend::new(&llama_embedding_url(), &llama_embedding_model(), None) {
             Ok(b) => b,
             Err(e) => {
                 eprintln!("llama-server not available, skipping: {e}");
@@ -290,7 +322,7 @@ mod tests {
 
     #[test]
     fn test_openai_embedding_llama_server_batch() {
-        let backend = match OpenAIEmbeddingBackend::new(LLAMA_EMBEDDING_URL, LLAMA_EMBEDDING_MODEL, None) {
+        let backend = match OpenAIEmbeddingBackend::new(&llama_embedding_url(), &llama_embedding_model(), None) {
             Ok(b) => b,
             Err(e) => {
                 eprintln!("llama-server not available, skipping: {e}");

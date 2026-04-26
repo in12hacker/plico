@@ -38,7 +38,7 @@ impl GoalGenerator {
 
     pub fn record_goal(&self, agent_id: &str, keywords: &[String], actions: &[String], success: bool) {
         let mut templates = self.templates.write().unwrap();
-        let agent_templates = templates.entry(agent_id.to_string()).or_insert_with(Vec::new);
+        let agent_templates = templates.entry(agent_id.to_string()).or_default();
 
         if let Some(existing) = agent_templates.iter_mut().find(|t| t.trigger_keywords == keywords && t.action_sequence == actions) {
             existing.total_count += 1;

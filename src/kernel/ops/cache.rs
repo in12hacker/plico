@@ -11,6 +11,7 @@
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+use std::num::NonZeroUsize;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
@@ -103,7 +104,7 @@ pub struct EmbeddingCache {
 impl EmbeddingCache {
     pub fn new(max_entries: usize) -> Self {
         Self {
-            cache: RwLock::new(LruCache::new(max_entries)),
+            cache: RwLock::new(LruCache::new(NonZeroUsize::new(max_entries).unwrap_or(NonZeroUsize::MIN))),
             max_entries,
             stats: RwLock::new(CacheStats::default()),
         }
@@ -192,7 +193,7 @@ pub struct KgQueryCache {
 impl KgQueryCache {
     pub fn new(max_entries: usize) -> Self {
         Self {
-            cache: RwLock::new(LruCache::new(max_entries)),
+            cache: RwLock::new(LruCache::new(NonZeroUsize::new(max_entries).unwrap_or(NonZeroUsize::MIN))),
             max_entries,
             stats: RwLock::new(CacheStats::default()),
         }
@@ -276,7 +277,7 @@ pub struct SearchCache {
 impl SearchCache {
     pub fn new(max_entries: usize, ttl_seconds: u64) -> Self {
         Self {
-            cache: RwLock::new(LruCache::new(max_entries)),
+            cache: RwLock::new(LruCache::new(NonZeroUsize::new(max_entries).unwrap_or(NonZeroUsize::MIN))),
             max_entries,
             ttl: Duration::from_secs(ttl_seconds),
             stats: RwLock::new(CacheStats::default()),

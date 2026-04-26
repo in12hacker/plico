@@ -86,6 +86,9 @@ impl From<CASError> for io::Error {
     }
 }
 
+const ACCESS_PERSIST_BATCH_SIZE: u64 = 100;
+const ACCESS_PERSIST_INTERVAL_MS: u64 = 60_000;
+
 fn validate_cid(cid: &str) -> Result<(), CASError> {
     if cid.len() < 2 {
         return Err(CASError::InvalidCid { cid: cid.to_string() });
@@ -190,7 +193,7 @@ impl CASStorage {
     }
 
     /// List all CIDs stored in this CAS.
-    /// Note: expensive for large stores; use with caution.
+    /// Note: O(n) filesystem traversal — expensive for large stores.
     pub fn list_cids(&self) -> io::Result<Vec<String>> {
         let mut cids = Vec::new();
 
@@ -199,8 +202,7 @@ impl CASStorage {
             let dir_name = entry.file_name();
             let dir_name_str = dir_name.to_string_lossy();
 
-            // Each shard dir is a 2-char hex prefix
-            if dir_name_str.len() != 2 {
+            if dir_name_str.len() != 2 || !dir_name_str.chars().all(|c| c.is_ascii_hexdigit()) {
                 continue;
             }
 
@@ -209,14 +211,11 @@ impl CASStorage {
                 let name = sub_entry.file_name();
                 let name_str = name.to_string_lossy();
 
-                // Skip temp files
-                if name_str.starts_with(".tmp_") {
+                if name_str.starts_with(".tmp_") || name_str.starts_with('_') {
                     continue;
                 }
 
-                // Rebuild CID: dir_name + filename (strip .json if present)
-                let rest = name_str.strip_prefix(".json").unwrap_or(&name_str);
-                let cid = format!("{}{}", dir_name_str, rest);
+                let cid = format!("{}{}", dir_name_str, name_str);
                 cids.push(cid);
             }
         }
@@ -244,17 +243,9 @@ impl CASStorage {
         &self.root
     }
 
-    /// Number of objects stored.
-    /// Counts top-level shard directories as a quick estimate; accurate if no partial shards.
+    /// Number of objects stored (O(n) filesystem scan).
     pub fn len(&self) -> usize {
-        fs::read_dir(&self.root)
-            .map(|entries| {
-                entries
-                    .filter_map(|e| e.ok())
-                    .filter(|e| e.file_type().is_ok_and(|ft| ft.is_dir()))
-                    .count()
-            })
-            .unwrap_or(0)
+        self.list_cids().map(|v| v.len()).unwrap_or(0)
     }
 
     /// Returns true if no objects are stored.
@@ -277,7 +268,7 @@ impl CASStorage {
 
             // F-42: Update counters for lazy persist trigger
             let new_total = self.access_count_total.fetch_add(1, Ordering::Relaxed) + 1;
-            should_persist = new_total.is_multiple_of(100);
+            should_persist = new_total.is_multiple_of(ACCESS_PERSIST_BATCH_SIZE);
         }
 
         // F-42: Trigger lazy persist if threshold reached
@@ -290,7 +281,7 @@ impl CASStorage {
     /// Called on each public API entry point for low-overhead check.
     pub fn maybe_persist_access_log(&self) {
         let elapsed = now_ms().saturating_sub(self.last_persist_ms.load(Ordering::Relaxed));
-        if elapsed >= 60_000 && self.persist_access_log().is_ok() {
+        if elapsed >= ACCESS_PERSIST_INTERVAL_MS && self.persist_access_log().is_ok() {
             self.last_persist_ms.store(now_ms(), Ordering::Relaxed);
         }
     }

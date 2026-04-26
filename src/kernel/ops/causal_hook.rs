@@ -64,7 +64,7 @@ impl CausalHookHandler {
             KGNodeType::Fact,
             context.params.to_string(), // Store params as content
             context.agent_id.clone(),
-            "default".to_string(),
+            crate::DEFAULT_TENANT.to_string(),
         );
 
         // Only add if node doesn't exist (ignore error if it already exists)
@@ -87,7 +87,7 @@ impl CausalHookHandler {
             KGNodeType::Fact,
             intent.to_string(),
             agent_id.to_string(),
-            "default".to_string(),
+            crate::DEFAULT_TENANT.to_string(),
         );
 
         // Only add if node doesn't exist

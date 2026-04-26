@@ -164,11 +164,13 @@ impl AgentExecutor for LocalExecutor {
 /// Kernel-backed executor — deserializes the intent's `action` as an
 /// `ApiRequest`, dispatches it through the kernel, and returns the JSON
 /// response. Falls back to LocalExecutor behavior if no action is present.
+type RequestHandler = Box<dyn Fn(&str, Option<&str>) -> String + Send + Sync>;
+
 pub struct KernelExecutor {
     /// Callback that executes an ApiRequest JSON and returns an ApiResponse JSON.
     /// Uses a boxed closure so the executor doesn't depend on kernel types directly,
     /// preserving the dependency direction (scheduler never imports kernel).
-    handler: Box<dyn Fn(&str, Option<&str>) -> String + Send + Sync>,
+    handler: RequestHandler,
 }
 
 impl KernelExecutor {

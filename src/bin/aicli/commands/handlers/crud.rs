@@ -70,11 +70,10 @@ pub fn cmd_search(kernel: &AIKernel, args: &[String]) -> ApiResponse {
         }
     }
     // Tag-only search: merge search_tags into require_tags for the API
-    if query.is_empty() && (!search_tags.is_empty() || !require_tags.is_empty()) {
-        if require_tags.is_empty() {
+    if query.is_empty() && (!search_tags.is_empty() || !require_tags.is_empty())
+        && require_tags.is_empty() {
             require_tags = search_tags;
         }
-    }
 
     if query.is_empty() && require_tags.is_empty() {
         return ApiResponse::error("search requires a query. Use: search --query <text> or: search <text>");

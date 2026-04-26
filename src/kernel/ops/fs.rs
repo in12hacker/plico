@@ -6,6 +6,16 @@ use crate::cas::{AIObject, AIObjectMeta};
 use crate::kernel::event_bus::KernelEvent;
 use super::observability::{OpType, OperationTimer};
 
+/// Bundled parameters for semantic search queries.
+pub(crate) struct SearchQuery<'a> {
+    pub query: &'a str,
+    pub agent_id: &'a str,
+    pub tenant_id: &'a str,
+    pub limit: usize,
+    pub require_tags: Vec<String>,
+    pub exclude_tags: Vec<String>,
+}
+
 impl crate::kernel::AIKernel {
     // ─── CAS Operations ────────────────────────────────────────────────
 
@@ -16,7 +26,7 @@ impl crate::kernel::AIKernel {
         meta: AIObjectMeta,
         agent_id: &str,
     ) -> std::io::Result<String> {
-        let ctx = PermissionContext::new(agent_id.to_string(), "default".to_string());
+        let ctx = PermissionContext::new(agent_id.to_string(), crate::DEFAULT_TENANT.to_string());
         self.permissions.check(&ctx, PermissionAction::Write)?;
         let obj = AIObject::new(data, meta);
         self.cas.put(&obj)
@@ -57,7 +67,7 @@ impl crate::kernel::AIKernel {
         );
         let _guard = span.enter();
 
-        let ctx = PermissionContext::new(agent_id.to_string(), "default".to_string());
+        let ctx = PermissionContext::new(agent_id.to_string(), crate::DEFAULT_TENANT.to_string());
         self.permissions.check(&ctx, PermissionAction::Write)?;
 
         // F-2: Precondition — content must be non-empty (fails fast before CAS write)
@@ -99,22 +109,20 @@ impl crate::kernel::AIKernel {
         require_tags: Vec<String>,
         exclude_tags: Vec<String>,
     ) -> std::io::Result<Vec<crate::fs::SearchResult>> {
-        self.semantic_search_with_time(query, agent_id, tenant_id, limit, require_tags, exclude_tags, None, None)
+        self.semantic_search_with_time(
+            SearchQuery { query, agent_id, tenant_id, limit, require_tags, exclude_tags },
+            None, None,
+        )
     }
 
     /// Semantic search with time-range bounds.
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn semantic_search_with_time(
         &self,
-        query: &str,
-        agent_id: &str,
-        tenant_id: &str,
-        limit: usize,
-        require_tags: Vec<String>,
-        exclude_tags: Vec<String>,
+        sq: SearchQuery<'_>,
         since: Option<i64>,
         until: Option<i64>,
     ) -> std::io::Result<Vec<crate::fs::SearchResult>> {
+        let SearchQuery { query, agent_id, tenant_id, limit, require_tags, exclude_tags } = sq;
         let ctx = PermissionContext::new(agent_id.to_string(), tenant_id.to_string());
         self.permissions.check(&ctx, PermissionAction::Read)?;
         let can_read_any = self.permissions.can_read_any(agent_id);
@@ -163,35 +171,18 @@ impl crate::kernel::AIKernel {
     /// When intent_context is provided, results are re-ranked based on:
     /// - Hot objects from the agent's profile (boosted by 1.5x)
     /// - Current intent alignment (gravity toward related CIDs)
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn semantic_search_with_intent(
         &self,
-        query: &str,
-        agent_id: &str,
-        tenant_id: &str,
-        limit: usize,
-        require_tags: Vec<String>,
-        exclude_tags: Vec<String>,
+        sq: SearchQuery<'_>,
         intent_context: Option<String>,
     ) -> std::io::Result<Vec<crate::fs::SearchResult>> {
-        // F-6: Get hot objects from agent profile for gravity re-ranking
         let hot_cids: std::collections::HashSet<String> = if intent_context.is_some() {
-            self.prefetch.get_hot_objects(agent_id).into_iter().collect()
+            self.prefetch.get_hot_objects(sq.agent_id).into_iter().collect()
         } else {
             std::collections::HashSet::new()
         };
 
-        // F-6: Perform base search
-        let results = self.semantic_search_with_time(
-            query,
-            agent_id,
-            tenant_id,
-            limit,
-            require_tags,
-            exclude_tags,
-            None,
-            None,
-        )?;
+        let results = self.semantic_search_with_time(sq, None, None)?;
 
         // If no intent context or no hot objects, return base results
         if hot_cids.is_empty() {
@@ -342,13 +333,13 @@ impl crate::kernel::AIKernel {
 
     /// List soft-deleted objects in the recycle bin.
     pub fn list_deleted(&self, agent_id: &str) -> Vec<crate::fs::RecycleEntry> {
-        let _ctx = PermissionContext::new(agent_id.to_string(), "default".to_string());
+        let _ctx = PermissionContext::new(agent_id.to_string(), crate::DEFAULT_TENANT.to_string());
         self.fs.list_deleted()
     }
 
     /// Restore a soft-deleted object.
     pub fn restore_deleted(&self, cid: &str, agent_id: &str) -> std::io::Result<()> {
-        let ctx = PermissionContext::new(agent_id.to_string(), "default".to_string());
+        let ctx = PermissionContext::new(agent_id.to_string(), crate::DEFAULT_TENANT.to_string());
         self.permissions.check(&ctx, PermissionAction::Write)?;
         self.fs.restore(cid, agent_id.to_string())
     }
@@ -360,7 +351,7 @@ impl crate::kernel::AIKernel {
         layer: crate::fs::ContextLayer,
         agent_id: &str,
     ) -> std::io::Result<crate::fs::LoadedContext> {
-        let ctx = PermissionContext::new(agent_id.to_string(), "default".to_string());
+        let ctx = PermissionContext::new(agent_id.to_string(), crate::DEFAULT_TENANT.to_string());
         self.permissions.check(&ctx, PermissionAction::Read)?;
         self.fs.ctx_loader().load(cid, layer)
     }
@@ -375,7 +366,7 @@ impl crate::kernel::AIKernel {
         budget_tokens: usize,
         agent_id: &str,
     ) -> std::io::Result<crate::fs::context_budget::BudgetAllocation> {
-        let ctx = PermissionContext::new(agent_id.to_string(), "default".to_string());
+        let ctx = PermissionContext::new(agent_id.to_string(), crate::DEFAULT_TENANT.to_string());
         self.permissions.check(&ctx, PermissionAction::Read)?;
         Ok(crate::fs::context_budget::assemble(
             self.fs.ctx_loader(),
@@ -388,7 +379,7 @@ impl crate::kernel::AIKernel {
     ///
     /// Returns a chain from newest to oldest: [current, previous, ...]
     pub fn version_history(&self, cid: &str, agent_id: &str) -> Vec<String> {
-        let ctx = PermissionContext::new(agent_id.to_string(), "default".to_string());
+        let ctx = PermissionContext::new(agent_id.to_string(), crate::DEFAULT_TENANT.to_string());
         if self.permissions.check(&ctx, PermissionAction::Read).is_err() {
             return vec![];
         }
@@ -430,7 +421,7 @@ impl crate::kernel::AIKernel {
         cid: &str,
         agent_id: &str,
     ) -> Result<String, String> {
-        let ctx = PermissionContext::new(agent_id.to_string(), "default".to_string());
+        let ctx = PermissionContext::new(agent_id.to_string(), crate::DEFAULT_TENANT.to_string());
         self.permissions.check(&ctx, PermissionAction::Write).map_err(|e| e.to_string())?;
 
         let history = self.version_history(cid, agent_id);
@@ -537,6 +528,8 @@ impl crate::kernel::AIKernel {
 
 #[cfg(test)]
 mod tests {
+    use super::SearchQuery;
+
     #[test]
     fn test_semantic_create_and_semantic_delete_roundtrip() {
         let (kernel, _dir) = crate::kernel::tests::make_kernel();
@@ -661,7 +654,8 @@ mod tests {
         let base_results = kernel.semantic_search("rust", "kernel", "default", 10, vec![], vec![])
             .expect("search failed");
         let with_intent = kernel.semantic_search_with_intent(
-            "rust", "kernel", "default", 10, vec![], vec![], None,
+            SearchQuery { query: "rust", agent_id: "kernel", tenant_id: "default", limit: 10, require_tags: vec![], exclude_tags: vec![] },
+            None,
         ).expect("search failed");
 
         assert_eq!(base_results.len(), with_intent.len());
@@ -685,7 +679,8 @@ mod tests {
         // Profile might be empty since we don't have a real profile store connected
         // The key is that the search_with_intent doesn't crash and returns results
         let results = kernel.semantic_search_with_intent(
-            "rust", "kernel", "default", 10, vec![], vec![], Some("fix rust bug".to_string()),
+            SearchQuery { query: "rust", agent_id: "kernel", tenant_id: "default", limit: 10, require_tags: vec![], exclude_tags: vec![] },
+            Some("fix rust bug".to_string()),
         ).expect("search failed");
         assert!(!results.is_empty() || results.is_empty()); // Just verify it runs
     }
@@ -697,7 +692,8 @@ mod tests {
 
         // Even with intent_context but no hot objects, should return results
         let results = kernel.semantic_search_with_intent(
-            "test", "kernel", "default", 10, vec![], vec![], Some("some intent".to_string()),
+            SearchQuery { query: "test", agent_id: "kernel", tenant_id: "default", limit: 10, require_tags: vec![], exclude_tags: vec![] },
+            Some("some intent".to_string()),
         ).expect("search failed");
         // Should not crash, may or may not have results depending on data
         assert!(results.len() <= 10); // Respect limit

@@ -133,7 +133,7 @@ fn run_daemon(args: &[String], root: &PathBuf) -> bool {
 }
 
 /// Fork plicod in the background and wait for the socket to become reachable.
-fn try_auto_start_daemon(root: &PathBuf, sock_path: &PathBuf) -> bool {
+fn try_auto_start_daemon(root: &std::path::Path, sock_path: &std::path::Path) -> bool {
     let plicod = which_plicod();
     let Some(plicod_bin) = plicod else {
         eprintln!("Warning: plicod binary not found in PATH");
@@ -176,7 +176,7 @@ fn which_plicod() -> Option<PathBuf> {
     })
 }
 
-fn wait_for_socket(sock_path: &PathBuf, timeout: std::time::Duration) -> bool {
+fn wait_for_socket(sock_path: &std::path::Path, timeout: std::time::Duration) -> bool {
     let start = std::time::Instant::now();
     let poll = std::time::Duration::from_millis(100);
     while start.elapsed() < timeout {
@@ -192,9 +192,9 @@ fn wait_for_socket(sock_path: &PathBuf, timeout: std::time::Duration) -> bool {
 
 // ── Embedded mode (--embedded) ──────────────────────────────────────
 
-fn run_embedded(args: &[String], root: &PathBuf) -> bool {
+fn run_embedded(args: &[String], root: &std::path::Path) -> bool {
     let filtered = filter_args(args);
-    let kernel = AIKernel::new(root.clone()).expect("Failed to initialize kernel");
+    let kernel = AIKernel::new(root.to_path_buf()).expect("Failed to initialize kernel");
     let result = commands::execute_local(&kernel, &filtered);
     commands::print_result(&result)
 }
@@ -620,6 +620,26 @@ fn build_remote_request(args: &[String]) -> Option<ApiRequest> {
                 .unwrap_or(20);
             let token_budget = commands::extract_arg(args, "--budget").and_then(|s| s.parse().ok());
             Some(ApiRequest::HybridRetrieve { query_text, seed_tags, graph_depth, edge_types, max_results, token_budget, agent_id: agent_id(), tenant_id: None })
+        }
+        Some("cost") => {
+            match args.get(1).map(|s| s.as_str()) {
+                Some("session") => {
+                    let session_id = commands::extract_arg(args, "--session").unwrap_or_default();
+                    Some(ApiRequest::CostSessionSummary { session_id })
+                }
+                Some("agent") => {
+                    let agent_id = commands::extract_arg(args, "--agent").unwrap_or_default();
+                    let last = commands::extract_arg(args, "--last")
+                        .and_then(|s| s.parse().ok())
+                        .unwrap_or(10);
+                    Some(ApiRequest::CostAgentTrend { agent_id, last_n_sessions: last })
+                }
+                Some("anomaly") => {
+                    let agent_id = commands::extract_arg(args, "--agent").unwrap_or_default();
+                    Some(ApiRequest::CostAnomalyCheck { agent_id })
+                }
+                _ => None,
+            }
         }
         Some("system-status") => Some(ApiRequest::SystemStatus),
         Some("health") => Some(ApiRequest::HealthReport),

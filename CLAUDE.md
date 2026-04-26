@@ -228,3 +228,24 @@ Rules:
 When to revisit: Only after the **first public release**. At that point, compatibility code becomes necessary.
 
 **Lesson learned (2026-04-23):** A redb migration added `migrate_old_edge_keys()`, `bulk_persist_to_redb()`, `load_from_json()` fallback, and `DeprecationNotice` — all for formats that never existed in production. These 140+ lines of dead code were cleaned up immediately. The cost of premature compatibility code: wasted implementation time, inflated code size, test maintenance burden, and misleading code paths that confuse future AI agents reading the codebase.
+
+## 6. Tokio Runtime Patterns (Daemons)
+
+**"Cannot start a runtime from within a runtime" panic** occurs when `#[tokio::main]` creates a multi-threaded runtime, then provider methods call `block_on` from within that context.
+
+**Fix**: Use `try_current()` + `block_in_place()` pattern:
+```rust
+match tokio::runtime::Handle::try_current() {
+    Ok(handle) => tokio::task::block_in_place(|| handle.block_on(async_fn())),
+    Err(_) => rt.block_on(async_fn()),
+}
+```
+
+**For async construction**: Use `OnceLock` to defer probing:
+```rust
+dimension: OnceLock<usize>  // Not computed at construction
+```
+
+**CLI daemon routing**: Commands in `commands/mod.rs` are embedded-mode only. Daemon mode requires routing in `build_remote_request()` in `main.rs`.
+
+See skill `plico-tokio-patterns` for full details and dogfood node "Pattern: Tokio Runtime Nesting Fix" for context.

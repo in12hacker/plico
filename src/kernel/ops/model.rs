@@ -182,7 +182,7 @@ pub(crate) fn create_llm_provider(
         "llama" => {
             let base_url = url
                 .map(String::from)
-                .unwrap_or_else(|| crate::kernel::persistence::resolve_llama_url());
+                .unwrap_or_else(crate::kernel::persistence::resolve_llama_url);
             crate::llm::OpenAICompatibleProvider::new(&base_url, model, None)
                 .map(|p| Arc::new(p) as Arc<dyn LlmProvider>)
                 .map_err(|e| format!("llama error: {}", e))

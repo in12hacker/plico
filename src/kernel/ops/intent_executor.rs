@@ -267,7 +267,7 @@ impl AutonomousExecutor {
 
     /// F-4 (M1): Record operation sequences for skill discovery.
     fn record_operation_sequences(&self, result: &IntentExecutionResult) {
-        for (_, step_result) in &result.results {
+        for step_result in result.results.values() {
             let ops = vec![step_result.step_id.clone()];
             self.skill_discriminator.record_sequence(
                 "default",
@@ -280,7 +280,7 @@ impl AutonomousExecutor {
 
     /// F-4 (M2): Analyze failures and update adaptation strategies.
     fn analyze_failures(&self, result: &IntentExecutionResult) {
-        for (_, step_result) in &result.results {
+        for step_result in result.results.values() {
             if !step_result.success {
                 if let Some(ref error) = step_result.error {
                     let failure_type = FailureClassifier::classify(error, &step_result.step_id);

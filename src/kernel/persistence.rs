@@ -111,6 +111,10 @@ impl AIKernel {
         if let Err(e) = self.prefetch.persist() {
             tracing::warn!("Failed to persist prefetch state: {}", e);
         }
+        // F-2: Explicitly persist cost ledger (also persisted via prefetch.persist())
+        if let Err(e) = self.cost_ledger.persist_to_dir(&self.root.join("prefetch")) {
+            tracing::warn!("Failed to persist cost ledger: {}", e);
+        }
         tracing::info!("All kernel state persisted to disk");
     }
 
@@ -347,6 +351,18 @@ impl AIKernel {
     }
 }
 
+fn read_circuit_breaker_config(threshold_env: &str, cooldown_env: &str, default_threshold: u32, default_cooldown_ms: u64) -> (u32, u64) {
+    let threshold: u32 = std::env::var(threshold_env)
+        .unwrap_or_else(|_| default_threshold.to_string())
+        .parse()
+        .unwrap_or(default_threshold);
+    let cooldown_ms: u64 = std::env::var(cooldown_env)
+        .unwrap_or_else(|_| default_cooldown_ms.to_string())
+        .parse()
+        .unwrap_or(default_cooldown_ms);
+    (threshold, cooldown_ms)
+}
+
 /// Create the embedding provider based on EMBEDDING_BACKEND env var.
 ///
 /// Explicit values: "openai" (default) | "local" | "ollama" | "stub" | "ort"
@@ -430,29 +446,17 @@ pub(crate) fn create_embedding_provider() -> Result<Arc<dyn EmbeddingProvider>, 
         }
     };
 
-    // F-38: Wrap in circuit breaker — 3 failures → open → 30s cooldown → half-open probe
-    let threshold: u32 = std::env::var("EMBEDDING_CB_THRESHOLD")
-        .unwrap_or_else(|_| "3".to_string())
-        .parse()
-        .unwrap_or(3);
-    let cooldown_ms: u64 = std::env::var("EMBEDDING_CB_COOLDOWN_MS")
-        .unwrap_or_else(|_| "30000".to_string())
-        .parse()
-        .unwrap_or(30000);
-
+    let (threshold, cooldown_ms) = read_circuit_breaker_config(
+        "EMBEDDING_CB_THRESHOLD", "EMBEDDING_CB_COOLDOWN_MS", 3, 30_000,
+    );
     Ok(Arc::new(EmbeddingCircuitBreaker::new(base_provider, threshold, cooldown_ms)))
 }
 
 fn try_ollama_circuitbreaker() -> Result<Arc<dyn EmbeddingProvider>, EmbedError> {
     let inner = try_ollama()?;
-    let threshold: u32 = std::env::var("EMBEDDING_CB_THRESHOLD")
-        .unwrap_or_else(|_| "3".to_string())
-        .parse()
-        .unwrap_or(3);
-    let cooldown_ms: u64 = std::env::var("EMBEDDING_CB_COOLDOWN_MS")
-        .unwrap_or_else(|_| "30000".to_string())
-        .parse()
-        .unwrap_or(30000);
+    let (threshold, cooldown_ms) = read_circuit_breaker_config(
+        "EMBEDDING_CB_THRESHOLD", "EMBEDDING_CB_COOLDOWN_MS", 3, 30_000,
+    );
     Ok(Arc::new(EmbeddingCircuitBreaker::new(inner, threshold, cooldown_ms)))
 }
 
@@ -520,15 +524,9 @@ pub(crate) fn create_llm_provider(model_env: &str, default_model: &str) -> Resul
         }
     };
 
-    // F-2: Wrap with circuit breaker for fail-fast on provider outages
-    let threshold: u32 = std::env::var("LLM_CIRCUIT_BREAKER_FAILURE_THRESHOLD")
-        .unwrap_or_else(|_| "5".into())
-        .parse()
-        .unwrap_or(5);
-    let cooldown_ms: u64 = std::env::var("LLM_CIRCUIT_BREAKER_COOLDOWN_MS")
-        .unwrap_or_else(|_| "60000".into())
-        .parse()
-        .unwrap_or(60000);
+    let (threshold, cooldown_ms) = read_circuit_breaker_config(
+        "LLM_CIRCUIT_BREAKER_FAILURE_THRESHOLD", "LLM_CIRCUIT_BREAKER_COOLDOWN_MS", 5, 60_000,
+    );
     Ok(Arc::new(CircuitBreakerLlmProvider::new(inner, threshold, cooldown_ms)) as Arc<dyn LlmProvider>)
 }
 

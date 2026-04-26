@@ -58,7 +58,7 @@ src/
 │   │   ├── mod.rs       # SemanticSearch trait, SearchFilter, re-exports
 │   │   ├── memory.rs    # InMemoryBackend (brute-force cosine)
 │   │   ├── bm25.rs      # BM25 keyword search index
-│   │   ├── hnsw.rs      # HnswBackend (approximate NN via hnsw_rs)
+│   │   ├── hnsw.rs      # HnswBackend (HNSW ANN via usearch, f16 quantization)
 │   │   └── INDEX.md
 │   ├── graph/
 │   │   ├── mod.rs       # KnowledgeGraph trait, ExploreDirection, re-exports
@@ -73,7 +73,12 @@ src/
 │   └── mod.rs           # Re-exports
 ├── kernel/              # AI Kernel — orchestrates all subsystems
 │   ├── mod.rs           # AIKernel struct, constructor, handle_api_request dispatch
-│   ├── builtin_tools.rs # Built-in ToolRegistry + execute_tool (quotas, allowlist)
+│   ├── api_dispatch.rs  # Thin dispatch → handlers/ (14 domain handler modules)
+│   ├── handlers/        # Domain-specific API request handlers
+│   │   └── {cas,memory,agent,graph,intent,events,session,system,tools,messaging,permission,tenant,model,storage}.rs
+│   ├── builtin_tools.rs # Tool registration + dispatch → tools/ (7 tool handler modules)
+│   ├── tools/           # Built-in tool handlers by category
+│   │   └── {cas,memory,graph,agent,system,messaging,permission}.rs
 │   ├── persistence.rs   # Restore/persist agents, intents, memories, search index, event log
 │   ├── event_bus.rs     # EventBus — typed pub/sub, kernel events, persisted log
 │   ├── ops/             # Operation groups (keeps mod.rs manageable)
@@ -281,7 +286,7 @@ docs/                    # Tier B — iteration-end human docs (not maintained p
 - MCP protocol: JSON-RPC 2.0 over stdio
 
 ### Clippy Policy
-- `cargo clippy` runs clean (zero warnings) — all lint violations either fixed or suppressed with `#[allow(...)]` and an explanation
+- `cargo clippy` runs clean (zero warnings) — no `#[allow(clippy::...)]` for structural lints; only `dead_code` / `unused_imports` in test code
 
 ## Dogfooding Tag Convention
 

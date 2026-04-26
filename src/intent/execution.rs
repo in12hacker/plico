@@ -138,11 +138,13 @@ pub fn execute_sync(
         let _ = kernel.remember_procedural(
             agent_id,
             "default",
-            name,
-            format!("Verified: when asked '{}', execute {} step(s)", text, steps.len()),
-            steps,
-            "auto-learned from successful sync execution".to_string(),
-            vec!["auto-learned".to_string(), "verified".to_string()],
+            crate::kernel::ops::memory::ProceduralEntry {
+                name,
+                description: format!("Verified: when asked '{}', execute {} step(s)", text, steps.len()),
+                steps,
+                learned_from: "auto-learned from successful sync execution".to_string(),
+                tags: vec!["auto-learned".to_string(), "verified".to_string()],
+            },
         );
     }
 
@@ -195,11 +197,13 @@ pub fn execute_async(
         let _ = kernel.remember_procedural(
             agent_id,
             "default",
-            name,
-            format!("When asked '{}', execute resolved action", text),
-            vec![step],
-            "auto-learned from intent execution".to_string(),
-            vec!["auto-learned".to_string()],
+            crate::kernel::ops::memory::ProceduralEntry {
+                name,
+                description: format!("When asked '{}', execute resolved action", text),
+                steps: vec![step],
+                learned_from: "auto-learned from intent execution".to_string(),
+                tags: vec!["auto-learned".to_string()],
+            },
         );
     }
 

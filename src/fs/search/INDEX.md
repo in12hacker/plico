@@ -19,7 +19,7 @@ Status: active | Fan-in: 2 | Fan-out: 0
 
 ## Dependencies (Fan-out: 0)
 
-External crates only: `serde`, `hnsw_rs`, `bm25`.
+External crates only: `serde`, `usearch`, `bm25`.
 
 ## Dependents (Fan-in: 2)
 
@@ -30,7 +30,7 @@ External crates only: `serde`, `hnsw_rs`, `bm25`.
 
 - `SemanticSearch::search()`: returns top-k results sorted by descending score; respects `SearchFilter`
 - `SearchFilter::matches()`: AND semantics for `require_tags`, OR-exclude for `exclude_tags`
-- `HnswBackend`: persistent to disk via `persist_to()` / `restore_from()`; thread-safe via `RwLock`
+- `HnswBackend`: persistent to disk via `persist_to()` / `restore_from()`; usearch Index is Send+Sync, metadata via `RwLock`
 - `InMemoryBackend`: no persistence; O(n) cosine scan; suitable for small datasets
 - `Bm25Index`: BM25 with k1=1.2, b=0.75 (TREC/SIGIR defaults); `RwLock`-protected
 
@@ -53,7 +53,7 @@ External crates only: `serde`, `hnsw_rs`, `bm25`.
 |------|-------|---------|
 | `mod.rs` | ~147 | `SemanticSearch` trait, types, `SearchFilter` |
 | `memory.rs` | ~332 | `InMemoryBackend` — brute-force cosine |
-| `hnsw.rs` | ~573 | `HnswBackend` — persistent HNSW ANN index |
+| `hnsw.rs` | ~310 | `HnswBackend` — HNSW ANN via usearch (f16 quantization, SIMD) |
 | `bm25.rs` | ~83 | `Bm25Index` — keyword search |
 
 ## Tests

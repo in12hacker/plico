@@ -26,6 +26,9 @@ pub mod llm;
 pub mod mcp;
 pub mod client;
 
+/// Default tenant ID used when no tenant is specified.
+pub const DEFAULT_TENANT: &str = "default";
+
 // Permission re-exports for ergonomic access
 pub use api::permission::{PermissionGuard, PermissionContext, PermissionAction, PermissionGrant};
 

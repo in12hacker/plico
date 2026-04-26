@@ -466,19 +466,27 @@ impl Default for SessionStore {
     }
 }
 
+/// Bundled parameters for session orchestration.
+pub struct SessionStartParams<'a> {
+    pub agent_id: &'a str,
+    pub intent_hint: Option<String>,
+    pub load_tiers: Vec<MemoryTier>,
+    pub last_seen_seq: Option<u64>,
+    pub session_store: &'a SessionStore,
+    pub event_bus: &'a Arc<EventBus>,
+    pub memory: &'a Arc<LayeredMemory>,
+    pub prefetch: &'a crate::kernel::ops::prefetch::IntentPrefetcher,
+    pub fs: &'a Arc<crate::fs::SemanticFS>,
+    pub root: &'a Path,
+}
+
 /// StartSession orchestration — restore checkpoint + compute delta + prefetch intent.
-pub fn start_session_orchestrate(
-    agent_id: &str,
-    intent_hint: Option<String>,
-    _load_tiers: Vec<MemoryTier>,
-    last_seen_seq: Option<u64>,
-    session_store: &SessionStore,
-    event_bus: &Arc<EventBus>,
-    _memory: &Arc<LayeredMemory>,
-    prefetch: &crate::kernel::ops::prefetch::IntentPrefetcher,
-    fs: &Arc<crate::fs::SemanticFS>,
-    root: &Path,
-) -> Result<StartSessionResult, String> {
+pub fn start_session_orchestrate(params: SessionStartParams<'_>) -> Result<StartSessionResult, String> {
+    let SessionStartParams {
+        agent_id, intent_hint, load_tiers: _load_tiers,
+        last_seen_seq, session_store, event_bus,
+        memory: _memory, prefetch, fs, root,
+    } = params;
     // 1. Get current event seq for this session's start point
     let current_seq = event_bus.current_seq();
 
@@ -644,10 +652,16 @@ pub fn end_session_orchestrate(
     // Clear only the ephemeral tier — preserve working and long-term memories
     let _cleared = memory.clear_ephemeral(agent_id);
 
-    // 4. Remove session from store (tokens_used = None for now, will enhance later)
-    session_store.end_session(session_id, None);
+    // 4. Get actual token cost from cost ledger (F-2: TokenCostLedger integration)
+    let (input_tokens, output_tokens) = prefetch
+        .map(|p| p.get_session_cost(session_id))
+        .unwrap_or((0, 0));
+    let total_tokens = (input_tokens + output_tokens) as usize;
 
-    // 5. Persist immediately (A-1)
+    // 5. Remove session from store with actual token cost for growth reporting
+    session_store.end_session(session_id, Some(total_tokens));
+
+    // 6. Persist immediately (A-1)
     if let Err(e) = session_store.persist(root) {
         tracing::warn!("Failed to persist session end: {}", e);
     }
@@ -657,7 +671,7 @@ pub fn end_session_orchestrate(
         p.set_session_id(None);
     }
 
-    // 6. Return last_seq — this is the current event count at EndSession time
+    // 7. Return last_seq — this is the current event count at EndSession time
     // The client will receive this and pass it back as last_seen_seq in next StartSession
     let last_seq = session.start_seq; // Use session's start_seq as the baseline
 
@@ -1029,19 +1043,18 @@ mod tests {
         let memory = Arc::new(crate::memory::LayeredMemory::new());
         let root = std::env::temp_dir();
 
-        // Start session WITHOUT intent_hint — should have no warm_context
-        let result = start_session_orchestrate(
-            "test-agent",
-            None,  // no intent_hint
-            vec![],
-            None,
-            &session_store,
-            &event_bus,
-            &memory,
-            &prefetcher,
-            &fs,
-            &root,
-        ).unwrap();
+        let result = start_session_orchestrate(SessionStartParams {
+            agent_id: "test-agent",
+            intent_hint: None,
+            load_tiers: vec![],
+            last_seen_seq: None,
+            session_store: &session_store,
+            event_bus: &event_bus,
+            memory: &memory,
+            prefetch: &prefetcher,
+            fs: &fs,
+            root: &root,
+        }).unwrap();
 
         assert!(result.warm_context.is_none());
     }
@@ -1056,18 +1069,18 @@ mod tests {
 
         // Start session WITH intent_hint — but prefetch runs in background thread
         // and may not be ready immediately, so we should fall back to assembly_id (UUID)
-        let result = start_session_orchestrate(
-            "test-agent",
-            Some("audit".to_string()),
-            vec![],
-            None,
-            &session_store,
-            &event_bus,
-            &memory,
-            &prefetcher,
-            &fs,
-            &root,
-        ).unwrap();
+        let result = start_session_orchestrate(SessionStartParams {
+            agent_id: "test-agent",
+            intent_hint: Some("audit".to_string()),
+            load_tiers: vec![],
+            last_seen_seq: None,
+            session_store: &session_store,
+            event_bus: &event_bus,
+            memory: &memory,
+            prefetch: &prefetcher,
+            fs: &fs,
+            root: &root,
+        }).unwrap();
 
         // B51 Fix: warm_context should always be a CAS CID (64 hex chars), never a UUID
         assert!(result.warm_context.is_some());
