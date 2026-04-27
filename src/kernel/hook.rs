@@ -18,6 +18,9 @@ pub enum HookPoint {
     PreSessionStart,
     /// Before a write operation (CAS create/update).
     PreWrite,
+    /// After a write operation completes (CAS create/update).
+    /// Used for async KG extraction and event chain building.
+    PostWrite,
     /// Before a delete operation.
     PreDelete,
 }

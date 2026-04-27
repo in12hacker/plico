@@ -26,6 +26,57 @@ pub use crate::fs::types::{
     EventType, EventMeta, EventRelation, EventSummary,
 };
 
+// ── Adaptive RRF configuration ──────────────────────────────────────────────
+
+/// Read RRF K constant from env or default to 60.
+fn rrf_config_k() -> f32 {
+    std::env::var("PLICO_RRF_K")
+        .ok()
+        .and_then(|v| v.parse::<f32>().ok())
+        .unwrap_or(60.0)
+}
+
+/// Compute adaptive BM25/Vector weights based on query characteristics.
+///
+/// Static override: if `PLICO_RRF_BM25_WEIGHT` and `PLICO_RRF_VECTOR_WEIGHT` are set,
+/// adaptive logic is bypassed.
+///
+/// Heuristic: short queries (<=3 tokens) favor BM25, long queries (>=8 tokens) favor
+/// vector search. BM25 top-1 high-score triggers an additional boost.
+fn rrf_weights(query: &str, bm25_hits: &[(String, f32)]) -> (f32, f32) {
+    // Static override
+    if let (Ok(bw), Ok(vw)) = (
+        std::env::var("PLICO_RRF_BM25_WEIGHT"),
+        std::env::var("PLICO_RRF_VECTOR_WEIGHT"),
+    ) {
+        if let (Ok(b), Ok(v)) = (bw.parse::<f32>(), vw.parse::<f32>()) {
+            return (b, v);
+        }
+    }
+
+    let token_count = query.split_whitespace().count();
+
+    // Linear interpolation between BM25-heavy and Vector-heavy
+    let (bm25_w, vector_w) = if token_count <= 3 {
+        (1.5_f32, 0.8_f32)
+    } else if token_count >= 8 {
+        (0.8_f32, 1.5_f32)
+    } else {
+        // Linear interpolation for 4-7 tokens
+        let t = (token_count as f32 - 3.0) / 5.0; // 0.0 at 3, 1.0 at 8
+        (1.5 - 0.7 * t, 0.8 + 0.7 * t)
+    };
+
+    // BM25 exact-match boost: if top-1 BM25 score is unusually high, boost BM25
+    let bm25_boost = if let Some((_, top_score)) = bm25_hits.first() {
+        if *top_score > 5.0 { 0.3 } else { 0.0 }
+    } else {
+        0.0
+    };
+
+    (bm25_w + bm25_boost, vector_w)
+}
+
 /// The semantic filesystem.
 pub struct SemanticFS {
     root: std::path::PathBuf,
@@ -218,6 +269,72 @@ impl SemanticFS {
                         Err(e) => { tracing::warn!("L0 summarization failed for {}: {}", &cid[..8], e); }
                     }
                 }
+            }
+        }
+
+        self.audit_log.write().unwrap().push(AuditEntry {
+            timestamp: now_ms(),
+            action: AuditAction::Create,
+            cid: cid.clone(),
+            agent_id: String::new(),
+        });
+
+        Ok(cid)
+    }
+
+    /// Create an object using a pre-computed embedding vector (batch optimization path).
+    /// Skips the per-item `embed_document` call, using the provided vector directly.
+    pub fn create_with_embedding(
+        &self,
+        content: Vec<u8>,
+        tags: Vec<String>,
+        created_by: String,
+        intent: Option<String>,
+        precomputed_embedding: Vec<f32>,
+    ) -> std::io::Result<String> {
+        let content_type = if std::str::from_utf8(&content).is_ok() {
+            crate::cas::ContentType::Text
+        } else {
+            crate::cas::ContentType::Unknown
+        };
+
+        let meta = AIObjectMeta {
+            content_type,
+            tags: tags.clone(),
+            created_by,
+            created_at: now_ms(),
+            intent,
+            tenant_id: crate::DEFAULT_TENANT.to_string(),
+        };
+
+        let obj = AIObject::new(content.clone(), meta.clone());
+        let cid = self.cas.put(&obj)?;
+
+        self.update_tag_index(&tags, &cid);
+
+        // Use the precomputed embedding directly
+        let text = String::from_utf8_lossy(&content);
+        let snippet = if text.len() > 200 { format!("{}...", &text[..200]) } else { text.to_string() };
+        let is_real = !precomputed_embedding.iter().all(|&v| v == 0.0);
+
+        self.search_index.upsert(&cid, &precomputed_embedding, SearchIndexMeta {
+            cid: cid.clone(),
+            tags: meta.tags.clone(),
+            snippet,
+            content_type: format!("{:?}", meta.content_type).to_lowercase(),
+            created_at: meta.created_at,
+        });
+
+        if !text.trim().is_empty() {
+            self.bm25_index.upsert(&cid, &text);
+        }
+
+        if let Some(ref kg) = self.knowledge_graph {
+            if let Err(e) = kg.upsert_document(&cid, &tags, &meta.created_by) {
+                tracing::warn!("Failed to upsert document to knowledge graph: {}", e);
+            }
+            if is_real {
+                self.add_similar_to_edges(kg, &cid, &precomputed_embedding);
             }
         }
 
@@ -454,28 +571,24 @@ impl SemanticFS {
             return self.search_by_tags_with_filter(query, &filter);
         }
 
-        // RRF fusion: proper Reciprocal Rank Fusion combining vector and BM25
-        // Both retrieval methods get rank-based scoring (not score-based) for fair fusion
-        const RRF_K: usize = 60;
-        let mut rrf_scores: HashMap<String, (f32, usize)> = HashMap::new(); // cid -> (score, count)
+        let rrf_k = rrf_config_k();
+        let (bm25_weight, vector_weight) = rrf_weights(query, &bm25_hits);
 
-        // Add vector hits with rank-based scoring
+        let mut rrf_scores: HashMap<String, (f32, usize)> = HashMap::new();
+
         let mut sorted_vector: Vec<_> = vector_hits.iter().collect();
         sorted_vector.sort_by(|a, b| b.1.partial_cmp(a.1).unwrap_or(std::cmp::Ordering::Equal));
         for (rank, (cid, _score)) in sorted_vector.iter().enumerate() {
-            let rrf = 1.0f32 / (RRF_K as f32 + rank as f32);
+            let rrf = vector_weight / (rrf_k + rank as f32);
             rrf_scores.insert((*cid).clone(), (rrf, 1usize));
         }
 
-        // Add BM25 hits with rank-based scoring (proper RRF fusion)
         for (rank, (cid, _score)) in bm25_hits.iter().enumerate() {
-            let rrf = 1.0f32 / (RRF_K as f32 + rank as f32);
+            let rrf = bm25_weight / (rrf_k + rank as f32);
             if let Some((existing_rrf, count)) = rrf_scores.get_mut(cid) {
-                // Already in vector results - add BM25 rank bonus
                 *existing_rrf += rrf;
                 *count += 1;
             } else {
-                // BM25-only result
                 let obj = match self.cas.get_raw(cid) {
                     Ok(o) => o,
                     Err(_) => continue,

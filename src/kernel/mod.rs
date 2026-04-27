@@ -96,6 +96,8 @@ pub struct AIKernel {
     pub(crate) task_store: Arc<ops::task::TaskStore>,
     /// Token cost ledger — tracks LLM/embedding token consumption (F-2).
     pub(crate) cost_ledger: Arc<TokenCostLedger>,
+    /// KG builder handle — async entity/event extraction on CAS writes.
+    pub(crate) kg_builder: Option<ops::kg_builder::KgBuilderHandle>,
 }
 
 /// Check if the embedding model has changed since last run.
@@ -333,6 +335,26 @@ impl AIKernel {
         // Task store — manages multi-agent task delegation with state tracking (F-14)
         let task_store = Arc::new(ops::task::TaskStore::restore(root.clone(), event_bus.clone()));
 
+        // KG builder — async entity/event extraction on CAS writes
+        let kg_builder_config = ops::kg_builder::KgBuilderConfig::from_env();
+        let kg_builder = if kg_builder_config.enabled {
+            if let Some(ref kg) = knowledge_graph {
+                let llm_for_kg: Arc<dyn LlmProvider> = Arc::new(llm_provider.clone());
+                let handle = ops::kg_builder::start_kg_builder(
+                    Arc::clone(kg),
+                    llm_for_kg,
+                    kg_builder_config,
+                );
+                tracing::info!("KG auto-extraction worker started");
+                Some(handle)
+            } else {
+                tracing::warn!("PLICO_KG_AUTO_EXTRACT=1 but no knowledge graph backend available");
+                None
+            }
+        } else {
+            None
+        };
+
         let kernel = Self {
             root: root.clone(),
             cas,
@@ -361,6 +383,7 @@ impl AIKernel {
             checkpoint_store,
             task_store,
             cost_ledger,
+            kg_builder,
         };
 
         kernel.register_builtin_tools();

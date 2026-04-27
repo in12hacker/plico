@@ -10,6 +10,7 @@ use crate::api::semantic::{
     BatchCreateItem, BatchCreateResponse, BatchMemoryEntry, BatchMemoryStoreResponse,
     BatchQueryResponse, BatchSubmitIntentResponse, ContentEncoding, IntentSpec, QuerySpec,
 };
+use crate::fs::embedding::EmbeddingProvider;
 use crate::scheduler::IntentPriority;
 use super::observability::{OpType, OperationTimer};
 
@@ -66,24 +67,54 @@ impl crate::kernel::AIKernel {
             return BatchCreateResponse { results, successful, failed };
         }
 
-        // Parallel batch: pre-decode content in parallel, then call semantic_create sequentially
+        // Batch embedding optimization: decode all items, batch-embed texts, then create with precomputed vectors
         let agent_id_str = agent_id.to_string();
 
         let items_data: Vec<_> = items.into_iter().map(|item| {
             let bytes_result: Result<Vec<u8>, String> = decode_content(&item.content, &item.content_encoding);
-            let tags = item.tags;
-            let intent = item.intent;
-            let agent_id_clone = agent_id_str.clone();
-            (bytes_result, tags, agent_id_clone, intent)
+            (bytes_result, item.tags, item.intent)
         }).collect();
+
+        // Collect texts for batch embedding
+        let texts: Vec<String> = items_data.iter().map(|(bytes_result, _, _)| {
+            match bytes_result {
+                Ok(bytes) => String::from_utf8_lossy(bytes).to_string(),
+                Err(_) => String::new(),
+            }
+        }).collect();
+
+        let text_refs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
+        let embeddings: Option<Vec<crate::fs::embedding::types::EmbedResult>> =
+            self.embedding.embed_batch(&text_refs).ok();
 
         let mut results = Vec::with_capacity(items_data.len());
         let mut successful = 0usize;
         let mut failed = 0usize;
 
-        for (bytes_result, tags, agent_id_clone, intent) in items_data {
+        for (i, (bytes_result, tags, intent)) in items_data.into_iter().enumerate() {
+            let text_for_kg = texts[i].clone();
+            let tags_for_kg = tags.clone();
             let result = bytes_result.and_then(|bytes| {
-                self.semantic_create(bytes, tags, &agent_id_clone, intent)
+                if let Some(ref embs) = embeddings {
+                    if let Some(emb_result) = embs.get(i) {
+                        let cid = self.fs.create_with_embedding(
+                            bytes, tags, agent_id_str.clone(), intent,
+                            emb_result.embedding.clone(),
+                        ).map_err(|e| e.to_string())?;
+                        // Notify KG builder for batch-created items
+                        if let Some(ref handle) = self.kg_builder {
+                            handle.notify(super::kg_builder::WriteEvent {
+                                cid: cid.clone(),
+                                text: text_for_kg,
+                                agent_id: agent_id_str.clone(),
+                                created_at: crate::fs::graph::types::now_ms(),
+                                tags: tags_for_kg,
+                            });
+                        }
+                        return Ok(cid);
+                    }
+                }
+                self.semantic_create(bytes, tags, &agent_id_str, intent)
                     .map_err(|e| e.to_string())
             });
 

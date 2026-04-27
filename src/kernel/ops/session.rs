@@ -23,6 +23,15 @@ const MIN_TAG_LENGTH: usize = 2;
 
 /// Agent profile for cognitive prefetch (F-10).
 ///
+/// An extracted user/agent preference fact.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PreferenceFact {
+    pub category: String,
+    pub preference: String,
+    pub confidence: f32,
+    pub updated_at_ms: u64,
+}
+
 /// Stores statistical patterns of agent behavior:
 /// - Intent transitions: which tag keys follow which
 /// - Hot objects: frequently accessed CIDs
@@ -37,6 +46,8 @@ pub struct AgentProfile {
     pub updated_at_ms: u64,
     /// Last intent observed (for transition tracking).
     pub last_intent: Option<String>,
+    /// Extracted preference facts for this agent (P1-3).
+    pub preference_facts: Vec<PreferenceFact>,
 }
 
 impl AgentProfile {
@@ -47,6 +58,7 @@ impl AgentProfile {
             hot_objects: Vec::new(),
             updated_at_ms: now_ms(),
             last_intent: None,
+            preference_facts: Vec::new(),
         }
     }
 
@@ -104,6 +116,38 @@ impl AgentProfile {
         for cid in cids {
             self.record_cid_usage(cid);
         }
+    }
+
+    /// Add or update a preference fact for this agent.
+    /// If a fact with the same category exists, it is updated if the new confidence is higher.
+    pub fn add_preference(&mut self, category: String, preference: String, confidence: f32) {
+        self.updated_at_ms = now_ms();
+        if let Some(existing) = self.preference_facts.iter_mut().find(|f| f.category == category) {
+            if confidence >= existing.confidence {
+                existing.preference = preference;
+                existing.confidence = confidence;
+                existing.updated_at_ms = now_ms();
+            }
+        } else {
+            self.preference_facts.push(PreferenceFact {
+                category,
+                preference,
+                confidence,
+                updated_at_ms: now_ms(),
+            });
+        }
+        // Keep top 50 preferences, sorted by confidence
+        self.preference_facts.sort_by(|a, b| b.confidence.partial_cmp(&a.confidence).unwrap_or(std::cmp::Ordering::Equal));
+        self.preference_facts.truncate(50);
+    }
+
+    /// Get preference keywords for search augmentation.
+    /// Returns preference strings above the given confidence threshold.
+    pub fn preference_keywords(&self, min_confidence: f32) -> Vec<&str> {
+        self.preference_facts.iter()
+            .filter(|f| f.confidence >= min_confidence)
+            .map(|f| f.preference.as_str())
+            .collect()
     }
 
     /// Decay the access count for an object (used when feedback shows it was unused).

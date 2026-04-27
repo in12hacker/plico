@@ -22,6 +22,9 @@ BENCH_ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = BENCH_ROOT / "data"
 RESULTS_DIR = BENCH_ROOT / "results"
 
+# Add bench root to path for judge import
+sys.path.insert(0, str(BENCH_ROOT))
+
 DATASET_FILE = DATA_DIR / "longmemeval_s_cleaned.json"
 ORACLE_FILE = DATA_DIR / "longmemeval_oracle.json"
 RESULTS_FILE = RESULTS_DIR / "longmemeval_e2e.json"
@@ -152,14 +155,12 @@ def run_benchmark(use_oracle: bool = False):
         reader_prompt = READER_PROMPT.format(context=context, question=question)
         actual_answer = llm_complete(reader_prompt)
 
-        # Judge
-        judge_prompt = JUDGE_PROMPT.format(
-            question=question,
-            expected=expected_answer,
-            actual=actual_answer,
-        )
-        judgment = llm_complete(judge_prompt, max_tokens=16)
-        is_correct = "correct" in judgment.lower() and "incorrect" not in judgment.lower()
+        # Judge — use configurable judge interface
+        from judge import Judge
+        _judge = Judge.from_env()
+        judge_result = _judge.evaluate(question, expected_answer, actual_answer)
+        is_correct = judge_result.correct
+        judgment = judge_result.raw_response
 
         if is_correct:
             correct_count += 1

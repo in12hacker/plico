@@ -18,6 +18,8 @@ pub enum KGNodeType {
     Document,
     Agent,
     Memory,
+    /// A temporal event extracted from content — first-class citizen for causal reasoning.
+    Event,
 }
 
 impl std::fmt::Display for KGNodeType {
@@ -28,6 +30,7 @@ impl std::fmt::Display for KGNodeType {
             KGNodeType::Document => write!(f, "document"),
             KGNodeType::Agent => write!(f, "agent"),
             KGNodeType::Memory => write!(f, "memory"),
+            KGNodeType::Event => write!(f, "event"),
         }
     }
 }
@@ -349,6 +352,7 @@ mod tests {
         assert_eq!(KGNodeType::Document.to_string(), "document");
         assert_eq!(KGNodeType::Agent.to_string(), "agent");
         assert_eq!(KGNodeType::Memory.to_string(), "memory");
+        assert_eq!(KGNodeType::Event.to_string(), "event");
     }
 
     #[test]

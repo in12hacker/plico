@@ -78,7 +78,19 @@ impl crate::kernel::AIKernel {
             ));
         }
 
+        let text_for_kg = String::from_utf8_lossy(&content).to_string();
         let cid = self.fs.create(content, tags.clone(), agent_id.to_string(), intent)?;
+
+        // PostWrite: notify KG builder for async entity/event extraction
+        if let Some(ref handle) = self.kg_builder {
+            handle.notify(crate::kernel::ops::kg_builder::WriteEvent {
+                cid: cid.clone(),
+                text: text_for_kg,
+                agent_id: agent_id.to_string(),
+                created_at: crate::fs::graph::types::now_ms(),
+                tags: tags.clone(),
+            });
+        }
 
         self.event_bus.emit(KernelEvent::ObjectStored {
             cid: cid.clone(),

@@ -210,7 +210,7 @@ docs/                    # Tier B — iteration-end human docs (not maintained p
 | LLM providers | `src/llm/INDEX.md` | LlmProvider trait, Ollama/OpenAI/Stub backends |
 | MCP client | `src/mcp/INDEX.md` | External tool integration via MCP protocol |
 | Event bus | `src/kernel/event_bus.rs` | Kernel pub/sub, persisted event log |
-| Kernel ops | `src/kernel/ops/INDEX.md` | 24 operation files (session, delta, prefetch, hybrid, etc.) |
+| Kernel ops | `src/kernel/ops/INDEX.md` | 25 operation files (session, delta, prefetch, hybrid, kg_builder, etc.) |
 | KernelClient | `src/client.rs` | Transport abstraction: EmbeddedClient + RemoteClient (UDS/TCP) |
 | Binaries | `src/bin/INDEX.md` | plicod (TCP+UDS daemon), plico-mcp (MCP stdio), aicli (CLI) |
 | Milestone plans | `docs/plans/INDEX.md` | v0.5+ roadmap copies for Git; sync at iteration end |
@@ -322,6 +322,14 @@ No project-specific KGNodeType or KGEdgeType — all semantics via tags + proper
 | `RUST_LOG` | Tracing log level filter (default: `info`) | No |
 | `AICLI_OUTPUT` | CLI output format: `json` (default) / `human` | No |
 | `PLICO_PERSIST_INTERVAL_SECS` | Periodic persist interval for `plicod` (default: 300) | No |
+| `PLICO_RRF_K` | RRF rank constant (default: 60) | No |
+| `PLICO_RRF_BM25_WEIGHT` | Static BM25 weight (overrides adaptive) | No |
+| `PLICO_RRF_VECTOR_WEIGHT` | Static vector weight (overrides adaptive) | No |
+| `PLICO_KG_AUTO_EXTRACT` | Enable async KG extraction on writes (`1`/`true`) | No |
+| `PLICO_KG_EXTRACT_BATCH_SIZE` | KG extraction batch size (default: 5) | No |
+| `PLICO_KG_EXTRACT_TIMEOUT_MS` | KG extraction batch timeout ms (default: 3000) | No |
+| `PLICO_JUDGE_API_BASE` | Judge model API base URL | No |
+| `PLICO_JUDGE_MODEL` | Judge model name | No |
 
 ## AI Agent Instructions
 

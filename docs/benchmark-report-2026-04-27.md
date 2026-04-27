@@ -253,7 +253,7 @@
 
 ### 6.4 P3 — 长期规划
 
-#### [P3-1] 缺少分布式/联邦式 Agent 记忆评测
+#### [P3-1] 缺少分布式/联邦式 Agent 记忆评测（暂时不考虑分布式，仅to c场景）
 - Plico 当前单节点部署，MemoryScope (Shared/Group) 仅本地生效
 - 长期需要验证多 Agent 跨实例的知识共享能力
 
@@ -261,7 +261,7 @@
 - 当前 KG 依赖外部 LLM 调用来抽取实体和关系
 - 应在 CAS 写入 hook 中自动触发，形成 "写入即理解" 的闭环
 
-#### [P3-3] 与大型 Agent 框架的集成测试
+#### [P3-3] 与大型 Agent 框架的集成测试（cursor本身也是真实的框架，你可以自行调用plico进行集成验证价值）
 - 需要在 AutoGPT / CrewAI / LangGraph 等框架中实际集成 Plico
 - 验证 "AI 的硅基大脑" 在真实 agent workflow 中的价值
 

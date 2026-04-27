@@ -39,3 +39,4 @@ pub mod self_healing;
 pub mod cross_domain_skill;
 pub mod goal_generator;
 pub mod temporal_projection;
+pub mod kg_builder;
