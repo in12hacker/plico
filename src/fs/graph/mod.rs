@@ -67,4 +67,18 @@ pub trait KnowledgeGraph: Send + Sync {
     ) -> Result<Vec<KGNode>, KGError>;
     fn save_to_disk(&self, path: &std::path::Path) -> Result<(), KGError>;
     fn load_from_disk(&self, path: &std::path::Path) -> Result<(), KGError>;
+
+    /// Personalized PageRank: given seed node IDs, compute PPR scores for all
+    /// reachable nodes. Returns top-K node IDs sorted by PPR score (descending).
+    ///
+    /// Default implementation returns an empty vec (no graph traversal).
+    fn personalized_pagerank(
+        &self,
+        _seed_nodes: &[String],
+        _alpha: f32,
+        _max_iter: usize,
+        _top_k: usize,
+    ) -> Result<Vec<(String, f32)>, KGError> {
+        Ok(vec![])
+    }
 }

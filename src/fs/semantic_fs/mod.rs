@@ -291,6 +291,48 @@ impl SemanticFS {
             agent_id: String::new(),
         });
 
+        // Hierarchical chunking: split large documents into child chunks
+        let chunking_mode = crate::fs::chunking::ChunkingMode::from_env();
+        if chunking_mode != crate::fs::chunking::ChunkingMode::None {
+            if let Ok(text) = std::str::from_utf8(&content) {
+                let emb_ref: Option<&dyn EmbeddingProvider> = if chunking_mode == crate::fs::chunking::ChunkingMode::Semantic {
+                    Some(self.embedding.as_ref())
+                } else {
+                    None
+                };
+                let chunks = crate::fs::chunking::chunk_document(text, chunking_mode, emb_ref);
+                if !chunks.is_empty() {
+                    tracing::debug!("Chunked document {} into {} child chunks", &cid[..8], chunks.len());
+                    for (ci, chunk) in chunks.iter().enumerate() {
+                        let mut child_tags = tags.clone();
+                        child_tags.push(format!("parent_cid:{}", cid));
+                        child_tags.push(format!("chunk_idx:{}", ci));
+                        child_tags.push("is_chunk:true".to_string());
+                        let child_meta = AIObjectMeta {
+                            content_type: crate::cas::ContentType::Text,
+                            tags: child_tags.clone(),
+                            created_by: meta.created_by.clone(),
+                            created_at: meta.created_at,
+                            intent: None,
+                            tenant_id: meta.tenant_id.clone(),
+                        };
+                        let child_obj = AIObject::new(chunk.text.as_bytes().to_vec(), child_meta);
+                        if let Ok(child_cid) = self.cas.put(&child_obj) {
+                            self.update_tag_index(&child_tags, &child_cid);
+                            self.upsert_semantic_index(&child_cid, chunk.text.as_bytes(), &AIObjectMeta {
+                                content_type: crate::cas::ContentType::Text,
+                                tags: child_tags,
+                                created_by: meta.created_by.clone(),
+                                created_at: meta.created_at,
+                                intent: None,
+                                tenant_id: meta.tenant_id.clone(),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
         Ok(cid)
     }
 
@@ -580,6 +622,50 @@ impl SemanticFS {
             }
         }
 
+        // Tier 0.5: PPR multi-hop retrieval — if KG has nodes, try entity-based graph traversal
+        let mut ppr_boost: HashMap<String, f32> = HashMap::new();
+        if let Some(ref kg) = self.knowledge_graph {
+            let query_words: Vec<String> = query.split_whitespace()
+                .filter(|w| w.len() > 2)
+                .map(|w| w.to_lowercase())
+                .collect();
+
+            let all_ids = kg.all_node_ids();
+            let seed_nodes: Vec<String> = all_ids.iter()
+                .filter(|id| {
+                    let id_lower = id.to_lowercase();
+                    query_words.iter().any(|w| id_lower.contains(w))
+                })
+                .take(5)
+                .cloned()
+                .collect();
+
+            if !seed_nodes.is_empty() {
+                match kg.personalized_pagerank(&seed_nodes, 0.15, 50, limit * 2) {
+                    Ok(ranked) => {
+                        for (node_id, score) in ranked {
+                            if let Ok(Some(node)) = kg.get_node(&node_id) {
+                                for cid in node.properties.as_object()
+                                    .and_then(|o| o.get("cids"))
+                                    .and_then(|v| v.as_array())
+                                    .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect::<Vec<_>>())
+                                    .unwrap_or_default()
+                                {
+                                    ppr_boost.insert(cid, score);
+                                }
+                            }
+                        }
+                        if !ppr_boost.is_empty() {
+                            tracing::debug!("PPR boosted {} documents from {} seed nodes", ppr_boost.len(), seed_nodes.len());
+                        }
+                    }
+                    Err(e) => {
+                        tracing::debug!("PPR failed, degrading: {e}");
+                    }
+                }
+            }
+        }
+
         let query_emb = self.embedding.embed_query(query).ok().map(|r| r.embedding);
 
         let vector_hits: HashMap<String, f32> = match &query_emb {
@@ -627,6 +713,16 @@ impl SemanticFS {
                 if filter.matches(&meta_for_filter) {
                     rrf_scores.insert(cid.clone(), (rrf, 1usize));
                 }
+            }
+        }
+
+        // Inject PPR boost into RRF scores
+        for (cid, ppr_score) in &ppr_boost {
+            let boost = ppr_score * 0.5;
+            if let Some((existing_rrf, _)) = rrf_scores.get_mut(cid) {
+                *existing_rrf += boost;
+            } else {
+                rrf_scores.insert(cid.clone(), (boost, 1));
             }
         }
 
@@ -687,15 +783,55 @@ impl SemanticFS {
 
         sorted.truncate(limit);
 
-        sorted
+        let results: Vec<SearchResult> = sorted
             .into_iter()
             .filter_map(|(cid, relevance)| {
                 self.cas.get(&cid).ok().map(|obj| {
-                    let snippet = String::from_utf8_lossy(&obj.data[..std::cmp::min(200, obj.data.len())]).to_string();
-                    SearchResult { cid, relevance, meta: obj.meta, snippet }
+                    SearchResult {
+                        cid,
+                        relevance,
+                        snippet: String::from_utf8_lossy(&obj.data[..std::cmp::min(200, obj.data.len())]).to_string(),
+                        meta: obj.meta,
+                    }
                 })
             })
-            .collect()
+            .collect();
+
+        self.resolve_parent_chunks(results)
+    }
+
+    /// If a search result is a child chunk (has `parent_cid:xxx` tag), resolve the parent
+    /// and return the parent's expanded snippet instead. Deduplicates by parent CID.
+    fn resolve_parent_chunks(&self, results: Vec<SearchResult>) -> Vec<SearchResult> {
+        let mut seen_parents = std::collections::HashSet::new();
+        let mut resolved = Vec::with_capacity(results.len());
+
+        for r in results {
+            let parent_cid = r.meta.tags.iter()
+                .find(|t| t.starts_with("parent_cid:"))
+                .map(|t| t["parent_cid:".len()..].to_string());
+
+            if let Some(ref pcid) = parent_cid {
+                if !seen_parents.insert(pcid.clone()) {
+                    continue;
+                }
+                if let Ok(parent_obj) = self.cas.get(pcid) {
+                    let snippet = String::from_utf8_lossy(
+                        &parent_obj.data[..std::cmp::min(500, parent_obj.data.len())]
+                    ).to_string();
+                    resolved.push(SearchResult {
+                        cid: pcid.clone(),
+                        relevance: r.relevance,
+                        meta: parent_obj.meta,
+                        snippet,
+                    });
+                    continue;
+                }
+            }
+            resolved.push(r);
+        }
+
+        resolved
     }
 
     fn search_by_tags_with_filter(&self, query: &str, filter: &SearchFilter) -> Vec<SearchResult> {

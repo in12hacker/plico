@@ -786,3 +786,40 @@ fn test_redb_update_node_persisted() {
     assert_eq!(node.label, "UpdatedLabel");
     assert_eq!(node.properties["key"], "value");
 }
+
+#[test]
+fn test_ppr_basic() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let kg = PetgraphBackend::open(dir.path().to_path_buf());
+
+    kg.add_node(make_node("a", KGNodeType::Entity, vec![], "agent1")).unwrap();
+    kg.add_node(make_node("b", KGNodeType::Entity, vec![], "agent1")).unwrap();
+    kg.add_node(make_node("c", KGNodeType::Entity, vec![], "agent1")).unwrap();
+    kg.add_node(make_node("d", KGNodeType::Entity, vec![], "agent1")).unwrap();
+
+    kg.add_edge(KGEdge::new("a".into(), "b".into(), KGEdgeType::HasFact, 1.0)).unwrap();
+    kg.add_edge(KGEdge::new("b".into(), "c".into(), KGEdgeType::HasFact, 1.0)).unwrap();
+    kg.add_edge(KGEdge::new("a".into(), "d".into(), KGEdgeType::HasFact, 1.0)).unwrap();
+
+    let result = kg.personalized_pagerank(&["a".to_string()], 0.15, 50, 4).unwrap();
+    assert!(!result.is_empty(), "PPR should return results");
+    assert_eq!(result[0].0, "a", "seed node should have highest score");
+    assert!(result[0].1 > result[1].1, "seed should score higher than neighbors");
+}
+
+#[test]
+fn test_ppr_empty_graph() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let kg = PetgraphBackend::open(dir.path().to_path_buf());
+    let result = kg.personalized_pagerank(&["x".to_string()], 0.15, 50, 5).unwrap();
+    assert!(result.is_empty());
+}
+
+#[test]
+fn test_ppr_no_seeds() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let kg = PetgraphBackend::open(dir.path().to_path_buf());
+    kg.add_node(make_node("a", KGNodeType::Entity, vec![], "agent1")).unwrap();
+    let result = kg.personalized_pagerank(&[], 0.15, 50, 5).unwrap();
+    assert!(result.is_empty());
+}

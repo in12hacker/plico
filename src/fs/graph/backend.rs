@@ -953,4 +953,83 @@ impl KnowledgeGraph for PetgraphBackend {
         *self.in_edges.write().unwrap() = new_in;
         Ok(())
     }
+
+    fn personalized_pagerank(
+        &self,
+        seed_nodes: &[String],
+        alpha: f32,
+        max_iter: usize,
+        top_k: usize,
+    ) -> Result<Vec<(String, f32)>, KGError> {
+        let nodes = self.nodes.read().unwrap();
+        let out_edges = self.out_edges.read().unwrap();
+
+        if nodes.is_empty() || seed_nodes.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let node_ids: Vec<String> = nodes.keys().cloned().collect();
+        let n = node_ids.len();
+        let id_to_idx: HashMap<&str, usize> = node_ids.iter().enumerate().map(|(i, id)| (id.as_str(), i)).collect();
+
+        let mut scores = vec![0.0_f32; n];
+        let seed_val = 1.0 / seed_nodes.len() as f32;
+        for s in seed_nodes {
+            if let Some(&idx) = id_to_idx.get(s.as_str()) {
+                scores[idx] = seed_val;
+            }
+        }
+
+        for _ in 0..max_iter {
+            let mut next = vec![0.0_f32; n];
+
+            // Teleport component
+            for s in seed_nodes {
+                if let Some(&idx) = id_to_idx.get(s.as_str()) {
+                    next[idx] += alpha * seed_val;
+                }
+            }
+
+            // Random walk component
+            for (src_id, neighbors) in out_edges.iter() {
+                if let Some(&src_idx) = id_to_idx.get(src_id.as_str()) {
+                    let cur_score = scores[src_idx];
+                    if cur_score < 1e-10 {
+                        continue;
+                    }
+                    let valid: Vec<&str> = neighbors
+                        .iter()
+                        .filter(|(dst, _)| id_to_idx.contains_key(dst.as_str()))
+                        .map(|(dst, _)| dst.as_str())
+                        .collect();
+                    if valid.is_empty() {
+                        continue;
+                    }
+                    let share = (1.0 - alpha) * cur_score / valid.len() as f32;
+                    for dst in valid {
+                        if let Some(&dst_idx) = id_to_idx.get(dst) {
+                            next[dst_idx] += share;
+                        }
+                    }
+                }
+            }
+
+            // Convergence check
+            let diff: f32 = scores.iter().zip(next.iter()).map(|(a, b)| (a - b).abs()).sum();
+            scores = next;
+            if diff < 1e-6 {
+                break;
+            }
+        }
+
+        let mut ranked: Vec<(String, f32)> = node_ids
+            .into_iter()
+            .zip(scores)
+            .filter(|(_, s)| *s > 1e-8)
+            .collect();
+        ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        ranked.truncate(top_k);
+
+        Ok(ranked)
+    }
 }

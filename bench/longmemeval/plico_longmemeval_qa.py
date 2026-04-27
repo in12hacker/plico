@@ -49,7 +49,7 @@ def load_longmemeval(path: str) -> list[dict]:
     return data
 
 
-def call_llm(url: str, model: str, prompt: str, max_tokens: int = 256) -> str:
+def call_llm(url: str, model: str, prompt: str, max_tokens: int = 1024) -> str:
     """Call an OpenAI-compatible LLM endpoint."""
     import urllib.request
     body = json.dumps({
@@ -67,7 +67,11 @@ def call_llm(url: str, model: str, prompt: str, max_tokens: int = 256) -> str:
     try:
         with urllib.request.urlopen(req, timeout=120) as resp:
             result = json.loads(resp.read())
-            return result["choices"][0]["message"]["content"].strip()
+            msg = result["choices"][0]["message"]
+            content = (msg.get("content") or "").strip()
+            if not content:
+                content = (msg.get("reasoning_content") or "").strip()
+            return content
     except Exception as e:
         return f"ERROR: {e}"
 
@@ -154,7 +158,7 @@ def evaluate_item(
         answer = call_llm(reader_url, reader_model, prompt)
 
         jp = JUDGE_PROMPT.format(question=question, gold=gold, answer=answer)
-        score_str = call_llm(judge_url, judge_model, jp, max_tokens=8)
+        score_str = call_llm(judge_url, judge_model, jp, max_tokens=256)
         try:
             score = int(re.search(r"[1-5]", score_str).group())
         except (AttributeError, ValueError):

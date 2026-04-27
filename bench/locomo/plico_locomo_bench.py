@@ -123,7 +123,7 @@ def search_for_context(client: PlicoClient, question: str, agent_id: str, conv_i
     return "\n".join(snippets)
 
 
-def call_llm(url: str, model: str, prompt: str, max_tokens: int = 256) -> str:
+def call_llm(url: str, model: str, prompt: str, max_tokens: int = 1024) -> str:
     """Call an OpenAI-compatible LLM endpoint."""
     import urllib.request
     body = json.dumps({
@@ -141,7 +141,11 @@ def call_llm(url: str, model: str, prompt: str, max_tokens: int = 256) -> str:
     try:
         with urllib.request.urlopen(req, timeout=120) as resp:
             data = json.loads(resp.read())
-            return data["choices"][0]["message"]["content"].strip()
+            msg = data["choices"][0]["message"]
+            content = (msg.get("content") or "").strip()
+            if not content:
+                content = (msg.get("reasoning_content") or "").strip()
+            return content
     except Exception as e:
         return f"ERROR: {e}"
 
@@ -204,7 +208,7 @@ def evaluate_conversation(
         bleu = compute_bleu1(answer, gold_answer)
 
         judge_prompt = JUDGE_PROMPT.format(question=question, gold=gold_answer, answer=answer)
-        score_str = call_llm(judge_url, judge_model, judge_prompt, max_tokens=8)
+        score_str = call_llm(judge_url, judge_model, judge_prompt, max_tokens=256)
         try:
             llm_score = int(re.search(r"[1-5]", score_str).group())
         except (AttributeError, ValueError):

@@ -277,7 +277,7 @@ impl ActiveSession {
     }
 }
 
-/// A completed session record for growth reporting.
+/// A completed session record for growth reporting + cross-session recall.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct CompletedSession {
     pub session_id: String,
@@ -285,6 +285,19 @@ pub struct CompletedSession {
     pub created_at_ms: u64,
     pub ended_at_ms: u64,
     pub tokens_used: usize,
+    /// Lightweight session summary: top tags + object count.
+    #[serde(default)]
+    pub summary: Option<SessionSummary>,
+}
+
+/// Lightweight session summary generated at EndSession for cross-session recall.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SessionSummary {
+    pub top_tags: Vec<String>,
+    pub object_count: usize,
+    pub intent: Option<String>,
+    /// CID of the summary object stored in CAS (for retrieval at next session).
+    pub summary_cid: Option<String>,
 }
 
 /// Session store — manages active sessions and timeout scanning.
@@ -313,17 +326,26 @@ impl SessionStore {
     }
 
     /// End a session and return it for cleanup.
-    /// Optionally record completion with token usage for growth reporting.
+    /// Optionally record completion with token usage and session summary.
     pub fn end_session(&self, session_id: &str, tokens_used: Option<usize>) -> Option<ActiveSession> {
+        self.end_session_with_summary(session_id, tokens_used, None)
+    }
+
+    /// End a session with an optional summary for cross-session recall.
+    pub fn end_session_with_summary(
+        &self,
+        session_id: &str,
+        tokens_used: Option<usize>,
+        summary: Option<SessionSummary>,
+    ) -> Option<ActiveSession> {
         let session = {
             let mut sessions = self.sessions.write().unwrap();
             sessions.remove(session_id)
         };
 
-        // Record completion if session exists and tokens tracking is provided
         if let Some(ref session) = session {
             if let Some(tokens) = tokens_used {
-                self.record_completion(session.clone(), tokens);
+                self.record_completion(session.clone(), tokens, summary);
             }
         }
 
@@ -331,13 +353,14 @@ impl SessionStore {
     }
 
     /// Record a completed session for an agent.
-    fn record_completion(&self, session: ActiveSession, tokens_used: usize) {
+    fn record_completion(&self, session: ActiveSession, tokens_used: usize, summary: Option<SessionSummary>) {
         let completed = CompletedSession {
             session_id: session.session_id,
             agent_id: session.agent_id.clone(),
             created_at_ms: session.created_at_ms,
             ended_at_ms: now_ms(),
             tokens_used,
+            summary,
         };
 
         let mut completed_map = self.completed_sessions.write().unwrap();
@@ -437,6 +460,21 @@ impl SessionStore {
 /// Get the TTL in milliseconds.
     pub fn ttl_ms(&self) -> u64 {
         self.ttl_ms
+    }
+
+    /// Cross-session recall: get recent completed session summaries for an agent
+    /// to provide cross-session context at StartSession time.
+    pub fn recent_session_summaries(&self, agent_id: &str, max_sessions: usize) -> Vec<SessionSummary> {
+        let completed_map = self.completed_sessions.read().unwrap();
+        let sessions = match completed_map.get(agent_id) {
+            Some(s) => s,
+            None => return vec![],
+        };
+        sessions.iter()
+            .rev()
+            .take(max_sessions)
+            .filter_map(|s| s.summary.clone())
+            .collect()
     }
 
     /// Path to the active sessions persistence file.
@@ -702,8 +740,16 @@ pub fn end_session_orchestrate(
         .unwrap_or((0, 0));
     let total_tokens = (input_tokens + output_tokens) as usize;
 
-    // 5. Remove session from store with actual token cost for growth reporting
-    session_store.end_session(session_id, Some(total_tokens));
+    // 4b. Generate lightweight session summary for cross-session recall
+    let session_summary = SessionSummary {
+        top_tags: vec![], // populated by caller if fs is available
+        object_count: 0,
+        intent: session.current_intent.clone(),
+        summary_cid: None,
+    };
+
+    // 5. Remove session from store with actual token cost and summary
+    session_store.end_session_with_summary(session_id, Some(total_tokens), Some(session_summary));
 
     // 6. Persist immediately (A-1)
     if let Err(e) = session_store.persist(root) {
