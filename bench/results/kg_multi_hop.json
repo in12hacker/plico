@@ -1,0 +1,796 @@
+{
+  "benchmark": "KG Multi-hop (LongMemEval subset)",
+  "system": "Plico KG (redb)",
+  "timestamp": "2026-04-26T19:43:08",
+  "overall": {
+    "n_questions": 20,
+    "total_entities_stored": 339,
+    "total_edges_stored": 105,
+    "paths_found": 25,
+    "paths_attempted": 120,
+    "path_hit_rate": 20.8,
+    "llm_extraction": true
+  },
+  "per_question": [
+    {
+      "question_id": "0a995998",
+      "question_type": "multi-session",
+      "entities_extracted": 17,
+      "relations_extracted": 27,
+      "entities_stored": 17,
+      "path_tests": [
+        {
+          "source": "shoe organizer",
+          "target": "thick grey scarf",
+          "found": false
+        },
+        {
+          "source": "shoe organizer",
+          "target": "shoe rack",
+          "found": false
+        },
+        {
+          "source": "thick grey scarf",
+          "target": "shoe rack",
+          "found": false
+        },
+        {
+          "source": "thick grey scarf",
+          "target": "black jeans",
+          "found": false
+        },
+        {
+          "source": "shoe rack",
+          "target": "black jeans",
+          "found": false
+        },
+        {
+          "source": "shoe rack",
+          "target": "compression bags",
+          "found": false
+        }
+      ]
+    },
+    {
+      "question_id": "6d550036",
+      "question_type": "multi-session",
+      "entities_extracted": 29,
+      "relations_extracted": 38,
+      "entities_stored": 20,
+      "path_tests": [
+        {
+          "source": "Plotly",
+          "target": "social media influencers",
+          "found": false
+        },
+        {
+          "source": "Plotly",
+          "target": "QlikView",
+          "found": false
+        },
+        {
+          "source": "social media influencers",
+          "target": "QlikView",
+          "found": false
+        },
+        {
+          "source": "social media influencers",
+          "target": "systematic review",
+          "found": false
+        },
+        {
+          "source": "QlikView",
+          "target": "systematic review",
+          "found": false
+        },
+        {
+          "source": "QlikView",
+          "target": "k-means",
+          "found": false
+        }
+      ]
+    },
+    {
+      "question_id": "gpt4_59c863d7",
+      "question_type": "multi-session",
+      "entities_extracted": 49,
+      "relations_extracted": 39,
+      "entities_stored": 20,
+      "path_tests": [
+        {
+          "source": "model",
+          "target": "AK Interactive",
+          "found": false
+        },
+        {
+          "source": "model",
+          "target": "salt weathering",
+          "found": true
+        },
+        {
+          "source": "AK Interactive",
+          "target": "salt weathering",
+          "found": false
+        },
+        {
+          "source": "AK Interactive",
+          "target": "exhaust stains",
+          "found": false
+        },
+        {
+          "source": "salt weathering",
+          "target": "exhaust stains",
+          "found": true
+        },
+        {
+          "source": "salt weathering",
+          "target": "fading",
+          "found": true
+        }
+      ]
+    },
+    {
+      "question_id": "b5ef892d",
+      "question_type": "multi-session",
+      "entities_extracted": 45,
+      "relations_extracted": 43,
+      "entities_stored": 20,
+      "path_tests": [
+        {
+          "source": "elk",
+          "target": "America the Beautiful Pass",
+          "found": false
+        },
+        {
+          "source": "elk",
+          "target": "Yellowstone National Park",
+          "found": false
+        },
+        {
+          "source": "America the Beautiful Pass",
+          "target": "Yellowstone National Park",
+          "found": false
+        },
+        {
+          "source": "America the Beautiful Pass",
+          "target": "Aspen Glen Campground",
+          "found": false
+        },
+        {
+          "source": "Yellowstone National Park",
+          "target": "Aspen Glen Campground",
+          "found": false
+        },
+        {
+          "source": "Yellowstone National Park",
+          "target": "La Sportiva Raptor GTX",
+          "found": false
+        }
+      ]
+    },
+    {
+      "question_id": "e831120c",
+      "question_type": "multi-session",
+      "entities_extracted": 6,
+      "relations_extracted": 11,
+      "entities_stored": 6,
+      "path_tests": [
+        {
+          "source": "Rogue One",
+          "target": "user",
+          "found": true
+        },
+        {
+          "source": "Rogue One",
+          "target": "Marvel Cinematic Universe",
+          "found": true
+        },
+        {
+          "source": "user",
+          "target": "Marvel Cinematic Universe",
+          "found": true
+        },
+        {
+          "source": "user",
+          "target": "Solo",
+          "found": true
+        },
+        {
+          "source": "Marvel Cinematic Universe",
+          "target": "Solo",
+          "found": true
+        },
+        {
+          "source": "Marvel Cinematic Universe",
+          "target": "Star Wars",
+          "found": true
+        }
+      ]
+    },
+    {
+      "question_id": "3a704032",
+      "question_type": "multi-session",
+      "entities_extracted": 18,
+      "relations_extracted": 34,
+      "entities_stored": 18,
+      "path_tests": [
+        {
+          "source": "nursery",
+          "target": "repotting",
+          "found": true
+        },
+        {
+          "source": "nursery",
+          "target": "user",
+          "found": true
+        },
+        {
+          "source": "repotting",
+          "target": "user",
+          "found": true
+        },
+        {
+          "source": "repotting",
+          "target": "general-purpose potting mix",
+          "found": false
+        },
+        {
+          "source": "user",
+          "target": "general-purpose potting mix",
+          "found": false
+        },
+        {
+          "source": "user",
+          "target": "pest control",
+          "found": true
+        }
+      ]
+    },
+    {
+      "question_id": "gpt4_d84a3211",
+      "question_type": "multi-session",
+      "entities_extracted": 15,
+      "relations_extracted": 11,
+      "entities_stored": 15,
+      "path_tests": [
+        {
+          "source": "bike lights",
+          "target": "bike maintenance schedule",
+          "found": false
+        },
+        {
+          "source": "bike lights",
+          "target": "start of the year",
+          "found": false
+        },
+        {
+          "source": "bike maintenance schedule",
+          "target": "start of the year",
+          "found": false
+        },
+        {
+          "source": "bike maintenance schedule",
+          "target": "summer",
+          "found": false
+        },
+        {
+          "source": "start of the year",
+          "target": "summer",
+          "found": false
+        },
+        {
+          "source": "start of the year",
+          "target": "mechanic",
+          "found": false
+        }
+      ]
+    },
+    {
+      "question_id": "aae3761f",
+      "question_type": "multi-session",
+      "entities_extracted": 48,
+      "relations_extracted": 44,
+      "entities_stored": 20,
+      "path_tests": [
+        {
+          "source": "Chincoteague Island, Virginia",
+          "target": "sleeping bag",
+          "found": false
+        },
+        {
+          "source": "Chincoteague Island, Virginia",
+          "target": "Outer Banks",
+          "found": false
+        },
+        {
+          "source": "sleeping bag",
+          "target": "Outer Banks",
+          "found": false
+        },
+        {
+          "source": "sleeping bag",
+          "target": "Tennessee",
+          "found": false
+        },
+        {
+          "source": "Outer Banks",
+          "target": "Tennessee",
+          "found": false
+        },
+        {
+          "source": "Outer Banks",
+          "target": "first aid kit",
+          "found": false
+        }
+      ]
+    },
+    {
+      "question_id": "gpt4_f2262a51",
+      "question_type": "multi-session",
+      "entities_extracted": 11,
+      "relations_extracted": 23,
+      "entities_stored": 11,
+      "path_tests": [
+        {
+          "source": "congestion",
+          "target": "nasal spray prescription",
+          "found": true
+        },
+        {
+          "source": "congestion",
+          "target": "fatigue",
+          "found": true
+        },
+        {
+          "source": "nasal spray prescription",
+          "target": "fatigue",
+          "found": true
+        },
+        {
+          "source": "nasal spray prescription",
+          "target": "user",
+          "found": true
+        },
+        {
+          "source": "fatigue",
+          "target": "user",
+          "found": true
+        },
+        {
+          "source": "fatigue",
+          "target": "Dr. Patel",
+          "found": true
+        }
+      ]
+    },
+    {
+      "question_id": "dd2973ad",
+      "question_type": "multi-session",
+      "entities_extracted": 10,
+      "relations_extracted": 13,
+      "entities_stored": 10,
+      "path_tests": [
+        {
+          "source": "user",
+          "target": "Greek Yogurt Parfait with Berries and Granola",
+          "found": false
+        },
+        {
+          "source": "user",
+          "target": "Whole Grain Waffles with Almond Butter and Sliced Banana",
+          "found": false
+        },
+        {
+          "source": "Greek Yogurt Parfait with Berries and Granola",
+          "target": "Whole Grain Waffles with Almond Butter and Sliced Banana",
+          "found": false
+        },
+        {
+          "source": "Greek Yogurt Parfait with Berries and Granola",
+          "target": "Chia Seed Pudding with Coconut Milk and Fresh Fruit",
+          "found": false
+        },
+        {
+          "source": "Whole Grain Waffles with Almond Butter and Sliced Banana",
+          "target": "Chia Seed Pudding with Coconut Milk and Fresh Fruit",
+          "found": false
+        },
+        {
+          "source": "Whole Grain Waffles with Almond Butter and Sliced Banana",
+          "target": "Avocado Toast with Poached Eggs",
+          "found": false
+        }
+      ]
+    },
+    {
+      "question_id": "c4a1ceb8",
+      "question_type": "multi-session",
+      "entities_extracted": 35,
+      "relations_extracted": 31,
+      "entities_stored": 20,
+      "path_tests": [
+        {
+          "source": "Whiskey Sour",
+          "target": "club soda",
+          "found": false
+        },
+        {
+          "source": "Whiskey Sour",
+          "target": "honey syrup",
+          "found": false
+        },
+        {
+          "source": "club soda",
+          "target": "honey syrup",
+          "found": false
+        },
+        {
+          "source": "club soda",
+          "target": "Huevos Estrellados",
+          "found": false
+        },
+        {
+          "source": "honey syrup",
+          "target": "Huevos Estrellados",
+          "found": false
+        },
+        {
+          "source": "honey syrup",
+          "target": "canned crushed tomatoes",
+          "found": false
+        }
+      ]
+    },
+    {
+      "question_id": "gpt4_a56e767c",
+      "question_type": "multi-session",
+      "entities_extracted": 42,
+      "relations_extracted": 54,
+      "entities_stored": 20,
+      "path_tests": [
+        {
+          "source": "Chinonye Chukwu",
+          "target": "Fences",
+          "found": false
+        },
+        {
+          "source": "Chinonye Chukwu",
+          "target": "The Killing of a Sacred Deer",
+          "found": false
+        },
+        {
+          "source": "Fences",
+          "target": "The Killing of a Sacred Deer",
+          "found": false
+        },
+        {
+          "source": "Fences",
+          "target": "Sundance Film Festival",
+          "found": false
+        },
+        {
+          "source": "The Killing of a Sacred Deer",
+          "target": "Sundance Film Festival",
+          "found": false
+        },
+        {
+          "source": "The Killing of a Sacred Deer",
+          "target": "Portland Film Festival",
+          "found": false
+        }
+      ]
+    },
+    {
+      "question_id": "6cb6f249",
+      "question_type": "multi-session",
+      "entities_extracted": 20,
+      "relations_extracted": 13,
+      "entities_stored": 20,
+      "path_tests": [
+        {
+          "source": "digital detox",
+          "target": "app usage",
+          "found": false
+        },
+        {
+          "source": "digital detox",
+          "target": "daily limits",
+          "found": false
+        },
+        {
+          "source": "app usage",
+          "target": "daily limits",
+          "found": true
+        },
+        {
+          "source": "app usage",
+          "target": "Greg McKeown",
+          "found": false
+        },
+        {
+          "source": "daily limits",
+          "target": "Greg McKeown",
+          "found": false
+        },
+        {
+          "source": "daily limits",
+          "target": "Thich Nhat Hanh",
+          "found": false
+        }
+      ]
+    },
+    {
+      "question_id": "46a3abf7",
+      "question_type": "multi-session",
+      "entities_extracted": 12,
+      "relations_extracted": 25,
+      "entities_stored": 12,
+      "path_tests": [
+        {
+          "source": "Amazonia",
+          "target": "water parameters",
+          "found": false
+        },
+        {
+          "source": "Amazonia",
+          "target": "community tank",
+          "found": false
+        },
+        {
+          "source": "water parameters",
+          "target": "community tank",
+          "found": false
+        },
+        {
+          "source": "water parameters",
+          "target": "20-gallon freshwater community tank",
+          "found": false
+        },
+        {
+          "source": "community tank",
+          "target": "20-gallon freshwater community tank",
+          "found": false
+        },
+        {
+          "source": "community tank",
+          "target": "nitrite",
+          "found": false
+        }
+      ]
+    },
+    {
+      "question_id": "36b9f61e",
+      "question_type": "multi-session",
+      "entities_extracted": 28,
+      "relations_extracted": 34,
+      "entities_stored": 20,
+      "path_tests": [
+        {
+          "source": "graphic tees",
+          "target": "spreadsheets",
+          "found": false
+        },
+        {
+          "source": "graphic tees",
+          "target": "mobile apps",
+          "found": false
+        },
+        {
+          "source": "spreadsheets",
+          "target": "mobile apps",
+          "found": false
+        },
+        {
+          "source": "spreadsheets",
+          "target": "H&M",
+          "found": false
+        },
+        {
+          "source": "mobile apps",
+          "target": "H&M",
+          "found": false
+        },
+        {
+          "source": "mobile apps",
+          "target": "irregular expenses",
+          "found": false
+        }
+      ]
+    },
+    {
+      "question_id": "28dc39ac",
+      "question_type": "multi-session",
+      "entities_extracted": 19,
+      "relations_extracted": 17,
+      "entities_stored": 19,
+      "path_tests": [
+        {
+          "source": "Inside",
+          "target": "The Witness",
+          "found": true
+        },
+        {
+          "source": "Inside",
+          "target": "Red Dead Redemption 2",
+          "found": false
+        },
+        {
+          "source": "The Witness",
+          "target": "Red Dead Redemption 2",
+          "found": false
+        },
+        {
+          "source": "The Witness",
+          "target": "The Witcher 3: Wild Hunt",
+          "found": false
+        },
+        {
+          "source": "Red Dead Redemption 2",
+          "target": "The Witcher 3: Wild Hunt",
+          "found": true
+        },
+        {
+          "source": "Red Dead Redemption 2",
+          "target": "Rime",
+          "found": false
+        }
+      ]
+    },
+    {
+      "question_id": "gpt4_2f8be40d",
+      "question_type": "multi-session",
+      "entities_extracted": 23,
+      "relations_extracted": 31,
+      "entities_stored": 20,
+      "path_tests": [
+        {
+          "source": "ranches",
+          "target": "Tom",
+          "found": false
+        },
+        {
+          "source": "ranches",
+          "target": "beachside estates",
+          "found": true
+        },
+        {
+          "source": "Tom",
+          "target": "beachside estates",
+          "found": false
+        },
+        {
+          "source": "Tom",
+          "target": "farms",
+          "found": false
+        },
+        {
+          "source": "beachside estates",
+          "target": "farms",
+          "found": true
+        },
+        {
+          "source": "beachside estates",
+          "target": "Jen",
+          "found": false
+        }
+      ]
+    },
+    {
+      "question_id": "2e6d26dc",
+      "question_type": "multi-session",
+      "entities_extracted": 17,
+      "relations_extracted": 23,
+      "entities_stored": 17,
+      "path_tests": [
+        {
+          "source": "twin baby carriers",
+          "target": "Max",
+          "found": false
+        },
+        {
+          "source": "twin baby carriers",
+          "target": "personalized blanket",
+          "found": false
+        },
+        {
+          "source": "Max",
+          "target": "personalized blanket",
+          "found": false
+        },
+        {
+          "source": "Max",
+          "target": "baby shower",
+          "found": false
+        },
+        {
+          "source": "personalized blanket",
+          "target": "baby shower",
+          "found": false
+        },
+        {
+          "source": "personalized blanket",
+          "target": "Ava",
+          "found": false
+        }
+      ]
+    },
+    {
+      "question_id": "gpt4_15e38248",
+      "question_type": "multi-session",
+      "entities_extracted": 26,
+      "relations_extracted": 32,
+      "entities_stored": 20,
+      "path_tests": [
+        {
+          "source": "modern aesthetic",
+          "target": "beige",
+          "found": false
+        },
+        {
+          "source": "modern aesthetic",
+          "target": "velvet pillows",
+          "found": false
+        },
+        {
+          "source": "beige",
+          "target": "velvet pillows",
+          "found": false
+        },
+        {
+          "source": "beige",
+          "target": "kitchen table",
+          "found": false
+        },
+        {
+          "source": "velvet pillows",
+          "target": "kitchen table",
+          "found": false
+        },
+        {
+          "source": "velvet pillows",
+          "target": "modern feel",
+          "found": false
+        }
+      ]
+    },
+    {
+      "question_id": "88432d0a",
+      "question_type": "multi-session",
+      "entities_extracted": 14,
+      "relations_extracted": 23,
+      "entities_stored": 14,
+      "path_tests": [
+        {
+          "source": "dry brine",
+          "target": "convection setting",
+          "found": false
+        },
+        {
+          "source": "dry brine",
+          "target": "user",
+          "found": false
+        },
+        {
+          "source": "convection setting",
+          "target": "user",
+          "found": false
+        },
+        {
+          "source": "convection setting",
+          "target": "cookies",
+          "found": false
+        },
+        {
+          "source": "user",
+          "target": "cookies",
+          "found": false
+        },
+        {
+          "source": "user",
+          "target": "all-purpose flour",
+          "found": true
+        }
+      ]
+    }
+  ]
+}

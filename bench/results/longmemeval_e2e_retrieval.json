@@ -1,0 +1,421 @@
+{
+  "benchmark": "LongMemEval-S E2E QA (retrieval)",
+  "system": "Plico retrieval + qwen2.5-coder-7b reader/judge",
+  "timestamp": "2026-04-26T19:21:44",
+  "overall": {
+    "n_questions": 50,
+    "correct": 20,
+    "accuracy": 40.0,
+    "mode": "retrieval",
+    "llm_model": "qwen2.5-coder-7b"
+  },
+  "by_question_type": {
+    "single-session-user": {
+      "count": 50,
+      "correct": 20,
+      "accuracy": 40.0
+    }
+  },
+  "per_question": [
+    {
+      "question_id": "e47becba",
+      "question_type": "single-session-user",
+      "correct": false,
+      "expected": "Business Administration",
+      "actual": "I don't know.",
+      "judgment": "incorrect"
+    },
+    {
+      "question_id": "118b2229",
+      "question_type": "single-session-user",
+      "correct": false,
+      "expected": "45 minutes each way",
+      "actual": "I don't know.",
+      "judgment": "incorrect"
+    },
+    {
+      "question_id": "51a45a95",
+      "question_type": "single-session-user",
+      "correct": true,
+      "expected": "Target",
+      "actual": "You redeemed a $5 coupon on coffee creamer at Target.",
+      "judgment": "correct"
+    },
+    {
+      "question_id": "58bf7951",
+      "question_type": "single-session-user",
+      "correct": false,
+      "expected": "The Glass Menagerie",
+      "actual": "I don't know.",
+      "judgment": "incorrect"
+    },
+    {
+      "question_id": "1e043500",
+      "question_type": "single-session-user",
+      "correct": false,
+      "expected": "Summer Vibes",
+      "actual": "I don't know.",
+      "judgment": "incorrect"
+    },
+    {
+      "question_id": "c5e8278d",
+      "question_type": "single-session-user",
+      "correct": true,
+      "expected": "Johnson",
+      "actual": "Your last name before you changed it was Johnson.",
+      "judgment": "correct"
+    },
+    {
+      "question_id": "6ade9755",
+      "question_type": "single-session-user",
+      "correct": true,
+      "expected": "Serenity Yoga",
+      "actual": "You take yoga classes at Serenity Yoga.",
+      "judgment": "correct"
+    },
+    {
+      "question_id": "6f9b354f",
+      "question_type": "single-session-user",
+      "correct": true,
+      "expected": "a lighter shade of gray",
+      "actual": "You repainted your bedroom walls a lighter shade of gray.",
+      "judgment": "correct"
+    },
+    {
+      "question_id": "58ef2f1c",
+      "question_type": "single-session-user",
+      "correct": false,
+      "expected": "February 14th",
+      "actual": "I don't know.",
+      "judgment": "incorrect"
+    },
+    {
+      "question_id": "f8c5f88b",
+      "question_type": "single-session-user",
+      "correct": true,
+      "expected": "the sports store downtown",
+      "actual": "You bought your new tennis racket from a sports store downtown.",
+      "judgment": "correct"
+    },
+    {
+      "question_id": "5d3d2817",
+      "question_type": "single-session-user",
+      "correct": false,
+      "expected": "Marketing specialist at a small startup",
+      "actual": "I don't know.",
+      "judgment": "incorrect"
+    },
+    {
+      "question_id": "7527f7e2",
+      "question_type": "single-session-user",
+      "correct": false,
+      "expected": "$800",
+      "actual": "I don't know.",
+      "judgment": "incorrect"
+    },
+    {
+      "question_id": "c960da58",
+      "question_type": "single-session-user",
+      "correct": true,
+      "expected": "20",
+      "actual": "You have 20 playlists on Spotify.",
+      "judgment": "correct"
+    },
+    {
+      "question_id": "3b6f954b",
+      "question_type": "single-session-user",
+      "correct": false,
+      "expected": "University of Melbourne in Australia",
+      "actual": "I don't know.",
+      "judgment": "incorrect"
+    },
+    {
+      "question_id": "726462e0",
+      "question_type": "single-session-user",
+      "correct": false,
+      "expected": "10%",
+      "actual": "I don't know.",
+      "judgment": "incorrect"
+    },
+    {
+      "question_id": "94f70d80",
+      "question_type": "single-session-user",
+      "correct": false,
+      "expected": "4 hours",
+      "actual": "I don't know.",
+      "judgment": "incorrect"
+    },
+    {
+      "question_id": "66f24dbb",
+      "question_type": "single-session-user",
+      "correct": false,
+      "expected": "a yellow dress",
+      "actual": "I don't know.",
+      "judgment": "incorrect"
+    },
+    {
+      "question_id": "ad7109d1",
+      "question_type": "single-session-user",
+      "correct": false,
+      "expected": "500 Mbps",
+      "actual": "I don't know.",
+      "judgment": "incorrect"
+    },
+    {
+      "question_id": "af8d2e46",
+      "question_type": "single-session-user",
+      "correct": false,
+      "expected": "7",
+      "actual": "I don't know.",
+      "judgment": "incorrect"
+    },
+    {
+      "question_id": "dccbc061",
+      "question_type": "single-session-user",
+      "correct": true,
+      "expected": "A staunch atheist",
+      "actual": "You used to be a staunch atheist.",
+      "judgment": "correct"
+    },
+    {
+      "question_id": "c8c3f81d",
+      "question_type": "single-session-user",
+      "correct": true,
+      "expected": "Nike",
+      "actual": "Nike",
+      "judgment": "correct"
+    },
+    {
+      "question_id": "8ebdbe50",
+      "question_type": "single-session-user",
+      "correct": true,
+      "expected": "Data Science",
+      "actual": "You completed a Data Science certification last month.",
+      "judgment": "correct"
+    },
+    {
+      "question_id": "6b168ec8",
+      "question_type": "single-session-user",
+      "correct": true,
+      "expected": "three",
+      "actual": "You own three bikes.",
+      "judgment": "correct"
+    },
+    {
+      "question_id": "75499fd8",
+      "question_type": "single-session-user",
+      "correct": false,
+      "expected": "Golden Retriever",
+      "actual": "I don't know.",
+      "judgment": "incorrect"
+    },
+    {
+      "question_id": "21436231",
+      "question_type": "single-session-user",
+      "correct": true,
+      "expected": "12",
+      "actual": "You caught 12 largemouth bass on your fishing trip to Lake Michigan.",
+      "judgment": "correct"
+    },
+    {
+      "question_id": "95bcc1c8",
+      "question_type": "single-session-user",
+      "correct": true,
+      "expected": "10",
+      "actual": "You watched 10 amateur comedians perform at the open mic night.",
+      "judgment": "correct"
+    },
+    {
+      "question_id": "0862e8bf",
+      "question_type": "single-session-user",
+      "correct": false,
+      "expected": "Luna",
+      "actual": "I don't know.",
+      "judgment": "incorrect"
+    },
+    {
+      "question_id": "853b0a1d",
+      "question_type": "single-session-user",
+      "correct": false,
+      "expected": "18",
+      "actual": "I don't know.",
+      "judgment": "incorrect"
+    },
+    {
+      "question_id": "a06e4cfe",
+      "question_type": "single-session-user",
+      "correct": false,
+      "expected": "3:1",
+      "actual": "I don't know.",
+      "judgment": "incorrect"
+    },
+    {
+      "question_id": "37d43f65",
+      "question_type": "single-session-user",
+      "correct": true,
+      "expected": "16GB",
+      "actual": "You upgraded your laptop's RAM to 16GB.",
+      "judgment": "correct"
+    },
+    {
+      "question_id": "b86304ba",
+      "question_type": "single-session-user",
+      "correct": false,
+      "expected": "The painting is worth triple what I paid for it.",
+      "actual": "I don't know.",
+      "judgment": "incorrect"
+    },
+    {
+      "question_id": "d52b4f67",
+      "question_type": "single-session-user",
+      "correct": true,
+      "expected": "The Grand Ballroom",
+      "actual": "You attended your cousin's wedding at the Grand Ballroom.",
+      "judgment": "correct"
+    },
+    {
+      "question_id": "25e5aa4f",
+      "question_type": "single-session-user",
+      "correct": false,
+      "expected": "University of California, Los Angeles (UCLA)",
+      "actual": "I don't know.",
+      "judgment": "incorrect"
+    },
+    {
+      "question_id": "caf9ead2",
+      "question_type": "single-session-user",
+      "correct": false,
+      "expected": "5 hours",
+      "actual": "I don't know.",
+      "judgment": "incorrect"
+    },
+    {
+      "question_id": "8550ddae",
+      "question_type": "single-session-user",
+      "correct": false,
+      "expected": "lavender gin fizz",
+      "actual": "I don't know.",
+      "judgment": "incorrect"
+    },
+    {
+      "question_id": "60d45044",
+      "question_type": "single-session-user",
+      "correct": false,
+      "expected": "Japanese short-grain rice",
+      "actual": "I don't know.",
+      "judgment": "incorrect"
+    },
+    {
+      "question_id": "3f1e9474",
+      "question_type": "single-session-user",
+      "correct": true,
+      "expected": "Sarah",
+      "actual": "You had a conversation with Sarah about destiny.",
+      "judgment": "correct"
+    },
+    {
+      "question_id": "86b68151",
+      "question_type": "single-session-user",
+      "correct": false,
+      "expected": "IKEA",
+      "actual": "I don't know.",
+      "judgment": "incorrect"
+    },
+    {
+      "question_id": "577d4d32",
+      "question_type": "single-session-user",
+      "correct": false,
+      "expected": "7 pm",
+      "actual": "I don't know.",
+      "judgment": "incorrect"
+    },
+    {
+      "question_id": "ec81a493",
+      "question_type": "single-session-user",
+      "correct": false,
+      "expected": "500",
+      "actual": "I don't know.",
+      "judgment": "incorrect"
+    },
+    {
+      "question_id": "15745da0",
+      "question_type": "single-session-user",
+      "correct": false,
+      "expected": "three months",
+      "actual": "I don't know.",
+      "judgment": "incorrect"
+    },
+    {
+      "question_id": "e01b8e2f",
+      "question_type": "single-session-user",
+      "correct": true,
+      "expected": "Hawaii",
+      "actual": "You went on a week-long trip to Hawaii with your family.",
+      "judgment": "correct"
+    },
+    {
+      "question_id": "bc8a6e93",
+      "question_type": "single-session-user",
+      "correct": false,
+      "expected": "a lemon blueberry cake",
+      "actual": "I don't know.",
+      "judgment": "incorrect"
+    },
+    {
+      "question_id": "ccb36322",
+      "question_type": "single-session-user",
+      "correct": true,
+      "expected": "Spotify",
+      "actual": "Spotify",
+      "judgment": "correct"
+    },
+    {
+      "question_id": "001be529",
+      "question_type": "single-session-user",
+      "correct": false,
+      "expected": "over a year",
+      "actual": "I don't know.",
+      "judgment": "incorrect"
+    },
+    {
+      "question_id": "b320f3f8",
+      "question_type": "single-session-user",
+      "correct": true,
+      "expected": "a blue Snaggletooth",
+      "actual": "You bought a rare blue Snaggletooth action figure from a thrift store.",
+      "judgment": "correct"
+    },
+    {
+      "question_id": "19b5f2b3",
+      "question_type": "single-session-user",
+      "correct": true,
+      "expected": "two weeks",
+      "actual": "You were in Japan for two weeks.",
+      "judgment": "correct"
+    },
+    {
+      "question_id": "4fd1909e",
+      "question_type": "single-session-user",
+      "correct": true,
+      "expected": "Xfinity Center",
+      "actual": "You attended the Imagine Dragons concert at the Xfinity Center on June 15th.",
+      "judgment": "correct"
+    },
+    {
+      "question_id": "545bd2b5",
+      "question_type": "single-session-user",
+      "correct": false,
+      "expected": "2 hours",
+      "actual": "I don't know.",
+      "judgment": "incorrect"
+    },
+    {
+      "question_id": "8a137a7f",
+      "question_type": "single-session-user",
+      "correct": false,
+      "expected": "Philips LED bulb",
+      "actual": "I don't know.",
+      "judgment": "incorrect"
+    }
+  ]
+}

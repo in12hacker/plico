@@ -1,0 +1,42 @@
+{
+  "measurements": [
+    {
+      "n": 0,
+      "rss_mb": 2.01953125,
+      "delta_mb": 0
+    },
+    {
+      "n": 20,
+      "rss_mb": 2.0,
+      "delta_mb": 0.0
+    },
+    {
+      "n": 40,
+      "rss_mb": 2.0,
+      "delta_mb": 0.0
+    },
+    {
+      "n": 60,
+      "rss_mb": 2.0,
+      "delta_mb": 0.0
+    },
+    {
+      "n": 80,
+      "rss_mb": 2.0,
+      "delta_mb": 0.0
+    },
+    {
+      "n": 100,
+      "rss_mb": 2.0,
+      "delta_mb": 0.0
+    }
+  ],
+  "summary": {
+    "total_writes": 100,
+    "content_size": 1000,
+    "initial_rss_mb": 2.01953125,
+    "final_rss_mb": 2.01953125,
+    "growth_mb": 0.0,
+    "per_object_bytes": 0.0
+  }
+}

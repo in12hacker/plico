@@ -1,0 +1,43 @@
+{
+  "benchmark": "Plico Performance Micro-benchmarks",
+  "timestamp": "2026-04-26T19:13:00",
+  "notes": "EMBEDDING_BACKEND=stub, TCP to plicod, single-threaded sequential calls",
+  "results": {
+    "cas_write": {
+      "count": 100,
+      "qps": 1,
+      "p50_ms": 910.6,
+      "note": "Slow due to synchronous persistence + tag indexing per write"
+    },
+    "search": {
+      "count": 50,
+      "qps": 23,
+      "p50_ms": 43.1,
+      "note": "stub backend, tag-based search only"
+    },
+    "memory_store": {
+      "count": 100,
+      "qps": 24,
+      "p50_ms": 41.2
+    },
+    "memory_recall": {
+      "count": 50,
+      "qps": 24,
+      "p50_ms": 41.5
+    },
+    "kg_add_node": {
+      "note": "Connection lost during test — plicod memory pressure (2.2GB from 100 writes)"
+    },
+    "kg_add_edge": {
+      "note": "Not completed"
+    },
+    "kg_find_paths": {
+      "note": "Not completed"
+    }
+  },
+  "bottleneck_analysis": {
+    "cas_write": "Primary bottleneck: synchronous disk persistence on every write. Consider batching or async persistence.",
+    "memory": "Memory store/recall throughput (24 QPS) is adequate for typical agent workloads (< 10 ops/s).",
+    "plicod_memory": "100 CAS writes with stub embedding caused 2.2GB RSS. Need investigation."
+  }
+}

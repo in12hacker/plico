@@ -1,0 +1,174 @@
+{
+  "benchmark": "MemoryAgentBench Accurate Retrieval",
+  "system": "Plico-equivalent (usearch cos f16 + all-MiniLM-L6-v2)",
+  "timestamp": "2026-04-26T19:07:54",
+  "overall": {
+    "n_documents": 20,
+    "n_questions": 1880,
+    "total_hits": 195,
+    "hit_rate": 10.4,
+    "chunk_size": "2048 chars"
+  },
+  "per_document": [
+    {
+      "doc_idx": 0,
+      "source": "ruler_qa1_197K",
+      "n_chunks": 605,
+      "n_questions": 100,
+      "hits": 52,
+      "accuracy": 52.0
+    },
+    {
+      "doc_idx": 1,
+      "source": "ruler_qa2_421K",
+      "n_chunks": 1094,
+      "n_questions": 100,
+      "hits": 39,
+      "accuracy": 39.0
+    },
+    {
+      "doc_idx": 2,
+      "source": "eventqa_full",
+      "n_chunks": 1,
+      "n_questions": 100,
+      "hits": 0,
+      "accuracy": 0.0
+    },
+    {
+      "doc_idx": 3,
+      "source": "eventqa_full",
+      "n_chunks": 1,
+      "n_questions": 100,
+      "hits": 0,
+      "accuracy": 0.0
+    },
+    {
+      "doc_idx": 4,
+      "source": "eventqa_full",
+      "n_chunks": 1,
+      "n_questions": 100,
+      "hits": 1,
+      "accuracy": 1.0
+    },
+    {
+      "doc_idx": 5,
+      "source": "eventqa_full",
+      "n_chunks": 944,
+      "n_questions": 100,
+      "hits": 1,
+      "accuracy": 1.0
+    },
+    {
+      "doc_idx": 6,
+      "source": "eventqa_full",
+      "n_chunks": 1,
+      "n_questions": 100,
+      "hits": 0,
+      "accuracy": 0.0
+    },
+    {
+      "doc_idx": 7,
+      "source": "eventqa_65536",
+      "n_chunks": 1,
+      "n_questions": 100,
+      "hits": 0,
+      "accuracy": 0.0
+    },
+    {
+      "doc_idx": 8,
+      "source": "eventqa_65536",
+      "n_chunks": 1,
+      "n_questions": 100,
+      "hits": 0,
+      "accuracy": 0.0
+    },
+    {
+      "doc_idx": 9,
+      "source": "eventqa_65536",
+      "n_chunks": 1,
+      "n_questions": 100,
+      "hits": 0,
+      "accuracy": 0.0
+    },
+    {
+      "doc_idx": 10,
+      "source": "eventqa_65536",
+      "n_chunks": 154,
+      "n_questions": 100,
+      "hits": 0,
+      "accuracy": 0.0
+    },
+    {
+      "doc_idx": 11,
+      "source": "eventqa_65536",
+      "n_chunks": 1,
+      "n_questions": 100,
+      "hits": 0,
+      "accuracy": 0.0
+    },
+    {
+      "doc_idx": 12,
+      "source": "eventqa_131072",
+      "n_chunks": 1,
+      "n_questions": 100,
+      "hits": 0,
+      "accuracy": 0.0
+    },
+    {
+      "doc_idx": 13,
+      "source": "eventqa_131072",
+      "n_chunks": 1,
+      "n_questions": 100,
+      "hits": 0,
+      "accuracy": 0.0
+    },
+    {
+      "doc_idx": 14,
+      "source": "eventqa_131072",
+      "n_chunks": 1,
+      "n_questions": 100,
+      "hits": 0,
+      "accuracy": 0.0
+    },
+    {
+      "doc_idx": 15,
+      "source": "eventqa_131072",
+      "n_chunks": 310,
+      "n_questions": 100,
+      "hits": 0,
+      "accuracy": 0.0
+    },
+    {
+      "doc_idx": 16,
+      "source": "eventqa_131072",
+      "n_chunks": 1,
+      "n_questions": 100,
+      "hits": 0,
+      "accuracy": 0.0
+    },
+    {
+      "doc_idx": 17,
+      "source": "longmemeval_s*",
+      "n_chunks": 1,
+      "n_questions": 60,
+      "hits": 39,
+      "accuracy": 65.0
+    },
+    {
+      "doc_idx": 18,
+      "source": "longmemeval_s*",
+      "n_chunks": 1,
+      "n_questions": 60,
+      "hits": 32,
+      "accuracy": 53.3
+    },
+    {
+      "doc_idx": 19,
+      "source": "longmemeval_s*",
+      "n_chunks": 1,
+      "n_questions": 60,
+      "hits": 31,
+      "accuracy": 51.7
+    }
+  ]
+}
