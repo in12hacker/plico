@@ -269,6 +269,7 @@ async fn cmd_start(args: Vec<String>, root: PathBuf) {
                     result = tcp_listener.accept() => {
                         match result {
                             Ok((stream, peer)) => {
+                                let _ = stream.set_nodelay(true);
                                 let kernel = Arc::clone(&kernel);
                                 tokio::spawn(async move {
                                     if let Err(e) = handle_connection(stream, &kernel).await {
@@ -411,6 +412,7 @@ async fn accept_tcp_only(listener: TcpListener, kernel: Arc<AIKernel>) {
     loop {
         match listener.accept().await {
             Ok((stream, peer)) => {
+                let _ = stream.set_nodelay(true);
                 let kernel = Arc::clone(&kernel);
                 tokio::spawn(async move {
                     if let Err(e) = handle_connection(stream, &kernel).await {

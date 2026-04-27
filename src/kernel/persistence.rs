@@ -6,7 +6,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::fs::{OllamaBackend, OpenAIEmbeddingBackend, EmbeddingProvider, LocalEmbeddingBackend, StubEmbeddingProvider, EmbedError, OrtEmbeddingBackend, EmbeddingCircuitBreaker};
+use crate::fs::{OllamaBackend, OpenAIEmbeddingBackend, EmbeddingProvider, LocalEmbeddingBackend, StubEmbeddingProvider, EmbedError, OrtEmbeddingBackend, EmbeddingCircuitBreaker, AdaptiveEmbeddingProvider};
 use crate::llm::{LlmProvider, LlmError, OllamaProvider, StubProvider, OpenAICompatibleProvider, CircuitBreakerLlmProvider};
 use crate::scheduler::Agent;
 use crate::scheduler::agent::Intent;
@@ -102,6 +102,7 @@ impl AIKernel {
         self.persist_permissions();
         self.persist_event_log();
         self.persist_search_index();
+        self.fs.flush_tag_index();
         self.persist_checkpoints();
         self.persist_task_store();
         self.persist_tenants();
@@ -449,7 +450,18 @@ pub(crate) fn create_embedding_provider() -> Result<Arc<dyn EmbeddingProvider>, 
     let (threshold, cooldown_ms) = read_circuit_breaker_config(
         "EMBEDDING_CB_THRESHOLD", "EMBEDDING_CB_COOLDOWN_MS", 3, 30_000,
     );
-    Ok(Arc::new(EmbeddingCircuitBreaker::new(base_provider, threshold, cooldown_ms)))
+    let with_cb = Arc::new(EmbeddingCircuitBreaker::new(base_provider, threshold, cooldown_ms));
+
+    let adaptive = AdaptiveEmbeddingProvider::from_env(with_cb as Arc<dyn EmbeddingProvider>);
+    if adaptive.is_passthrough() {
+        Ok(Arc::new(adaptive) as Arc<dyn EmbeddingProvider>)
+    } else {
+        tracing::info!(
+            "Embedding adaptive layer active: output_dim={}, raw_dim={}",
+            adaptive.dimension(), adaptive.raw_dimension(),
+        );
+        Ok(Arc::new(adaptive) as Arc<dyn EmbeddingProvider>)
+    }
 }
 
 fn try_ollama_circuitbreaker() -> Result<Arc<dyn EmbeddingProvider>, EmbedError> {
@@ -457,7 +469,9 @@ fn try_ollama_circuitbreaker() -> Result<Arc<dyn EmbeddingProvider>, EmbedError>
     let (threshold, cooldown_ms) = read_circuit_breaker_config(
         "EMBEDDING_CB_THRESHOLD", "EMBEDDING_CB_COOLDOWN_MS", 3, 30_000,
     );
-    Ok(Arc::new(EmbeddingCircuitBreaker::new(inner, threshold, cooldown_ms)))
+    let with_cb = Arc::new(EmbeddingCircuitBreaker::new(inner, threshold, cooldown_ms));
+    let adaptive = AdaptiveEmbeddingProvider::from_env(with_cb as Arc<dyn EmbeddingProvider>);
+    Ok(Arc::new(adaptive) as Arc<dyn EmbeddingProvider>)
 }
 
 fn try_ollama() -> Result<Arc<dyn EmbeddingProvider>, EmbedError> {

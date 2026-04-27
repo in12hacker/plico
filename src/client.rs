@@ -67,6 +67,7 @@ impl RemoteClient {
         let raw = match &self.addr {
             RemoteAddr::Tcp(addr) => {
                 let mut stream = std::net::TcpStream::connect(addr)?;
+                stream.set_nodelay(true)?;
                 stream.set_read_timeout(Some(std::time::Duration::from_secs(30)))?;
                 write_frame(&mut stream, &payload)?;
                 read_frame(&mut stream)?

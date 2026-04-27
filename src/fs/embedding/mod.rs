@@ -2,6 +2,7 @@
 //!
 //! Re-exports all embedding backends.
 
+pub mod adaptive;
 pub mod circuit_breaker;
 pub mod json_rpc;
 pub mod local;
@@ -11,6 +12,7 @@ pub mod ort_backend;
 pub mod stub;
 pub mod types;
 
+pub use adaptive::AdaptiveEmbeddingProvider;
 pub use circuit_breaker::EmbeddingCircuitBreaker;
 pub use ollama::OllamaBackend;
 pub use openai::OpenAIEmbeddingBackend;

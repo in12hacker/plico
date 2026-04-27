@@ -135,7 +135,7 @@ impl SemanticFS {
             self.bm25_index.upsert(cid, &text);
 
             if embed_available {
-                match self.embedding.embed(&text) {
+                match self.embedding.embed_document(&text) {
                     Ok(result) => {
                         self.search_index.upsert(cid, &result.embedding, SearchIndexMeta {
                             cid: cid.clone(),
@@ -247,7 +247,7 @@ impl SemanticFS {
             }
             Query::Semantic { text, filter } => {
                 let filter = filter.clone().unwrap_or_default();
-                let query_emb = match self.embedding.embed(text) {
+                let query_emb = match self.embedding.embed_query(text) {
                     Ok(result) => result.embedding,
                     Err(e) => {
                         tracing::warn!("Embedding failed for query '{text}': {e}. Falling back to tag search.");
@@ -282,7 +282,7 @@ impl SemanticFS {
                 };
 
                 if let Some(text) = semantic {
-                    let query_emb = match self.embedding.embed(text) {
+                    let query_emb = match self.embedding.embed_query(text) {
                         Ok(result) => result.embedding,
                         Err(e) => {
                             tracing::warn!("Embedding failed in Hybrid query: {e}. Falling back to filter scan.");
@@ -439,7 +439,7 @@ impl SemanticFS {
     }
 
     pub fn search_with_filter(&self, query: &str, limit: usize, filter: SearchFilter) -> Vec<SearchResult> {
-        let query_emb = self.embedding.embed(query).ok().map(|r| r.embedding);
+        let query_emb = self.embedding.embed_query(query).ok().map(|r| r.embedding);
 
         let vector_hits: HashMap<String, f32> = match &query_emb {
             Some(emb) => self
@@ -661,10 +661,9 @@ impl SemanticFS {
             is_real_embedding = false;
             vec![0.0f32; self.embedding.dimension()]
         } else {
-            match self.embedding.embed(&text) {
+            match self.embedding.embed_document(&text) {
                 Ok(result) => {
                     is_real_embedding = true;
-                    // Record embedding cost to global ledger with actual token count from EmbedResult
                     if let Some(ledger) = crate::kernel::ops::cost_ledger::get_global_cost_ledger() {
                         ledger.record_embedding_with_tokens(result.input_tokens, self.embedding.model_name(), "", &meta.created_by);
                     }
@@ -696,7 +695,10 @@ impl SemanticFS {
     fn update_tag_index(&self, tags: &[String], cid: &str) {
         let mut index = self.tag_index.write().unwrap();
         for tag in tags { index.entry(tag.clone()).or_default().push(cid.to_string()); }
-        drop(index);
+    }
+
+    /// Persist the tag index to disk (called periodically, not on every write).
+    pub fn flush_tag_index(&self) {
         let _ = self.persist_tag_index();
     }
 
@@ -742,8 +744,6 @@ impl SemanticFS {
         for tag in tags {
             if let Some(cids) = index.get_mut(tag) { cids.retain(|c| c != cid); }
         }
-        drop(index);
-        let _ = self.persist_tag_index();
     }
 
     fn resolve_tags(&self, tags: &[String]) -> Vec<String> {

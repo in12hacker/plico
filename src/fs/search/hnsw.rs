@@ -18,7 +18,6 @@ use usearch::{new_index, Index, IndexOptions, MetricKind, ScalarKind};
 
 use super::{SearchFilter, SearchHit, SearchIndexEntry, SearchIndexMeta, SemanticSearch};
 
-const DEFAULT_DIM: usize = 768;
 const INITIAL_CAPACITY: usize = 10_000;
 
 pub struct HnswBackend {
@@ -36,18 +35,14 @@ struct HnswEntry {
 }
 
 impl HnswBackend {
-    pub fn new() -> Self {
-        Self::with_dim(DEFAULT_DIM)
-    }
-
     pub fn with_dim(dim: usize) -> Self {
         let options = IndexOptions {
             dimensions: dim,
             metric: MetricKind::Cos,
             quantization: ScalarKind::F16,
-            connectivity: 16,
-            expansion_add: 128,
-            expansion_search: 64,
+            connectivity: 24,
+            expansion_add: 200,
+            expansion_search: 128,
             multi: false,
         };
         let index = new_index(&options).expect("Failed to create usearch index");
@@ -90,12 +85,6 @@ impl HnswBackend {
                 tracing::error!("Failed to reserve usearch capacity {}: {}", new_cap, e);
             }
         }
-    }
-}
-
-impl Default for HnswBackend {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -547,5 +536,24 @@ mod tests {
 
         backend.upsert("cid1", &vec![0.0; dim], make_meta("cid1", vec![]));
         assert_eq!(backend.len(), 0);
+    }
+
+    #[test]
+    fn test_persist_latency_acceptable() {
+        let dim = 384;
+        let backend = HnswBackend::with_dim(dim);
+        for i in 0..1000 {
+            let cid = format!("cid_{:06}", i);
+            backend.upsert(
+                &cid,
+                &sample_embedding(dim, i as f32 * 0.1 + 0.01),
+                make_meta(&cid, vec!["bench"]),
+            );
+        }
+        let dir = tempfile::TempDir::new().unwrap();
+        let t0 = std::time::Instant::now();
+        backend.persist_to(dir.path()).unwrap();
+        let elapsed = t0.elapsed();
+        assert!(elapsed.as_millis() < 500, "persist 1K vectors should take <500ms, got {}ms", elapsed.as_millis());
     }
 }

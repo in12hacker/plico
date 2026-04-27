@@ -158,8 +158,20 @@ impl EmbeddingProvider for EmbeddingCircuitBreaker {
         }
     }
 
+    fn embed_query(&self, text: &str) -> Result<EmbedResult, EmbedError> {
+        self.embed(text)
+    }
+
+    fn embed_document(&self, text: &str) -> Result<EmbedResult, EmbedError> {
+        self.embed(text)
+    }
+
     fn dimension(&self) -> usize {
         self.inner.dimension()
+    }
+
+    fn raw_dimension(&self) -> usize {
+        self.inner.raw_dimension()
     }
 
     fn model_name(&self) -> &str {

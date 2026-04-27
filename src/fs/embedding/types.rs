@@ -58,14 +58,36 @@ impl EmbedError {
 
 /// Thread-safe provider for generating text embeddings.
 pub trait EmbeddingProvider: Send + Sync {
-    /// Generate an embedding for a single text.
+    /// Generate an embedding for a single text (generic / unspecified usage).
     fn embed(&self, text: &str) -> Result<EmbedResult, EmbedError>;
 
     /// Generate embeddings for multiple texts in a batch.
     fn embed_batch(&self, texts: &[&str]) -> Result<Vec<EmbedResult>, EmbedError>;
 
-    /// Embedding vector dimension (e.g. 384 for all-MiniLM-L6-v2).
+    /// Embed text intended as a **search query** (asymmetric retrieval).
+    ///
+    /// Models trained with task-specific prefixes (e.g. jina-v5 `"Query: "`,
+    /// E5 `"query: "`, BGE `"Represent this sentence..."`) should override this.
+    /// Default: delegates to [`embed`].
+    fn embed_query(&self, text: &str) -> Result<EmbedResult, EmbedError> {
+        self.embed(text)
+    }
+
+    /// Embed text intended as a **stored document** (asymmetric retrieval).
+    ///
+    /// Default: delegates to [`embed`].
+    fn embed_document(&self, text: &str) -> Result<EmbedResult, EmbedError> {
+        self.embed(text)
+    }
+
+    /// Output embedding dimension after any post-processing (e.g. Matryoshka truncation).
     fn dimension(&self) -> usize;
+
+    /// Raw embedding dimension from the underlying model (before truncation).
+    /// Default: same as [`dimension`].
+    fn raw_dimension(&self) -> usize {
+        self.dimension()
+    }
 
     /// Name of the model used.
     fn model_name(&self) -> &str;

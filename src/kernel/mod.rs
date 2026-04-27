@@ -98,6 +98,37 @@ pub struct AIKernel {
     pub(crate) cost_ledger: Arc<TokenCostLedger>,
 }
 
+/// Check if the embedding model has changed since last run.
+/// Returns `true` if the metadata file is absent or mismatched.
+fn check_embedding_meta(root: &std::path::Path, model_name: &str, dim: usize) -> bool {
+    let path = root.join(".embedding_meta.json");
+    match std::fs::read_to_string(&path) {
+        Ok(content) => {
+            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
+                let saved_model = val.get("model").and_then(|v| v.as_str()).unwrap_or("");
+                let saved_dim = val.get("dimension").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+                saved_model != model_name || saved_dim != dim
+            } else {
+                true
+            }
+        }
+        Err(_) => false, // First run — no metadata yet, no need to wipe
+    }
+}
+
+/// Persist current embedding model metadata for change detection on next startup.
+fn save_embedding_meta(root: &std::path::Path, model_name: &str, dim: usize) {
+    let meta = serde_json::json!({
+        "model": model_name,
+        "dimension": dim,
+        "saved_at": chrono::Utc::now().to_rfc3339(),
+    });
+    let path = root.join(".embedding_meta.json");
+    if let Err(e) = std::fs::write(&path, serde_json::to_string_pretty(&meta).unwrap_or_default()) {
+        tracing::warn!("Failed to save embedding metadata: {e}");
+    }
+}
+
 impl AIKernel {
     /// Initialize the AI Kernel with the given storage root.
     pub fn new(root: PathBuf) -> std::io::Result<Self> {
@@ -138,8 +169,20 @@ impl AIKernel {
             .unwrap_or_else(|_| "memory".into()).as_str()
         {
             "hnsw" => {
-                let backend = Arc::new(HnswBackend::new());
-                backend.restore_from(&root).ok();
+                let dim = embedding.dimension();
+                let model_name = embedding.model_name().to_string();
+                let meta_changed = check_embedding_meta(&root, &model_name, dim);
+                let backend = Arc::new(HnswBackend::with_dim(dim));
+                if meta_changed {
+                    tracing::warn!(
+                        "Embedding model changed (now {}@{}d) — starting with fresh HNSW index",
+                        model_name, dim,
+                    );
+                    let _ = std::fs::remove_file(root.join("hnsw_index.jsonl"));
+                } else {
+                    backend.restore_from(&root).ok();
+                }
+                save_embedding_meta(&root, &model_name, dim);
                 backend as Arc<dyn SemanticSearch>
             }
             _ => {
@@ -342,6 +385,7 @@ impl AIKernel {
         let count = self.search_op_count.fetch_add(1, Ordering::Relaxed) + 1;
         if count.is_multiple_of(Self::SEARCH_PERSIST_EVERY_N) {
             self.persist_search_index();
+            self.fs.flush_tag_index();
         }
     }
 

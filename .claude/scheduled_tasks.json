@@ -1,12 +1,3 @@
 {
-  "tasks": [
-    {
-      "id": "f5a1e84a",
-      "cron": "*/30 * * * *",
-      "prompt": "继续推进Node 26 \"循\"的完整实现。检查:\n\n1. TokenCostLedger集成: 当前EmbeddingProvider/LlmProvider trait不返回token计数，需要修改trait签名让TokenCostLedger能实际记录\n2. VerificationGate集成: 在PostToolCall Hook中实际调用verification\n3. 运行 cargo test 确认所有测试通过\n4. 运行dogfood验证关键功能\n5. 如有需要更新docs/design-node26-circulation.md\n\n报告进度和遇到的问题。",
-      "createdAt": 1777104622342,
-      "lastFiredAt": 1777198463907,
-      "recurring": true
-    }
-  ]
+  "tasks": []
 }
