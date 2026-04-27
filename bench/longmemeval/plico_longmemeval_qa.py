@@ -75,7 +75,7 @@ def call_llm(url: str, model: str, prompt: str, max_tokens: int = 256) -> str:
 def ingest_sessions(client: PlicoClient, item: dict, item_idx: int) -> str:
     """Ingest all sessions for one LongMemEval item."""
     agent_id = f"lme-{item_idx}"
-    sessions = item.get("sessions", item.get("conversations", []))
+    sessions = item.get("haystack_sessions", item.get("sessions", item.get("conversations", [])))
     for si, session in enumerate(sessions):
         turns = session if isinstance(session, list) else session.get("turns", session.get("messages", []))
         for ti, turn in enumerate(turns):
@@ -89,11 +89,18 @@ def ingest_sessions(client: PlicoClient, item: dict, item_idx: int) -> str:
                 continue
             if not content.strip():
                 continue
-            client.create(
-                content=content,
-                tags=[f"lme:item{item_idx}", f"session:{si}", f"turn:{ti}"],
-                agent_id=agent_id,
-            )
+            for attempt in range(3):
+                try:
+                    client.create(
+                        content=content,
+                        tags=[f"lme:item{item_idx}", f"session:{si}", f"turn:{ti}"],
+                        agent_id=agent_id,
+                    )
+                    break
+                except (ConnectionError, OSError):
+                    if attempt < 2:
+                        time.sleep(0.3)
+                        client.close()
     return agent_id
 
 
@@ -106,25 +113,40 @@ def evaluate_item(
     agent_id = ingest_sessions(client, item, item_idx)
     time.sleep(0.5)
 
-    questions = item.get("questions", item.get("qa_pairs", []))
-    if isinstance(questions, dict):
-        questions = [questions]
+    question_field = item.get("question", "")
+    answer_field = item.get("answer", "")
+    category_field = item.get("question_type", item.get("category", "unknown"))
+
+    if question_field and answer_field:
+        questions = [{"question": question_field, "answer": str(answer_field), "category": category_field}]
+    else:
+        questions = item.get("questions", item.get("qa_pairs", []))
+        if isinstance(questions, dict):
+            questions = [questions]
 
     results = []
     for qa in questions:
         question = qa.get("question", qa.get("q", ""))
-        gold = qa.get("answer", qa.get("a", qa.get("gold_answer", "")))
+        gold = str(qa.get("answer", qa.get("a", qa.get("gold_answer", ""))))
         category = qa.get("category", qa.get("type", "unknown"))
 
         if not question:
             continue
 
-        resp = client.search(
-            query=question,
-            agent_id=agent_id,
-            limit=5,
-            require_tags=[f"lme:item{item_idx}"],
-        )
+        resp = {"results": []}
+        for attempt in range(3):
+            try:
+                resp = client.search(
+                    query=question,
+                    agent_id=agent_id,
+                    limit=5,
+                    require_tags=[f"lme:item{item_idx}"],
+                )
+                break
+            except (ConnectionError, OSError):
+                if attempt < 2:
+                    time.sleep(0.3)
+                    client.close()
         snippets = [r.get("snippet", "") for r in resp.get("results", []) if r.get("snippet")]
         context = "\n".join(snippets)
 

@@ -1,0 +1,1027 @@
+{
+  "summary": {
+    "multi-session": {
+      "count": 30,
+      "llm_score": 1.5666666666666667,
+      "exact_match": 0.03333333333333333,
+      "accuracy_4plus": 0.06666666666666667,
+      "context_hit_rate": 1.0
+    },
+    "overall": {
+      "count": 100,
+      "llm_score": 2.56,
+      "exact_match": 0.36,
+      "accuracy_4plus": 0.39,
+      "context_hit_rate": 1.0
+    },
+    "single-session-user": {
+      "count": 70,
+      "llm_score": 2.9857142857142858,
+      "exact_match": 0.5,
+      "accuracy_4plus": 0.5285714285714286,
+      "context_hit_rate": 1.0
+    }
+  },
+  "details": [
+    {
+      "item_idx": 0,
+      "category": "single-session-user",
+      "question": "What degree did I graduate with?",
+      "gold": "Business Administration",
+      "predicted": "You graduated with a degree in Business Administration.",
+      "llm_score": 5,
+      "exact_match": 1.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 1,
+      "category": "single-session-user",
+      "question": "How long is my daily commute to work?",
+      "gold": "45 minutes each way",
+      "predicted": "Your daily commute to work takes 45 minutes each way.",
+      "llm_score": 5,
+      "exact_match": 1.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 2,
+      "category": "single-session-user",
+      "question": "Where did I redeem a $5 coupon on coffee creamer?",
+      "gold": "Target",
+      "predicted": "I don't know. The conversation didn't specify the platform or location where the coupon was redeemed.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 3,
+      "category": "single-session-user",
+      "question": "What play did I attend at the local community theater?",
+      "gold": "The Glass Menagerie",
+      "predicted": "The play you attended at the local community theater was a production of The Glass Menagerie.",
+      "llm_score": 4,
+      "exact_match": 1.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 4,
+      "category": "single-session-user",
+      "question": "What is the name of the playlist I created on Spotify?",
+      "gold": "Summer Vibes",
+      "predicted": "I don't know. The conversation didn't mention the name of the playlist you created on Spotify.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 5,
+      "category": "single-session-user",
+      "question": "What was my last name before I changed it?",
+      "gold": "Johnson",
+      "predicted": "I don't know.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 6,
+      "category": "single-session-user",
+      "question": "Where do I take yoga classes?",
+      "gold": "Serenity Yoga",
+      "predicted": "Based on the conversation, you take yoga classes through the Down Dog app on your home practice.",
+      "llm_score": 2,
+      "exact_match": 0.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 7,
+      "category": "single-session-user",
+      "question": "What color did I repaint my bedroom walls?",
+      "gold": "a lighter shade of gray",
+      "predicted": "I don't know.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 8,
+      "category": "single-session-user",
+      "question": "When did I volunteer at the local animal shelter's fundraising dinner?",
+      "gold": "February 14th",
+      "predicted": "I don't know.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 9,
+      "category": "single-session-user",
+      "question": "Where did I buy my new tennis racket from?",
+      "gold": "the sports store downtown",
+      "predicted": "From the conversation, you got your new tennis racket from a sports store downtown.",
+      "llm_score": 4,
+      "exact_match": 0.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 10,
+      "category": "single-session-user",
+      "question": "What was my previous occupation?",
+      "gold": "Marketing specialist at a small startup",
+      "predicted": "I don't know.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 11,
+      "category": "single-session-user",
+      "question": "How much did I spend on a designer handbag?",
+      "gold": "$800",
+      "predicted": "I don't know. The conversation didn't provide specific information about the amount spent on a designer handbag.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 12,
+      "category": "single-session-user",
+      "question": "How many playlists do I have on Spotify?",
+      "gold": "20",
+      "predicted": "I don't know. The conversation didn't provide information about the number of playlists you have on Spotify.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 13,
+      "category": "single-session-user",
+      "question": "Where did I attend for my study abroad program?",
+      "gold": "University of Melbourne in Australia",
+      "predicted": "The user attended the University during their study abroad program, but the specific university name was not mentioned.",
+      "llm_score": 2,
+      "exact_match": 0.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 14,
+      "category": "single-session-user",
+      "question": "What was the discount I got on my first purchase from the new clothing brand?",
+      "gold": "10%",
+      "predicted": "I don't know. The conversation did not mention a discount on a first purchase from a new clothing brand.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 15,
+      "category": "single-session-user",
+      "question": "How long did it take me to assemble the IKEA bookshelf?",
+      "gold": "4 hours",
+      "predicted": "I don't know.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 16,
+      "category": "single-session-user",
+      "question": "What did I buy for my sister's birthday gift?",
+      "gold": "a yellow dress",
+      "predicted": "You bought a yellow dress and a pair of earrings (matching the dress) for your sister's birthday. Additionally, you got her some groceries and flowers when she was recovering from surgery.",
+      "llm_score": 2,
+      "exact_match": 1.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 17,
+      "category": "single-session-user",
+      "question": "What speed is my new internet plan?",
+      "gold": "500 Mbps",
+      "predicted": "Your new internet plan is 500 Mbps.",
+      "llm_score": 5,
+      "exact_match": 1.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 18,
+      "category": "single-session-user",
+      "question": "How many shirts did I pack for my 5-day trip to Costa Rica?",
+      "gold": "7",
+      "predicted": "You packed 7 shirts for your 5-day trip to Costa Rica.",
+      "llm_score": 5,
+      "exact_match": 1.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 19,
+      "category": "single-session-user",
+      "question": "What was my previous stance on spirituality?",
+      "gold": "A staunch atheist",
+      "predicted": "I don't know.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 20,
+      "category": "single-session-user",
+      "question": "What brand are my favorite running shoes?",
+      "gold": "Nike",
+      "predicted": "Nike",
+      "llm_score": 5,
+      "exact_match": 1.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 21,
+      "category": "single-session-user",
+      "question": "What certification did I complete last month?",
+      "gold": "Data Science",
+      "predicted": "You completed your Data Science certification last month.",
+      "llm_score": 5,
+      "exact_match": 1.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 22,
+      "category": "single-session-user",
+      "question": "How many bikes do I own?",
+      "gold": "three",
+      "predicted": "You own three bikes.",
+      "llm_score": 5,
+      "exact_match": 1.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 23,
+      "category": "single-session-user",
+      "question": "What breed is my dog?",
+      "gold": "Golden Retriever",
+      "predicted": "Golden Retrievers.",
+      "llm_score": 4,
+      "exact_match": 1.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 24,
+      "category": "single-session-user",
+      "question": "How many largemouth bass did I catch on my fishing trip to Lake Michigan?",
+      "gold": "12",
+      "predicted": "You caught 12 largemouth bass on your last trip to Lake Michigan.",
+      "llm_score": 4,
+      "exact_match": 1.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 25,
+      "category": "single-session-user",
+      "question": "How many amateur comedians did I watch perform at the open mic night?",
+      "gold": "10",
+      "predicted": "I don't know.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 26,
+      "category": "single-session-user",
+      "question": "What is the name of my cat?",
+      "gold": "Luna",
+      "predicted": "Your cat's name is Luna.",
+      "llm_score": 5,
+      "exact_match": 1.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 27,
+      "category": "single-session-user",
+      "question": "How old was I when my grandma gave me the silver necklace?",
+      "gold": "18",
+      "predicted": "You were 18 years old when your grandma gave you the silver necklace.",
+      "llm_score": 4,
+      "exact_match": 1.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 28,
+      "category": "single-session-user",
+      "question": "What is my preferred gin-to-vermouth ratio for a classic gin martini?",
+      "gold": "3:1",
+      "predicted": "Your preferred gin-to-vermouth ratio for a classic gin martini is 3:1.",
+      "llm_score": 4,
+      "exact_match": 1.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 29,
+      "category": "single-session-user",
+      "question": "How much RAM did I upgrade my laptop to?",
+      "gold": "16GB",
+      "predicted": "You upgraded your laptop's RAM to 16GB.",
+      "llm_score": 5,
+      "exact_match": 1.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 30,
+      "category": "single-session-user",
+      "question": "How much is the painting of a sunset worth in terms of the amount I paid for it?",
+      "gold": "The painting is worth triple what I paid for it.",
+      "predicted": "I don't know. The conversation didn't provide information about the specific painting or the amount paid for it.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 31,
+      "category": "single-session-user",
+      "question": "Where did I attend my cousin's wedding?",
+      "gold": "The Grand Ballroom",
+      "predicted": "At the Grand Ballroom.",
+      "llm_score": 4,
+      "exact_match": 1.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 32,
+      "category": "single-session-user",
+      "question": "Where did I complete my Bachelor's degree in Computer Science?",
+      "gold": "University of California, Los Angeles (UCLA)",
+      "predicted": "I don't know.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 33,
+      "category": "single-session-user",
+      "question": "How long did it take to move to the new apartment?",
+      "gold": "5 hours",
+      "predicted": "It took around 5 hours to move everything into the new apartment.",
+      "llm_score": 4,
+      "exact_match": 1.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 34,
+      "category": "single-session-user",
+      "question": "What type of cocktail recipe did I try last weekend?",
+      "gold": "lavender gin fizz",
+      "predicted": "You tried a lavender gin fizz last weekend.",
+      "llm_score": 5,
+      "exact_match": 1.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 35,
+      "category": "single-session-user",
+      "question": "What type of rice is my favorite?",
+      "gold": "Japanese short-grain rice",
+      "predicted": "Your favorite rice is Japanese short-grain rice.",
+      "llm_score": 4,
+      "exact_match": 1.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 36,
+      "category": "single-session-user",
+      "question": "Who did I have a conversation with about destiny?",
+      "gold": "Sarah",
+      "predicted": "I don't know.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 37,
+      "category": "single-session-user",
+      "question": "Where did I buy my new bookshelf from?",
+      "gold": "IKEA",
+      "predicted": "From IKEA.",
+      "llm_score": 5,
+      "exact_match": 1.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 38,
+      "category": "single-session-user",
+      "question": "What time do I stop checking work emails and messages?",
+      "gold": "7 pm",
+      "predicted": "I don't know. The conversation didn't specify a particular time for stopping work emails and messages.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 39,
+      "category": "single-session-user",
+      "question": "How many copies of my favorite artist's debut album were released worldwide?",
+      "gold": "500",
+      "predicted": "It was a limited edition of only 500 copies worldwide.",
+      "llm_score": 5,
+      "exact_match": 1.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 40,
+      "category": "single-session-user",
+      "question": "How long have I been collecting vintage cameras?",
+      "gold": "three months",
+      "predicted": "You have been collecting vintage cameras for three months.",
+      "llm_score": 5,
+      "exact_match": 1.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 41,
+      "category": "single-session-user",
+      "question": "Where did I go on a week-long trip with my family?",
+      "gold": "Hawaii",
+      "predicted": "You went on a week-long trip to the Big Island of Hawaii with your family.",
+      "llm_score": 4,
+      "exact_match": 1.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 42,
+      "category": "single-session-user",
+      "question": "What did I bake for my niece's birthday party?",
+      "gold": "a lemon blueberry cake",
+      "predicted": "You baked a lemon blueberry cake for your niece's birthday party.",
+      "llm_score": 5,
+      "exact_match": 1.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 43,
+      "category": "single-session-user",
+      "question": "What is the name of the music streaming service have I been using lately?",
+      "gold": "Spotify",
+      "predicted": "Spotify",
+      "llm_score": 5,
+      "exact_match": 1.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 44,
+      "category": "single-session-user",
+      "question": "How long did I wait for the decision on my asylum application?",
+      "gold": "over a year",
+      "predicted": "I don't know. The conversation didn't provide specific details about how long the wait was for the asylum application decision.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 45,
+      "category": "single-session-user",
+      "question": "What type of action figure did I buy from a thrift store?",
+      "gold": "a blue Snaggletooth",
+      "predicted": "I don't know.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 46,
+      "category": "single-session-user",
+      "question": "How long was I in Japan for?",
+      "gold": "two weeks",
+      "predicted": "You spent two weeks traveling solo around Japan.",
+      "llm_score": 4,
+      "exact_match": 1.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 47,
+      "category": "single-session-user",
+      "question": "Where did I attend the Imagine Dragons concert?",
+      "gold": "Xfinity Center",
+      "predicted": "I don't know. The location of the Imagine Dragons concert was not mentioned in the provided context.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 48,
+      "category": "single-session-user",
+      "question": "How much screen time have I been averaging on Instagram per day?",
+      "gold": "2 hours",
+      "predicted": "You've been averaging around 2 hours of screen time on Instagram per day for the past two weeks.",
+      "llm_score": 4,
+      "exact_match": 1.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 49,
+      "category": "single-session-user",
+      "question": "What type of bulb did I replace in my bedside lamp?",
+      "gold": "Philips LED bulb",
+      "predicted": "You replaced your bedside lamp with a Philips LED bulb.",
+      "llm_score": 2,
+      "exact_match": 1.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 50,
+      "category": "single-session-user",
+      "question": "What size is my new Samsung TV?",
+      "gold": "55-inch",
+      "predicted": "Your new Samsung TV is 55 inches.",
+      "llm_score": 5,
+      "exact_match": 0.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 51,
+      "category": "single-session-user",
+      "question": "What book am I currently reading?",
+      "gold": "The Seven Husbands of Evelyn Hugo",
+      "predicted": "I'm currently devouring \"The Seven Husbands of Evelyn Hugo.\"",
+      "llm_score": 5,
+      "exact_match": 1.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 52,
+      "category": "single-session-user",
+      "question": "How many skeins of worsted weight yarn did I find in my stash?",
+      "gold": "17",
+      "predicted": "You found 17 skeins of worsted weight yarn in your stash.",
+      "llm_score": 5,
+      "exact_match": 1.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 53,
+      "category": "single-session-user",
+      "question": "How many hours did I spend watching documentaries on Netflix last month?",
+      "gold": "10",
+      "predicted": "I don't know.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 54,
+      "category": "single-session-user",
+      "question": "What time do I usually get home from work on weeknights?",
+      "gold": "6:30 pm",
+      "predicted": "You usually get home from work around 6:30 pm on weekdays.",
+      "llm_score": 4,
+      "exact_match": 1.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 55,
+      "category": "single-session-user",
+      "question": "What is my ethnicity?",
+      "gold": "A mix of Irish and Italian",
+      "predicted": "I don't know. The conversation did not provide specific information about your ethnicity.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 56,
+      "category": "single-session-user",
+      "question": "How much time do I dedicate to practicing guitar every day?",
+      "gold": "30 minutes",
+      "predicted": "You dedicate 30 minutes a day to practicing guitar.",
+      "llm_score": 5,
+      "exact_match": 1.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 57,
+      "category": "single-session-user",
+      "question": "Where does my sister Emily live?",
+      "gold": "Denver",
+      "predicted": "I don't know. The conversation did not provide information about where your sister Emily lives.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 58,
+      "category": "single-session-user",
+      "question": "How long did Alex marinate the BBQ ribs in special sauce?",
+      "gold": "24 hours",
+      "predicted": "Alex marinated the BBQ ribs in a special sauce for 24 hours.",
+      "llm_score": 5,
+      "exact_match": 1.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 59,
+      "category": "single-session-user",
+      "question": "Who gave me a new stand mixer as a birthday gift?",
+      "gold": "my sister",
+      "predicted": "Your sister gave you a new stand mixer as a birthday gift.",
+      "llm_score": 5,
+      "exact_match": 0.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 60,
+      "category": "single-session-user",
+      "question": "What brand of shampoo do I currently use?",
+      "gold": "Trader Joe's",
+      "predicted": "You currently use a lavender scented shampoo from Trader Joe's.",
+      "llm_score": 3,
+      "exact_match": 1.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 61,
+      "category": "single-session-user",
+      "question": "What health issue did I initially think was just a cold?",
+      "gold": "bronchitis",
+      "predicted": "You initially thought your bronchitis was just a cold.",
+      "llm_score": 4,
+      "exact_match": 1.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 62,
+      "category": "single-session-user",
+      "question": "Where did I meet Sophia?",
+      "gold": "a coffee shop in the city",
+      "predicted": "In the city coffee shop.",
+      "llm_score": 4,
+      "exact_match": 0.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 63,
+      "category": "single-session-user",
+      "question": "What game did I finally beat last weekend?",
+      "gold": "Dark Souls 3 DLC",
+      "predicted": "Dark Souls 3.",
+      "llm_score": 4,
+      "exact_match": 0.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 64,
+      "category": "single-session-user",
+      "question": "What is the name of my hamster?",
+      "gold": "You did not mention this information. You mentioned your cat Luna but not your hamster.",
+      "predicted": "I don't know.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 65,
+      "category": "single-session-user",
+      "question": "How long have I been collecting vintage films?",
+      "gold": "You did not mention this information. You mentioned collecting vintage cameras but not vintage films.",
+      "predicted": "I don't know.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 66,
+      "category": "single-session-user",
+      "question": "What did I bake for my uncle's birthday party?",
+      "gold": "You did not mention this information. You mentioned baking for your niece's birthday party but not your uncle's",
+      "predicted": "I don't know. The conversation did not mention baking anything for your uncle's birthday party.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 67,
+      "category": "single-session-user",
+      "question": "How long was I in Korea for?",
+      "gold": "You did not mention this information. You mentioned staying in Japan, but not in Korea.",
+      "predicted": "I don't know.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 68,
+      "category": "single-session-user",
+      "question": "How much time do I dedicate to practicing violin every day?",
+      "gold": "You did not mention this information. You mentioned practing guitar everyday, but not violin.",
+      "predicted": "I don't know. The conversation was about guitar practice and meditation, not violin practice.",
+      "llm_score": 2,
+      "exact_match": 0.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 69,
+      "category": "single-session-user",
+      "question": "What did my dad gave me as a birthday gift?",
+      "gold": "You did not mention this information. You mentioned receiving a birthday gift from your sister, but not your dad.",
+      "predicted": "I don't know.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 70,
+      "category": "multi-session",
+      "question": "How many items of clothing do I need to pick up or return from a store?",
+      "gold": "3",
+      "predicted": "I don't know. You mentioned exchanging a pair of boots and needing to pick up the new pair, but the number of items to pick up or return wasn't specified.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 71,
+      "category": "multi-session",
+      "question": "How many projects have I led or am currently leading?",
+      "gold": "2",
+      "predicted": "I don't know.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 72,
+      "category": "multi-session",
+      "question": "How many model kits have I worked on or bought?",
+      "gold": "I have worked on or bought five model kits. The scales of the models are: Revell F-15 Eagle (scale not mentioned), Tamiya 1/48 scale Spitfire Mk.V, 1/16 scale German Tiger I tank, 1/72 scale B-29 bomber, and 1/24 scale '69 Camaro.",
+      "predicted": "You have worked on or bought at least three model kits: a simple Revell F-15 Eagle, a Tamiya 1/48 scale Spitfire Mk.V, and a new 1/72 scale B-29 bomber.",
+      "llm_score": 3,
+      "exact_match": 0.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 73,
+      "category": "multi-session",
+      "question": "How many days did I spend on camping trips in the United States this year?",
+      "gold": "8 days.",
+      "predicted": "I don't know.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 74,
+      "category": "multi-session",
+      "question": "How many weeks did it take me to watch all the Marvel Cinematic Universe movies and the main Star Wars films?",
+      "gold": "3.5 weeks",
+      "predicted": "I don't know.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 75,
+      "category": "multi-session",
+      "question": "How many plants did I acquire in the last month?",
+      "gold": "3",
+      "predicted": "You acquired one plant in the last month, which is the snake plant you got from your sister.",
+      "llm_score": 2,
+      "exact_match": 0.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 76,
+      "category": "multi-session",
+      "question": "How much total money have I spent on bike-related expenses since the start of the year?",
+      "gold": "$185",
+      "predicted": "Based on the information provided, you spent $25 on replacing the chain during a tune-up on April 20th. Without other specific expenses mentioned, I don't have enough information to determine the total amount spent on bike-related expenses since the start of the year.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 77,
+      "category": "multi-session",
+      "question": "How many hours in total did I spend driving to my three road trip destinations combined?",
+      "gold": "15 hours for getting to the three destinations (or 30 hours for the round trip)",
+      "predicted": "I don't know. The conversation didn't provide the total driving time for multiple trips combined.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 78,
+      "category": "multi-session",
+      "question": "How many different doctors did I visit?",
+      "gold": "I visited three different doctors: a primary care physician, an ENT specialist, and a dermatologist.",
+      "predicted": "I don't know.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 79,
+      "category": "multi-session",
+      "question": "What time did I go to bed on the day before I had a doctor's appointment?",
+      "gold": "2 AM",
+      "predicted": "I don't know.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 80,
+      "category": "multi-session",
+      "question": "How many different types of citrus fruits have I used in my cocktail recipes?",
+      "gold": "3",
+      "predicted": "Based on the information provided, you have used one type of citrus fruit, which is orange, in your cocktail recipes.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 81,
+      "category": "multi-session",
+      "question": "How many movie festivals that I attended?",
+      "gold": "I attended four movie festivals.",
+      "predicted": "I don't know.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 82,
+      "category": "multi-session",
+      "question": "How many days did I take social media breaks in total?",
+      "gold": "17 days",
+      "predicted": "You took a week-long break from social media, which typically means 7 days.",
+      "llm_score": 2,
+      "exact_match": 0.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 83,
+      "category": "multi-session",
+      "question": "How many tanks do I currently have, including the one I set up for my friend's kid?",
+      "gold": "3",
+      "predicted": "You currently have three tanks, including the one you set up for your friend's kid.",
+      "llm_score": 5,
+      "exact_match": 0.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 84,
+      "category": "multi-session",
+      "question": "What is the total amount I spent on luxury items in the past few months?",
+      "gold": "$2,500",
+      "predicted": "I don't know. To provide an accurate answer, I would need more specific information about your expenses, such as a detailed expense log or a completed expense tracker template.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 85,
+      "category": "multi-session",
+      "question": "How many hours have I spent playing games in total?",
+      "gold": "140 hours",
+      "predicted": "Based on the information provided, you have spent approximately 95 hours playing games (70 hours on Assassin's Creed Odyssey and 25 hours on The Last of Us Part II). I don't know if you included other games in your total.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 86,
+      "category": "multi-session",
+      "question": "How many weddings have I attended in this year?",
+      "gold": "I attended three weddings. The couples were Rachel and Mike, Emily and Sarah, and Jen and Tom.",
+      "predicted": "Based on the conversation, you have attended at least two weddings this year: your sister's wedding and a friend's wedding.",
+      "llm_score": 2,
+      "exact_match": 0.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 87,
+      "category": "multi-session",
+      "question": "How many babies were born to friends and family members in the last few months?",
+      "gold": "5",
+      "predicted": "Based on the information provided, three babies were born to friends and family members in the last few months: Ava and Lily (twins born in April), Max (born in March), and Charlotte (born to Mike and Emma). I don't know about any other births mentioned.",
+      "llm_score": 2,
+      "exact_match": 0.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 88,
+      "category": "multi-session",
+      "question": "How many pieces of furniture did I buy, assemble, sell, or fix in the past few months?",
+      "gold": "4",
+      "predicted": "I don't know.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 89,
+      "category": "multi-session",
+      "question": "How many times did I bake something in the past two weeks?",
+      "gold": "4",
+      "predicted": "Three times. You baked cookies using the convection setting, and you tried making sourdough bread and chicken wings.",
+      "llm_score": 2,
+      "exact_match": 0.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 90,
+      "category": "multi-session",
+      "question": "How many different museums or galleries did I visit in the month of February?",
+      "gold": "2",
+      "predicted": "Based on the information provided, you visited one museum in February, the Natural History Museum, on 2/8.",
+      "llm_score": 2,
+      "exact_match": 1.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 91,
+      "category": "multi-session",
+      "question": "How many different cuisines have I learned to cook or tried out in the past few months?",
+      "gold": "4",
+      "predicted": "I don't know.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 92,
+      "category": "multi-session",
+      "question": "How many properties did I view before making an offer on the townhouse in the Brookside neighborhood?",
+      "gold": "I viewed four properties before making an offer on the townhouse in the Brookside neighborhood. The reasons I didn't make an offer on them were: the kitchen of the bungalow needed serious renovation, the property in Cedar Creek was out of my budget, the noise from the highway was a deal-breaker for the 1-bedroom condo, and my offer on the 2-bedroom condo was rejected due to a higher bid.",
+      "predicted": "I don't know.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 93,
+      "category": "multi-session",
+      "question": "How many different types of food delivery services have I used recently?",
+      "gold": "3",
+      "predicted": "You mentioned using Uber Eats and Domino's Pizza, so you have used at least two different types of food delivery services recently.",
+      "llm_score": 4,
+      "exact_match": 0.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 94,
+      "category": "multi-session",
+      "question": "How many hours of jogging and yoga did I do last week?",
+      "gold": "0.5 hours",
+      "predicted": "Based on the information provided, you jogged for 30 minutes on Saturday, but there is no mention of yoga practice time last week. Therefore, I don't have enough information to determine the number of hours you spent on yoga.",
+      "llm_score": 2,
+      "exact_match": 0.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 95,
+      "category": "multi-session",
+      "question": "Which social media platform did I gain the most followers on over the past month?",
+      "gold": "TikTok",
+      "predicted": "I don't know.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 96,
+      "category": "multi-session",
+      "question": "Which grocery store did I spend the most money at in the past month?",
+      "gold": "Thrive Market",
+      "predicted": "I don't know.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 97,
+      "category": "multi-session",
+      "question": "How much more did I spend on accommodations per night in Hawaii compared to Tokyo?",
+      "gold": "$270",
+      "predicted": "I don't know. The conversation did not provide information about accommodation costs in Hawaii.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 98,
+      "category": "multi-session",
+      "question": "How many different art-related events did I attend in the past month?",
+      "gold": "4",
+      "predicted": "I don't know.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 99,
+      "category": "multi-session",
+      "question": "What is the average age of me, my parents, and my grandparents?",
+      "gold": "59.6",
+      "predicted": "To calculate the average age, we need your age, your parents' ages (55 and 58), and your grandparents' ages (75 and 78). I don't have your age, so I can't calculate the average.",
+      "llm_score": 2,
+      "exact_match": 0.0,
+      "has_context": true
+    }
+  ]
+}

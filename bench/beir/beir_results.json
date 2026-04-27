@@ -8,5 +8,25 @@
     "map": 0.1219336086643621,
     "latency_p50_ms": 672.5878715515137,
     "latency_p99_ms": 1145.8277702331543
+  },
+  "fiqa": {
+    "dataset": "fiqa",
+    "num_queries": 1148,
+    "num_corpus": 57638,
+    "ndcg@10": 0.3729591708139306,
+    "recall@5": 0.3665698558120161,
+    "map": 0.29359326805410574,
+    "latency_p50_ms": 762.5157833099365,
+    "latency_p99_ms": 1469.4013595581055
+  },
+  "scifact": {
+    "dataset": "scifact",
+    "num_queries": 300,
+    "num_corpus": 5183,
+    "ndcg@10": 0.6593,
+    "recall@5": 0.7314,
+    "map": 0.6109,
+    "latency_p50_ms": 565.2,
+    "latency_p99_ms": 1039.1
   }
 }

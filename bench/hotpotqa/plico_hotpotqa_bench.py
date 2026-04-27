@@ -92,11 +92,18 @@ def ingest_question_docs(client: PlicoClient, item: dict, q_idx: int) -> str:
     context = item.get("context", [])
     for doc_idx, (title, sentences) in enumerate(context):
         text = f"{title}: {' '.join(sentences)}"
-        client.create(
-            content=text[:2000],
-            tags=[f"hotpot:q{q_idx}", f"doc:{doc_idx}", f"title:{title}"],
-            agent_id=agent_id,
-        )
+        for attempt in range(3):
+            try:
+                client.create(
+                    content=text[:2000],
+                    tags=[f"hotpot:q{q_idx}", f"doc:{doc_idx}", f"title:{title}"],
+                    agent_id=agent_id,
+                )
+                break
+            except (ConnectionError, OSError):
+                if attempt < 2:
+                    time.sleep(0.3)
+                    client.close()
     return agent_id
 
 
@@ -113,12 +120,20 @@ def evaluate_question(
     level = item.get("level", "unknown")
     qtype = item.get("type", "unknown")
 
-    resp = client.search(
-        query=question,
-        agent_id=agent_id,
-        limit=5,
-        require_tags=[f"hotpot:q{q_idx}"],
-    )
+    resp = {"results": []}
+    for attempt in range(3):
+        try:
+            resp = client.search(
+                query=question,
+                agent_id=agent_id,
+                limit=5,
+                require_tags=[f"hotpot:q{q_idx}"],
+            )
+            break
+        except (ConnectionError, OSError):
+            if attempt < 2:
+                time.sleep(0.3)
+                client.close()
     snippets = [r.get("snippet", "") for r in resp.get("results", []) if r.get("snippet")]
     context = "\n".join(snippets)
 

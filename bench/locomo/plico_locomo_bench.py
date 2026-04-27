@@ -60,18 +60,50 @@ def load_locomo(path: str) -> list[dict]:
 def ingest_conversation(client: PlicoClient, conv: dict, conv_idx: int) -> str:
     """Ingest a conversation's turns into plicod."""
     agent_id = f"locomo-{conv_idx}"
-    turns = conv.get("conversation", [])
-    for i, turn in enumerate(turns):
-        speaker = turn.get("role", turn.get("speaker", "unknown"))
-        text = turn.get("content", turn.get("text", ""))
-        if not text:
-            continue
-        content = f"[{speaker}]: {text}"
-        client.create(
-            content=content,
-            tags=[f"locomo:conv{conv_idx}", f"turn:{i}", f"speaker:{speaker}"],
-            agent_id=agent_id,
-        )
+    conversation = conv.get("conversation", {})
+
+    if isinstance(conversation, dict):
+        sessions = sorted(k for k in conversation if k.startswith("session_") and not k.endswith("date_time"))
+        turn_idx = 0
+        for sess_key in sessions:
+            date_key = f"{sess_key}_date_time"
+            date_str = conversation.get(date_key, "")
+            turns = conversation.get(sess_key, [])
+            if not isinstance(turns, list):
+                continue
+            for turn in turns:
+                speaker = turn.get("speaker", "unknown")
+                text = turn.get("text", "")
+                if not text:
+                    continue
+                prefix = f"[{date_str}] " if date_str else ""
+                content = f"{prefix}[{speaker}]: {text}"
+                for attempt in range(3):
+                    try:
+                        client.create(
+                            content=content,
+                            tags=[f"locomo:conv{conv_idx}", f"session:{sess_key}", f"turn:{turn_idx}", f"speaker:{speaker}"],
+                            agent_id=agent_id,
+                        )
+                        break
+                    except (ConnectionError, OSError):
+                        if attempt < 2:
+                            time.sleep(0.3)
+                            client.close()
+                turn_idx += 1
+    elif isinstance(conversation, list):
+        for i, turn in enumerate(conversation):
+            speaker = turn.get("role", turn.get("speaker", "unknown"))
+            text = turn.get("content", turn.get("text", ""))
+            if not text:
+                continue
+            content = f"[{speaker}]: {text}"
+            client.create(
+                content=content,
+                tags=[f"locomo:conv{conv_idx}", f"turn:{i}", f"speaker:{speaker}"],
+                agent_id=agent_id,
+            )
+
     return agent_id
 
 
@@ -116,8 +148,8 @@ def call_llm(url: str, model: str, prompt: str, max_tokens: int = 256) -> str:
 
 def compute_f1(prediction: str, ground_truth: str) -> float:
     """Compute token-level F1."""
-    pred_tokens = prediction.lower().split()
-    gold_tokens = ground_truth.lower().split()
+    pred_tokens = str(prediction).lower().split()
+    gold_tokens = str(ground_truth).lower().split()
     common = Counter(pred_tokens) & Counter(gold_tokens)
     num_same = sum(common.values())
     if num_same == 0:
@@ -151,13 +183,15 @@ def evaluate_conversation(
     agent_id = ingest_conversation(client, conv, conv_idx)
     time.sleep(1)
 
-    qa_pairs = conv.get("qa_pairs", conv.get("questions", []))
+    qa_pairs = conv.get("qa", conv.get("qa_pairs", conv.get("questions", [])))
     results = []
 
+    cat_names = {1: "single-hop", 2: "temporal", 3: "multi-hop", 4: "open-domain", 5: "adversarial"}
     for qa in qa_pairs:
         question = qa.get("question", qa.get("q", ""))
-        gold_answer = qa.get("answer", qa.get("a", ""))
-        category = qa.get("category", qa.get("type", "unknown"))
+        gold_answer = str(qa.get("answer", qa.get("a", "")))
+        raw_cat = qa.get("category", qa.get("type", "unknown"))
+        category = cat_names.get(raw_cat, str(raw_cat)) if isinstance(raw_cat, int) else str(raw_cat)
 
         if not question or not gold_answer:
             continue
