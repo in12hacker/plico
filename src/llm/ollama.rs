@@ -128,3 +128,40 @@ impl Clone for OllamaProvider {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_ollama_provider_new() {
+        let provider = OllamaProvider::new("http://localhost:11434", "test-model");
+        assert!(provider.is_ok());
+        let p = provider.unwrap();
+        assert_eq!(p.model_name(), "test-model");
+        assert_eq!(p.url, "http://localhost:11434");
+    }
+
+    #[test]
+    fn test_ollama_provider_trim_trailing_slash() {
+        let provider = OllamaProvider::new("http://localhost:11434/", "model").unwrap();
+        assert_eq!(provider.url, "http://localhost:11434");
+    }
+
+    #[test]
+    fn test_ollama_provider_clone() {
+        let provider = OllamaProvider::new("http://localhost:11434", "model").unwrap();
+        let cloned = provider.clone();
+        assert_eq!(cloned.model_name(), provider.model_name());
+        assert_eq!(cloned.url, provider.url);
+    }
+
+    #[test]
+    fn test_ollama_chat_unreachable() {
+        let provider = OllamaProvider::new("http://127.0.0.1:1", "model").unwrap();
+        let msgs = vec![ChatMessage::user("test")];
+        let opts = ChatOptions { temperature: 0.0, max_tokens: None };
+        let result = provider.chat(&msgs, &opts);
+        assert!(result.is_err());
+    }
+}

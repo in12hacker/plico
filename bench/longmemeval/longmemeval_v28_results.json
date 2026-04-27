@@ -1,0 +1,70 @@
+{
+  "summary": {
+    "overall": {
+      "count": 5,
+      "llm_score": 4.2,
+      "exact_match": 0.6,
+      "accuracy_4plus": 0.8,
+      "context_hit_rate": 1.0
+    },
+    "single-session-user": {
+      "count": 5,
+      "llm_score": 4.2,
+      "exact_match": 0.6,
+      "accuracy_4plus": 0.8,
+      "context_hit_rate": 1.0
+    }
+  },
+  "details": [
+    {
+      "item_idx": 0,
+      "category": "single-session-user",
+      "question": "What degree did I graduate with?",
+      "gold": "Business Administration",
+      "predicted": "Business Administration",
+      "llm_score": 5,
+      "exact_match": 1.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 1,
+      "category": "single-session-user",
+      "question": "How long is my daily commute to work?",
+      "gold": "45 minutes each way",
+      "predicted": "45 minutes each way.",
+      "llm_score": 5,
+      "exact_match": 1.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 2,
+      "category": "single-session-user",
+      "question": "Where did I redeem a $5 coupon on coffee creamer?",
+      "gold": "Target",
+      "predicted": "ERROR: HTTP Error 500: Internal Server Error",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 3,
+      "category": "single-session-user",
+      "question": "What play did I attend at the local community theater?",
+      "gold": "The Glass Menagerie",
+      "predicted": "The Glass Menagerie",
+      "llm_score": 5,
+      "exact_match": 1.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 4,
+      "category": "single-session-user",
+      "question": "What is the name of the playlist I created on Spotify?",
+      "gold": "Summer Vibes",
+      "predicted": "I don't know.",
+      "llm_score": 5,
+      "exact_match": 0.0,
+      "has_context": true
+    }
+  ]
+}

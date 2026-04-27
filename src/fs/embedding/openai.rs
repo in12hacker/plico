@@ -314,8 +314,8 @@ mod tests {
         };
         let result = backend.embed("Hello world");
         match result {
-            Err(ref e) if e.to_string().to_lowercase().contains("unavailable") || e.to_string().contains("connect") => {
-                eprintln!("llama-server not reachable, skipping: {e}");
+            Err(ref e) if e.to_string().to_lowercase().contains("unavailable") || e.to_string().contains("connect") || e.to_string().contains("501") || e.to_string().contains("not_supported") => {
+                eprintln!("llama-server embedding not available, skipping: {e}");
                 return;
             }
             _ => {}
@@ -338,8 +338,8 @@ mod tests {
         };
         let result = backend.embed_batch(&["Hello", "World"]);
         match result {
-            Err(ref e) if e.to_string().to_lowercase().contains("unavailable") || e.to_string().contains("connect") => {
-                eprintln!("llama-server not reachable, skipping: {e}");
+            Err(ref e) if e.to_string().to_lowercase().contains("unavailable") || e.to_string().contains("connect") || e.to_string().contains("501") || e.to_string().contains("not_supported") => {
+                eprintln!("llama-server embedding not available, skipping: {e}");
                 return;
             }
             _ => {}

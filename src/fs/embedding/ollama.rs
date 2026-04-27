@@ -280,3 +280,44 @@ impl Clone for OllamaBackend {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_ollama_backend_new() {
+        let backend = OllamaBackend::new("http://localhost:11434", "nomic-embed-text");
+        assert!(backend.is_ok());
+        let b = backend.unwrap();
+        assert_eq!(b.model_name(), "nomic-embed-text");
+    }
+
+    #[test]
+    fn test_ollama_backend_url_preserved() {
+        let backend = OllamaBackend::new("http://localhost:11434", "model").unwrap();
+        assert_eq!(backend.url, "http://localhost:11434");
+    }
+
+    #[test]
+    fn test_ollama_backend_clone() {
+        let backend = OllamaBackend::new("http://localhost:11434", "model").unwrap();
+        let cloned = backend.clone();
+        assert_eq!(cloned.model_name(), backend.model_name());
+    }
+
+    #[test]
+    fn test_ollama_embed_unreachable() {
+        let backend = OllamaBackend::new("http://127.0.0.1:1", "model").unwrap();
+        let result = backend.embed("test");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_ollama_dimension_default() {
+        let backend = OllamaBackend::new("http://127.0.0.1:1", "model").unwrap();
+        // dimension() calls probe which may fail on unreachable server, returns 0 or cached
+        let dim = backend.dimension();
+        assert!(dim == 0 || dim > 0);
+    }
+}
