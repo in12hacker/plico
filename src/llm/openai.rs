@@ -119,7 +119,10 @@ pub(crate) fn parse_response(body: &[u8]) -> Result<(String, u32, u32), LlmError
     }
     #[derive(serde::Deserialize)]
     struct ChoiceMessage {
-        content: String,
+        #[serde(default)]
+        content: Option<String>,
+        #[serde(default)]
+        reasoning_content: Option<String>,
     }
     #[derive(serde::Deserialize)]
     struct Usage {
@@ -130,17 +133,24 @@ pub(crate) fn parse_response(body: &[u8]) -> Result<(String, u32, u32), LlmError
     let parsed: ChatCompletionResponse = serde_json::from_slice(body)
         .map_err(|e| LlmError::Parse(format!("response parse error: {e}")))?;
 
-    let content = parsed
+    let msg = parsed
         .choices
         .into_iter()
         .next()
-        .map(|c| c.message.content.trim().to_string())
+        .map(|c| c.message)
         .ok_or_else(|| LlmError::Parse("empty choices array".into()))?;
+
+    let content = msg.content.as_deref().unwrap_or("").trim();
+    let text = if content.is_empty() {
+        msg.reasoning_content.as_deref().unwrap_or("").trim().to_string()
+    } else {
+        content.to_string()
+    };
 
     let input_tokens = parsed.usage.as_ref().map(|u| u.prompt_tokens).unwrap_or(0);
     let output_tokens = parsed.usage.as_ref().map(|u| u.completion_tokens).unwrap_or(0);
 
-    Ok((content, input_tokens, output_tokens))
+    Ok((text, input_tokens, output_tokens))
 }
 
 impl LlmProvider for OpenAICompatibleProvider {
@@ -187,6 +197,24 @@ mod tests {
         assert_eq!(content, "hello world");
         assert_eq!(in_tok, 10);
         assert_eq!(out_tok, 5);
+    }
+
+    #[test]
+    fn test_parse_response_reasoning_content_fallback() {
+        let json = br#"{"id":"chatcmpl-1","choices":[{"message":{"role":"assistant","content":"","reasoning_content":"The answer is Four."}}],"usage":{"prompt_tokens":28,"completion_tokens":50}}"#;
+        let result = parse_response(json);
+        assert!(result.is_ok());
+        let (content, _, _) = result.unwrap();
+        assert_eq!(content, "The answer is Four.");
+    }
+
+    #[test]
+    fn test_parse_response_null_content_with_reasoning() {
+        let json = br#"{"id":"chatcmpl-1","choices":[{"message":{"role":"assistant","reasoning_content":"Thinking..."}}],"usage":{"prompt_tokens":5,"completion_tokens":3}}"#;
+        let result = parse_response(json);
+        assert!(result.is_ok());
+        let (content, _, _) = result.unwrap();
+        assert_eq!(content, "Thinking...");
     }
 
     #[test]
@@ -304,7 +332,7 @@ mod tests {
         let provider = OpenAICompatibleProvider::new(&llama_server_url(), &llama_model(), None)
             .expect("provider should be constructible");
         let msgs = vec![ChatMessage::user("What is 1+1?")];
-        let opts = ChatOptions { temperature: 0.0, max_tokens: Some(10) };
+        let opts = ChatOptions { temperature: 0.0, max_tokens: Some(200) };
         let r1 = skip_if_unavailable!(provider.chat(&msgs, &opts));
         let r2 = skip_if_unavailable!(provider.chat(&msgs, &opts));
         assert!(r1.is_ok() && r2.is_ok());

@@ -40,12 +40,32 @@ impl AdaptiveEmbeddingProvider {
     }
 
     /// Build from environment variables, wrapping a base provider.
+    ///
+    /// Auto-detects known model families and sets optimal prefixes:
+    /// - Qwen3-Embedding: `"Instruct: ...\nQuery: "` for queries, no document prefix
     pub fn from_env(inner: Arc<dyn EmbeddingProvider>) -> Self {
-        let query_prefix = std::env::var("EMBEDDING_QUERY_PREFIX").unwrap_or_default();
-        let document_prefix = std::env::var("EMBEDDING_DOCUMENT_PREFIX").unwrap_or_default();
+        let mut query_prefix = std::env::var("EMBEDDING_QUERY_PREFIX").unwrap_or_default();
+        let mut document_prefix = std::env::var("EMBEDDING_DOCUMENT_PREFIX").unwrap_or_default();
         let target_dim = std::env::var("EMBEDDING_DIM")
             .ok()
             .and_then(|s| s.parse::<usize>().ok());
+
+        // Auto-detect model-specific prefixes when not explicitly set
+        if query_prefix.is_empty() {
+            let model = inner.model_name().to_lowercase();
+            if model.contains("qwen3") && model.contains("embed") {
+                query_prefix = "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery: ".to_string();
+                tracing::info!("Auto-detected Qwen3-Embedding, setting instruction-aware query prefix");
+            }
+        }
+
+        // Support escaped newlines in env var values
+        if query_prefix.contains("\\n") {
+            query_prefix = query_prefix.replace("\\n", "\n");
+        }
+        if document_prefix.contains("\\n") {
+            document_prefix = document_prefix.replace("\\n", "\n");
+        }
 
         let has_config = !query_prefix.is_empty()
             || !document_prefix.is_empty()
