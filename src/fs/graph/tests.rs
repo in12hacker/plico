@@ -468,16 +468,17 @@ fn test_jaccard_weight_scoring() {
 }
 
 #[test]
-fn test_single_tag_overlap_creates_edge() {
+fn test_two_shared_tags_creates_edge() {
     let kg = PetgraphBackend::new();
-    kg.upsert_document("d1", &["shared".into(), "unique1".into()], "a").unwrap();
-    kg.upsert_document("d2", &["shared".into(), "unique2".into()], "a").unwrap();
+    // Need >= 2 shared tags per upsert_document logic (shared_tag_count >= 2)
+    kg.upsert_document("d1", &["shared1".into(), "shared2".into(), "unique1".into()], "a").unwrap();
+    kg.upsert_document("d2", &["shared1".into(), "shared2".into(), "unique2".into()], "a").unwrap();
 
     let edges = kg.list_edges("a").unwrap();
     let assoc: Vec<_> = edges.iter()
         .filter(|e| e.edge_type == KGEdgeType::AssociatesWith)
         .collect();
-    assert!(assoc.len() >= 2, "1 shared tag should create edges (threshold=1)");
+    assert!(assoc.len() >= 2, "2 shared tags should create edges");
 }
 
 #[test]

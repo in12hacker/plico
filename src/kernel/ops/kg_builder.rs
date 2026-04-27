@@ -6,7 +6,7 @@
 //! pass connects recent Event nodes with `Follows` edges by `created_at` order.
 //!
 //! Controlled by env vars:
-//! - `PLICO_KG_AUTO_EXTRACT=1` — enable (default: disabled)
+//! - `PLICO_KG_AUTO_EXTRACT=0` — disable (default: enabled)
 //! - `PLICO_KG_EXTRACT_BATCH_SIZE` — batch size before flush (default: 5)
 //! - `PLICO_KG_EXTRACT_TIMEOUT_MS` — max wait before flush (default: 3000)
 
@@ -58,8 +58,8 @@ impl KgBuilderConfig {
     pub fn from_env() -> Self {
         Self {
             enabled: std::env::var("PLICO_KG_AUTO_EXTRACT")
-                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-                .unwrap_or(false),
+                .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
+                .unwrap_or(true),
             batch_size: std::env::var("PLICO_KG_EXTRACT_BATCH_SIZE")
                 .ok()
                 .and_then(|v| v.parse().ok())
@@ -437,7 +437,7 @@ mod tests {
     #[test]
     fn test_kg_builder_config_defaults() {
         let config = KgBuilderConfig::from_env();
-        assert!(!config.enabled);
+        assert!(config.enabled); // defaults to true (PLICO_KG_AUTO_EXTRACT not set)
         assert_eq!(config.batch_size, 5);
         assert_eq!(config.timeout_ms, 3000);
     }
