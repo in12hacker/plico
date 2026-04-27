@@ -261,4 +261,200 @@ mod tests {
         assert_eq!(result.from_seq, 100);
         assert_eq!(result.to_seq, 100);
     }
+
+    #[test]
+    fn test_change_entry_memory_stored() {
+        let bus = EventBus::new();
+        bus.emit(KernelEvent::MemoryStored {
+            agent_id: "a1".into(),
+            tier: "episodic".into(),
+        });
+        let events = bus.events_since(0);
+        let entry = change_entry_from_event(&events[0]);
+        assert_eq!(entry.cid, "memory:episodic");
+        assert_eq!(entry.change_type, "memory_stored");
+        assert_eq!(entry.changed_by, "a1");
+    }
+
+    #[test]
+    fn test_change_entry_agent_state_changed() {
+        let bus = EventBus::new();
+        bus.emit(KernelEvent::AgentStateChanged {
+            agent_id: "a1".into(),
+            old_state: "idle".into(),
+            new_state: "running".into(),
+        });
+        let events = bus.events_since(0);
+        let entry = change_entry_from_event(&events[0]);
+        assert_eq!(entry.change_type, "state_changed:idle->running");
+    }
+
+    #[test]
+    fn test_change_entry_intent_submitted() {
+        let bus = EventBus::new();
+        bus.emit(KernelEvent::IntentSubmitted {
+            intent_id: "i1".into(),
+            agent_id: Some("a1".into()),
+            priority: "high".into(),
+        });
+        let events = bus.events_since(0);
+        let entry = change_entry_from_event(&events[0]);
+        assert_eq!(entry.cid, "intent:i1");
+        assert_eq!(entry.change_type, "intent_submitted");
+    }
+
+    #[test]
+    fn test_change_entry_intent_completed_success_and_failure() {
+        let bus = EventBus::new();
+        bus.emit(KernelEvent::IntentCompleted { intent_id: "i1".into(), success: true });
+        bus.emit(KernelEvent::IntentCompleted { intent_id: "i2".into(), success: false });
+        let events = bus.events_since(0);
+        assert_eq!(change_entry_from_event(&events[0]).change_type, "intent_completed");
+        assert_eq!(change_entry_from_event(&events[1]).change_type, "intent_failed");
+    }
+
+    #[test]
+    fn test_change_entry_event_created() {
+        let bus = EventBus::new();
+        bus.emit(KernelEvent::EventCreated {
+            event_id: "ev1".into(),
+            agent_id: "a1".into(),
+            label: "something happened".into(),
+        });
+        let events = bus.events_since(0);
+        let entry = change_entry_from_event(&events[0]);
+        assert_eq!(entry.cid, "event:ev1");
+        assert_eq!(entry.change_type, "event_created");
+    }
+
+    #[test]
+    fn test_change_entry_knowledge_shared() {
+        let bus = EventBus::new();
+        bus.emit(KernelEvent::KnowledgeShared {
+            cid: "cid123456".into(),
+            agent_id: "a1".into(),
+            tags: vec!["t1".into()],
+            scope: "global".into(),
+            summary: "summary".into(),
+        });
+        let events = bus.events_since(0);
+        let entry = change_entry_from_event(&events[0]);
+        assert!(entry.change_type.contains("knowledge_shared:global"));
+    }
+
+    #[test]
+    fn test_change_entry_knowledge_superseded() {
+        let bus = EventBus::new();
+        bus.emit(KernelEvent::KnowledgeSuperseded {
+            old_cid: "old123".into(),
+            new_cid: "new456".into(),
+            agent_id: "a1".into(),
+        });
+        let events = bus.events_since(0);
+        let entry = change_entry_from_event(&events[0]);
+        assert_eq!(entry.cid, "new456");
+        assert!(entry.change_type.contains("knowledge_superseded:old123"));
+    }
+
+    #[test]
+    fn test_change_entry_task_delegated() {
+        let bus = EventBus::new();
+        bus.emit(KernelEvent::TaskDelegated {
+            task_id: "t1".into(),
+            from_agent: "a1".into(),
+            to_agent: "a2".into(),
+        });
+        let events = bus.events_since(0);
+        let entry = change_entry_from_event(&events[0]);
+        assert!(entry.change_type.contains("task_delegated:a1->a2"));
+    }
+
+    #[test]
+    fn test_change_entry_task_completed() {
+        let bus = EventBus::new();
+        bus.emit(KernelEvent::TaskCompleted {
+            task_id: "t1".into(),
+            agent_id: "a1".into(),
+            result_cids: vec!["r1".into(), "r2".into()],
+        });
+        let events = bus.events_since(0);
+        let entry = change_entry_from_event(&events[0]);
+        assert!(entry.change_type.contains("task_completed:2results"));
+    }
+
+    #[test]
+    fn test_change_entry_verification_failed() {
+        let bus = EventBus::new();
+        bus.emit(KernelEvent::VerificationFailed {
+            tool_name: "tool1".into(),
+            operation: "op1".into(),
+            reason: "bad".into(),
+            agent_id: "a1".into(),
+        });
+        let events = bus.events_since(0);
+        let entry = change_entry_from_event(&events[0]);
+        assert!(entry.change_type.contains("verification_failed:op1"));
+    }
+
+    #[test]
+    fn test_event_matches_filter_watch_cids() {
+        let bus = EventBus::new();
+        bus.emit(KernelEvent::ObjectStored {
+            cid: "target-cid-123".into(),
+            agent_id: "a1".into(),
+            tags: vec![],
+        });
+        bus.emit(KernelEvent::ObjectStored {
+            cid: "other-cid-456".into(),
+            agent_id: "a1".into(),
+            tags: vec![],
+        });
+        let result = handle_delta_since(0, vec!["target-cid".into()], vec![], None, &bus);
+        assert_eq!(result.changes.len(), 1);
+        assert_eq!(result.changes[0].cid, "target-cid-123");
+    }
+
+    #[test]
+    fn test_event_matches_filter_watch_tags() {
+        let bus = EventBus::new();
+        bus.emit(KernelEvent::ObjectStored {
+            cid: "cid1".into(),
+            agent_id: "a1".into(),
+            tags: vec!["important".into()],
+        });
+        bus.emit(KernelEvent::ObjectStored {
+            cid: "cid2".into(),
+            agent_id: "a1".into(),
+            tags: vec!["irrelevant".into()],
+        });
+        let result = handle_delta_since(0, vec![], vec!["important".into()], None, &bus);
+        assert_eq!(result.changes.len(), 1);
+        assert_eq!(result.changes[0].cid, "cid1");
+    }
+
+    #[test]
+    fn test_event_matches_filter_non_object_events() {
+        let bus = EventBus::new();
+        bus.emit(KernelEvent::AgentStateChanged {
+            agent_id: "a1".into(),
+            old_state: "idle".into(),
+            new_state: "running".into(),
+        });
+        let result = handle_delta_since(0, vec!["a1".into()], vec![], None, &bus);
+        assert!(result.changes.is_empty());
+    }
+
+    #[test]
+    fn test_handle_delta_since_no_limit() {
+        let bus = EventBus::new();
+        for i in 0..10 {
+            bus.emit(KernelEvent::ObjectStored {
+                cid: format!("cid-{}", i),
+                agent_id: "a1".into(),
+                tags: vec![],
+            });
+        }
+        let result = handle_delta_since(0, vec![], vec![], None, &bus);
+        assert_eq!(result.changes.len(), 10);
+    }
 }

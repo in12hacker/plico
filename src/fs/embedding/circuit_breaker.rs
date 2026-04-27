@@ -256,4 +256,76 @@ mod tests {
         assert!(result.is_ok());
         assert_eq!(cb.state(), STATE_CLOSED);
     }
+
+    #[test]
+    fn test_circuit_breaker_stays_closed_on_success() {
+        let inner = Arc::new(FailingProvider::new(0));
+        let cb = EmbeddingCircuitBreaker::new(inner, 3, 100);
+
+        for _ in 0..5 {
+            assert!(cb.embed("test").is_ok());
+        }
+        assert_eq!(cb.state(), STATE_CLOSED);
+    }
+
+    #[test]
+    fn test_circuit_breaker_resets_count_on_success() {
+        let inner = Arc::new(FailingProvider::new(2));
+        let cb = EmbeddingCircuitBreaker::new(inner, 3, 100);
+
+        cb.embed("test").unwrap_err();
+        cb.embed("test").unwrap_err();
+        assert!(cb.embed("test").is_ok());
+        assert_eq!(cb.state(), STATE_CLOSED);
+    }
+
+    #[test]
+    fn test_circuit_breaker_embed_batch() {
+        let inner = Arc::new(FailingProvider::new(0));
+        let cb = EmbeddingCircuitBreaker::new(inner, 3, 100);
+
+        let result = cb.embed_batch(&["hello", "world"]);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().len(), 2);
+    }
+
+    #[test]
+    fn test_circuit_breaker_embed_batch_opens() {
+        let inner = Arc::new(FailingProvider::new(10));
+        let cb = EmbeddingCircuitBreaker::new(inner, 2, 100);
+
+        let _ = cb.embed_batch(&["a"]);
+        let _ = cb.embed_batch(&["b"]);
+        assert_eq!(cb.state(), STATE_OPEN);
+    }
+
+    #[test]
+    fn test_circuit_breaker_dimension_delegation() {
+        let inner = Arc::new(FailingProvider::new(0));
+        let cb = EmbeddingCircuitBreaker::new(inner, 3, 100);
+        assert_eq!(cb.dimension(), 384);
+        assert_eq!(cb.raw_dimension(), 384);
+        assert_eq!(cb.model_name(), "failing");
+    }
+
+    #[test]
+    fn test_circuit_breaker_embed_query_and_document() {
+        let inner = Arc::new(FailingProvider::new(0));
+        let cb = EmbeddingCircuitBreaker::new(inner, 3, 100);
+        assert!(cb.embed_query("test").is_ok());
+        assert!(cb.embed_document("test").is_ok());
+    }
+
+    #[test]
+    fn test_circuit_breaker_half_open_probe_fails() {
+        let inner = Arc::new(FailingProvider::new(5));
+        let cb = EmbeddingCircuitBreaker::new(inner, 1, 50);
+
+        cb.embed("test").unwrap_err();
+        assert_eq!(cb.state(), STATE_OPEN);
+
+        std::thread::sleep(Duration::from_millis(60));
+        let _ = cb.embed("test");
+        assert_eq!(cb.state(), STATE_OPEN);
+    }
 }

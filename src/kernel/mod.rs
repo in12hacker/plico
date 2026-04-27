@@ -45,7 +45,7 @@ use crate::cas::CASStorage;
 use crate::memory::{LayeredMemory, CASPersister, MemoryPersister};
 use crate::scheduler::AgentScheduler;
 use crate::scheduler::messaging::MessageBus;
-use crate::fs::{SemanticFS, InMemoryBackend, HnswBackend, EmbeddingProvider, SemanticSearch, LlmSummarizer, Summarizer, KnowledgeGraph, PetgraphBackend, StubEmbeddingProvider};
+use crate::fs::{SemanticFS, InMemoryBackend, HnswBackend, EmbeddingProvider, SemanticSearch, LlmSummarizer, Summarizer, KnowledgeGraph, PetgraphBackend, StubEmbeddingProvider, RerankerProvider};
 use crate::llm::LlmProvider;
 use crate::api::permission::PermissionGuard;
 use crate::tool::ToolRegistry;
@@ -98,6 +98,9 @@ pub struct AIKernel {
     pub(crate) cost_ledger: Arc<TokenCostLedger>,
     /// KG builder handle — async entity/event extraction on CAS writes.
     pub(crate) kg_builder: Option<ops::kg_builder::KgBuilderHandle>,
+    /// Reranker provider — cross-encoder reranking for search refinement.
+    #[allow(dead_code)]
+    pub(crate) reranker: Option<Arc<dyn RerankerProvider>>,
 }
 
 /// Check if the embedding model has changed since last run.
@@ -202,12 +205,15 @@ impl AIKernel {
         let memory = Arc::new(LayeredMemory::new());
         let scheduler = Arc::new(AgentScheduler::new());
 
-        let fs = Arc::new(SemanticFS::new(
+        let reranker = crate::fs::reranker::create_reranker_provider();
+
+        let fs = Arc::new(SemanticFS::with_reranker(
             root.clone(),
             Arc::new(embedding.clone()) as Arc<dyn EmbeddingProvider>,
             search_index,
             summarizer.clone(),
             knowledge_graph.clone(),
+            reranker.clone(),
         )?);
         let permissions = Arc::new(PermissionGuard::new());
 
@@ -384,6 +390,7 @@ impl AIKernel {
             task_store,
             cost_ledger,
             kg_builder,
+            reranker,
         };
 
         kernel.register_builtin_tools();

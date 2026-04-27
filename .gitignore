@@ -16,4 +16,13 @@ Cargo.lock
 # OS
 .DS_Store
 Thumbs.db
-.claude/\ntests/e2e/__pycache__/
+.claude/
+tests/e2e/__pycache__/
+
+# Benchmark data (large datasets, not tracked)
+bench/data/
+bench/**/__pycache__/
+bench/**/*.pyc
+
+# Model files
+*.gguf

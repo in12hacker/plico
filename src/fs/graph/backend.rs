@@ -364,7 +364,11 @@ impl PetgraphBackend {
             expired_at: None,
         };
 
-        let candidates: Vec<_> = {
+        const MAX_ASSOC_EDGES: usize = 5;
+        const MIN_JACCARD: f32 = 0.3;
+        const MAX_SCAN: usize = 500;
+
+        let mut candidates: Vec<_> = {
             let nodes = self.nodes.read().unwrap();
             nodes
                 .values()
@@ -372,13 +376,18 @@ impl PetgraphBackend {
                     n.agent_id == agent_id
                         && n.node_type == KGNodeType::Document
                         && n.id != cid
-                        && shared_tag_count(&n.properties, tags) >= 1
+                        && shared_tag_count(&n.properties, tags) >= 2
                 })
+                .take(MAX_SCAN)
                 .map(|n| (n.id.clone(), jaccard_weight(&n.properties, tags)))
+                .filter(|(_, w)| *w >= MIN_JACCARD)
                 .collect()
         };
 
         self.add_node(node)?;
+
+        candidates.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        candidates.truncate(MAX_ASSOC_EDGES);
 
         for (other_id, w) in candidates {
             let e1 = KGEdge::new_with_episode(

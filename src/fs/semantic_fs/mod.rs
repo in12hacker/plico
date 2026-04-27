@@ -15,6 +15,7 @@ use std::sync::{Arc, RwLock};
 use crate::cas::{AIObject, AIObjectMeta, CASStorage};
 use crate::fs::context_loader::ContextLoader;
 use crate::fs::embedding::EmbeddingProvider;
+use crate::fs::reranker::RerankerProvider;
 use crate::fs::search::{SemanticSearch, SearchFilter, SearchIndexMeta, Bm25Index};
 use crate::fs::summarizer::Summarizer;
 use crate::fs::graph::KnowledgeGraph;
@@ -92,6 +93,7 @@ pub struct SemanticFS {
     summarizer: Option<Arc<dyn Summarizer>>,
     knowledge_graph: Option<Arc<dyn KnowledgeGraph>>,
     bm25_index: Arc<Bm25Index>,
+    reranker: Option<Arc<dyn RerankerProvider>>,
     // F-5: Soul alignment — env var disables auto-summarize to prevent OS policy leakage
     disable_auto_summarize: bool,
 }
@@ -112,6 +114,17 @@ impl SemanticFS {
         search_index: Arc<dyn SemanticSearch>,
         summarizer: Option<Arc<dyn Summarizer>>,
         knowledge_graph: Option<Arc<dyn KnowledgeGraph>>,
+    ) -> std::io::Result<Self> {
+        Self::with_reranker(root_path, embedding, search_index, summarizer, knowledge_graph, None)
+    }
+
+    pub fn with_reranker(
+        root_path: std::path::PathBuf,
+        embedding: Arc<dyn EmbeddingProvider>,
+        search_index: Arc<dyn SemanticSearch>,
+        summarizer: Option<Arc<dyn Summarizer>>,
+        knowledge_graph: Option<Arc<dyn KnowledgeGraph>>,
+        reranker: Option<Arc<dyn RerankerProvider>>,
     ) -> std::io::Result<Self> {
         let tag_index_path = root_path.join("tag_index.json");
         let recycle_bin_path = root_path.join("recycle_bin.json");
@@ -149,8 +162,7 @@ impl SemanticFS {
             summarizer,
             knowledge_graph,
             bm25_index: Arc::new(Bm25Index::new()),
-            // F-5: Soul alignment — auto-summarize disabled by default (V-06 fix)
-            // Set PLICO_AUTO_SUMMARIZE=1 to re-enable (not recommended — soul violation)
+            reranker,
             disable_auto_summarize: std::env::var("PLICO_AUTO_SUMMARIZE").as_deref() != Ok("1"),
         };
 
@@ -556,6 +568,18 @@ impl SemanticFS {
     }
 
     pub fn search_with_filter(&self, query: &str, limit: usize, filter: SearchFilter) -> Vec<SearchResult> {
+        // Tier 0: Temporal query detection — if the query looks temporal, try KG path first
+        if is_temporal_query(query) {
+            if let Some(ref kg) = self.knowledge_graph {
+                let temporal_results = self.search_temporal_via_kg(kg, query, limit);
+                if !temporal_results.is_empty() {
+                    tracing::debug!("Temporal KG path returned {} results", temporal_results.len());
+                    return temporal_results;
+                }
+                tracing::debug!("Temporal KG path returned 0 results, degrading to hybrid search");
+            }
+        }
+
         let query_emb = self.embedding.embed_query(query).ok().map(|r| r.embedding);
 
         let vector_hits: HashMap<String, f32> = match &query_emb {
@@ -611,6 +635,56 @@ impl SemanticFS {
             .map(|(cid, (score, _))| (cid, score))
             .collect();
         sorted.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        // Reranker stage: if available, apply cross-encoder reranking on top-N RRF candidates
+        if let Some(ref reranker) = self.reranker {
+            let rerank_candidates: usize = (limit * 3).min(sorted.len());
+            let candidates: Vec<(String, String)> = sorted[..rerank_candidates]
+                .iter()
+                .filter_map(|(cid, _)| {
+                    self.cas.get(cid).ok().map(|obj| {
+                        let text = String::from_utf8_lossy(
+                            &obj.data[..std::cmp::min(512, obj.data.len())],
+                        )
+                        .to_string();
+                        (cid.clone(), text)
+                    })
+                })
+                .collect();
+
+            match reranker.rerank(query, &candidates) {
+                Ok(reranked) => {
+                    tracing::debug!(
+                        "Reranker refined {} candidates -> {} results",
+                        candidates.len(),
+                        reranked.len(),
+                    );
+                    let reranked_results: Vec<SearchResult> = reranked
+                        .into_iter()
+                        .take(limit)
+                        .filter_map(|r| {
+                            self.cas.get(&r.id).ok().map(|obj| {
+                                let snippet = String::from_utf8_lossy(
+                                    &obj.data[..std::cmp::min(200, obj.data.len())],
+                                )
+                                .to_string();
+                                SearchResult {
+                                    cid: r.id,
+                                    relevance: r.score,
+                                    meta: obj.meta,
+                                    snippet,
+                                }
+                            })
+                        })
+                        .collect();
+                    return reranked_results;
+                }
+                Err(e) => {
+                    tracing::warn!("Reranker failed, degrading to RRF: {e}");
+                }
+            }
+        }
+
         sorted.truncate(limit);
 
         sorted
@@ -731,13 +805,21 @@ impl SemanticFS {
 
     // ─── Internal helpers ────────────────────────────────────────────────
 
-    const SIMILARITY_THRESHOLD: f32 = 0.5;
+    const SIMILARITY_THRESHOLD: f32 = 0.75;
+    const MAX_SIMILAR_EDGES: usize = 3;
 
     fn add_similar_to_edges(&self, kg: &Arc<dyn KnowledgeGraph>, cid: &str, embedding: &[f32]) {
         let filter = SearchFilter::default();
-        let similar = self.search_index.search(embedding, 10, &filter);
+        let similar = self.search_index.search(embedding, Self::MAX_SIMILAR_EDGES + 1, &filter);
+        let mut added = 0usize;
         for hit in similar {
             if hit.cid == cid || hit.score < Self::SIMILARITY_THRESHOLD {
+                continue;
+            }
+            if added >= Self::MAX_SIMILAR_EDGES {
+                break;
+            }
+            if kg.get_valid_edge_between(cid, &hit.cid, Some(KGEdgeType::SimilarTo), 0).ok().flatten().is_some() {
                 continue;
             }
             let e1 = KGEdge::new_with_episode(
@@ -756,6 +838,7 @@ impl SemanticFS {
             );
             let _ = kg.add_edge(e1);
             let _ = kg.add_edge(e2);
+            added += 1;
         }
     }
 
@@ -875,6 +958,106 @@ impl SemanticFS {
         }
 
         cids
+    }
+}
+
+/// Detect whether a query has temporal intent based on keyword matching.
+fn is_temporal_query(query: &str) -> bool {
+    let q = query.to_lowercase();
+    const TEMPORAL_KEYWORDS: &[&str] = &[
+        "after", "before", "when", "then", "during", "since", "until",
+        "first", "last", "next", "previous", "recent", "latest", "earliest",
+        "sequence", "timeline", "order", "chronolog",
+        "之后", "之前", "什么时候", "然后", "期间", "自从", "直到",
+        "第一次", "最后", "最近", "最早", "顺序", "时间线", "先后",
+    ];
+    TEMPORAL_KEYWORDS.iter().any(|kw| q.contains(kw))
+}
+
+impl SemanticFS {
+    /// Search via KG temporal path: find Event nodes, walk Follows edges,
+    /// and assemble context from related documents.
+    fn search_temporal_via_kg(
+        &self,
+        kg: &Arc<dyn crate::fs::graph::KnowledgeGraph>,
+        query: &str,
+        limit: usize,
+    ) -> Vec<SearchResult> {
+        use crate::fs::graph::{KGNodeType, KGEdgeType};
+
+        let event_nodes = match kg.list_nodes("", Some(KGNodeType::Event)) {
+            Ok(nodes) => nodes,
+            Err(_) => return vec![],
+        };
+
+        if event_nodes.is_empty() {
+            return vec![];
+        }
+
+        let query_lower = query.to_lowercase();
+        let mut relevant_events: Vec<_> = event_nodes
+            .into_iter()
+            .filter(|n| n.is_active())
+            .filter(|n| {
+                n.label.to_lowercase().contains(&query_lower)
+                    || query_lower.contains(&n.label.to_lowercase())
+                    || query.split_whitespace().any(|w| {
+                        n.label.to_lowercase().contains(&w.to_lowercase())
+                    })
+            })
+            .collect();
+
+        if relevant_events.is_empty() {
+            return vec![];
+        }
+
+        relevant_events.sort_by_key(|n| n.created_at);
+
+        let mut result_cids: Vec<String> = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+
+        for event in &relevant_events {
+            if let Some(ref cid) = event.content_cid {
+                if seen.insert(cid.clone()) {
+                    result_cids.push(cid.clone());
+                }
+            }
+
+            if let Ok(neighbors) = kg.get_neighbors(&event.id, Some(KGEdgeType::Follows), 2) {
+                for (neighbor, _edge) in neighbors {
+                    if let Some(ref cid) = neighbor.content_cid {
+                        if seen.insert(cid.clone()) {
+                            result_cids.push(cid.clone());
+                        }
+                    }
+                }
+            }
+
+            if result_cids.len() >= limit {
+                break;
+            }
+        }
+
+        result_cids.truncate(limit);
+
+        result_cids
+            .into_iter()
+            .enumerate()
+            .filter_map(|(i, cid)| {
+                self.cas.get(&cid).ok().map(|obj| {
+                    let snippet = String::from_utf8_lossy(
+                        &obj.data[..std::cmp::min(200, obj.data.len())],
+                    )
+                    .to_string();
+                    SearchResult {
+                        cid,
+                        relevance: 1.0 - (i as f32 * 0.05),
+                        meta: obj.meta,
+                        snippet,
+                    }
+                })
+            })
+            .collect()
     }
 }
 

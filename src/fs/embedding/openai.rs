@@ -313,6 +313,13 @@ mod tests {
             }
         };
         let result = backend.embed("Hello world");
+        match result {
+            Err(ref e) if e.to_string().to_lowercase().contains("unavailable") || e.to_string().contains("connect") => {
+                eprintln!("llama-server not reachable, skipping: {e}");
+                return;
+            }
+            _ => {}
+        }
         assert!(result.is_ok(), "embed should succeed: {:?}", result);
         let emb = result.unwrap();
         assert!(!emb.embedding.is_empty(), "embedding should not be empty");
@@ -330,6 +337,13 @@ mod tests {
             }
         };
         let result = backend.embed_batch(&["Hello", "World"]);
+        match result {
+            Err(ref e) if e.to_string().to_lowercase().contains("unavailable") || e.to_string().contains("connect") => {
+                eprintln!("llama-server not reachable, skipping: {e}");
+                return;
+            }
+            _ => {}
+        }
         assert!(result.is_ok(), "batch embed should succeed: {:?}", result);
         let embs = result.unwrap();
         assert_eq!(embs.len(), 2);
