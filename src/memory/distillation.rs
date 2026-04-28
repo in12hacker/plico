@@ -123,8 +123,8 @@ pub fn to_long_term_entry(
 /// Build an LLM prompt for session summarization.
 pub fn summarization_prompt(entries_text: &str) -> String {
     format!(
-        "Summarize the following conversation memories into a concise paragraph. \
-         Preserve all important facts, decisions, and action items. \
+        "Compress these memories into the SHORTEST possible summary (fewer words than the input). \
+         Keep only key facts, decisions, and action items. Remove filler and redundancy. \
          Output ONLY the summary, nothing else.\n\n\
          Memories:\n{entries_text}\n\n\
          Summary:"

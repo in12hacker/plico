@@ -145,10 +145,12 @@ pub fn check_contradiction_rules(
 /// Build an LLM prompt for contradiction detection.
 pub fn contradiction_prompt(old_content: &str, new_content: &str) -> String {
     format!(
-        "Do these two statements contradict each other? \
-         Answer ONLY 'yes' or 'no'.\n\n\
+        "Two statements are contradictory if they assign DIFFERENT values to the SAME attribute \
+         (e.g. different dates, versions, names, numbers, or choices for the same subject). \
+         Even if phrased differently ('required' vs 'recommended'), conflicting specifics count.\n\n\
          Statement A: {old_content}\n\
          Statement B: {new_content}\n\n\
+         Do these two statements contradict each other? Answer ONLY 'yes' or 'no'.\n\
          Answer:"
     )
 }

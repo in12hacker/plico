@@ -646,6 +646,360 @@ fn bench_b8_full_pipeline() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
+// B9: Scale Test — 50 entries store + search performance degradation
+// ═══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn bench_b9_scale_store_search() {
+    use plico::api::semantic::{ApiRequest, ContentEncoding};
+
+    let (kernel, _dir) = match make_real_kernel() {
+        Some(k) => k,
+        None => { eprintln!("{SKIP_MSG}"); return; }
+    };
+
+    let agent_id = kernel.register_agent("scale-agent".into());
+    kernel.permission_grant(&agent_id, plico::api::permission::PermissionAction::Write, None, None);
+    kernel.permission_grant(&agent_id, plico::api::permission::PermissionAction::Read, None, None);
+
+    let corpus: Vec<(String, Vec<String>)> = (0..50).map(|i| {
+        let domain = match i % 5 {
+            0 => "infrastructure",
+            1 => "team",
+            2 => "process",
+            3 => "architecture",
+            _ => "metrics",
+        };
+        let content = match i % 10 {
+            0 => format!("Server #{} runs Ubuntu 22.04 with {}GB RAM", i, 8 + i),
+            1 => format!("Engineer-{} specializes in {} development", i, if i % 2 == 0 { "backend" } else { "frontend" }),
+            2 => format!("Sprint {} review: {} story points completed", i, 20 + i),
+            3 => format!("Service {} uses {} for inter-process communication", i, if i % 2 == 0 { "gRPC" } else { "REST" }),
+            4 => format!("Average response time for endpoint-{}: {}ms", i, 50 + i * 3),
+            5 => format!("Database shard {} contains {} million records", i, i * 2),
+            6 => format!("Team member {} joined in 20{}", i, 20 + i % 5),
+            7 => format!("CI pipeline stage {}: average duration {}s", i, 30 + i * 2),
+            8 => format!("Microservice {} deployed to {} replicas", i, 2 + i % 4),
+            _ => format!("Monitoring alert #{}: CPU usage at {}%", i, 40 + i),
+        };
+        (content, vec![domain.to_string(), format!("item-{i}")])
+    }).collect();
+
+    println!("\n=== B9: Scale Test ({} entries) ===", corpus.len());
+
+    let mut store_latencies = Vec::with_capacity(corpus.len());
+    let t_total_store = Instant::now();
+    for (content, tags) in &corpus {
+        let t0 = Instant::now();
+        let resp = kernel.handle_api_request(ApiRequest::Create {
+            api_version: None,
+            content: content.clone(),
+            content_encoding: ContentEncoding::Utf8,
+            tags: tags.clone(),
+            agent_id: agent_id.clone(),
+            tenant_id: None,
+            agent_token: None,
+            intent: None,
+        });
+        store_latencies.push(t0.elapsed().as_millis());
+        assert!(resp.ok, "Store failed at entry: {:?}", resp.error);
+    }
+    let total_store_ms = t_total_store.elapsed().as_millis();
+
+    store_latencies.sort();
+    let p50_store = store_latencies[store_latencies.len() / 2];
+    let p95_store = store_latencies[store_latencies.len() * 95 / 100];
+    let p99_store = store_latencies[store_latencies.len() * 99 / 100];
+    let avg_store = total_store_ms as f64 / corpus.len() as f64;
+
+    println!("  Store: {} entries in {}ms", corpus.len(), total_store_ms);
+    println!("    avg={:.1}ms  p50={}ms  p95={}ms  p99={}ms", avg_store, p50_store, p95_store, p99_store);
+
+    let search_queries = vec![
+        ("Ubuntu server with RAM", "ram"),
+        ("backend developer specialization", "backend"),
+        ("sprint review story points", "sprint"),
+        ("gRPC inter-process communication", "grpc"),
+        ("response time endpoint latency", "response"),
+        ("database shard records", "shard"),
+        ("CI pipeline duration", "pipeline"),
+        ("microservice deployment replicas", "replica"),
+        ("monitoring CPU alert", "cpu"),
+        ("team member joined date", "joined"),
+    ];
+
+    println!("\n  {:>3} {:<45} {:>8} {:>6} {}", "#", "Query", "Lat(ms)", "Hits", "Top result");
+    println!("  {}", "-".repeat(110));
+
+    let mut search_latencies = Vec::with_capacity(search_queries.len());
+    let mut total_found = 0;
+
+    for (i, (query, keyword)) in search_queries.iter().enumerate() {
+        let t0 = Instant::now();
+        let resp = kernel.handle_api_request(ApiRequest::Search {
+            query: query.to_string(),
+            limit: Some(5),
+            offset: None,
+            agent_id: agent_id.clone(),
+            tenant_id: None,
+            agent_token: None,
+            require_tags: vec![],
+            exclude_tags: vec![],
+            since: None,
+            until: None,
+            intent_context: None,
+        });
+        let lat = t0.elapsed().as_millis();
+        search_latencies.push(lat);
+
+        let results = resp.results.as_deref().unwrap_or(&[]);
+        let found = results.iter().any(|r| r.snippet.to_lowercase().contains(keyword));
+        if found { total_found += 1; }
+
+        let preview = results.first()
+            .map(|r| if r.snippet.len() > 55 { format!("{}...", &r.snippet[..55]) } else { r.snippet.clone() })
+            .unwrap_or_else(|| "(empty)".into());
+
+        println!("  {:>3} {:<45} {:>8} {:>6} {}", i + 1, query, lat, results.len(), preview);
+    }
+
+    search_latencies.sort();
+    let avg_search = search_latencies.iter().sum::<u128>() as f64 / search_latencies.len() as f64;
+    let p50_search = search_latencies[search_latencies.len() / 2];
+    let p95_search = search_latencies[search_latencies.len() * 95 / 100];
+
+    println!("\n  Search: avg={:.1}ms  p50={}ms  p95={}ms", avg_search, p50_search, p95_search);
+    println!("  Relevance: {total_found}/{} queries found keyword in top-5", search_queries.len());
+
+    assert!(total_found >= search_queries.len() / 2, "Scale search accuracy too low: {total_found}/{}",
+        search_queries.len());
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// B10: Embedding Throughput — batch embedding latency
+// ═══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn bench_b10_embedding_throughput() {
+    let emb = match make_embedding_provider() {
+        Some(p) => p,
+        None => { eprintln!("{SKIP_MSG}"); return; }
+    };
+
+    let texts: Vec<String> = (0..30).map(|i| {
+        match i % 6 {
+            0 => format!("The architecture of microservice {} follows domain-driven design principles", i),
+            1 => format!("Database query optimization reduced latency by {}% on shard {}", 10 + i, i),
+            2 => format!("Sprint {} retrospective identified {} action items for improvement", i, 3 + i % 5),
+            3 => format!("Load balancer distributes traffic across {} pods in cluster {}", 4 + i % 3, i),
+            4 => format!("Security audit found {} medium-severity vulnerabilities in service {}", i % 4, i),
+            _ => format!("Deployment pipeline {} takes {} minutes end-to-end", i, 5 + i % 10),
+        }
+    }).collect();
+
+    println!("\n=== B10: Embedding Throughput ({} texts) ===", texts.len());
+
+    let mut latencies = Vec::with_capacity(texts.len());
+    let mut dimensions = 0usize;
+    let t_total = Instant::now();
+
+    for text in &texts {
+        let t0 = Instant::now();
+        match emb.embed(text) {
+            Ok(result) => {
+                latencies.push(t0.elapsed().as_millis());
+                if dimensions == 0 { dimensions = result.embedding.len(); }
+            }
+            Err(e) => {
+                eprintln!("  Embed error: {e}");
+                latencies.push(t0.elapsed().as_millis());
+            }
+        }
+    }
+
+    let total_ms = t_total.elapsed().as_millis();
+    latencies.sort();
+
+    let avg = total_ms as f64 / texts.len() as f64;
+    let p50 = latencies[latencies.len() / 2];
+    let p95 = latencies[latencies.len() * 95 / 100];
+    let p99 = latencies[latencies.len() * 99 / 100];
+    let throughput = texts.len() as f64 / (total_ms as f64 / 1000.0);
+
+    println!("  Total: {}ms for {} embeddings (dim={})", total_ms, texts.len(), dimensions);
+    println!("  avg={:.1}ms  p50={}ms  p95={}ms  p99={}ms", avg, p50, p95, p99);
+    println!("  Throughput: {:.1} embeddings/sec", throughput);
+
+    let first_5_avg: f64 = latencies[..5].iter().map(|&l| l as f64).sum::<f64>() / 5.0;
+    let last_5_avg: f64 = latencies[latencies.len()-5..].iter().map(|&l| l as f64).sum::<f64>() / 5.0;
+    println!("  Cold start effect: first_5_avg={:.1}ms  last_5_avg={:.1}ms", first_5_avg, last_5_avg);
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// B11: Multi-Session Memory Persistence — cross-session recall
+// ═══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn bench_b11_multi_session_memory() {
+    let (kernel, _dir) = match make_real_kernel() {
+        Some(k) => k,
+        None => { eprintln!("{SKIP_MSG}"); return; }
+    };
+
+    let agent_id = kernel.register_agent("session-agent".into());
+    kernel.permission_grant(&agent_id, plico::api::permission::PermissionAction::Write, None, None);
+    kernel.permission_grant(&agent_id, plico::api::permission::PermissionAction::Read, None, None);
+
+    println!("\n=== B11: Multi-Session Memory Persistence ===");
+
+    let sessions = vec![
+        vec![
+            "Project Alpha uses React 18 for the frontend",
+            "The backend is built with Rust and Actix-web",
+            "PostgreSQL 15 is the primary database",
+        ],
+        vec![
+            "Alice is the frontend lead for Project Alpha",
+            "Bob handles the infrastructure and DevOps",
+            "Sprint planning happens every Monday",
+        ],
+        vec![
+            "Deployed v2.0 of Project Alpha to production",
+            "Performance improved 30% after Rust migration",
+            "Next milestone is to add real-time notifications",
+        ],
+    ];
+
+    let mut total_store_ms = 0u128;
+    for (session_idx, session) in sessions.iter().enumerate() {
+        let t0 = Instant::now();
+        for content in session {
+            let _ = kernel.remember_long_term(
+                &agent_id, "default",
+                content.to_string(),
+                vec![format!("session-{session_idx}")],
+                50,
+            );
+        }
+        let ms = t0.elapsed().as_millis();
+        total_store_ms += ms;
+        println!("  Session {}: stored {} memories in {}ms", session_idx + 1, session.len(), ms);
+    }
+
+    let cross_session_queries = vec![
+        ("What technology stack does Project Alpha use?", vec!["react", "rust"]),
+        ("Who is responsible for the frontend?", vec!["alice"]),
+        ("What was the performance improvement?", vec!["30%"]),
+        ("When is sprint planning?", vec!["monday"]),
+        ("What is the next milestone?", vec!["notification"]),
+    ];
+
+    println!("\n  {:>3} {:<50} {:>8} {:>6} {}", "#", "Cross-session Query", "Lat(ms)", "Found", "Evidence");
+    println!("  {}", "-".repeat(110));
+
+    let mut found_count = 0;
+    let mut total_search_ms = 0u128;
+
+    for (i, (query, keywords)) in cross_session_queries.iter().enumerate() {
+        let t0 = Instant::now();
+        let results = kernel.recall_semantic(&agent_id, "default", query, 5);
+        let lat = t0.elapsed().as_millis();
+        total_search_ms += lat;
+
+        match results {
+            Ok(entries) => {
+                let found = entries.iter().any(|e| {
+                    let content = e.content.display().to_string().to_lowercase();
+                    keywords.iter().any(|kw| content.contains(kw))
+                });
+                if found { found_count += 1; }
+
+                let evidence = entries.first()
+                    .map(|e| {
+                        let s = e.content.display().to_string();
+                        if s.len() > 50 { format!("{}...", &s[..50]) } else { s }
+                    })
+                    .unwrap_or_else(|| "(empty)".into());
+
+                println!("  {:>3} {:<50} {:>8} {:>6} {}", i + 1, query, lat, if found { "YES" } else { "NO" }, evidence);
+            }
+            Err(e) => {
+                println!("  {:>3} {:<50} {:>8} {:>6} ERROR: {}", i + 1, query, lat, "ERR", e);
+            }
+        }
+    }
+
+    let n = cross_session_queries.len();
+    println!("\n  Cross-session recall: {found_count}/{n} ({:.0}%)", found_count as f64 / n as f64 * 100.0);
+    println!("  Total store: {}ms  Total search: {}ms", total_store_ms, total_search_ms);
+
+    assert!(found_count >= n / 2, "Cross-session recall too low: {found_count}/{n}");
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// B12: LLM Latency Stability — 20-call consistency check
+// ═══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn bench_b12_llm_latency_stability() {
+    let llm = match make_llm_provider() {
+        Some(p) => p,
+        None => { eprintln!("{SKIP_MSG}"); return; }
+    };
+
+    println!("\n=== B12: LLM Latency Stability (20 calls) ===");
+
+    let prompts: Vec<String> = (0..20).map(|i| {
+        intent_classification_prompt(&format!("Query number {} about various topics", i))
+    }).collect();
+
+    let mut latencies = Vec::with_capacity(prompts.len());
+    let t_total = Instant::now();
+
+    for (i, prompt) in prompts.iter().enumerate() {
+        let t0 = Instant::now();
+        let result = llm_chat(&*llm, prompt);
+        let lat = t0.elapsed().as_millis();
+        latencies.push(lat);
+
+        if i < 3 || i >= prompts.len() - 3 || result.is_err() {
+            let status = match &result {
+                Ok(r) => r.trim().to_string(),
+                Err(e) => format!("ERR: {e}"),
+            };
+            println!("  [{:>2}] {}ms — {}", i + 1, lat, status);
+        } else if i == 3 {
+            println!("  ... ({} calls) ...", prompts.len() - 6);
+        }
+    }
+
+    let total_ms = t_total.elapsed().as_millis();
+    latencies.sort();
+    let avg = total_ms as f64 / latencies.len() as f64;
+    let p50 = latencies[latencies.len() / 2];
+    let p95 = latencies[latencies.len() * 95 / 100];
+    let min_lat = latencies[0];
+    let max_lat = latencies[latencies.len() - 1];
+    let std_dev = {
+        let mean = avg;
+        let variance: f64 = latencies.iter()
+            .map(|&l| { let diff = l as f64 - mean; diff * diff })
+            .sum::<f64>() / latencies.len() as f64;
+        variance.sqrt()
+    };
+    let cv = std_dev / avg * 100.0;
+
+    println!("\n  Total: {}ms for {} calls", total_ms, latencies.len());
+    println!("  avg={:.1}ms  p50={}ms  p95={}ms  min={}ms  max={}ms", avg, p50, p95, min_lat, max_lat);
+    println!("  std_dev={:.1}ms  CV={:.1}%", std_dev, cv);
+    println!("  Throughput: {:.1} calls/sec", latencies.len() as f64 / (total_ms as f64 / 1000.0));
+
+    if cv > 50.0 {
+        println!("  WARNING: High latency variance (CV>50%) — LLM service may be unstable");
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
 // Helpers
 // ═══════════════════════════════════════════════════════════════════════
 
