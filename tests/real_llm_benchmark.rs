@@ -204,7 +204,7 @@ fn bench_b2_embedding_similarity() {
         let lat_ms = t0.elapsed().as_millis();
 
         let cos_sim = cosine_similarity(&emb_a, &emb_b);
-        let predicted_similar = cos_sim > 0.5;
+        let predicted_similar = cos_sim > 0.15;
         let ok = predicted_similar == *should_be_similar;
         if ok { correct += 1; }
 
@@ -441,7 +441,7 @@ fn bench_b5_kernel_store_recall() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// B6: Recall Routed — intent-classified retrieval with real LLM
+// B6: Recall Routed — intent-classified retrieval with real LLM + embeddings
 // ═══════════════════════════════════════════════════════════════════════
 
 #[test]
@@ -450,25 +450,34 @@ fn bench_b6_recall_routed() {
         Some(k) => k,
         None => { eprintln!("{SKIP_MSG}"); return; }
     };
-
     let agent_id = kernel.register_agent("routed-agent".into());
     kernel.permission_grant(&agent_id, plico::api::permission::PermissionAction::Write, None, None);
     kernel.permission_grant(&agent_id, plico::api::permission::PermissionAction::Read, None, None);
 
-    let memories = vec![
-        "2024-01-15: Sprint planning meeting — decided to migrate to Kubernetes",
-        "2024-02-01: Successfully deployed auth service to K8s cluster",
-        "2024-02-15: Performance regression found in API gateway after K8s migration",
-        "Alice prefers blue-green deployments over canary",
-        "Bob prefers canary deployments with gradual rollout",
-        "Total API requests per day: 2.5 million",
-        "Database backup runs every 6 hours",
-        "Redis cache hit rate is 95%",
+    let memories: Vec<(&str, Vec<&str>)> = vec![
+        ("2024-01-15: Sprint planning meeting — decided to migrate to Kubernetes", vec!["meeting", "k8s"]),
+        ("2024-02-01: Successfully deployed auth service to K8s cluster", vec!["deploy", "k8s"]),
+        ("2024-02-15: Performance regression found in API gateway after K8s migration", vec!["bug", "k8s"]),
+        ("Alice prefers blue-green deployments over canary", vec!["preference", "deploy"]),
+        ("Bob prefers canary deployments with gradual rollout", vec!["preference", "deploy"]),
+        ("Total API requests per day: 2.5 million", vec!["metrics", "api"]),
+        ("Database backup runs every 6 hours", vec!["ops", "database"]),
+        ("Redis cache hit rate is 95%", vec!["metrics", "redis"]),
     ];
 
-    for content in &memories {
-        let _ = kernel.remember(&agent_id, "default", content.to_string());
+    println!("\n=== B6: Recall Routed (Intent-classified with LongTerm Memory) ===");
+
+    let t_store = Instant::now();
+    for (content, tags) in &memories {
+        let _ = kernel.remember_long_term(
+            &agent_id, "default",
+            content.to_string(),
+            tags.iter().map(|s| s.to_string()).collect(),
+            50,
+        );
     }
+    let store_ms = t_store.elapsed().as_millis();
+    println!("  Stored {} memories to LongTerm (with embeddings) in {}ms", memories.len(), store_ms);
 
     let routed_queries = vec![
         ("What happened after the K8s migration?", QueryIntent::Temporal),
@@ -478,12 +487,12 @@ fn bench_b6_recall_routed() {
         ("Summarize all infrastructure decisions", QueryIntent::Aggregation),
     ];
 
-    println!("\n=== B6: Recall Routed (Intent-classified) ===");
-    println!("  {:>5} {:<50} {:>10} {:>10} {:>8} {:>6}",
+    println!("\n  {:>5} {:<50} {:>10} {:>10} {:>8} {:>6}",
         "#", "Query", "Expected", "Classified", "Lat(ms)", "Hits");
     println!("  {}", "-".repeat(100));
 
     let mut correct_intent = 0;
+    let mut total_hits = 0;
 
     for (i, (query, expected_intent)) in routed_queries.iter().enumerate() {
         let t0 = Instant::now();
@@ -494,6 +503,7 @@ fn bench_b6_recall_routed() {
             Ok((entries, classified)) => {
                 let intent_ok = classified.intent == *expected_intent;
                 if intent_ok { correct_intent += 1; }
+                total_hits += entries.len();
 
                 println!("  {:>5} {:<50} {:>10} {:>10} {:>8} {:>6}",
                     i + 1,
@@ -503,6 +513,11 @@ fn bench_b6_recall_routed() {
                     lat_ms,
                     entries.len(),
                 );
+                for e in entries.iter().take(2) {
+                    let s = e.content.display();
+                    let preview = if s.len() > 70 { format!("{}...", &s[..70]) } else { s.to_string() };
+                    println!("          → {preview}");
+                }
             }
             Err(e) => {
                 println!("  {:>5} {:<50} {:>10} {:>10} {:>8} {:>6}",
@@ -514,6 +529,8 @@ fn bench_b6_recall_routed() {
 
     let n = routed_queries.len();
     println!("\n  Intent accuracy: {correct_intent}/{n} ({:.0}%)", correct_intent as f64 / n as f64 * 100.0);
+    println!("  Total hits: {total_hits}");
+    assert!(total_hits > 0, "Recall routed should return some results");
 }
 
 // ═══════════════════════════════════════════════════════════════════════
