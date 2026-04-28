@@ -23,6 +23,7 @@ pub mod distillation;
 pub mod causal;
 pub mod topology;
 pub mod cross_agent;
+pub mod foresight;
 
 pub use layered::{LayeredMemory, MemoryTier, MemoryType, MemoryEntry, MemoryContent, MemoryError, MemoryScope};
 pub use persist::{MemoryPersister, CASPersister, MemoryLoader, PersistError, PersistenceIndex, PersistedTier};
