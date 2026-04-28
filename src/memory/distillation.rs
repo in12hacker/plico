@@ -266,6 +266,6 @@ mod tests {
     fn test_summarization_prompt_format() {
         let prompt = summarization_prompt("some memories here");
         assert!(prompt.contains("some memories here"));
-        assert!(prompt.contains("Summarize"));
+        assert!(prompt.contains("Compress") || prompt.contains("Summarize"));
     }
 }

@@ -1000,6 +1000,185 @@ fn bench_b12_llm_latency_stability() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
+// B13: Batch vs Sequential Embedding — measure batch API speedup
+// ═══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn bench_b13_batch_embedding() {
+    let emb = match make_embedding_provider() {
+        Some(p) => p,
+        None => { eprintln!("{SKIP_MSG}"); return; }
+    };
+
+    let texts: Vec<&str> = vec![
+        "Rust is a systems programming language",
+        "PostgreSQL is an advanced relational database",
+        "Kubernetes orchestrates containerized applications",
+        "gRPC uses protocol buffers for serialization",
+        "Redis provides in-memory key-value storage",
+        "Docker containers isolate application environments",
+        "GraphQL enables flexible API queries",
+        "Prometheus monitors system metrics and alerts",
+        "Terraform manages infrastructure as code",
+        "Elasticsearch powers full-text search capabilities",
+    ];
+
+    println!("\n=== B13: Batch vs Sequential Embedding ({} texts) ===", texts.len());
+
+    let t_seq = Instant::now();
+    let mut seq_results = Vec::new();
+    for text in &texts {
+        match emb.embed(text) {
+            Ok(r) => seq_results.push(r),
+            Err(e) => { eprintln!("  Sequential embed error: {e}"); return; }
+        }
+    }
+    let seq_ms = t_seq.elapsed().as_millis();
+
+    let t_batch = Instant::now();
+    let batch_results = match emb.embed_batch(&texts) {
+        Ok(r) => r,
+        Err(e) => { eprintln!("  Batch embed error: {e}"); return; }
+    };
+    let batch_ms = t_batch.elapsed().as_millis();
+
+    let speedup = if batch_ms > 0 { seq_ms as f64 / batch_ms as f64 } else { f64::INFINITY };
+
+    println!("  Sequential: {}ms ({:.1}ms/text)", seq_ms, seq_ms as f64 / texts.len() as f64);
+    println!("  Batch:      {}ms ({:.1}ms/text)", batch_ms, batch_ms as f64 / texts.len() as f64);
+    println!("  Speedup:    {:.2}x", speedup);
+    println!("  Results:    seq={} batch={}", seq_results.len(), batch_results.len());
+
+    assert_eq!(seq_results.len(), batch_results.len());
+
+    let mut embedding_match = 0;
+    for (s, b) in seq_results.iter().zip(batch_results.iter()) {
+        let sim = cosine_similarity(&s.embedding, &b.embedding);
+        if sim > 0.99 { embedding_match += 1; }
+    }
+    println!("  Consistency: {}/{} embeddings match (>0.99 cosine)", embedding_match, texts.len());
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// B14: End-to-End Multi-Round Conversation — distill + recall cycle
+// ═══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn bench_b14_conversation_cycle() {
+    let (kernel, _dir) = match make_real_kernel() {
+        Some(k) => k,
+        None => { eprintln!("{SKIP_MSG}"); return; }
+    };
+
+    let llm = match make_llm_provider() {
+        Some(p) => p,
+        None => { eprintln!("{SKIP_MSG}"); return; }
+    };
+
+    let agent_id = kernel.register_agent("convo-agent".into());
+    kernel.permission_grant(&agent_id, plico::api::permission::PermissionAction::Write, None, None);
+    kernel.permission_grant(&agent_id, plico::api::permission::PermissionAction::Read, None, None);
+
+    println!("\n=== B14: Multi-Round Conversation Cycle ===");
+
+    let rounds = vec![
+        vec![
+            ("User asked about deployment strategy", MemoryType::Episodic, &["deploy"][..]),
+            ("Team decided on blue-green deployment", MemoryType::Semantic, &["deploy", "decision"][..]),
+        ],
+        vec![
+            ("Discussed monitoring setup for production", MemoryType::Episodic, &["monitoring"][..]),
+            ("Prometheus + Grafana chosen for observability", MemoryType::Semantic, &["monitoring", "decision"][..]),
+            ("Always set up alerts before deploying new services", MemoryType::Procedural, &["monitoring", "best-practice"][..]),
+        ],
+        vec![
+            ("Sprint 5 planning: focus on auth redesign", MemoryType::Episodic, &["sprint", "auth"][..]),
+            ("Auth will use JWT with refresh tokens", MemoryType::Semantic, &["auth", "decision"][..]),
+        ],
+    ];
+
+    let mut total_store_ms = 0u128;
+    let mut total_distill_ms = 0u128;
+    let mut all_lt_count = 0;
+
+    for (round_idx, round_entries) in rounds.iter().enumerate() {
+        let t_store = Instant::now();
+        let mut working_entries = Vec::new();
+        for (content, mem_type, tags) in round_entries {
+            let entry = make_entry(&uuid::Uuid::new_v4().to_string(), content, *mem_type,
+                tags);
+            working_entries.push(entry);
+            let _ = kernel.remember(&agent_id, "default", content.to_string());
+        }
+        let store_ms = t_store.elapsed().as_millis();
+        total_store_ms += store_ms;
+
+        let t_distill = Instant::now();
+        let distilled = distill_working_memory(&working_entries, |text| {
+            let prompt = summarization_prompt(text);
+            llm_chat(&*llm, &prompt).ok()
+        });
+        let distill_ms = t_distill.elapsed().as_millis();
+        total_distill_ms += distill_ms;
+
+        for d in &distilled {
+            let _ = kernel.remember_long_term(
+                &agent_id, "default",
+                d.content.clone(),
+                d.tags.clone(),
+                d.importance,
+            );
+        }
+        all_lt_count += distilled.len();
+
+        println!("  Round {}: {} entries → {} distilled (store: {}ms, distill: {}ms)",
+            round_idx + 1, round_entries.len(), distilled.len(), store_ms, distill_ms);
+    }
+
+    println!("\n  Totals: store={}ms, distill={}ms, LT entries={}", total_store_ms, total_distill_ms, all_lt_count);
+
+    let verification_queries = vec![
+        ("What deployment strategy did the team choose?", "blue-green"),
+        ("What monitoring tools are being used?", "prometheus"),
+        ("How does the auth system work?", "jwt"),
+    ];
+
+    println!("\n  {:>3} {:<50} {:>8} {:>6} {}", "#", "Verification Query", "Lat(ms)", "Found", "Top result");
+    println!("  {}", "-".repeat(100));
+
+    let mut found_count = 0;
+    for (i, (query, keyword)) in verification_queries.iter().enumerate() {
+        let t0 = Instant::now();
+        let results = kernel.recall_semantic(&agent_id, "default", query, 3);
+        let lat = t0.elapsed().as_millis();
+
+        match results {
+            Ok(entries) => {
+                let found = entries.iter().any(|e|
+                    e.content.display().to_string().to_lowercase().contains(keyword));
+                if found { found_count += 1; }
+
+                let preview = entries.first()
+                    .map(|e| {
+                        let s = e.content.display().to_string();
+                        if s.len() > 50 { format!("{}...", &s[..50]) } else { s }
+                    })
+                    .unwrap_or_else(|| "(empty)".into());
+
+                println!("  {:>3} {:<50} {:>8} {:>6} {}", i + 1, query, lat, if found { "YES" } else { "NO" }, preview);
+            }
+            Err(e) => {
+                println!("  {:>3} {:<50} {:>8} {:>6} ERR: {}", i + 1, query, lat, "ERR", e);
+            }
+        }
+    }
+
+    let n = verification_queries.len();
+    println!("\n  Verification: {found_count}/{n} ({:.0}%)", found_count as f64 / n as f64 * 100.0);
+    assert!(found_count >= 2, "Multi-round recall too low: {found_count}/{n}");
+}
+
+// ═══════════════════════════════════════════════════════════════════════
 // Helpers
 // ═══════════════════════════════════════════════════════════════════════
 
