@@ -164,9 +164,6 @@ pub fn pressure_ratio(entry_count: usize, global_budget: usize) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[allow(unused_imports)]
-    use crate::memory::layered::{MemoryContent, MemoryScope};
-
     fn make_entry(
         id: &str, agent: &str, tier: MemoryTier,
         mem_type: MemoryType, access_count: u32, importance: u8,

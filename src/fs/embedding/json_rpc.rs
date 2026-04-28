@@ -9,7 +9,6 @@ pub struct JsonRpcRequest {
 }
 
 /// JSON-RPC response envelope.
-#[allow(dead_code)]
 #[derive(Debug, serde::Deserialize)]
 pub struct JsonRpcResponse {
     #[serde(default)]
@@ -22,7 +21,6 @@ pub struct JsonRpcResponse {
     pub error: Option<JsonRpcError>,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, serde::Deserialize)]
 pub struct JsonRpcError {
     pub code: i64,

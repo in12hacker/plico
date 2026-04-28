@@ -4541,7 +4541,6 @@ fn test_kernel_list_agents_returns_registered() {
 #[test]
 fn test_kg_add_node_and_get_via_api() {
     use plico::api::semantic::ApiRequest;
-    use plico::api::semantic::ContentEncoding;
     use plico::fs::graph::KGNodeType;
 
     let (kernel, _dir) = make_kernel();
@@ -4993,7 +4992,6 @@ fn test_hook_registry_causal_hook_handler_in_kernel() {
     // Verify the CausalHookHandler (N20 F-3) is registered in AIKernel by default.
     // We verify this indirectly: after a session with intent + tool calls,
     // the KG should have CausedBy edges from the hook handler.
-    use plico::api::semantic::ApiRequest;
     use plico::fs::graph::KGEdgeType;
 
     let _ = std::env::set_var("EMBEDDING_BACKEND", "stub");

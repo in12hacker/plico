@@ -64,12 +64,10 @@ fn get_intent_cache_stats(kernel: &AIKernel) -> (usize, u64) {
 
 /// Record for a single session's metrics.
 #[derive(Debug)]
-#[allow(dead_code)]
 struct SessionMetrics {
     session_num: usize,
     token_estimate: usize,
     changes_count: usize,
-    total_tokens: usize,
 }
 
 impl SessionMetrics {
@@ -78,7 +76,6 @@ impl SessionMetrics {
             session_num,
             token_estimate,
             changes_count,
-            total_tokens: token_estimate,
         }
     }
 }

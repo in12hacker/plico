@@ -45,7 +45,7 @@ use crate::cas::CASStorage;
 use crate::memory::{LayeredMemory, CASPersister, MemoryPersister};
 use crate::scheduler::AgentScheduler;
 use crate::scheduler::messaging::MessageBus;
-use crate::fs::{SemanticFS, InMemoryBackend, HnswBackend, EmbeddingProvider, SemanticSearch, LlmSummarizer, Summarizer, KnowledgeGraph, PetgraphBackend, StubEmbeddingProvider, RerankerProvider};
+use crate::fs::{SemanticFS, InMemoryBackend, HnswBackend, EmbeddingProvider, SemanticSearch, LlmSummarizer, Summarizer, KnowledgeGraph, PetgraphBackend, StubEmbeddingProvider};
 use crate::llm::LlmProvider;
 use crate::api::permission::PermissionGuard;
 use crate::tool::ToolRegistry;
@@ -64,8 +64,6 @@ pub struct AIKernel {
     pub(crate) embedding: HotSwapEmbeddingProvider,
     /// LLM provider for summarization — hot-swap wrapper for runtime model switching (v18.0).
     pub(crate) llm_provider: HotSwapLlmProvider,
-    #[allow(dead_code)]
-    pub(crate) summarizer: Option<Arc<dyn Summarizer>>,
     pub(crate) knowledge_graph: Option<Arc<dyn KnowledgeGraph>>,
     pub(crate) search_backend: Arc<dyn SemanticSearch>,
     /// Counter for search index auto-persist. Every SEARCH_PERSIST_EVERY_N operations,
@@ -98,9 +96,6 @@ pub struct AIKernel {
     pub(crate) cost_ledger: Arc<TokenCostLedger>,
     /// KG builder handle — async entity/event extraction on CAS writes.
     pub(crate) kg_builder: Option<ops::kg_builder::KgBuilderHandle>,
-    /// Reranker provider — cross-encoder reranking for search refinement.
-    #[allow(dead_code)]
-    pub(crate) reranker: Option<Arc<dyn RerankerProvider>>,
 }
 
 /// Check if the embedding model has changed since last run.
@@ -371,7 +366,6 @@ impl AIKernel {
             memory_persister: persister,
             embedding,
             llm_provider,
-            summarizer,
             knowledge_graph,
             search_backend,
             search_op_count: Arc::new(AtomicU64::new(0)),
@@ -390,7 +384,6 @@ impl AIKernel {
             task_store,
             cost_ledger,
             kg_builder,
-            reranker,
         };
 
         kernel.register_builtin_tools();

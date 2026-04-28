@@ -22,15 +22,17 @@ impl CorrelationId {
         Self(uuid::Uuid::new_v4().to_string())
     }
 
-    /// Parse from a string slice (for incoming requests).
-    #[allow(clippy::should_implement_trait)]
-    pub fn from_str(s: &str) -> Self {
-        Self(s.to_string())
-    }
-
     /// Return the underlying string representation.
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+}
+
+impl std::str::FromStr for CorrelationId {
+    type Err = std::convert::Infallible;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(Self(s.to_string()))
     }
 }
 
@@ -574,13 +576,13 @@ mod tests {
 
     #[test]
     fn test_correlation_id_from_str() {
-        let id = CorrelationId::from_str("test-id-123");
+        let id: CorrelationId = "test-id-123".parse().unwrap();
         assert_eq!(id.as_str(), "test-id-123");
     }
 
     #[test]
     fn test_correlation_id_display() {
-        let id = CorrelationId::from_str("abc-123");
+        let id: CorrelationId = "abc-123".parse().unwrap();
         assert_eq!(format!("{}", id), "abc-123");
     }
 

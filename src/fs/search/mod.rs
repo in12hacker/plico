@@ -103,7 +103,6 @@ impl SearchFilter {
         true
     }
 
-    #[allow(dead_code)]
     pub fn with_time(mut self, since: i64, until: i64) -> Self {
         self.since = Some(since);
         self.until = Some(until);

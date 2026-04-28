@@ -80,12 +80,6 @@ fn get_intent_cache_stats(kernel: &AIKernel) -> (usize, u64) {
     }
 }
 
-/// Helper to get token_estimate from top-level ApiResponse (F-8 design spec).
-#[allow(dead_code)]
-fn get_response_token_estimate(resp: &ApiResponse) -> Option<usize> {
-    resp.token_estimate
-}
-
 // ── Benchmark 1: Delta Savings Rate ──────────────────────────────────────────
 
 /// Benchmark: Delta 99.6% Savings Rate

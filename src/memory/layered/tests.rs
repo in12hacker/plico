@@ -1,6 +1,5 @@
 //! Layered memory tests — extracted for module compliance.
 
-#[allow(unused_imports)]
 use crate::memory::{LayeredMemory, MemoryTier, MemoryType, MemoryEntry, MemoryScope};
 use crate::memory::layered::{MemoryContent, now_ms};
 

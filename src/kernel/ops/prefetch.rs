@@ -849,7 +849,6 @@ impl IntentPrefetcher {
     }
 
     /// Get the number of feedback entries currently stored.
-    #[allow(dead_code)]
     pub fn feedback_count(&self) -> usize {
         self.feedback_history.read().unwrap().len()
     }

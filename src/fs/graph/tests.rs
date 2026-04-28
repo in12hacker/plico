@@ -1,9 +1,7 @@
 //! Graph backend tests.
 
-#[allow(unused_imports)]
 use crate::fs::graph::{KGNode, KGEdge, KGNodeType, KGEdgeType, PetgraphBackend, KnowledgeGraph};
 
-#[allow(dead_code)]
 fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -11,7 +9,6 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
-#[allow(dead_code)]
 fn make_node(id: &str, node_type: KGNodeType, tags: Vec<String>, agent: &str) -> KGNode {
     KGNode {
         id: id.to_string(),
@@ -28,7 +25,6 @@ fn make_node(id: &str, node_type: KGNodeType, tags: Vec<String>, agent: &str) ->
     }
 }
 
-#[allow(dead_code)]
 fn make_edge(src: &str, dst: &str, edge_type: KGEdgeType, weight: f32) -> KGEdge {
     KGEdge {
         src: src.to_string(),

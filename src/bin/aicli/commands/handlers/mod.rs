@@ -23,7 +23,6 @@ pub mod cost;
 
 // Re-export shared utilities for handler submodules.
 // Re-export shared utilities for handler submodules (defined in parent commands/mod.rs).
-#[allow(unused_imports)]
 pub use super::{extract_arg, extract_tags, extract_tags_opt, extract_agent_id};
 
 // Re-export all public command functions for use by the parent module.

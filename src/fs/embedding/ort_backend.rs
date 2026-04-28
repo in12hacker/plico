@@ -221,10 +221,8 @@ mod inner {
 
     /// Stub for when `ort-backend` feature is not enabled.
     /// Disabled via feature gate so no ort code is compiled.
-    #[allow(dead_code)]
     pub struct OrtEmbeddingBackend;
 
-    #[allow(dead_code)]
     impl OrtEmbeddingBackend {
         pub fn new(_model_dir: &Path) -> Result<Self, EmbedError> {
             Err(EmbedError::ModelNotFound(

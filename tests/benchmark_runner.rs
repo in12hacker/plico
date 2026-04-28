@@ -24,37 +24,23 @@ use std::time::{Duration, Instant};
 /// With EMBEDDING_BACKEND=stub, we use conservative estimates based on
 /// the design doc's baseline measurements. Real embeddings would use
 /// actual token counts from the LLM provider.
-#[allow(dead_code)]
 pub struct TokenEstimator {
-    /// Average tokens per text character (conservative estimate)
-    tokens_per_char: f32,
-    /// Average tokens per semantic search query
     search_overhead_tokens: usize,
-    /// Average tokens per memory recall
     recall_overhead_tokens: usize,
 }
 
 impl TokenEstimator {
     pub fn new() -> Self {
-        // Conservative: ~4 chars per token for typical code/text
         Self {
-            tokens_per_char: 0.25,
-            search_overhead_tokens: 50,  // Embedding generation + API overhead
-            recall_overhead_tokens: 30,   // Memory retrieval overhead
+            search_overhead_tokens: 50,
+            recall_overhead_tokens: 30,
         }
     }
 
-    #[allow(dead_code)]
-    pub fn estimate_text_tokens(&self, text: &str) -> usize {
-        (text.len() as f32 * self.tokens_per_char) as usize
-    }
-
-    /// Estimate tokens for a search operation.
     pub fn search_tokens(&self) -> usize {
         self.search_overhead_tokens
     }
 
-    /// Estimate tokens for a recall operation.
     pub fn recall_tokens(&self) -> usize {
         self.recall_overhead_tokens
     }
@@ -139,17 +125,10 @@ impl Default for BenchmarkMetrics {
 
 /// Benchmark result with pass/fail against targets.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct BenchmarkResult {
-    /// Name of the scenario being measured
     pub scenario_name: String,
-    /// Raw metrics captured
     pub metrics: BenchmarkMetrics,
-    /// Target thresholds
     pub targets: BenchmarkTargets,
-    /// Token reduction percentage (0-100)
-    pub token_reduction_pct: f32,
-    /// Tool call reduction percentage (0-100)
     pub tool_reduction_pct: f32,
     /// Time reduction percentage (0-100)
     pub time_reduction_pct: f32,
@@ -287,7 +266,6 @@ impl BenchmarkResult {
             scenario_name,
             metrics,
             targets,
-            token_reduction_pct,
             tool_reduction_pct,
             time_reduction_pct,
             passed,
