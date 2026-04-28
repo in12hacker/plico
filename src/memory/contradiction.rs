@@ -103,11 +103,21 @@ impl ContradictionClassifier for RuleBasedClassifier {
         let mut score: f32 = 0.0;
         let mut evidence_parts = Vec::new();
 
-        // Similar topic (high cosine) but not identical → contradiction signal
-        if ctx.cosine_similarity > 0.3 && ctx.cosine_similarity < 0.95 {
-            let topic_signal = ctx.cosine_similarity * 0.4;
+        // Similar topic (high cosine) but not identical → contradiction signal.
+        // High overlap (>0.6) with any divergence means same-topic disagreement.
+        if ctx.cosine_similarity > 0.3 && ctx.cosine_similarity < 0.98 {
+            let topic_signal = ctx.cosine_similarity * 0.5;
             score += topic_signal;
             evidence_parts.push(format!("topic overlap {:.2}", ctx.cosine_similarity));
+        }
+
+        // Identical content (cosine > 0.98) → not a contradiction
+        if ctx.cosine_similarity > 0.98 {
+            return ContradictionResult {
+                is_contradiction: false,
+                confidence: 0.0,
+                evidence: "near-identical content".to_string(),
+            };
         }
 
         // Shared causal ancestors → stronger signal (same lineage, different claim)
@@ -126,7 +136,7 @@ impl ContradictionClassifier for RuleBasedClassifier {
         }
 
         // Recent time gap + content difference → update/contradiction vs ancient
-        if ctx.time_gap_ms < 24 * 60 * 60 * 1000 && ctx.embedding_divergence > 0.1 {
+        if ctx.time_gap_ms < 24 * 60 * 60 * 1000 && ctx.embedding_divergence > 0.05 {
             score += 0.1;
             evidence_parts.push("recent divergence".into());
         }
@@ -143,7 +153,7 @@ impl ContradictionClassifier for RuleBasedClassifier {
             }
         }
 
-        let is_contradiction = score > 0.45;
+        let is_contradiction = score > 0.35;
         let evidence = if evidence_parts.is_empty() {
             "no contradiction signals".to_string()
         } else {

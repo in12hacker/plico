@@ -1471,6 +1471,146 @@ fn bench_b18_agent_profile_learning() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
+// B19: Real-World Context Ingestion — Cursor/Claude development context
+// ═══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn bench_b19_real_world_context_ingestion() {
+    let (kernel, _dir) = match make_real_kernel() {
+        Some(k) => k,
+        None => { println!("  {SKIP_MSG}"); return; }
+    };
+
+    println!("\n═══ B19: Real-World Context Ingestion (Cursor/Claude Dev Context) ═══\n");
+
+    let agent_id = kernel.register_agent("ctx-bench-agent".to_string());
+
+    // 20 real knowledge fragments extracted from Plico development transcripts.
+    // Source: Cursor agent-transcripts/ + ~/.claude/projects/ JSONL sessions.
+    let dev_knowledge: Vec<(&str, MemoryType, Vec<&str>)> = vec![
+        // --- Semantic: architectural facts ---
+        ("Plico uses Content-Addressed Storage with SHA-256 hashing for automatic deduplication of all stored objects",
+         MemoryType::Semantic, vec!["cas", "storage", "architecture"]),
+        ("The AIKernel has four memory tiers: Ephemeral for session cache, Working for task context, LongTerm for persistent knowledge, and Procedural for reusable workflows",
+         MemoryType::Semantic, vec!["memory", "architecture", "layered"]),
+        ("EmbeddingProvider and LlmProvider are trait abstractions that keep the kernel model-agnostic — any OpenAI-compatible server works",
+         MemoryType::Semantic, vec!["embedding", "llm", "trait", "architecture"]),
+        ("The CausalGraph tracks parent-child relationships between memories, enabling root cause analysis and impact propagation queries",
+         MemoryType::Semantic, vec!["causal", "graph", "architecture"]),
+        ("RetrievalFusionEngine combines six signals: semantic similarity, causal proximity, access affinity, tag overlap, temporal recency, and memory type matching",
+         MemoryType::Semantic, vec!["retrieval", "rfe", "algorithm"]),
+        ("CausalSemanticContradiction algorithm detects conflicts using embedding cosine distance, causal chain proximity, temporal divergence, and optional LLM classification",
+         MemoryType::Semantic, vec!["contradiction", "csc", "algorithm"]),
+        ("PromptRegistry supports versioned templates with global and agent-level overrides, compile-in defaults, and variable substitution via render method",
+         MemoryType::Semantic, vec!["prompt", "registry", "configuration"]),
+
+        // --- Episodic: bug fixes and events ---
+        ("B6 recall_routed returned zero hits because remember() stores to Ephemeral tier without embeddings — fixed by switching to remember_long_term which creates embeddings for semantic search",
+         MemoryType::Episodic, vec!["bug", "recall", "embedding", "fix"]),
+        ("ConnectionRefusedError on port 8080 because llama-server instances were actually running on ports 18920 for LLM and 18921 for embeddings — environment variable LLAMA_URL must be set correctly",
+         MemoryType::Episodic, vec!["bug", "llm", "connection", "fix"]),
+        ("B3 distillation showed negative compression rate of -25.3% before prompt optimization — the LLM was generating summaries longer than input due to verbose prompt instructions",
+         MemoryType::Episodic, vec!["bug", "distillation", "prompt", "optimization"]),
+        ("MemoryConsolidationEngine test failed with unresolved MemoryContent import — needed to add use statement specifically inside cfg(test) module since it was unused in non-test code paths",
+         MemoryType::Episodic, vec!["bug", "test", "import", "fix"]),
+        ("Intent classification rules engine misclassified temporal queries containing 'after' keyword when combined with 'why' — LLM correctly handled these as multi_hop queries",
+         MemoryType::Episodic, vec!["bug", "intent", "classification"]),
+
+        // --- Procedural: workflows and patterns ---
+        ("To run real LLM benchmarks: set LLAMA_URL=http://127.0.0.1:18920 and EMBEDDING_API_BASE=http://127.0.0.1:18921, then cargo test --test real_llm_benchmark -- --nocapture --test-threads=1",
+         MemoryType::Procedural, vec!["benchmark", "llm", "workflow"]),
+        ("Pattern for Tokio runtime nesting: use try_current() plus block_in_place() to avoid 'cannot start a runtime from within a runtime' panic in daemon mode",
+         MemoryType::Procedural, vec!["tokio", "runtime", "pattern"]),
+        ("Debug auth issues: check token expiry, then timezone handling, then session store connectivity — this three-step sequence resolves 90% of authentication failures",
+         MemoryType::Procedural, vec!["debug", "auth", "workflow"]),
+        ("Memory distillation parallel optimization: group working memories by MemoryType, process each group in std::thread::scope for concurrent LLM summarization calls",
+         MemoryType::Procedural, vec!["distillation", "parallel", "optimization"]),
+
+        // --- Mixed: project-specific knowledge ---
+        ("Gemma 4 26B-A4B MoE model with Q4_K_M quantization runs at 9.3 QPS for intent classification with average latency of 107ms and CV of 2.4% on NVIDIA GB10",
+         MemoryType::Semantic, vec!["gemma", "performance", "benchmark"]),
+        ("v5-small-retrieval embedding model produces 1024-dimensional vectors with batch throughput of 294 embeddings per second at 3.4ms per text",
+         MemoryType::Semantic, vec!["embedding", "performance", "benchmark"]),
+        ("AgentProfile tracks usage patterns via intent histogram and memory type preferences, adapting RetrievalFusionEngine weights through exponential moving average learning",
+         MemoryType::Semantic, vec!["agent", "profile", "adaptive", "learning"]),
+        ("MemoryConsolidationEngine performs four operations: semantic deduplication via embedding similarity, contradiction resolution using CSC, confidence decay for stale entries, and access-based enhancement",
+         MemoryType::Semantic, vec!["consolidation", "mce", "algorithm"]),
+    ];
+
+    // Phase 1: Ingest all knowledge into kernel
+    println!("  Phase 1: Ingesting {} knowledge fragments...", dev_knowledge.len());
+    let t_ingest = Instant::now();
+    for (i, (content, _mem_type, tags)) in dev_knowledge.iter().enumerate() {
+        let tag_strings: Vec<String> = tags.iter().map(|s| s.to_string()).collect();
+        match kernel.remember_long_term(&agent_id, "default", content.to_string(), tag_strings, 7) {
+            Ok(_) => {},
+            Err(e) => println!("    WARN: Failed to store item {i}: {e}"),
+        }
+    }
+    let ingest_ms = t_ingest.elapsed().as_millis();
+    println!("  Ingestion complete: {}ms ({:.1}ms/item)\n", ingest_ms, ingest_ms as f64 / dev_knowledge.len() as f64);
+
+    // Phase 2: Recall with real development questions
+    let recall_queries: Vec<(&str, &str, &str)> = vec![
+        ("How does Plico store data?", "SHA-256", "CAS architecture"),
+        ("What memory tiers does the kernel have?", "Ephemeral", "memory layers"),
+        ("How does contradiction detection work?", "cosine", "CSC algorithm"),
+        ("What caused the recall_routed bug?", "Ephemeral", "B6 bug"),
+        ("How to run benchmarks with real LLM?", "LLAMA_URL", "benchmark workflow"),
+        ("What is the embedding throughput?", "294", "embedding perf"),
+        ("How does memory consolidation work?", "deduplication", "MCE operations"),
+        ("What pattern fixes Tokio runtime nesting?", "block_in_place", "Tokio pattern"),
+        ("How does the retrieval fusion engine rank results?", "six signals", "RFE algorithm"),
+        ("What was the distillation compression problem?", "negative", "B3 prompt bug"),
+    ];
+
+    println!("  Phase 2: Recalling with {} development queries...\n", recall_queries.len());
+    println!("  {:>3} {:<50} {:>8} {:>6} {}", "#", "Query", "Lat(ms)", "Found", "Top result preview");
+    println!("  {}", "-".repeat(110));
+
+    let mut found_count = 0;
+    let mut total_lat_ms = 0u128;
+    for (i, (query, keyword, desc)) in recall_queries.iter().enumerate() {
+        let t0 = Instant::now();
+        let results = kernel.recall_semantic(&agent_id, "default", query, 5);
+        let lat = t0.elapsed().as_millis();
+        total_lat_ms += lat;
+
+        match results {
+            Ok(entries) => {
+                let found = entries.iter().any(|e|
+                    e.content.display().to_string().to_lowercase().contains(&keyword.to_lowercase()));
+                if found { found_count += 1; }
+
+                let preview = entries.first()
+                    .map(|e| {
+                        let s = e.content.display().to_string();
+                        if s.len() > 60 { format!("{}...", &s[..60]) } else { s }
+                    })
+                    .unwrap_or_else(|| "(empty)".into());
+
+                println!("  {:>3} {:<50} {:>8} {:>6} {}",
+                    i + 1, desc, lat, if found { "✓" } else { "✗" }, preview);
+            }
+            Err(e) => {
+                println!("  {:>3} {:<50} {:>8} {:>6} ERR: {}", i + 1, desc, lat, "ERR", e);
+            }
+        }
+    }
+
+    let n = recall_queries.len();
+    let accuracy = found_count as f64 / n as f64 * 100.0;
+    let avg_lat = total_lat_ms as f64 / n as f64;
+
+    println!("\n  ── B19 Results ──");
+    println!("  Knowledge ingested: {} items in {}ms", dev_knowledge.len(), ingest_ms);
+    println!("  Recall accuracy: {found_count}/{n} ({accuracy:.0}%)");
+    println!("  Avg recall latency: {avg_lat:.1}ms");
+    println!("  Data source: Cursor agent-transcripts + Claude Code sessions (~23K raw items, 20 curated)");
+    assert!(found_count >= 5, "Real-world recall accuracy too low: {found_count}/{n}");
+}
+
+// ═══════════════════════════════════════════════════════════════════════
 // Helpers
 // ═══════════════════════════════════════════════════════════════════════
 
