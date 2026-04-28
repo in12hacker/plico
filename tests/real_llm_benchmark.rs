@@ -2333,6 +2333,324 @@ fn bench_b24_rfe_7signal() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
+// B25: Real LongMemEval dataset (S setting, 500 questions)
+//      Industry-standard benchmark with ingest-then-query pipeline
+// ═══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn bench_b25_longmemeval_real() {
+    if !is_real_backend() { println!("{SKIP_MSG}"); return; }
+    let dataset_path = "benchmarks/datasets/LongMemEval/data/longmemeval_s_cleaned.json";
+    if !std::path::Path::new(dataset_path).exists() {
+        println!("  SKIP: LongMemEval dataset not found at {dataset_path}");
+        return;
+    }
+
+    let llm = match make_llm_provider() { Some(p) => p, None => { println!("{SKIP_MSG}"); return; } };
+
+    println!("\n═══════════════════════════════════════════════════════════════════");
+    println!("  B25: LongMemEval Real Dataset (S setting, 500 questions)");
+    println!("  Industry benchmark: https://github.com/xiaowu0162/LongMemEval");
+    println!("═══════════════════════════════════════════════════════════════════\n");
+
+    let raw = std::fs::read_to_string(dataset_path).expect("read dataset");
+    let dataset: Vec<serde_json::Value> = serde_json::from_str(&raw).expect("parse JSON");
+    println!("  Dataset loaded: {} questions\n", dataset.len());
+
+    let types_to_sample = [
+        "single-session-user", "single-session-assistant", "single-session-preference",
+        "temporal-reasoning", "knowledge-update", "multi-session",
+    ];
+    let samples_per_type = 10;
+
+    let mut sampled: Vec<&serde_json::Value> = Vec::new();
+    for qtype in &types_to_sample {
+        let of_type: Vec<&serde_json::Value> = dataset.iter()
+            .filter(|q| q["question_type"].as_str() == Some(qtype))
+            .collect();
+        let take = samples_per_type.min(of_type.len());
+        sampled.extend_from_slice(&of_type[..take]);
+    }
+    println!("  Sampled {} questions ({} per type × {} types)\n",
+        sampled.len(), samples_per_type, types_to_sample.len());
+
+    let mut category_results: std::collections::HashMap<String, (usize, usize)> = std::collections::HashMap::new();
+    let mut total_ingest_ms: u128 = 0;
+    let mut total_query_ms: u128 = 0;
+    let mut total_judge_ms: u128 = 0;
+    let mut total_ingested: usize = 0;
+
+    println!("  {:>3} {:<24} {:<50} {:>7} {:>7} {:>6}",
+        "#", "Type", "Question", "Ingest", "Query", "Hit");
+    println!("  {}", "-".repeat(100));
+
+    for (qi, q) in sampled.iter().enumerate() {
+        let qtype = q["question_type"].as_str().unwrap_or("unknown");
+        let question = q["question"].as_str().unwrap_or("");
+        let expected = q["answer"].as_str().unwrap_or("");
+
+        let sessions = match q["haystack_sessions"].as_array() {
+            Some(s) => s,
+            None => continue,
+        };
+        let dates = q["haystack_dates"].as_array();
+
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var("LLM_BACKEND", "llama");
+        std::env::set_var("EMBEDDING_BACKEND", "openai");
+        let kernel = match plico::kernel::AIKernel::new(dir.path().to_path_buf()) {
+            Ok(k) => k,
+            Err(_) => continue,
+        };
+        let agent_id = kernel.register_agent("lme-agent".to_string());
+
+        let ingest_t = Instant::now();
+        let mut n_turns = 0;
+        for (si, session) in sessions.iter().enumerate() {
+            let turns = match session.as_array() { Some(t) => t, None => continue };
+            let date_str = dates.and_then(|d| d.get(si))
+                .and_then(|v| v.as_str()).unwrap_or("unknown");
+            for turn in turns {
+                let role = turn["role"].as_str().unwrap_or("user");
+                let content = turn["content"].as_str().unwrap_or("");
+                if content.len() < 5 { continue; }
+                let mem_content = format!("[{}] {}: {}", date_str, role, content);
+                let tags = vec![format!("session-{si}"), "longmemeval".to_string()];
+                let _ = kernel.remember_long_term(&agent_id, "default", mem_content, tags, 5);
+                n_turns += 1;
+            }
+        }
+        let ingest_ms = ingest_t.elapsed().as_millis();
+        total_ingest_ms += ingest_ms;
+        total_ingested += n_turns;
+
+        let query_t = Instant::now();
+        let results = kernel.recall_semantic(&agent_id, "default", question, 10);
+        let query_ms = query_t.elapsed().as_millis();
+        total_query_ms += query_ms;
+
+        let context: String = results.as_ref().map(|entries| {
+            entries.iter().take(5)
+                .map(|e| e.content.display().to_string())
+                .collect::<Vec<_>>().join("\n")
+        }).unwrap_or_default();
+
+        let judge_t = Instant::now();
+        let hit = if context.is_empty() {
+            false
+        } else {
+            let kw_lower = expected.to_lowercase();
+            let ctx_lower = context.to_lowercase();
+            if ctx_lower.contains(&kw_lower) {
+                true
+            } else {
+                let judge_prompt = format!(
+                    "Given the following retrieved context:\n---\n{}\n---\n\nQuestion: {}\nExpected answer: {}\n\nDoes the retrieved context contain enough information to answer the question correctly? Reply ONLY 'yes' or 'no'.",
+                    &context[..context.len().min(1500)], question, expected
+                );
+                llm_chat(&*llm, &judge_prompt)
+                    .map(|r| r.trim().to_lowercase().starts_with("yes"))
+                    .unwrap_or(false)
+            }
+        };
+        let judge_ms = judge_t.elapsed().as_millis();
+        total_judge_ms += judge_ms;
+
+        let (total, hits) = category_results.entry(qtype.to_string()).or_insert((0, 0));
+        *total += 1;
+        if hit { *hits += 1; }
+
+        let trunc_q: String = if question.len() > 48 { format!("{}...", &question[..48]) } else { question.to_string() };
+        println!("  {:>3} {:<24} {:<50} {:>5}ms {:>5}ms {:>6}",
+            qi + 1, qtype, trunc_q, ingest_ms, query_ms, if hit { "✓" } else { "✗" });
+    }
+
+    println!("\n  ══ B25 LongMemEval Category Breakdown ══");
+    let mut grand_total = 0;
+    let mut grand_hits = 0;
+    for qtype in &types_to_sample {
+        if let Some((total, hits)) = category_results.get(*qtype) {
+            println!("  {:<30} {}/{} ({:.0}%)", qtype, hits, total, *hits as f64 / *total as f64 * 100.0);
+            grand_total += total;
+            grand_hits += hits;
+        }
+    }
+    let overall = grand_hits as f64 / grand_total as f64 * 100.0;
+    println!("  ──────────────────────────────");
+    println!("  Overall:                       {}/{} ({:.1}%)", grand_hits, grand_total, overall);
+    println!("  Total turns ingested:          {}", total_ingested);
+    println!("  Total ingest time:             {}ms", total_ingest_ms);
+    println!("  Avg ingest per question:       {:.0}ms", total_ingest_ms as f64 / sampled.len() as f64);
+    println!("  Total query time:              {}ms", total_query_ms);
+    println!("  Avg query latency:             {:.1}ms", total_query_ms as f64 / sampled.len() as f64);
+    println!("  Total judge time:              {}ms", total_judge_ms);
+    println!("  Benchmark: LongMemEval S-setting (ICLR 2025)");
+
+    assert!(grand_hits >= sampled.len() / 4, "LongMemEval accuracy too low: {grand_hits}/{grand_total}");
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// B26: Real LoCoMo dataset (10 conversations, 1986 QA)
+//      Industry-standard benchmark with ingest-then-query pipeline
+// ═══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn bench_b26_locomo_real() {
+    if !is_real_backend() { println!("{SKIP_MSG}"); return; }
+    let dataset_path = "benchmarks/datasets/LoCoMo/data/locomo10.json";
+    if !std::path::Path::new(dataset_path).exists() {
+        println!("  SKIP: LoCoMo dataset not found at {dataset_path}");
+        return;
+    }
+
+    let llm = match make_llm_provider() { Some(p) => p, None => { println!("{SKIP_MSG}"); return; } };
+
+    println!("\n═══════════════════════════════════════════════════════════════════");
+    println!("  B26: LoCoMo Real Dataset (10 conversations, ACL 2024)");
+    println!("  Industry benchmark: https://github.com/snap-research/LoCoMo");
+    println!("═══════════════════════════════════════════════════════════════════\n");
+
+    let raw = std::fs::read_to_string(dataset_path).expect("read dataset");
+    let dataset: Vec<serde_json::Value> = serde_json::from_str(&raw).expect("parse JSON");
+    println!("  Conversations: {}", dataset.len());
+    let total_qa: usize = dataset.iter()
+        .map(|c| c["qa"].as_array().map(|a| a.len()).unwrap_or(0)).sum();
+    println!("  Total QA pairs: {}\n", total_qa);
+
+    let convs_to_test = 2.min(dataset.len());
+    let mut category_results: std::collections::HashMap<String, (usize, usize)> = std::collections::HashMap::new();
+    let mut total_ingest_ms: u128 = 0;
+    let mut total_query_ms: u128 = 0;
+    let mut total_judge_ms: u128 = 0;
+    let mut total_ingested: usize = 0;
+    let mut total_qa_tested: usize = 0;
+
+    let category_names = ["unknown", "single-hop", "temporal", "common-sense", "multi-hop", "adversarial"];
+
+    for ci in 0..convs_to_test {
+        let conv = &dataset[ci];
+        let conv_data = &conv["conversation"];
+        let speaker_a = conv_data["speaker_a"].as_str().unwrap_or("A");
+        let speaker_b = conv_data["speaker_b"].as_str().unwrap_or("B");
+
+        println!("  ── Conversation {} ({} & {}) ──", ci + 1, speaker_a, speaker_b);
+
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var("LLM_BACKEND", "llama");
+        std::env::set_var("EMBEDDING_BACKEND", "openai");
+        let kernel = match plico::kernel::AIKernel::new(dir.path().to_path_buf()) {
+            Ok(k) => k,
+            Err(e) => { println!("  Kernel error: {e}"); continue; }
+        };
+        let agent_id = kernel.register_agent("locomo-agent".to_string());
+
+        let ingest_t = Instant::now();
+        let mut n_turns = 0;
+        for si in 1..=50 {
+            let session_key = format!("session_{si}");
+            let date_key = format!("session_{si}_date_time");
+            let session = match conv_data.get(&session_key) { Some(s) => s, None => break };
+            let date = conv_data.get(&date_key).and_then(|v| v.as_str()).unwrap_or("unknown");
+
+            let turns = match session.as_array() { Some(t) => t, None => continue };
+            for turn in turns {
+                let speaker = turn["speaker"].as_str().unwrap_or("unknown");
+                let text = turn["text"].as_str().unwrap_or("");
+                if text.len() < 5 { continue; }
+                let content = format!("[{}] {}: {}", date, speaker, text);
+                let tags = vec![format!("session-{si}"), "locomo".to_string()];
+                let _ = kernel.remember_long_term(&agent_id, "default", content, tags, 5);
+                n_turns += 1;
+            }
+        }
+        let ingest_ms = ingest_t.elapsed().as_millis();
+        total_ingest_ms += ingest_ms;
+        total_ingested += n_turns;
+        println!("  Ingested: {} turns in {}ms ({:.1}ms/turn)", n_turns, ingest_ms, ingest_ms as f64 / n_turns.max(1) as f64);
+
+        let qas = match conv["qa"].as_array() { Some(q) => q, None => continue };
+        let qa_sample_size = 50.min(qas.len());
+        let step = if qas.len() > qa_sample_size { qas.len() / qa_sample_size } else { 1 };
+        let sampled_qas: Vec<&serde_json::Value> = qas.iter().step_by(step).take(qa_sample_size).collect();
+
+        println!("  Testing {} QA pairs (sampled from {})\n", sampled_qas.len(), qas.len());
+        println!("  {:>3} {:<14} {:<52} {:>7} {:>5}", "#", "Category", "Question", "Query", "Hit");
+        println!("  {}", "-".repeat(85));
+
+        for (qi, qa) in sampled_qas.iter().enumerate() {
+            let question = qa["question"].as_str().unwrap_or("");
+            let expected = qa["answer"].as_str().unwrap_or("");
+            let cat_id = qa["category"].as_u64().unwrap_or(0) as usize;
+            let cat_name = category_names.get(cat_id).unwrap_or(&"unknown");
+
+            let query_t = Instant::now();
+            let results = kernel.recall_semantic(&agent_id, "default", question, 10);
+            let query_ms = query_t.elapsed().as_millis();
+            total_query_ms += query_ms;
+
+            let context: String = results.as_ref().map(|entries| {
+                entries.iter().take(5)
+                    .map(|e| e.content.display().to_string())
+                    .collect::<Vec<_>>().join("\n")
+            }).unwrap_or_default();
+
+            let judge_t = Instant::now();
+            let hit = if context.is_empty() {
+                false
+            } else {
+                let kw_lower = expected.to_lowercase();
+                let ctx_lower = context.to_lowercase();
+                if kw_lower.len() <= 3 || ctx_lower.contains(&kw_lower) {
+                    ctx_lower.contains(&kw_lower)
+                } else {
+                    let judge_prompt = format!(
+                        "Retrieved context:\n---\n{}\n---\nQuestion: {}\nExpected: {}\nDoes the context contain the answer? Reply ONLY 'yes' or 'no'.",
+                        &context[..context.len().min(1500)], question, expected
+                    );
+                    llm_chat(&*llm, &judge_prompt)
+                        .map(|r| r.trim().to_lowercase().starts_with("yes"))
+                        .unwrap_or(false)
+                }
+            };
+            let judge_ms = judge_t.elapsed().as_millis();
+            total_judge_ms += judge_ms;
+
+            let (total, hits) = category_results.entry(cat_name.to_string()).or_insert((0, 0));
+            *total += 1;
+            if hit { *hits += 1; }
+            total_qa_tested += 1;
+
+            let trunc_q: String = if question.len() > 50 { format!("{}...", &question[..50]) } else { question.to_string() };
+            println!("  {:>3} {:<14} {:<52} {:>5}ms {:>5}",
+                qi + 1, cat_name, trunc_q, query_ms, if hit { "✓" } else { "✗" });
+        }
+        println!();
+    }
+
+    println!("  ══ B26 LoCoMo Category Breakdown ══");
+    let mut grand_total = 0;
+    let mut grand_hits = 0;
+    for cat in &category_names[1..] {
+        if let Some((total, hits)) = category_results.get(*cat) {
+            println!("  {:<20} {}/{} ({:.0}%)", cat, hits, total, *hits as f64 / *total as f64 * 100.0);
+            grand_total += total;
+            grand_hits += hits;
+        }
+    }
+    let overall = if grand_total > 0 { grand_hits as f64 / grand_total as f64 * 100.0 } else { 0.0 };
+    println!("  ──────────────────────────────");
+    println!("  Overall:               {}/{} ({:.1}%)", grand_hits, grand_total, overall);
+    println!("  Conversations tested:  {}", convs_to_test);
+    println!("  QA pairs tested:       {}", total_qa_tested);
+    println!("  Total turns ingested:  {}", total_ingested);
+    println!("  Total ingest time:     {}ms", total_ingest_ms);
+    println!("  Total query time:      {}ms", total_query_ms);
+    println!("  Avg query latency:     {:.1}ms", total_query_ms as f64 / total_qa_tested.max(1) as f64);
+    println!("  Total judge time:      {}ms", total_judge_ms);
+    println!("  Benchmark: LoCoMo (ACL 2024, snap-research/LoCoMo)");
+}
+
+// ═══════════════════════════════════════════════════════════════════════
 // Helpers
 // ═══════════════════════════════════════════════════════════════════════
 
