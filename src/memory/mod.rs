@@ -25,6 +25,7 @@ pub mod topology;
 pub mod cross_agent;
 pub mod foresight;
 pub mod pressure;
+pub mod meta_memory;
 
 pub use layered::{LayeredMemory, MemoryTier, MemoryType, MemoryEntry, MemoryContent, MemoryError, MemoryScope};
 pub use persist::{MemoryPersister, CASPersister, MemoryLoader, PersistError, PersistenceIndex, PersistedTier};
