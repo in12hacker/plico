@@ -26,6 +26,8 @@ fn make_entry(agent: &str, tier: MemoryTier, importance: u8, text: &str) -> Memo
         original_ttl_ms: None,
         scope: plico::memory::MemoryScope::Private,
         memory_type: plico::memory::MemoryType::default(),
+        causal_parent: None,
+        supersedes: None,
     }
 }
 
@@ -282,6 +284,8 @@ fn test_promotion_ephemeral_to_working() {
         original_ttl_ms: None,
         scope: plico::memory::MemoryScope::Private,
         memory_type: plico::memory::MemoryType::default(),
+        causal_parent: None,
+        supersedes: None,
     };
     mem.store(entry);
 
@@ -322,6 +326,8 @@ fn test_promotion_working_to_longterm() {
         original_ttl_ms: None,
         scope: plico::memory::MemoryScope::Private,
         memory_type: plico::memory::MemoryType::default(),
+        causal_parent: None,
+        supersedes: None,
     };
     mem.store(entry);
 
@@ -361,6 +367,8 @@ fn test_no_promotion_below_threshold() {
         original_ttl_ms: None,
         scope: plico::memory::MemoryScope::Private,
         memory_type: plico::memory::MemoryType::default(),
+        causal_parent: None,
+        supersedes: None,
     };
     mem.store(entry);
 
@@ -399,6 +407,8 @@ fn test_no_promotion_working_low_importance() {
         original_ttl_ms: None,
         scope: plico::memory::MemoryScope::Private,
         memory_type: plico::memory::MemoryType::default(),
+        causal_parent: None,
+        supersedes: None,
     };
     mem.store(entry);
 
@@ -478,6 +488,8 @@ fn test_longterm_entries_not_promoted() {
         original_ttl_ms: None,
         scope: plico::memory::MemoryScope::Private,
         memory_type: plico::memory::MemoryType::default(),
+        causal_parent: None,
+        supersedes: None,
     };
     mem.store(lt_entry);
 
@@ -503,6 +515,8 @@ fn test_longterm_entries_not_promoted() {
         original_ttl_ms: None,
         scope: plico::memory::MemoryScope::Private,
         memory_type: plico::memory::MemoryType::default(),
+        causal_parent: None,
+        supersedes: None,
     };
     mem.store(proc_entry);
 

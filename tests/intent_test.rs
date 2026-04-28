@@ -114,6 +114,8 @@ fn test_procedural_memory_roundtrip() {
         original_ttl_ms: None,
         scope: plico::memory::MemoryScope::Private,
         memory_type: plico::memory::MemoryType::default(),
+        causal_parent: None,
+        supersedes: None,
     };
 
     memory.store(entry);
