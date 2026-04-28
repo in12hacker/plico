@@ -8,9 +8,9 @@ An operating system kernel designed **entirely from an AI perspective**. No huma
 
 ## Status
 
-**Genesis (Node 25) — 132 source files, 50,487 lines of Rust, 1,435 tests (0 failures).**
+**Genesis (Node 31) — 191 source files, 62,176 lines of Rust, 1,035+ unit tests (0 failures).**
 
-Core stack: CAS, semantic filesystem (vectors + BM25 + knowledge graph with redb, 17 edge types), layered memory (4-tier + MemoryScope), agent scheduler, kernel event bus (pub/sub + filtering + persistent log), permission guardrails, hook system (5 interception points), intent system (DAG decomposition + autonomous execution), context budget engine (L0/L1/L2), tool registry (37 built-in + external MCP), agent lifecycle (checkpoint/restore/discover/delegate), learning loop (execution stats + skill discovery + self-healing), `plicod` (TCP+UDS daemon with `start/stop/status` lifecycle), `plico-mcp` (stdio JSON-RPC), and `aicli` (semantic CLI).
+Core stack: CAS, semantic filesystem (vectors + BM25 + knowledge graph with redb, 17 edge types), layered memory (4-tier + MemoryScope), agent scheduler, kernel event bus (pub/sub + filtering + persistent log), permission guardrails, hook system (5 interception points), intent system (DAG decomposition + autonomous execution), context budget engine (L0/L1/L2), tool registry (37 built-in + external MCP), agent lifecycle (checkpoint/restore/discover/delegate), learning loop (execution stats + skill discovery + self-healing), retrieval fusion engine (RFE, 7-signal adaptive ranking), unified configuration (`config.json` + env vars + CLI), `plicod` (TCP+UDS daemon with `start/stop/status` lifecycle), `plico-sse` (A2A SSE adapter), `plico-mcp` (stdio JSON-RPC), and `aicli` (semantic CLI).
 
 Soul 2.0 alignment: **94.7%**. Architecture red lines: **8/8 (100%)**.
 
@@ -55,11 +55,12 @@ External AI agents / MCP clients
 # Build
 cargo build --release
 
-# Run all tests (1,435 tests)
+# Run all tests
 cargo test
 
-# Start the daemon (recommended)
-cargo run --bin plicod -- start --port 7878
+# Start the daemon (recommended — binds 127.0.0.1:7878 by default)
+cargo run --bin plicod -- start
+cargo run --bin plicod -- start --host 0.0.0.0 --port 9000  # custom bind
 
 # Daemon lifecycle
 cargo run --bin plicod -- stop       # graceful shutdown
@@ -75,8 +76,38 @@ aicli recall --agent my-agent
 # CLI in embedded mode (no daemon needed)
 aicli --embedded put --content "hello" --tags "test"
 
+# SSE adapter (A2A protocol, binds 127.0.0.1:7879 by default)
+cargo run --bin plico-sse
+cargo run --bin plico-sse -- --host 0.0.0.0 --port 9000  # custom bind
+
 # MCP adapter (stdio JSON-RPC 2.0)
 cargo run --bin plico-mcp
+```
+
+## Configuration
+
+Plico uses a three-layer cascade (lowest → highest priority):
+
+1. **Built-in defaults** — zero-config works out of the box
+2. **Config file** — `~/.plico/config.json` (or `$PLICO_ROOT/config.json`)
+3. **Environment variables** — `PLICO_HOST`, `PLICO_DAEMON_PORT`, `EMBEDDING_BACKEND`, etc.
+4. **CLI flags** — `--host`, `--port`, `--root` (highest priority)
+
+```bash
+# Generate default config
+cargo run --bin plicod -- start  # creates ~/.plico/ if needed
+
+# Override via environment
+PLICO_HOST=0.0.0.0 PLICO_DAEMON_PORT=9000 cargo run --bin plicod -- start
+
+# Override via config file (~/.plico/config.json)
+cat > ~/.plico/config.json <<EOF
+{
+  "network": { "host": "127.0.0.1", "daemon_port": 7878, "sse_port": 7879 },
+  "inference": { "embedding_backend": "openai", "llm_backend": "llama" },
+  "tuning": { "persist_interval_secs": 300 }
+}
+EOF
 ```
 
 ## 10 Axioms (Soul 2.0)
@@ -114,17 +145,19 @@ src/
 ├── tool/           # Tool trait and registry ("everything is a tool")
 ├── llm/            # LlmProvider trait (OpenAI-compatible / Ollama / llama.cpp / stub)
 ├── mcp/            # MCP client — external tool integration
+├── config.rs       # Unified configuration (3-layer cascade)
 ├── client.rs       # KernelClient trait (Embedded / UDS / TCP)
 └── bin/
     ├── plicod.rs       # Daemon (TCP + UDS, start/stop/status lifecycle, PID file)
+    ├── plico_sse.rs    # SSE adapter (A2A protocol)
     ├── plico_mcp/      # MCP stdio server (JSON-RPC 2.0)
     └── aicli/          # Semantic CLI (daemon-first, --embedded fallback)
 
-tests/              # 33 integration test files
+tests/              # 39 integration test files
 docs/
 ├── genesis-reference.md    # Complete reference document
-├── genesis-audit-n25*.md   # Audit reports
-└── design-node*.md         # 24 design documents (N2-N25)
+├── plico-v*-audit*.md      # Audit reports
+└── design-node*.md         # Design documents
 ```
 
 ## Design documents

@@ -916,6 +916,7 @@ impl IntentPrefetcher {
     /// Run the full multi-path prefetch in a background thread.
     /// Optionally stores result in intent cache (F-9).
     /// B51: Also stores in allocation_cache for fetch_assembled_context.
+    #[allow(clippy::too_many_arguments)]
     async fn run_prefetch(
         assemblies: Arc<RwLock<HashMap<String, Assembly>>>,
         allocation_cache: Option<Arc<AllocationCache>>,

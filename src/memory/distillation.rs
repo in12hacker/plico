@@ -9,6 +9,9 @@ use crate::memory::layered::{MemoryEntry, MemoryType, MemoryContent, MemoryTier,
 use crate::memory::MemoryScope;
 use std::collections::HashMap;
 
+/// Intermediate grouping: (memory_type, source_ids, merged_tags, max_importance, combined_text).
+type DistillGroup = (MemoryType, Vec<String>, Vec<String>, u8, String);
+
 /// A distilled memory ready to be stored in LongTerm.
 #[derive(Debug, Clone)]
 pub struct DistilledEntry {
@@ -94,7 +97,7 @@ pub fn distill_working_memory_parallel(
         return distill_working_memory(entries, summarizer);
     }
 
-    let groups: Vec<(MemoryType, Vec<String>, Vec<String>, u8, String)> = by_type
+    let groups: Vec<DistillGroup> = by_type
         .into_iter()
         .filter(|(_, group)| !group.is_empty())
         .map(|(mem_type, group)| {

@@ -105,8 +105,8 @@ pub fn split_by_intent(
     }
 
     type_hits
-        .into_iter()
-        .map(|(mem_type, _)| {
+        .into_keys()
+        .map(|mem_type| {
             let mut new_entry = entry.clone();
             new_entry.id = Uuid::new_v4().to_string();
             new_entry.memory_type = mem_type;
@@ -248,7 +248,7 @@ pub fn update_on_contradiction(
     new_entry: &MemoryEntry,
 ) -> (MemoryEntry, MemoryEntry) {
     let mut updated_old = old.clone();
-    updated_old.importance = updated_old.importance / 2;
+    updated_old.importance /= 2;
 
     let mut updated_new = new_entry.clone();
     updated_new.supersedes = Some(old.id.clone());
@@ -291,9 +291,9 @@ pub fn update_prompt(old: &MemoryEntry, new_entry: &MemoryEntry) -> String {
 
 /// Find merge candidates across agents: same MemoryType, high similarity,
 /// different agent_id. Returns pairs of (agent_a_entry, agent_b_entry).
-pub fn find_cross_agent_merge_candidates<'a>(
-    entries: &'a [MemoryEntry],
-) -> Vec<(&'a MemoryEntry, &'a MemoryEntry)> {
+pub fn find_cross_agent_merge_candidates(
+    entries: &[MemoryEntry],
+) -> Vec<(&MemoryEntry, &MemoryEntry)> {
     let mut candidates = Vec::new();
     for i in 0..entries.len() {
         for j in (i + 1)..entries.len() {

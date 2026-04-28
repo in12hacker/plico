@@ -76,7 +76,8 @@ impl super::AIKernel {
             ApiRequest::KGTemporalChanges { agent_id, .. } |
             ApiRequest::QueryGrowthReport { agent_id, .. } |
             ApiRequest::MemoryStats { agent_id, .. } |
-            ApiRequest::RememberLongTermBatch { agent_id, .. } => Some(agent_id.clone()),
+            ApiRequest::RememberLongTermBatch { agent_id, .. } |
+            ApiRequest::ImportFiles { agent_id, .. } => Some(agent_id.clone()),
 
             ApiRequest::RegisterAgent { name } => Some(name.clone()),
             ApiRequest::GrantPermission { agent_id, .. } |
@@ -256,6 +257,9 @@ impl super::AIKernel {
             // ── Prompt ──
             req @ (ApiRequest::ListPrompts | ApiRequest::GetPromptInfo { .. } |
                    ApiRequest::SetPromptOverride { .. } | ApiRequest::RemovePromptOverride { .. }) => self.handle_prompt(req),
+
+            // ── File Import (v33) ──
+            req @ ApiRequest::ImportFiles { .. } => self.handle_import(req),
         };
 
         self.maybe_persist_event_log();

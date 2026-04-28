@@ -59,7 +59,7 @@ fn resolve_root(args: &[String]) -> PathBuf {
         .map(PathBuf::from)
         .unwrap_or_else(|_| {
             dirs::home_dir()
-                .unwrap_or_else(|| PathBuf::from("/tmp"))
+                .unwrap_or_else(std::env::temp_dir)
                 .join(".plico")
         })
 }
@@ -234,11 +234,34 @@ fn build_remote_request(args: &[String]) -> Option<ApiRequest> {
     let agent_id = || commands::extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
     match args.first().map(|s| s.as_str()) {
         Some("put") | Some("create") => {
-            let content = commands::extract_arg(args, "--content")
-                .or_else(|| args.get(1).cloned().filter(|a| !a.starts_with("--")))
-                .unwrap_or_default();
-            let tags = commands::extract_tags(args, "--tags");
-            Some(ApiRequest::Create { api_version: None, content, content_encoding: Default::default(), tags, agent_id: agent_id(), tenant_id: None, agent_token: None, intent: commands::extract_arg(args, "--intent") })
+            let file_path = commands::extract_arg(args, "--file");
+            let dir_path = commands::extract_arg(args, "--dir");
+            if file_path.is_some() || dir_path.is_some() {
+                let glob_pattern = commands::extract_arg(args, "--glob").unwrap_or_else(|| "*.md".to_string());
+                let mut paths = Vec::new();
+                if let Some(ref fp) = file_path {
+                    let p = std::path::Path::new(fp);
+                    paths.push(std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf()).to_string_lossy().to_string());
+                }
+                if let Some(ref dp) = dir_path {
+                    if let Ok(found) = commands::handlers::crud::collect_files(std::path::Path::new(dp), &glob_pattern) {
+                        paths.extend(found);
+                    }
+                }
+                Some(ApiRequest::ImportFiles {
+                    paths,
+                    agent_id: agent_id(),
+                    tags: commands::extract_tags(args, "--tags"),
+                    chunking: commands::extract_arg(args, "--chunking"),
+                    tenant_id: None,
+                })
+            } else {
+                let content = commands::extract_arg(args, "--content")
+                    .or_else(|| args.get(1).cloned().filter(|a| !a.starts_with("--")))
+                    .unwrap_or_default();
+                let tags = commands::extract_tags(args, "--tags");
+                Some(ApiRequest::Create { api_version: None, content, content_encoding: Default::default(), tags, agent_id: agent_id(), tenant_id: None, agent_token: None, intent: commands::extract_arg(args, "--intent") })
+            }
         }
         Some("get") | Some("read") => {
             let cid = args.get(1).cloned().unwrap_or_default();

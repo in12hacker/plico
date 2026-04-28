@@ -43,7 +43,7 @@ pub fn eviction_priority(entry: &MemoryEntry, now_ms: u64) -> u32 {
         5
     };
 
-    let access_bonus = (entry.access_count.min(50) as u32) * 2;
+    let access_bonus = entry.access_count.min(50) * 2;
 
     let superseded_penalty = if entry.supersedes.is_some() || is_likely_superseded(entry) {
         0

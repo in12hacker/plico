@@ -215,7 +215,7 @@ impl CausalGraph {
         loop {
             let next = self.parents.get(&current).and_then(|parents| {
                 parents.iter().find_map(|(pid, edge)| {
-                    if filter.map_or(true, |f| f == *edge) {
+                    if filter.is_none_or(|f| f == *edge) {
                         Some(pid.clone())
                     } else {
                         None

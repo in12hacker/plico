@@ -53,12 +53,18 @@ pub struct PromptRegistry {
     overrides: RwLock<HashMap<OverrideKey, PromptTemplate>>,
 }
 
-impl PromptRegistry {
-    pub fn new() -> Self {
+impl Default for PromptRegistry {
+    fn default() -> Self {
         Self {
             defaults: HashMap::new(),
             overrides: RwLock::new(HashMap::new()),
         }
+    }
+}
+
+impl PromptRegistry {
+    pub fn new() -> Self {
+        Self::default()
     }
 
     /// Register a compiled-in default template.

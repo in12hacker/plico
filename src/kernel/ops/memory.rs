@@ -514,10 +514,7 @@ impl crate::kernel::AIKernel {
                 // RFE 7-signal re-ranking with per-agent learned weights
                 let agent_weights = self.agent_profiles.get_weights(agent_id);
                 let rfe = RetrievalFusionEngine::new(agent_weights);
-                let kg_ref = self.knowledge_graph.as_deref();
-                let causal_graph = kg_ref.and_then(|_| {
-                    None::<&crate::memory::causal::CausalGraph>
-                });
+                let causal_graph: Option<&crate::memory::causal::CausalGraph> = None;
 
                 let rfe_query = RetrievalQuery {
                     query_embedding: &query_emb.embedding,
@@ -715,7 +712,7 @@ impl crate::kernel::AIKernel {
 
         let mut total_entries = 0;
         let mut total_bytes = 0usize;
-        let mut oldest_entry_age_ms = u64::MAX;
+        let mut oldest_entry_age_ms: u64 = 0;
         let mut total_access_count = 0u64;
         let mut never_accessed_count = 0;
         let mut about_to_expire_count = 0;
@@ -727,7 +724,7 @@ impl crate::kernel::AIKernel {
                 total_bytes += entry.content.display().len(); // rough byte estimate
 
                 let age_ms = now.saturating_sub(entry.created_at);
-                if age_ms < oldest_entry_age_ms {
+                if age_ms > oldest_entry_age_ms {
                     oldest_entry_age_ms = age_ms;
                 }
 
@@ -751,10 +748,6 @@ impl crate::kernel::AIKernel {
         } else {
             0.0
         };
-
-        if oldest_entry_age_ms == u64::MAX {
-            oldest_entry_age_ms = 0;
-        }
 
         MemoryStatsResult {
             agent_id: agent_id.to_string(),

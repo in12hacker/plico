@@ -123,7 +123,7 @@ export LLM_BACKEND=stub
 # Build
 cargo build
 
-# Run tests (1,435 tests)
+# Run tests (1,038 unit + 38 integration)
 cargo test
 
 # Build release

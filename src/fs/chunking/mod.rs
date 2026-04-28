@@ -26,6 +26,8 @@ pub enum ChunkingMode {
     None,
     Fixed,
     Semantic,
+    /// Markdown-aware: split on headings (`#`), fenced code blocks, and thematic breaks.
+    Markdown,
 }
 
 impl ChunkingMode {
@@ -33,6 +35,7 @@ impl ChunkingMode {
         match std::env::var("PLICO_CHUNKING").as_deref() {
             Ok("semantic") => Self::Semantic,
             Ok("fixed") => Self::Fixed,
+            Ok("markdown") | Ok("md") => Self::Markdown,
             _ => Self::None,
         }
     }
@@ -65,6 +68,7 @@ pub fn chunk_document(
     }
 
     match mode {
+        ChunkingMode::Markdown => markdown_chunk(text),
         ChunkingMode::Semantic if embedding.is_some() => {
             semantic_chunk(text, &sentences, embedding.unwrap())
         }
@@ -83,7 +87,7 @@ fn split_sentences(text: &str) -> Vec<(usize, usize)> {
             && byte_after < text.len()
         {
             let next = text[byte_after..].chars().next();
-            if c == '\n' || next.map_or(true, |nc| nc.is_whitespace() || nc.is_uppercase()) {
+            if c == '\n' || next.is_none_or(|nc| nc.is_whitespace() || nc.is_uppercase()) {
                 let end = byte_after;
                 let trimmed = text[start..end].trim();
                 if !trimmed.is_empty() {
@@ -197,6 +201,92 @@ fn semantic_chunk(
     chunks
 }
 
+/// Markdown-aware chunking: split on headings, fenced code blocks, and thematic breaks.
+///
+/// Each heading starts a new section. Fenced code blocks (```) are kept intact
+/// within their parent section. Sections exceeding `TARGET_CHUNK_CHARS` are
+/// further split at paragraph boundaries.
+fn markdown_chunk(text: &str) -> Vec<Chunk> {
+    let mut sections: Vec<(usize, usize)> = Vec::new();
+    let mut section_start: usize = 0;
+    let mut in_fenced_block = false;
+
+    for (line_start, line) in line_offsets(text) {
+        let trimmed = line.trim();
+
+        if trimmed.starts_with("```") {
+            in_fenced_block = !in_fenced_block;
+            continue;
+        }
+        if in_fenced_block {
+            continue;
+        }
+
+        let is_heading = trimmed.starts_with('#');
+        let is_thematic_break = trimmed.len() >= 3
+            && trimmed.chars().all(|c| c == '-' || c == '*' || c == '_' || c == ' ')
+            && trimmed.chars().filter(|c| *c == '-' || *c == '*' || *c == '_').count() >= 3;
+
+        if (is_heading || is_thematic_break) && line_start > section_start {
+            let section_text = text[section_start..line_start].trim();
+            if section_text.len() >= MIN_CHUNK_CHARS {
+                sections.push((section_start, line_start));
+            }
+            section_start = line_start;
+        }
+    }
+
+    if section_start < text.len() {
+        let section_text = text[section_start..].trim();
+        if section_text.len() >= MIN_CHUNK_CHARS {
+            sections.push((section_start, text.len()));
+        }
+    }
+
+    if sections.is_empty() {
+        let sentences = split_sentences(text);
+        if sentences.len() <= 1 {
+            return vec![];
+        }
+        return fixed_chunk(text, &sentences);
+    }
+
+    let mut chunks = Vec::new();
+    for (sec_start, sec_end) in sections {
+        let section = &text[sec_start..sec_end];
+        if section.len() <= TARGET_CHUNK_CHARS * 2 {
+            chunks.push(Chunk {
+                text: section.trim().to_string(),
+                start_byte: sec_start,
+                end_byte: sec_end,
+            });
+        } else {
+            let sub_sentences = split_sentences(section);
+            let sub_chunks = fixed_chunk(section, &sub_sentences);
+            for sc in sub_chunks {
+                chunks.push(Chunk {
+                    text: sc.text,
+                    start_byte: sec_start + sc.start_byte,
+                    end_byte: sec_start + sc.end_byte,
+                });
+            }
+        }
+    }
+
+    chunks
+}
+
+/// Iterate over lines with their byte offsets.
+fn line_offsets(text: &str) -> Vec<(usize, &str)> {
+    let mut result = Vec::new();
+    let mut start = 0;
+    for line in text.split('\n') {
+        result.push((start, line));
+        start += line.len() + 1;
+    }
+    result
+}
+
 fn embed_sentences(
     embedding: &dyn EmbeddingProvider,
     sentences: &[&str],
@@ -285,6 +375,30 @@ mod tests {
 
         let c = vec![0.0, 1.0, 0.0];
         assert!(cosine_similarity(&a, &c).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_markdown_chunking_splits_on_headings() {
+        let md = "# Introduction\n\nThis is the introduction with enough text to meet the minimum chunk size requirement for chunking to actually work properly.\n\n## Methods\n\nThis section describes the methods used in detail, with sufficient content to form a valid chunk on its own.\n\n## Results\n\nThe results section contains findings from the analysis, presented with enough detail to be meaningful.\n";
+        let chunks = chunk_document(md, ChunkingMode::Markdown, None);
+        assert!(chunks.len() >= 2, "markdown should split on headings: got {}", chunks.len());
+        assert!(chunks[0].text.contains("Introduction"));
+    }
+
+    #[test]
+    fn test_markdown_chunking_preserves_code_blocks() {
+        let md = "# Setup\n\nInstall the dependencies:\n\n```bash\ncargo build\ncargo test\n```\n\nThen run the server. Make sure you have enough content here to pass minimum.\n\n# Usage\n\nUse the following commands to interact with the system. This section needs adequate content.\n";
+        let chunks = chunk_document(md, ChunkingMode::Markdown, None);
+        let all_text: String = chunks.iter().map(|c| c.text.as_str()).collect::<Vec<_>>().join("\n");
+        assert!(all_text.contains("cargo build"), "code blocks should be preserved");
+    }
+
+    #[test]
+    fn test_markdown_chunking_thematic_break() {
+        let section = "This is a substantial section of text that contains enough characters to exceed the minimum chunk size threshold. It discusses various topics in detail to ensure the content is realistic and meaningful for testing purposes. We need to make sure each section is long enough on its own.";
+        let md = format!("{section}\n\n---\n\n{section}\n");
+        let chunks = chunk_document(&md, ChunkingMode::Markdown, None);
+        assert!(chunks.len() >= 2, "should split on thematic break: got {}", chunks.len());
     }
 
     #[test]

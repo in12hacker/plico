@@ -72,11 +72,19 @@ impl RemoteClient {
                 write_frame(&mut stream, &payload)?;
                 read_frame(&mut stream)?
             }
+            #[cfg(unix)]
             RemoteAddr::Uds(path) => {
                 let mut stream = std::os::unix::net::UnixStream::connect(path)?;
                 stream.set_read_timeout(Some(std::time::Duration::from_secs(30)))?;
                 write_frame(&mut stream, &payload)?;
                 read_frame(&mut stream)?
+            }
+            #[cfg(not(unix))]
+            RemoteAddr::Uds(_) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Unsupported,
+                    "Unix domain sockets are not available on this platform; use TCP mode",
+                ));
             }
         };
         serde_json::from_slice(&raw)

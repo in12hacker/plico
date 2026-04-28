@@ -34,7 +34,7 @@ pub struct TenantStore {
     /// Map from tenant_id -> Tenant metadata.
     tenants: RwLock<HashMap<String, Tenant>>,
     /// Agents that are "tenant admins" — they can create tenants.
-    /// TODO: move this to a proper admin role system.
+    /// ROADMAP: move this to a proper admin role system (multi-tenant milestone).
     admins: RwLock<HashMap<String, Vec<String>>>, // tenant_id -> vec<agent_id>
 }
 
@@ -79,12 +79,12 @@ impl TenantStore {
 
     /// List all tenants accessible to the given agent.
     /// Currently all tenants are listed (agents can see that other tenants exist).
-    /// TODO: filter based on visibility permissions.
+    /// ROADMAP: filter based on visibility permissions (multi-tenant milestone).
     pub fn list_for_agent(&self, agent_id: &str) -> Vec<Tenant> {
         let tenants = self.tenants.read().unwrap();
         // For now, return all tenants if the agent is admin of any tenant,
         // or if the agent is a trusted system agent.
-        // TODO: implement proper visibility rules.
+        // ROADMAP: implement proper visibility rules (multi-tenant milestone).
         let all_tenants: Vec<Tenant> = tenants.values().cloned().collect();
 
         if agent_id == "kernel" || agent_id == "system" {

@@ -73,6 +73,14 @@ pub trait KnowledgeGraph: Send + Sync {
     /// reachable nodes. Returns top-K node IDs sorted by PPR score (descending).
     ///
     /// Default implementation returns an empty vec (no graph traversal).
+    /// Check whether any node references the given CID via `content_cid`.
+    ///
+    /// Default: O(n) scan. Backends may override with an indexed implementation.
+    fn has_node_with_cid(&self, cid: &str) -> Result<bool, KGError> {
+        let nodes = self.list_nodes("", None)?;
+        Ok(nodes.iter().any(|n| n.content_cid.as_deref() == Some(cid)))
+    }
+
     fn personalized_pagerank(
         &self,
         _seed_nodes: &[String],

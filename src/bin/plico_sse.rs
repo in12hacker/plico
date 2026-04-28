@@ -127,11 +127,11 @@ const SHUTDOWN_TIMEOUT_SECS: u64 = 10;
 
 #[derive(Clone)]
 struct AppState {
+    plicod_host: String,
     plicod_port: u16,
+    agent_card_url: String,
     broadcast_tx: Arc<broadcast::Sender<ServerEvent>>,
-    /// Track if plicod is connected (updated on each request)
     plicod_connected: Arc<tokio::sync::RwLock<bool>>,
-    /// Connection pool: track in-flight requests
     in_flight: Arc<std::sync::atomic::AtomicUsize>,
 }
 
@@ -247,11 +247,12 @@ fn to_sse_event(se: SseEvent) -> Event {
 // ── plicod Client (length-prefixed framing) ───────────────────────────────────
 
 async fn send_to_plicod(
+    host: &str,
     port: u16,
     request: ApiRequest,
     connected_flag: Option<Arc<tokio::sync::RwLock<bool>>>,
 ) -> Result<ApiResponse, SseError> {
-    let addr: SocketAddr = format!("127.0.0.1:{}", port).parse().unwrap();
+    let addr: SocketAddr = format!("{}:{}", host, port).parse().unwrap();
 
     let mut stream = match TcpStream::connect(addr).await {
         Ok(s) => {
@@ -293,17 +294,17 @@ async fn send_to_plicod(
 // ── API Handlers ──────────────────────────────────────────────────────────────
 
 /// Agent Card — A2A protocol capability declaration
-async fn get_agent_card() -> Response {
+async fn get_agent_card(State(state): State<AppState>) -> Response {
     let card = serde_json::json!({
         "name": "plico",
         "description": "AI-native operating system kernel — semantic file system, knowledge graph, and agent orchestration",
-        "version": "1.0.0",
+        "version": env!("CARGO_PKG_VERSION"),
         "capabilities": {
             "streaming": true,
             "pushNotifications": false,
             "agentCard": true,
         },
-        "url": "http://localhost:7879",
+        "url": state.agent_card_url,
         "endpoints": {
             "tasksSendSubscribe": "/tasks/sendSubscribe",
         },
@@ -419,6 +420,7 @@ async fn task_send_subscribe(
     });
 
     // Spawn async task to process the request and stream results
+    let plicod_host = state.plicod_host.clone();
     let plicod_port = state.plicod_port;
     let plicod_connected = state.plicod_connected.clone();
     let task_id_for_processing = task_id.clone();
@@ -436,7 +438,7 @@ async fn task_send_subscribe(
                 });
 
                 // Call plicod
-                match send_to_plicod(plicod_port, req, Some(plicod_connected)).await {
+                match send_to_plicod(&plicod_host, plicod_port, req, Some(plicod_connected)).await {
                     Ok(response) => {
                         let final_state = TaskState::from_response(&response);
                         let event_data = if response.ok {
@@ -548,10 +550,11 @@ async fn task_send(
     };
 
     // Send to plicod synchronously (non-streaming)
+    let plicod_host = state.plicod_host.clone();
     let plicod_port = state.plicod_port;
     let plicod_connected = state.plicod_connected.clone();
 
-    let result = send_to_plicod(plicod_port, api_request, Some(plicod_connected)).await;
+    let result = send_to_plicod(&plicod_host, plicod_port, api_request, Some(plicod_connected)).await;
 
     // Decrement in-flight counter
     state.in_flight.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
@@ -720,25 +723,38 @@ fn cors_layer() -> CorsLayer {
 #[tokio::main]
 async fn main() {
     let args: Vec<String> = std::env::args().collect();
+    let config = plico::config::PlicoConfig::load(None);
+
+    let host = args.iter().position(|a| a == "--host")
+        .and_then(|i| args.get(i + 1).cloned())
+        .unwrap_or(config.network.host.clone());
 
     let port = args.iter().position(|a| a == "--port")
         .and_then(|i| args.get(i + 1))
         .and_then(|s| s.parse::<u16>().ok())
-        .unwrap_or(7879);
+        .unwrap_or(config.network.sse_port);
+
+    let plicod_host = args.iter().position(|a| a == "--plicod-host")
+        .and_then(|i| args.get(i + 1).cloned())
+        .unwrap_or(config.network.host.clone());
 
     let plicod_port = args.iter().position(|a| a == "--plicod-port")
         .and_then(|i| args.get(i + 1))
         .and_then(|s| s.parse::<u16>().ok())
-        .unwrap_or(7878);
+        .unwrap_or(config.network.daemon_port);
+
+    let agent_card_url = format!("http://{}:{}", host, port);
 
     println!("Plico SSE Streaming Adapter (A2A Protocol)");
-    println!("Listening on: 0.0.0.0:{}", port);
-    println!("Connecting to plicod on: 0.0.0.0:{}", plicod_port);
+    println!("Listening on: {}:{}", host, port);
+    println!("Connecting to plicod on: {}:{}", plicod_host, plicod_port);
 
     let (broadcast_tx, _) = broadcast::channel::<ServerEvent>(1000);
 
     let state = AppState {
+        plicod_host,
         plicod_port,
+        agent_card_url,
         broadcast_tx: Arc::new(broadcast_tx),
         plicod_connected: Arc::new(tokio::sync::RwLock::new(false)),
         in_flight: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
@@ -753,7 +769,7 @@ async fn main() {
         .layer(cors_layer())
         .with_state(state.clone());
 
-    let addr: SocketAddr = format!("0.0.0.0:{}", port).parse().unwrap();
+    let addr: SocketAddr = format!("{}:{}", host, port).parse().unwrap();
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
 
     println!("SSE adapter ready. Endpoints:");

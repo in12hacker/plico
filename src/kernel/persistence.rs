@@ -13,46 +13,16 @@ use crate::scheduler::agent::Intent;
 
 use super::AIKernel;
 
-/// Resolve llama.cpp server URL from multiple sources (priority order):
-/// 1. `LLAMA_URL` env var (explicit override)
-/// 2. `OPENAI_API_BASE` env var (generic OpenAI-compatible)
-/// 3. `~/.plico/llama.url` file (persistent user config)
-/// 4. Auto-detect from running llama-server process (`--port` flag)
-/// 5. Fallback: `http://127.0.0.1:8080/v1`
+/// Resolve llama.cpp server URL via unified config.
+///
+/// Delegates to `PlicoConfig::resolve_llama_url()` which handles the full
+/// cascade: config field → env var → `llama.url` file → auto-detect → fallback.
 pub(crate) fn resolve_llama_url() -> String {
-    if let Ok(url) = std::env::var("LLAMA_URL") {
-        return ensure_v1_suffix(&url);
-    }
-    if let Ok(url) = std::env::var("OPENAI_API_BASE") {
-        return ensure_v1_suffix(&url);
-    }
-    if let Ok(home) = std::env::var("HOME") {
-        let config_path = PathBuf::from(&home).join(".plico/llama.url");
-        if let Ok(url) = std::fs::read_to_string(&config_path) {
-            let url = url.trim();
-            if !url.is_empty() {
-                return ensure_v1_suffix(url);
-            }
-        }
-    }
-    if let Some(port) = detect_llama_server_port() {
-        return format!("http://127.0.0.1:{port}/v1");
-    }
-    "http://127.0.0.1:8080/v1".to_string()
+    crate::config::PlicoConfig::load(None).resolve_llama_url()
 }
 
 pub(crate) fn ensure_v1_suffix(url: &str) -> String {
-    if url.contains("/v1") { url.to_string() } else { format!("{}/v1", url.trim_end_matches('/')) }
-}
-
-/// Try to detect the port of a running llama-server process.
-fn detect_llama_server_port() -> Option<u16> {
-    let output = std::process::Command::new("sh")
-        .args(["-c", "ps aux | grep -oP 'llama-server.*--port \\K[0-9]+' | head -1"])
-        .output()
-        .ok()?;
-    let s = String::from_utf8_lossy(&output.stdout);
-    s.trim().parse().ok()
+    crate::config::ensure_v1_suffix(url)
 }
 
 /// Atomically write a serializable value to a JSON file.

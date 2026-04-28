@@ -60,6 +60,8 @@ pub struct PetgraphBackend {
     nodes: RwLock<HashMap<String, KGNode>>,
     out_edges: RwLock<HashMap<String, Vec<(String, KGEdge)>>>,
     in_edges: RwLock<HashMap<String, Vec<(String, KGEdge)>>>,
+    /// Reverse index: content_cid → set of node IDs that reference it.
+    cid_refs: RwLock<HashMap<String, HashSet<String>>>,
     db: Option<std::sync::Arc<Database>>,
 }
 
@@ -69,6 +71,7 @@ impl PetgraphBackend {
             nodes: RwLock::new(HashMap::new()),
             out_edges: RwLock::new(HashMap::new()),
             in_edges: RwLock::new(HashMap::new()),
+            cid_refs: RwLock::new(HashMap::new()),
             db: None,
         }
     }
@@ -95,6 +98,7 @@ impl PetgraphBackend {
                                 nodes: RwLock::new(HashMap::new()),
                                 out_edges: RwLock::new(HashMap::new()),
                                 in_edges: RwLock::new(HashMap::new()),
+                                cid_refs: RwLock::new(HashMap::new()),
                                 db: None,
                             };
                         }
@@ -108,6 +112,7 @@ impl PetgraphBackend {
                                 nodes: RwLock::new(HashMap::new()),
                                 out_edges: RwLock::new(HashMap::new()),
                                 in_edges: RwLock::new(HashMap::new()),
+                                cid_refs: RwLock::new(HashMap::new()),
                                 db: None,
                             };
                         }
@@ -131,10 +136,18 @@ impl PetgraphBackend {
             (HashMap::new(), HashMap::new(), HashMap::new())
         };
 
+        let mut cid_refs_map: HashMap<String, HashSet<String>> = HashMap::new();
+        for (node_id, node) in &nodes {
+            if let Some(ref cid) = node.content_cid {
+                cid_refs_map.entry(cid.clone()).or_default().insert(node_id.clone());
+            }
+        }
+
         Self {
             nodes: RwLock::new(nodes),
             out_edges: RwLock::new(out_e),
             in_edges: RwLock::new(in_e),
+            cid_refs: RwLock::new(cid_refs_map),
             db,
         }
     }
@@ -502,6 +515,10 @@ impl KnowledgeGraph for PetgraphBackend {
     fn add_node(&self, node: KGNode) -> Result<(), KGError> {
         let node_id = node.id.clone();
         let node_clone = node.clone();
+        if let Some(ref cid) = node.content_cid {
+            self.cid_refs.write().unwrap()
+                .entry(cid.clone()).or_default().insert(node_id.clone());
+        }
         let mut nodes = self.nodes.write().unwrap();
         nodes.insert(node_id.clone(), node);
         drop(nodes);
@@ -722,7 +739,15 @@ impl KnowledgeGraph for PetgraphBackend {
 
     fn remove_node(&self, id: &str) -> Result<(), KGError> {
         let mut nodes = self.nodes.write().unwrap();
-        nodes.remove(id);
+        if let Some(removed) = nodes.remove(id) {
+            if let Some(ref cid) = removed.content_cid {
+                let mut refs = self.cid_refs.write().unwrap();
+                if let Some(set) = refs.get_mut(cid) {
+                    set.remove(id);
+                    if set.is_empty() { refs.remove(cid); }
+                }
+            }
+        }
         drop(nodes);
         let mut out = self.out_edges.write().unwrap();
         let mut in_e = self.in_edges.write().unwrap();
@@ -952,6 +977,11 @@ impl KnowledgeGraph for PetgraphBackend {
         *self.out_edges.write().unwrap() = new_out;
         *self.in_edges.write().unwrap() = new_in;
         Ok(())
+    }
+
+    fn has_node_with_cid(&self, cid: &str) -> Result<bool, KGError> {
+        let refs = self.cid_refs.read().unwrap();
+        Ok(refs.get(cid).is_some_and(|s| !s.is_empty()))
     }
 
     fn personalized_pagerank(

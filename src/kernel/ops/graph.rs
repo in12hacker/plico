@@ -767,20 +767,7 @@ impl crate::kernel::AIKernel {
         let Some(ref kg) = self.knowledge_graph else {
             return false;
         };
-        // Iterate over all agents' nodes to find any that reference this CID
-        // We use a simple approach: list nodes with no agent filter and check content_cid
-        // Note: This is a stub implementation. A production version would have an
-        // efficient index (e.g., inverted index from CID -> nodes).
-        if let Ok(nodes) = kg.list_nodes("", None) {
-            for node in nodes {
-                if let Some(ref content_cid) = node.content_cid {
-                    if content_cid == cid {
-                        return true;
-                    }
-                }
-            }
-        }
-        false
+        kg.has_node_with_cid(cid).unwrap_or(false)
     }
 }
 

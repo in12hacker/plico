@@ -76,7 +76,7 @@ pub fn check_semantic_dedup(
 /// Stub dedup check when embedding is unavailable — exact content hash comparison.
 pub fn check_exact_dedup(new_content: &str, existing: &[MemoryEntry]) -> DedupResult {
     for entry in existing {
-        if entry.content.display().to_string() == new_content {
+        if entry.content.display() == new_content {
             return DedupResult::Duplicate {
                 existing_id: entry.id.clone(),
                 similarity: 1.0,

@@ -38,12 +38,18 @@ pub struct ArmStats {
     pub total_reward: f64,
 }
 
-impl ArmStats {
-    pub fn new() -> Self {
+impl Default for ArmStats {
+    fn default() -> Self {
         Self {
             pulls: 0,
             total_reward: 0.0,
         }
+    }
+}
+
+impl ArmStats {
+    pub fn new() -> Self {
+        Self::default()
     }
 
     pub fn avg_reward(&self) -> f64 {
@@ -83,7 +89,7 @@ impl Ucb1Bandit {
 
     /// Record a pull with observed reward (0.0 to 1.0).
     pub fn record(&mut self, arm: StrategyArm, reward: f64) {
-        let stats = self.arms.entry(arm).or_insert_with(ArmStats::new);
+        let stats = self.arms.entry(arm).or_default();
         stats.pulls += 1;
         stats.total_reward += reward;
         self.total_pulls += 1;

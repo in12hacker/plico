@@ -1144,7 +1144,7 @@ impl LayeredMemory {
         let mut total_bytes = 0;
         let mut never_accessed_count = 0;
         let mut about_to_expire_count = 0;
-        let mut oldest_entry_age_ms = u64::MAX;
+        let mut oldest_entry_age_ms: u64 = 0;
         let mut total_access_count = 0u64;
 
         let ephemeral_entries: usize;
@@ -1175,7 +1175,7 @@ impl LayeredMemory {
                     }
                 }
                 let age = now.saturating_sub(entry.created_at);
-                if age < oldest_entry_age_ms {
+                if age > oldest_entry_age_ms {
                     oldest_entry_age_ms = age;
                 }
             }
@@ -1205,7 +1205,7 @@ impl LayeredMemory {
                     }
                 }
                 let age = now.saturating_sub(entry.created_at);
-                if age < oldest_entry_age_ms {
+                if age > oldest_entry_age_ms {
                     oldest_entry_age_ms = age;
                 }
             }
@@ -1235,7 +1235,7 @@ impl LayeredMemory {
                     }
                 }
                 let age = now.saturating_sub(entry.created_at);
-                if age < oldest_entry_age_ms {
+                if age > oldest_entry_age_ms {
                     oldest_entry_age_ms = age;
                 }
             }
@@ -1261,14 +1261,10 @@ impl LayeredMemory {
                     }
                 }
                 let age = now.saturating_sub(entry.created_at);
-                if age < oldest_entry_age_ms {
+                if age > oldest_entry_age_ms {
                     oldest_entry_age_ms = age;
                 }
             }
-        }
-
-        if oldest_entry_age_ms == u64::MAX {
-            oldest_entry_age_ms = 0;
         }
 
         MemoryStats {

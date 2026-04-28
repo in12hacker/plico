@@ -80,7 +80,7 @@ fn main() {
         .map(PathBuf::from)
         .unwrap_or_else(|_| {
             dirs::home_dir()
-                .unwrap_or_else(|| PathBuf::from("/tmp"))
+                .unwrap_or_else(std::env::temp_dir)
                 .join(".plico")
         });
 

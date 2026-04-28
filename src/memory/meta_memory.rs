@@ -25,7 +25,7 @@ pub struct MetaSnapshot {
 }
 
 /// Hit rate for a single query intent category.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct HitRate {
     pub queries: u64,
     pub hits: u64,
@@ -33,7 +33,7 @@ pub struct HitRate {
 
 impl HitRate {
     pub fn new() -> Self {
-        Self { queries: 0, hits: 0 }
+        Self::default()
     }
 
     pub fn rate(&self) -> f64 {
@@ -94,7 +94,7 @@ impl MetaMemory {
     pub fn record_retrieval(&mut self, intent: QueryIntent, hit: bool) {
         self.intent_hits
             .entry(intent)
-            .or_insert_with(HitRate::new)
+            .or_default()
             .record(hit);
     }
 

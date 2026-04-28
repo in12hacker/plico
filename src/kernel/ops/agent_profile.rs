@@ -141,11 +141,17 @@ pub struct AgentProfileStore {
     profiles: RwLock<HashMap<String, AgentProfile>>,
 }
 
-impl AgentProfileStore {
-    pub fn new() -> Self {
+impl Default for AgentProfileStore {
+    fn default() -> Self {
         Self {
             profiles: RwLock::new(HashMap::new()),
         }
+    }
+}
+
+impl AgentProfileStore {
+    pub fn new() -> Self {
+        Self::default()
     }
 
     pub fn get_or_create(&self, agent_id: &str) -> AgentProfile {

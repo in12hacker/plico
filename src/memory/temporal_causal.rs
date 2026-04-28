@@ -22,7 +22,7 @@ pub struct IndexEntry {
 }
 
 /// The temporal-causal inverted index.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct TemporalCausalIndex {
     by_entity: HashMap<String, Vec<String>>,
     by_time: BTreeMap<u64, Vec<String>>,
@@ -31,11 +31,7 @@ pub struct TemporalCausalIndex {
 
 impl TemporalCausalIndex {
     pub fn new() -> Self {
-        Self {
-            by_entity: HashMap::new(),
-            by_time: BTreeMap::new(),
-            entries: HashMap::new(),
-        }
+        Self::default()
     }
 
     /// Build the index from memory entries.

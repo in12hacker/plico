@@ -25,6 +25,7 @@ pub mod intent;
 pub mod llm;
 pub mod mcp;
 pub mod client;
+pub mod config;
 pub mod prompt;
 
 /// Default tenant ID used when no tenant is specified.

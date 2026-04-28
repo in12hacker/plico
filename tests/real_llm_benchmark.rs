@@ -1465,10 +1465,9 @@ fn bench_b18_agent_profile_learning() {
     let tag_grew = final_weights.tag > initial_weights.tag * 0.9;
     println!("\n  Semantic weight grew: {semantic_grew}");
     println!("  Tag weight grew: {tag_grew}");
-    let sum = final_weights.semantic + final_weights.causal + final_weights.access
-        + final_weights.tag + final_weights.temporal + final_weights.type_match;
+    let sum = final_weights.total();
     println!("  Weights sum: {sum:.4} (should be ~1.0)");
-    assert!((sum - 1.0).abs() < 0.01, "Weights must normalize to 1.0");
+    assert!((sum - 1.0).abs() < 0.01, "Weights must normalize to 1.0 (got {sum})");
 }
 
 // ═══════════════════════════════════════════════════════════════════════

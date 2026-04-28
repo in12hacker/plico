@@ -67,7 +67,7 @@ fn resolve_root(args: &[String]) -> PathBuf {
         .or_else(|| std::env::var("PLICO_ROOT").ok().map(PathBuf::from))
         .unwrap_or_else(|| {
             dirs::home_dir()
-                .unwrap_or_else(|| PathBuf::from("/tmp"))
+                .unwrap_or_else(std::env::temp_dir)
                 .join(".plico")
         })
 }
@@ -92,7 +92,8 @@ fn check_existing_daemon(root: &Path) -> Option<u32> {
     }
     #[cfg(not(unix))]
     {
-        std::fs::metadata(format!("/proc/{}", pid)).ok().map(|_| pid)
+        let _ = pid;
+        None
     }
 }
 
@@ -171,10 +172,13 @@ fn cmd_status(root: &Path) {
 // ── cmd_start (main daemon logic) ───────────────────────────────────
 
 async fn cmd_start(args: Vec<String>, root: PathBuf) {
+    let config = plico::config::PlicoConfig::load(Some(root.clone()));
+    let host = extract_opt(&args, "--host")
+        .unwrap_or(config.network.host.clone());
     let port = extract_opt(&args, "--port")
         .and_then(|s| s.parse::<u16>().ok())
-        .unwrap_or(7878);
-    let no_uds = args.iter().any(|a| a == "--no-uds");
+        .unwrap_or(config.network.daemon_port);
+    let no_uds = args.iter().any(|a| a == "--no-uds") || config.network.disable_uds;
 
     let env = std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string());
     tracing_subscriber::fmt()
@@ -222,16 +226,16 @@ async fn cmd_start(args: Vec<String>, root: PathBuf) {
         sp.clone(),
     );
 
-    setup_periodic_persist(Arc::clone(&kernel));
+    setup_periodic_persist(Arc::clone(&kernel), config.tuning.persist_interval_secs);
 
     let dispatch = kernel.start_dispatch_loop();
     let _result_consumer = kernel.start_result_consumer(&dispatch);
     println!("Agent dispatch loop + result consumer started.");
 
     // TCP listener
-    let tcp_addr: SocketAddr = format!("0.0.0.0:{}", port).parse().unwrap();
+    let tcp_addr: SocketAddr = format!("{}:{}", host, port).parse().unwrap();
     let tcp_listener = TcpListener::bind(tcp_addr).await.expect("Failed to bind TCP port");
-    println!("TCP listening on: 0.0.0.0:{}", port);
+    println!("TCP listening on: {}:{}", host, port);
 
     // UDS listener (Unix only)
     #[cfg(unix)]
@@ -335,11 +339,7 @@ fn setup_shutdown_handler(kernel: Arc<AIKernel>, pid_path: PathBuf, sock_path: P
     }
 }
 
-fn setup_periodic_persist(kernel: Arc<AIKernel>) {
-    let interval_secs: u64 = std::env::var("PLICO_PERSIST_INTERVAL_SECS")
-        .unwrap_or_else(|_| "300".to_string())
-        .parse()
-        .unwrap_or(300);
+fn setup_periodic_persist(kernel: Arc<AIKernel>, interval_secs: u64) {
     tokio::spawn(async move {
         let mut interval = time::interval(Duration::from_secs(interval_secs));
         loop {

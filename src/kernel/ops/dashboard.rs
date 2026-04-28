@@ -259,10 +259,13 @@ impl crate::kernel::AIKernel {
         }
     }
 
-    /// Check if LLM is available.
+    /// Check if LLM is available by sending a minimal probe request.
     fn llm_available(&self) -> bool {
-        // LLM availability check — stub always returns true
-        true
+        use crate::llm::{LlmProvider, ChatMessage, ChatOptions};
+        self.llm_provider.chat(
+            &[ChatMessage::user("ping")],
+            &ChatOptions { max_tokens: Some(1), ..ChatOptions::default() },
+        ).is_ok()
     }
 
     /// Simple roundtrip test: write and read a CAS object.
@@ -317,11 +320,10 @@ impl crate::kernel::AIKernel {
 }
 
 /// Get system memory usage (used_bytes, total_bytes).
-/// Returns (0, 0) if memory info is unavailable.
-/// TODO: integrate sysinfo crate for accurate memory metrics.
+///
+/// Supports Linux (`/proc/meminfo`) and macOS (`sysctl` + `vm_stat`).
+/// Returns (0, 0) on unsupported platforms.
 fn get_memory_usage() -> (u64, u64) {
-    // Stub implementation — returns 0,0 until sysinfo is integrated.
-    // On Linux, this could read /proc/meminfo as a lightweight alternative.
     #[cfg(target_os = "linux")]
     {
         use std::fs::read_to_string;
@@ -331,20 +333,70 @@ fn get_memory_usage() -> (u64, u64) {
             for line in meminfo.lines() {
                 if line.starts_with("MemTotal:") {
                     if let Some(val) = line.split_whitespace().nth(1) {
-                        total = val.parse::<u64>().unwrap_or(0) * 1024; // KB to bytes
+                        total = val.parse::<u64>().unwrap_or(0) * 1024;
                     }
                 } else if line.starts_with("MemAvailable:") {
                     if let Some(val) = line.split_whitespace().nth(1) {
-                        available = val.parse::<u64>().unwrap_or(0) * 1024; // KB to bytes
+                        available = val.parse::<u64>().unwrap_or(0) * 1024;
                     }
                 }
             }
             if total > 0 {
-                return (total - available, total);
+                return (total.saturating_sub(available), total);
             }
         }
     }
+
+    #[cfg(target_os = "macos")]
+    {
+        let total = std::process::Command::new("sysctl")
+            .args(["-n", "hw.memsize"])
+            .output()
+            .ok()
+            .and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse::<u64>().ok())
+            .unwrap_or(0);
+
+        let page_size: u64 = std::process::Command::new("sysctl")
+            .args(["-n", "hw.pagesize"])
+            .output()
+            .ok()
+            .and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse().ok())
+            .unwrap_or(4096);
+
+        let free_pages: u64 = std::process::Command::new("vm_stat")
+            .output()
+            .ok()
+            .and_then(|o| {
+                let text = String::from_utf8_lossy(&o.stdout);
+                let mut free = 0u64;
+                let mut inactive = 0u64;
+                for line in text.lines() {
+                    if line.starts_with("Pages free") {
+                        free = parse_vm_stat_value(line);
+                    } else if line.starts_with("Pages inactive") {
+                        inactive = parse_vm_stat_value(line);
+                    }
+                }
+                Some(free + inactive)
+            })
+            .unwrap_or(0);
+
+        if total > 0 {
+            let available = free_pages * page_size;
+            return (total.saturating_sub(available), total);
+        }
+    }
+
     (0, 0)
+}
+
+/// Parse a vm_stat line like `"Pages free:    12345."` → `12345`.
+#[cfg(target_os = "macos")]
+fn parse_vm_stat_value(line: &str) -> u64 {
+    line.split_whitespace()
+        .last()
+        .and_then(|s| s.trim_end_matches('.').parse().ok())
+        .unwrap_or(0)
 }
 
 #[cfg(test)]

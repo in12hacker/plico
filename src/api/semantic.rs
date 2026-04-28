@@ -1184,6 +1184,29 @@ pub enum ApiRequest {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         tenant_id: Option<String>,
     },
+
+    // ── File Import (v33) ─────────────────────────────────────────
+
+    /// Import files from a local directory into CAS with optional chunking.
+    ///
+    /// The daemon reads files at the given paths, stores each in CAS,
+    /// and applies the specified chunking mode. Tags are auto-generated
+    /// from filename and user-supplied extras.
+    #[serde(rename = "import_files")]
+    ImportFiles {
+        /// Absolute paths to files on the daemon's host filesystem.
+        paths: Vec<String>,
+        agent_id: String,
+        /// Extra tags to apply to all imported objects.
+        #[serde(default)]
+        tags: Vec<String>,
+        /// Chunking mode override: `"markdown"` | `"fixed"` | `"semantic"` | `"none"`.
+        /// Defaults to auto-detect from file extension.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        chunking: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tenant_id: Option<String>,
+    },
 }
 
 /// A JSON API response.
@@ -1373,8 +1396,20 @@ pub struct ApiResponse {
     /// Cost anomaly result (F-2).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cost_anomaly: Option<CostAnomalyResult>,
+    /// File import results (v33).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub import_results: Option<Vec<ImportFileResult>>,
 }
 
+/// Result for a single file import.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImportFileResult {
+    pub path: String,
+    pub cid: Option<String>,
+    pub chunks: usize,
+    pub ok: bool,
+    pub error: Option<String>,
+}
 
 /// Cost summary for a session (F-2).
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -1399,10 +1434,10 @@ pub struct CostAnomalyResult {
     pub avg_cost_per_session_after: u64,
 }
 
-impl ApiResponse {
-    pub fn ok() -> Self {
+impl Default for ApiResponse {
+    fn default() -> Self {
         Self {
-            ok: true,
+            ok: false,
             version: Some(ApiVersion::CURRENT),
             cid: None, node_id: None, data: None, results: None,
             agent_id: None, agents: None, memory: None, tags: None,
@@ -1452,7 +1487,14 @@ impl ApiResponse {
             cost_session_summary: None,
             cost_agent_trend: None,
             cost_anomaly: None,
+            import_results: None,
         }
+    }
+}
+
+impl ApiResponse {
+    pub fn ok() -> Self {
+        Self { ok: true, ..Self::default() }
     }
 
     pub fn with_cid(cid: String) -> Self {
@@ -1493,58 +1535,7 @@ impl ApiResponse {
 
 
     pub fn error(msg: impl Into<String>) -> Self {
-        Self {
-            ok: false,
-            version: Some(ApiVersion::CURRENT),
-            cid: None, node_id: None, data: None, results: None,
-            agent_id: None, agents: None, memory: None, tags: None,
-            neighbors: None, deleted: None, events: None, nodes: None,
-            paths: None, edges: None, intent_id: None, assembly_id: None,
-            agent_state: None,
-            pending_intents: None, tools: None, tool_result: None,
-            resolved_intents: None, messages: None, context_data: None,
-            error: Some(msg.into()), message: None, error_code: None, fix_hint: None, next_actions: None, total_count: None, has_more: None,
-            subscription_id: None, kernel_events: None,
-            system_status: None,
-            context_assembly: None,
-            agent_usage: None,
-            agent_cards: None,
-            delegation: None,
-            event_history: None,
-            discovered_skills: None,
-            token: None,
-            tenants: None,
-            correlation_id: None,
-            batch_create: None,
-            batch_memory_store: None,
-            batch_submit_intent: None,
-            batch_query: None,
-            causal_paths: None,
-            impact_analysis: None,
-            temporal_changes: None,
-            model_switch: None,
-            model_health: None,
-            cache_stats: None,
-            intent_cache_stats: None,
-            cluster_status: None,
-            token_estimate: None,
-            delta_result: None,
-            session_started: None,
-            session_ended: None,
-            hybrid_result: None,
-            growth_report: None,
-            task_result: None,
-            memory_stats: None,
-            discovery_result: None,
-            object_usage: None,
-            storage_stats: None,
-            evict_result: None,
-            health_report: None,
-            hook_list: None,
-            cost_session_summary: None,
-            cost_agent_trend: None,
-            cost_anomaly: None,
-        }
+        Self { error: Some(msg.into()), ..Self::default() }
     }
 
     /// Create an ok response with a human-readable confirmation message (F-47).

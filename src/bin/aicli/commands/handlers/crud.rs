@@ -5,13 +5,23 @@ use plico::api::semantic::{ApiRequest, ApiResponse};
 use super::{extract_arg, extract_tags, extract_tags_opt};
 
 pub fn cmd_create(kernel: &AIKernel, args: &[String]) -> ApiResponse {
+    let file_path = extract_arg(args, "--file");
+    let dir_path = extract_arg(args, "--dir");
+
+    if file_path.is_some() || dir_path.is_some() {
+        return cmd_import_files(kernel, args, file_path, dir_path);
+    }
+
     let content = extract_arg(args, "--content")
         .or_else(|| args.get(1).cloned().filter(|a| !a.starts_with("--")))
         .unwrap_or_default();
 
     if content.is_empty() {
         return ApiResponse::error(
-            "put requires content: put <content> --tags ... or put --content <content> --tags ..."
+            "put requires content, --file <path>, or --dir <path>. Examples:\n  \
+             put <content> --tags ...\n  \
+             put --file doc.md --tags ...\n  \
+             put --dir ./docs/ --glob *.md --tags ..."
         );
     }
 
@@ -29,6 +39,85 @@ pub fn cmd_create(kernel: &AIKernel, args: &[String]) -> ApiResponse {
         agent_token: None,
         intent,
     })
+}
+
+fn cmd_import_files(
+    kernel: &AIKernel,
+    args: &[String],
+    file_path: Option<String>,
+    dir_path: Option<String>,
+) -> ApiResponse {
+    let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
+    let tags = extract_tags(args, "--tags");
+    let chunking = extract_arg(args, "--chunking");
+    let glob_pattern = extract_arg(args, "--glob").unwrap_or_else(|| "*.md".to_string());
+
+    let mut paths: Vec<String> = Vec::new();
+
+    if let Some(ref fp) = file_path {
+        let p = std::path::Path::new(fp);
+        if !p.exists() {
+            return ApiResponse::error(format!("file not found: {fp}"));
+        }
+        paths.push(std::fs::canonicalize(p)
+            .unwrap_or_else(|_| p.to_path_buf())
+            .to_string_lossy().to_string());
+    }
+
+    if let Some(ref dp) = dir_path {
+        let dir = std::path::Path::new(dp);
+        if !dir.is_dir() {
+            return ApiResponse::error(format!("directory not found: {dp}"));
+        }
+        match collect_files(dir, &glob_pattern) {
+            Ok(found) => {
+                if found.is_empty() {
+                    return ApiResponse::error(format!(
+                        "no files matching '{glob_pattern}' found in {dp}"
+                    ));
+                }
+                paths.extend(found);
+            }
+            Err(e) => return ApiResponse::error(format!("directory scan error: {e}")),
+        }
+    }
+
+    kernel.handle_api_request(ApiRequest::ImportFiles {
+        paths,
+        agent_id,
+        tags,
+        chunking,
+        tenant_id: None,
+    })
+}
+
+pub fn collect_files(dir: &std::path::Path, pattern: &str) -> Result<Vec<String>, std::io::Error> {
+    let mut results = Vec::new();
+    let ext_filter: Option<&str> = pattern.strip_prefix("*.");
+
+    fn walk(dir: &std::path::Path, ext: Option<&str>, results: &mut Vec<String>) -> Result<(), std::io::Error> {
+        for entry in std::fs::read_dir(dir)? {
+            let entry = entry?;
+            let ft = entry.file_type()?;
+            if ft.is_dir() {
+                walk(&entry.path(), ext, results)?;
+            } else if ft.is_file() {
+                let path = entry.path();
+                let matches = match ext {
+                    Some(ext) => path.extension().and_then(|e| e.to_str()) == Some(ext),
+                    None => true,
+                };
+                if matches {
+                    results.push(path.to_string_lossy().to_string());
+                }
+            }
+        }
+        Ok(())
+    }
+
+    walk(dir, ext_filter, &mut results)?;
+    results.sort();
+    Ok(results)
 }
 
 pub fn cmd_read(kernel: &AIKernel, args: &[String]) -> ApiResponse {
