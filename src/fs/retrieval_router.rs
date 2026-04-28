@@ -131,11 +131,11 @@ pub fn intent_classification_prompt(query: &str) -> String {
         "Classify the following query into exactly ONE category. \
          Output ONLY the category name, nothing else.\n\n\
          Categories:\n\
-         - factual: simple fact lookup (\"What is X?\", \"Who did Y?\")\n\
+         - factual: looking up a single known fact or number (\"What is X?\", \"How many Y per day?\", \"Who did Z?\")\n\
          - temporal: time-related queries (\"When did\", \"before\", \"after\", \"last week\")\n\
          - multi_hop: requires connecting multiple pieces of information (\"Why did X cause Y?\")\n\
          - preference: about preferences/opinions (\"What does user prefer?\", \"favorite\")\n\
-         - aggregation: requires combining/summarizing multiple items (\"list all\", \"how many\", \"summarize\")\n\n\
+         - aggregation: requires listing or summarizing MULTIPLE distinct items (\"List all X\", \"Summarize all Y\")\n\n\
          Query: {query}\n\n\
          Category:"
     )
