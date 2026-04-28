@@ -170,6 +170,42 @@ impl CausalGraph {
             .unwrap_or_default()
     }
 
+    /// BFS shortest path distance between two entries (undirected, all edge types).
+    /// Returns None if no path exists.
+    pub fn shortest_path_len(&self, from: &str, to: &str) -> Option<usize> {
+        if from == to {
+            return Some(0);
+        }
+        if !self.all_ids.contains(from) || !self.all_ids.contains(to) {
+            return None;
+        }
+        let mut visited = HashSet::new();
+        let mut queue = VecDeque::new();
+        queue.push_back((from.to_string(), 0usize));
+        visited.insert(from.to_string());
+
+        while let Some((current, dist)) = queue.pop_front() {
+            let neighbors = self.children.get(&current).into_iter().flatten()
+                .chain(self.parents.get(&current).into_iter().flatten());
+            for (neighbor_id, _) in neighbors {
+                if neighbor_id == to {
+                    return Some(dist + 1);
+                }
+                if visited.insert(neighbor_id.clone()) {
+                    queue.push_back((neighbor_id.clone(), dist + 1));
+                }
+            }
+        }
+        None
+    }
+
+    /// Find common causal ancestors of two entries.
+    pub fn common_ancestors(&self, a: &str, b: &str) -> Vec<String> {
+        let ancestors_a: HashSet<String> = self.ancestors(a).into_iter().collect();
+        let ancestors_b: HashSet<String> = self.ancestors(b).into_iter().collect();
+        ancestors_a.intersection(&ancestors_b).cloned().collect()
+    }
+
     fn walk_backward(&self, start_id: &str, filter: Option<CausalEdge>) -> Vec<String> {
         let mut chain = Vec::new();
         let mut current = start_id.to_string();

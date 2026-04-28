@@ -1139,6 +1139,51 @@ pub enum ApiRequest {
     CostAnomalyCheck {
         agent_id: String,
     },
+
+    // ── Prompt Registry (v31) ─────────────────────────────────────
+
+    /// List all registered prompt names.
+    #[serde(rename = "list_prompts")]
+    ListPrompts,
+
+    /// Get info about a prompt (resolved with optional agent override).
+    #[serde(rename = "get_prompt_info")]
+    GetPromptInfo {
+        name: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        agent_id: Option<String>,
+    },
+
+    /// Set a prompt override (global if agent_id is None, per-agent otherwise).
+    #[serde(rename = "set_prompt_override")]
+    SetPromptOverride {
+        name: String,
+        template: String,
+        #[serde(default)]
+        variables: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        agent_id: Option<String>,
+    },
+
+    /// Remove a prompt override.
+    #[serde(rename = "remove_prompt_override")]
+    RemovePromptOverride {
+        name: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        agent_id: Option<String>,
+    },
+
+    // ── Batch Long-Term Memory (v31) ──────────────────────────────
+
+    /// Batch store multiple long-term memories with a single batched embedding call.
+    #[serde(rename = "remember_long_term_batch")]
+    RememberLongTermBatch {
+        agent_id: String,
+        /// Each item: (content, tags, importance).
+        items: Vec<BatchLongTermItem>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tenant_id: Option<String>,
+    },
 }
 
 /// A JSON API response.

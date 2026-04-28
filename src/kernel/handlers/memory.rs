@@ -89,6 +89,21 @@ impl super::super::AIKernel {
                     Err(e) => ApiResponse::error(e),
                 }
             }
+            ApiRequest::RememberLongTermBatch { agent_id, items, tenant_id } => {
+                let tenant = tenant_id.unwrap_or_else(|| DEFAULT_TENANT.to_string());
+                let batch: Vec<(String, Vec<String>, u8)> = items
+                    .into_iter()
+                    .map(|item| (item.content, item.tags, item.importance))
+                    .collect();
+                match self.remember_long_term_batch(&agent_id, &tenant, &batch) {
+                    Ok(ids) => {
+                        let mut r = ApiResponse::ok();
+                        r.data = Some(serde_json::to_string(&ids).unwrap_or_default());
+                        r
+                    }
+                    Err(e) => ApiResponse::error(e),
+                }
+            }
             ApiRequest::RecallSemantic { agent_id, query, k } => {
                 let budget = (k * 500).max(1000);
                 let entries = self.recall_relevant_semantic(&agent_id, DEFAULT_TENANT, &query, budget);

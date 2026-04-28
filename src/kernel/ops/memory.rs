@@ -330,6 +330,71 @@ impl crate::kernel::AIKernel {
         Ok(entry_id)
     }
 
+    /// Batch-store multiple long-term memories with a single batched embedding call.
+    ///
+    /// Significantly faster than calling `remember_long_term` in a loop because
+    /// embedding requests are batched into one network round-trip.
+    pub fn remember_long_term_batch(
+        &self,
+        agent_id: &str,
+        tenant_id: &str,
+        items: &[(String, Vec<String>, u8)],
+    ) -> Result<Vec<String>, String> {
+        let _timer = OperationTimer::new(&self.metrics, OpType::RememberLongTerm);
+        if items.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let ctx = PermissionContext::new(agent_id.to_string(), tenant_id.to_string());
+        self.permissions.check(&ctx, PermissionAction::Write).map_err(|e| e.to_string())?;
+
+        let texts: Vec<&str> = items.iter().map(|(c, _, _)| c.as_str()).collect();
+        let embeddings = match self.embedding.embed_batch(&texts) {
+            Ok(results) => results.into_iter().map(|r| Some(r.embedding)).collect::<Vec<_>>(),
+            Err(e) => {
+                tracing::warn!("batch embed failed, falling back to individual: {e}");
+                texts.iter().map(|t| self.embedding.embed(t).ok().map(|r| r.embedding)).collect()
+            }
+        };
+
+        let created_at = crate::memory::layered::now_ms();
+        let quota = self.agent_memory_quota(agent_id);
+        let mut ids = Vec::with_capacity(items.len());
+
+        for (i, (content, tags, importance)) in items.iter().enumerate() {
+            let entry_id = uuid::Uuid::new_v4().to_string();
+            let entry = MemoryEntry {
+                id: entry_id.clone(),
+                agent_id: agent_id.to_string(),
+                tenant_id: tenant_id.to_string(),
+                tier: MemoryTier::LongTerm,
+                content: MemoryContent::Text(content.clone()),
+                importance: *importance,
+                access_count: 0,
+                last_accessed: created_at,
+                created_at,
+                tags: tags.clone(),
+                embedding: embeddings.get(i).cloned().flatten(),
+                ttl_ms: None,
+                original_ttl_ms: None,
+                scope: MemoryScope::Private,
+                memory_type: MemoryType::default(),
+                causal_parent: None,
+                supersedes: None,
+            };
+            self.memory.store_checked(entry, quota).map_err(|e| e.to_string())?;
+            self.event_bus.emit(KernelEvent::MemoryStored {
+                agent_id: agent_id.to_string(),
+                tier: "long_term".into(),
+            });
+            ids.push(entry_id);
+        }
+
+        self.persist_memories();
+        tracing::info!(count = items.len(), "batch long-term memory stored");
+        Ok(ids)
+    }
+
     /// Retrieve semantically relevant long-term memories for an agent.
     pub fn recall_semantic(
         &self,
@@ -391,7 +456,13 @@ impl crate::kernel::AIKernel {
         self.permissions.check(&ctx, PermissionAction::Read).map_err(|e| e.to_string())?;
 
         let classified = {
-            let prompt = intent_classification_prompt(query);
+            let prompt = {
+                let mut vars = std::collections::HashMap::new();
+                vars.insert("query", query.to_string());
+                self.prompt_registry
+                    .render("intent_classification", &vars, Some(agent_id))
+                    .unwrap_or_else(|_| intent_classification_prompt(query))
+            };
             let opts = ChatOptions { temperature: 0.0, max_tokens: Some(20) };
             let msgs = [ChatMessage::system("You are an intent classifier."), ChatMessage::user(prompt)];
             match self.llm_provider.chat(&msgs, &opts) {
@@ -436,6 +507,18 @@ impl crate::kernel::AIKernel {
                     .collect()
             }
         };
+
+        // Record query to agent profile for adaptive learning (v31 Axiom 9)
+        {
+            let t_elapsed = std::time::Instant::now(); // approximate
+            let mut profile = self.agent_profiles.get_or_create(agent_id);
+            profile.record_query(classified.intent, 0.0);
+            for entry in &results {
+                profile.record_memory_type_hit(entry.memory_type);
+            }
+            let _ = t_elapsed;
+            self.agent_profiles.update(profile);
+        }
 
         Ok((results, classified))
     }

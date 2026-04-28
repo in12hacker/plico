@@ -27,6 +27,8 @@ pub mod foresight;
 pub mod pressure;
 pub mod meta_memory;
 pub mod temporal_causal;
+pub mod contradiction;
+pub mod consolidation;
 
 pub use layered::{LayeredMemory, MemoryTier, MemoryType, MemoryEntry, MemoryContent, MemoryError, MemoryScope};
 pub use persist::{MemoryPersister, CASPersister, MemoryLoader, PersistError, PersistenceIndex, PersistedTier};

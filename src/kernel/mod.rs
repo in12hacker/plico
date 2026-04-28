@@ -96,6 +96,10 @@ pub struct AIKernel {
     pub(crate) cost_ledger: Arc<TokenCostLedger>,
     /// KG builder handle — async entity/event extraction on CAS writes.
     pub(crate) kg_builder: Option<ops::kg_builder::KgBuilderHandle>,
+    /// Prompt registry — versioned, overridable prompt templates (v31).
+    pub(crate) prompt_registry: Arc<crate::prompt::PromptRegistry>,
+    /// Agent profile store — per-agent adaptive retrieval weights (v31).
+    pub(crate) agent_profiles: Arc<ops::agent_profile::AgentProfileStore>,
 }
 
 /// Check if the embedding model has changed since last run.
@@ -356,6 +360,12 @@ impl AIKernel {
             None
         };
 
+        let prompt_registry = {
+            let mut reg = crate::prompt::PromptRegistry::new();
+            crate::prompt::register_defaults(&mut reg);
+            Arc::new(reg)
+        };
+
         let kernel = Self {
             root: root.clone(),
             cas,
@@ -384,6 +394,8 @@ impl AIKernel {
             task_store,
             cost_ledger,
             kg_builder,
+            prompt_registry,
+            agent_profiles: Arc::new(ops::agent_profile::AgentProfileStore::new()),
         };
 
         kernel.register_builtin_tools();
@@ -438,6 +450,11 @@ impl AIKernel {
 
     pub fn event_unsubscribe(&self, subscription_id: &str) -> bool {
         self.event_bus.unsubscribe(subscription_id)
+    }
+
+    /// Get the prompt registry for rendering templates.
+    pub fn prompt_registry(&self) -> &crate::prompt::PromptRegistry {
+        &self.prompt_registry
     }
 
 }

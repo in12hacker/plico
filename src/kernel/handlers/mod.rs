@@ -14,3 +14,4 @@ mod permission;
 mod tenant;
 mod model;
 mod storage;
+mod prompt;

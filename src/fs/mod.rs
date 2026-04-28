@@ -38,6 +38,7 @@ pub mod types;
 pub mod retrieval_router;
 pub mod query_augment;
 pub mod adaptive_budget;
+pub mod retrieval_fusion;
 
 pub use semantic_fs::{SemanticFS, FSError, Query, SearchResult, AuditEntry, AuditAction, RecycleEntry, EventType, EventRelation, EventSummary};
 pub use context_loader::{ContextLoader, ContextLayer, LoadedContext};

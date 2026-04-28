@@ -75,7 +75,8 @@ impl super::AIKernel {
             ApiRequest::KGImpactAnalysis { agent_id, .. } |
             ApiRequest::KGTemporalChanges { agent_id, .. } |
             ApiRequest::QueryGrowthReport { agent_id, .. } |
-            ApiRequest::MemoryStats { agent_id, .. } => Some(agent_id.clone()),
+            ApiRequest::MemoryStats { agent_id, .. } |
+            ApiRequest::RememberLongTermBatch { agent_id, .. } => Some(agent_id.clone()),
 
             ApiRequest::RegisterAgent { name } => Some(name.clone()),
             ApiRequest::GrantPermission { agent_id, .. } |
@@ -124,7 +125,11 @@ impl super::AIKernel {
             ApiRequest::HookList |
             ApiRequest::HookRegister { .. } |
             ApiRequest::HealthReport |
-            ApiRequest::CostSessionSummary { .. } => None,
+            ApiRequest::CostSessionSummary { .. } |
+            ApiRequest::ListPrompts |
+            ApiRequest::GetPromptInfo { .. } |
+            ApiRequest::SetPromptOverride { .. } |
+            ApiRequest::RemovePromptOverride { .. } => None,
         }
     }
 
@@ -174,7 +179,8 @@ impl super::AIKernel {
                    ApiRequest::RecallVisible { .. } | ApiRequest::MemoryMove { .. } |
                    ApiRequest::MemoryDeleteEntry { .. } | ApiRequest::EvictExpired { .. } |
                    ApiRequest::LoadContext { .. } | ApiRequest::BatchMemoryStore { .. } |
-                   ApiRequest::MemoryStats { .. } | ApiRequest::DiscoverKnowledge { .. }) => self.handle_memory(req),
+                   ApiRequest::MemoryStats { .. } | ApiRequest::DiscoverKnowledge { .. } |
+                   ApiRequest::RememberLongTermBatch { .. }) => self.handle_memory(req),
 
             // ── Agent ──
             req @ (ApiRequest::RegisterAgent { .. } | ApiRequest::ListAgents |
@@ -246,6 +252,10 @@ impl super::AIKernel {
             // ── Storage ──
             req @ (ApiRequest::HybridRetrieve { .. } | ApiRequest::ObjectUsage { .. } |
                    ApiRequest::StorageStats { .. } | ApiRequest::EvictCold { .. }) => self.handle_storage(req),
+
+            // ── Prompt ──
+            req @ (ApiRequest::ListPrompts | ApiRequest::GetPromptInfo { .. } |
+                   ApiRequest::SetPromptOverride { .. } | ApiRequest::RemovePromptOverride { .. }) => self.handle_prompt(req),
         };
 
         self.maybe_persist_event_log();

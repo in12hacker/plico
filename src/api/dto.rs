@@ -79,6 +79,16 @@ pub struct BatchMemoryEntry {
     pub tags: Vec<String>,
 }
 
+/// An item within a RememberLongTermBatch request.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BatchLongTermItem {
+    pub content: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default = "default_importance")]
+    pub importance: u8,
+}
+
 /// An intent specification within a BatchSubmitIntent request.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IntentSpec {
