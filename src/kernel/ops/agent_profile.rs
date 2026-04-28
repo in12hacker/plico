@@ -80,6 +80,7 @@ impl AgentProfile {
             tag: 0.0,
             temporal: 0.0,
             type_match: 0.0,
+            bm25_keyword: 0.0,
         };
 
         for fb in used_signals {
@@ -89,6 +90,7 @@ impl AgentProfile {
             nudge.tag += fb.tag_was_high as u8 as f32;
             nudge.temporal += fb.temporal_was_high as u8 as f32;
             nudge.type_match += fb.type_was_match as u8 as f32;
+            nudge.bm25_keyword += fb.bm25_was_high as u8 as f32;
         }
 
         let n = used_signals.len() as f32;
@@ -99,8 +101,8 @@ impl AgentProfile {
         w.tag += learning_rate * (nudge.tag / n - 0.5);
         w.temporal += learning_rate * (nudge.temporal / n - 0.5);
         w.type_match += learning_rate * (nudge.type_match / n - 0.5);
+        w.bm25_keyword += learning_rate * (nudge.bm25_keyword / n - 0.5);
 
-        // Clamp and normalize
         let clamp = |v: f32| v.max(0.02);
         w.semantic = clamp(w.semantic);
         w.causal = clamp(w.causal);
@@ -108,16 +110,9 @@ impl AgentProfile {
         w.tag = clamp(w.tag);
         w.temporal = clamp(w.temporal);
         w.type_match = clamp(w.type_match);
+        w.bm25_keyword = clamp(w.bm25_keyword);
 
-        let total = w.semantic + w.causal + w.access + w.tag + w.temporal + w.type_match;
-        if total > 0.0 {
-            w.semantic /= total;
-            w.causal /= total;
-            w.access /= total;
-            w.tag /= total;
-            w.temporal /= total;
-            w.type_match /= total;
-        }
+        w.normalize();
     }
 
     /// Get the dominant intent type for this agent.
@@ -138,6 +133,7 @@ pub struct SignalFeedback {
     pub tag_was_high: bool,
     pub temporal_was_high: bool,
     pub type_was_match: bool,
+    pub bm25_was_high: bool,
 }
 
 /// Thread-safe store for all agent profiles.
@@ -191,8 +187,7 @@ mod tests {
     fn test_new_profile_has_default_weights() {
         let p = AgentProfile::new("test-agent");
         let w = &p.retrieval_weights;
-        let sum = w.semantic + w.causal + w.access + w.tag + w.temporal + w.type_match;
-        assert!((sum - 1.0).abs() < 0.01);
+        assert!((w.total() - 1.0).abs() < 0.01);
     }
 
     #[test]
@@ -219,13 +214,13 @@ mod tests {
                 tag_was_high: true,
                 temporal_was_high: false,
                 type_was_match: true,
+                bm25_was_high: false,
             },
         ];
         p.learn_weights(&feedback);
 
         let w = &p.retrieval_weights;
-        let sum = w.semantic + w.causal + w.access + w.tag + w.temporal + w.type_match;
-        assert!((sum - 1.0).abs() < 0.01, "weights sum to {}", sum);
+        assert!((w.total() - 1.0).abs() < 0.01, "weights sum to {}", w.total());
     }
 
     #[test]

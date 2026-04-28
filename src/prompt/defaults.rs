@@ -1,7 +1,6 @@
 //! Compiled-in default prompt templates.
 //!
-//! Each prompt is registered once at kernel startup. The original prompt
-//! functions still exist but delegate to the registry for backward compat.
+//! Each prompt is registered once at kernel startup and accessed via the registry.
 
 use super::registry::{PromptRegistry, PromptTemplate};
 

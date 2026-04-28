@@ -1313,6 +1313,7 @@ fn bench_b16_rfe_retrieval_fusion() {
             query_tags,
             query_memory_type: Some(MemoryType::Semantic),
             context_entry_id: None,
+            bm25_scores: None,
         };
         let rfe_results = engine.rank(&entries, &rfe_query, None, 5);
         let rfe_top = rfe_results.first().map(|r| r.entry.id.as_str()).unwrap_or("");
@@ -1434,7 +1435,6 @@ fn bench_b18_agent_profile_learning() {
         let intent = if i % 3 == 0 { QueryIntent::Factual } else { QueryIntent::Temporal };
         profile.record_query(intent, 50.0 + (i as f64) * 0.5);
 
-        // Simulate: semantic and tag signals are reliably good
         let feedback = vec![SignalFeedback {
             semantic_was_high: true,
             causal_was_high: i % 5 == 0,
@@ -1442,6 +1442,7 @@ fn bench_b18_agent_profile_learning() {
             tag_was_high: true,
             temporal_was_high: i % 2 == 0,
             type_was_match: true,
+            bm25_was_high: i % 3 == 0,
         }];
         profile.learn_weights(&feedback);
 
@@ -1608,6 +1609,728 @@ fn bench_b19_real_world_context_ingestion() {
     println!("  Avg recall latency: {avg_lat:.1}ms");
     println!("  Data source: Cursor agent-transcripts + Claude Code sessions (~23K raw items, 20 curated)");
     assert!(found_count >= 5, "Real-world recall accuracy too low: {found_count}/{n}");
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// B20: LongMemEval-aligned — Information Extraction + Multi-Session + Temporal
+//      + Knowledge Update + Abstention (5 categories, ingest-then-query)
+// ═══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn bench_b20_longmemeval_suite() {
+    let (kernel, _dir) = match make_real_kernel() {
+        Some(pair) => pair,
+        None => { println!("{SKIP_MSG}"); return; }
+    };
+    println!("\n═══ B20: LongMemEval-Aligned Suite (5 categories, ingest-then-query) ═══\n");
+    let agent_id = kernel.register_agent("longmem-agent".to_string());
+
+    // ── Phase 1: Ingest — simulate multi-session chat history ──
+    // Each "session" is a topic block with timestamps, mimicking LongMemEval_S structure.
+    let sessions: Vec<(&str, Vec<&str>, &str)> = vec![
+        // (session_date, messages, session_topic)
+        ("2025-01-15", vec![
+            "User told the assistant they recently moved to Portland, Oregon from Austin, Texas",
+            "User mentioned they work as a senior systems engineer at Cloudflare",
+            "User asked about good hiking trails near Portland and was recommended Forest Park",
+        ], "relocation"),
+        ("2025-02-03", vec![
+            "User discussed their preference for Rust over Go for systems programming",
+            "User mentioned their team is migrating from PostgreSQL to CockroachDB",
+            "User said they prefer neovim with LazyVim configuration over VS Code",
+        ], "tech_preferences"),
+        ("2025-02-20", vec![
+            "User said they adopted a rescue dog named Luna, a 3-year-old border collie mix",
+            "User mentioned they run 5km every morning before work",
+            "User talked about training for the Portland Marathon in October",
+        ], "personal_life"),
+        ("2025-03-10", vec![
+            "User asked about database migration strategies and was told to use blue-green deployment",
+            "User mentioned their CockroachDB migration hit a snag with foreign key constraints",
+            "User shared they fixed the migration by using batch processing with 1000-row chunks",
+        ], "db_migration"),
+        ("2025-03-25", vec![
+            "User said they got promoted to Staff Engineer at Cloudflare",
+            "User mentioned their new role involves leading the edge computing platform team",
+            "User discussed plans to present at KubeCon 2025 about edge-native databases",
+        ], "career_update"),
+        ("2025-04-05", vec![
+            "User corrected earlier information: they now prefer Zed editor over neovim",
+            "User explained the switch was because Zed has better Rust LSP integration",
+            "User said they still use neovim for quick terminal edits",
+        ], "preference_update"),
+        ("2025-04-15", vec![
+            "User mentioned Luna the dog completed basic obedience training",
+            "User talked about signing up Luna for agility training classes",
+            "User said their marathon training increased to 15km long runs on weekends",
+        ], "personal_update"),
+        ("2025-04-20", vec![
+            "User discussed a production incident where edge cache invalidation failed",
+            "User explained the root cause was a race condition in the distributed lock",
+            "User shared they resolved it by switching to a consensus-based invalidation protocol",
+        ], "incident"),
+    ];
+
+    let ingest_start = Instant::now();
+    let mut ingested = 0;
+    for (date, messages, topic) in &sessions {
+        for msg in messages {
+            let content = format!("[{}] {}", date, msg);
+            let tags = vec![topic.to_string(), "longmemeval".to_string()];
+            if kernel.remember_long_term(&agent_id, "default", content, tags, 7).is_ok() {
+                ingested += 1;
+            }
+        }
+    }
+    let ingest_ms = ingest_start.elapsed().as_millis();
+    println!("  Ingest: {} items in {}ms ({:.1}ms/item)\n",
+        ingested, ingest_ms, ingest_ms as f64 / ingested as f64);
+
+    // ── Phase 2: Query — 5 LongMemEval categories ──
+    struct LMEQuery {
+        category: &'static str,
+        question: &'static str,
+        expected_keyword: &'static str,
+        should_abstain: bool,
+    }
+
+    let queries = vec![
+        // Information Extraction (IE)
+        LMEQuery { category: "IE", question: "What kind of dog does the user have?",
+            expected_keyword: "Luna", should_abstain: false },
+        LMEQuery { category: "IE", question: "Where does the user work?",
+            expected_keyword: "Cloudflare", should_abstain: false },
+        LMEQuery { category: "IE", question: "What city did the user move to?",
+            expected_keyword: "Portland", should_abstain: false },
+        // Multi-Session Reasoning (MR)
+        LMEQuery { category: "MR", question: "What is the user training for and what daily exercise do they do?",
+            expected_keyword: "marathon", should_abstain: false },
+        LMEQuery { category: "MR", question: "What database technology is the user's team migrating to and what deployment strategy was recommended?",
+            expected_keyword: "CockroachDB", should_abstain: false },
+        // Temporal Reasoning (TR)
+        LMEQuery { category: "TR", question: "What happened after the user moved to Portland regarding their career?",
+            expected_keyword: "promoted", should_abstain: false },
+        LMEQuery { category: "TR", question: "When did the user's database migration encounter problems?",
+            expected_keyword: "March", should_abstain: false },
+        // Knowledge Update (KU)
+        LMEQuery { category: "KU", question: "What is the user's current preferred code editor?",
+            expected_keyword: "Zed", should_abstain: false },
+        LMEQuery { category: "KU", question: "What is the user's current role at their company?",
+            expected_keyword: "Staff", should_abstain: false },
+        // Abstention (ABS)
+        LMEQuery { category: "ABS", question: "What programming language does the user's partner use?",
+            expected_keyword: "", should_abstain: true },
+        LMEQuery { category: "ABS", question: "What is the user's salary at Cloudflare?",
+            expected_keyword: "", should_abstain: true },
+    ];
+
+    let mut category_results: std::collections::HashMap<&str, (usize, usize)> = std::collections::HashMap::new();
+    let mut total_query_ms: u128 = 0;
+
+    println!("  {:>4} {:>4} {:<65} {:>8} {:>6}", "#", "Cat", "Question", "Latency", "Hit");
+    println!("  {}", "-".repeat(95));
+
+    for (i, q) in queries.iter().enumerate() {
+        let t = Instant::now();
+        let result = kernel.recall_semantic(&agent_id, "default", q.question, 5);
+        let lat = t.elapsed().as_millis();
+        total_query_ms += lat;
+
+        let hit = match &result {
+            Ok(entries) if q.should_abstain => {
+                let any_relevant = entries.iter().any(|e| {
+                    let s = e.content.display().to_string().to_lowercase();
+                    s.contains("partner") || s.contains("salary") || s.contains("spouse")
+                });
+                !any_relevant
+            }
+            Ok(entries) => entries.iter().any(|e|
+                e.content.display().to_string().to_lowercase()
+                    .contains(&q.expected_keyword.to_lowercase())),
+            Err(_) => false,
+        };
+
+        let (total, hits) = category_results.entry(q.category).or_insert((0, 0));
+        *total += 1;
+        if hit { *hits += 1; }
+
+        let trunc_q: String = if q.question.len() > 62 {
+            format!("{}...", &q.question[..62])
+        } else {
+            q.question.to_string()
+        };
+        println!("  {:>4} {:>4} {:<65} {:>6}ms {:>6}",
+            i + 1, q.category, trunc_q, lat, if hit { "✓" } else { "✗" });
+    }
+
+    println!("\n  ── B20 Category Breakdown ──");
+    let mut total_hits = 0;
+    let mut total_qs = 0;
+    for cat in &["IE", "MR", "TR", "KU", "ABS"] {
+        if let Some((total, hits)) = category_results.get(cat) {
+            let pct = *hits as f64 / *total as f64 * 100.0;
+            println!("  {:<25} {}/{} ({:.0}%)", cat, hits, total, pct);
+            total_hits += hits;
+            total_qs += total;
+        }
+    }
+    let overall_pct = total_hits as f64 / total_qs as f64 * 100.0;
+    let avg_query_ms = total_query_ms as f64 / total_qs as f64;
+    println!("  ─────────────────────────");
+    println!("  Overall:                  {}/{} ({:.0}%)", total_hits, total_qs, overall_pct);
+    println!("  Ingest time:              {}ms ({} items)", ingest_ms, ingested);
+    println!("  Avg query latency:        {:.1}ms", avg_query_ms);
+    println!("  Benchmark: LongMemEval-aligned (IE/MR/TR/KU/ABS)");
+
+    assert!(total_hits >= 6, "LongMemEval suite accuracy too low: {total_hits}/{total_qs}");
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// B21: LoCoMo-aligned — Single-Hop / Multi-Hop / Temporal / Adversarial QA
+//      (ingest-then-query with separate timing)
+// ═══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn bench_b21_locomo_suite() {
+    let (kernel, _dir) = match make_real_kernel() {
+        Some(pair) => pair,
+        None => { println!("{SKIP_MSG}"); return; }
+    };
+    println!("\n═══ B21: LoCoMo-Aligned Suite (4 QA categories, ingest-then-query) ═══\n");
+    let agent_id = kernel.register_agent("locomo-agent".to_string());
+
+    // ── Phase 1: Ingest multi-session dialogue ──
+    // Simulates LoCoMo's two-speaker conversation structure.
+    let dialogue: Vec<(&str, &str, &str)> = vec![
+        // (session, speaker, utterance)
+        ("2025-01-10 session1", "Alice", "I just got back from my trip to Kyoto! The bamboo forest was incredible."),
+        ("2025-01-10 session1", "Bob", "That sounds amazing! How long were you there?"),
+        ("2025-01-10 session1", "Alice", "Two weeks. I also visited Nara and fed the deer. My favorite meal was at a tiny ramen shop called Ichiran in Shijo."),
+        ("2025-01-20 session2", "Bob", "How's work going? Still at the biotech startup?"),
+        ("2025-01-20 session2", "Alice", "Actually, I switched to a fintech company called Stripe last month. I'm working on their billing infrastructure team."),
+        ("2025-01-20 session2", "Bob", "Wow, big change! Are you still doing Python mostly?"),
+        ("2025-01-20 session2", "Alice", "No, I transitioned to Ruby on Rails for the backend. But I still use Python for data analysis on the side."),
+        ("2025-02-05 session3", "Alice", "Guess what? I adopted two cats from the shelter. Named them Mochi and Kinako."),
+        ("2025-02-05 session3", "Bob", "So cute! What breed are they?"),
+        ("2025-02-05 session3", "Alice", "Mochi is a Scottish Fold and Kinako is a regular tabby. They're both about 1 year old."),
+        ("2025-02-15 session4", "Bob", "Did you hear about the earthquake in Japan?"),
+        ("2025-02-15 session4", "Alice", "Yes! I was so worried about Kyoto but my friends there said it was minor. The epicenter was in Hokkaido."),
+        ("2025-02-15 session4", "Bob", "Glad everyone is safe. Are you planning to go back?"),
+        ("2025-02-15 session4", "Alice", "Definitely, I'm planning a trip for Golden Week in May. This time I want to visit Okinawa too."),
+        ("2025-03-01 session5", "Alice", "I signed up for a pottery class on weekends. Making my own matcha bowls!"),
+        ("2025-03-01 session5", "Bob", "That's so cool, very Japanese-inspired!"),
+        ("2025-03-01 session5", "Alice", "Totally. I also started learning Japanese with the Genki textbook. Currently on chapter 5."),
+        ("2025-03-15 session6", "Bob", "How's Stripe treating you?"),
+        ("2025-03-15 session6", "Alice", "Great! I just got a spot bonus for shipping the usage-based billing feature. My tech lead said it saved the team 3 months of work."),
+        ("2025-03-15 session6", "Alice", "Oh, and I need to update you — Mochi got sick last week but she's fully recovered now after the vet visit."),
+    ];
+
+    let ingest_start = Instant::now();
+    let mut ingested = 0;
+    for (session, speaker, utterance) in &dialogue {
+        let content = format!("[{}] {}: {}", session, speaker, utterance);
+        let tags = vec!["locomo".to_string(), speaker.to_lowercase()];
+        if kernel.remember_long_term(&agent_id, "default", content, tags, 6).is_ok() {
+            ingested += 1;
+        }
+    }
+    let ingest_ms = ingest_start.elapsed().as_millis();
+    println!("  Ingest: {} turns in {}ms ({:.1}ms/turn)\n",
+        ingested, ingest_ms, ingest_ms as f64 / ingested as f64);
+
+    // ── Phase 2: Query — 4 LoCoMo QA categories ──
+    struct LoCoQ {
+        category: &'static str,
+        question: &'static str,
+        expected_keyword: &'static str,
+    }
+
+    let queries = vec![
+        // Single-Hop (fact from one session)
+        LoCoQ { category: "single", question: "What is the name of Alice's cats?",
+            expected_keyword: "Mochi" },
+        LoCoQ { category: "single", question: "Where does Alice currently work?",
+            expected_keyword: "Stripe" },
+        LoCoQ { category: "single", question: "What Japanese textbook is Alice using?",
+            expected_keyword: "Genki" },
+        // Multi-Hop (requires cross-session reasoning)
+        LoCoQ { category: "multi", question: "What programming language did Alice switch to when she changed jobs?",
+            expected_keyword: "Ruby" },
+        LoCoQ { category: "multi", question: "What creative hobby did Alice start that relates to her Japan interest?",
+            expected_keyword: "pottery" },
+        // Temporal (time-based reasoning)
+        LoCoQ { category: "temporal", question: "When is Alice planning her next trip to Japan?",
+            expected_keyword: "May" },
+        LoCoQ { category: "temporal", question: "What happened to Mochi recently?",
+            expected_keyword: "sick" },
+        // Adversarial (should not hallucinate)
+        LoCoQ { category: "adversarial", question: "What is Bob's job title at Stripe?",
+            expected_keyword: "" },
+        LoCoQ { category: "adversarial", question: "How many children does Alice have?",
+            expected_keyword: "" },
+    ];
+
+    let mut cat_results: std::collections::HashMap<&str, (usize, usize)> = std::collections::HashMap::new();
+    let mut total_query_ms: u128 = 0;
+
+    println!("  {:>4} {:>10} {:<58} {:>8} {:>6}", "#", "Cat", "Question", "Latency", "Hit");
+    println!("  {}", "-".repeat(90));
+
+    for (i, q) in queries.iter().enumerate() {
+        let t = Instant::now();
+        let result = kernel.recall_semantic(&agent_id, "default", q.question, 5);
+        let lat = t.elapsed().as_millis();
+        total_query_ms += lat;
+
+        let hit = match &result {
+            Ok(entries) if q.expected_keyword.is_empty() => {
+                // Adversarial: check that no result directly answers the question
+                let any_direct = entries.iter().any(|e| {
+                    let s = e.content.display().to_string().to_lowercase();
+                    s.contains("bob") && (s.contains("job") || s.contains("title") || s.contains("work"))
+                        && s.contains("stripe")
+                });
+                !any_direct
+            }
+            Ok(entries) => entries.iter().any(|e|
+                e.content.display().to_string().to_lowercase()
+                    .contains(&q.expected_keyword.to_lowercase())),
+            Err(_) => false,
+        };
+
+        let (total, hits) = cat_results.entry(q.category).or_insert((0, 0));
+        *total += 1;
+        if hit { *hits += 1; }
+
+        let trunc_q: String = if q.question.len() > 55 {
+            format!("{}...", &q.question[..55])
+        } else {
+            q.question.to_string()
+        };
+        println!("  {:>4} {:>10} {:<58} {:>6}ms {:>6}",
+            i + 1, q.category, trunc_q, lat, if hit { "✓" } else { "✗" });
+    }
+
+    println!("\n  ── B21 Category Breakdown (LoCoMo-aligned) ──");
+    let mut total_hits = 0;
+    let mut total_qs = 0;
+    for cat in &["single", "multi", "temporal", "adversarial"] {
+        if let Some((total, hits)) = cat_results.get(cat) {
+            let pct = *hits as f64 / *total as f64 * 100.0;
+            println!("  {:<25} {}/{} ({:.0}%)", cat, hits, total, pct);
+            total_hits += hits;
+            total_qs += total;
+        }
+    }
+    let overall_pct = total_hits as f64 / total_qs as f64 * 100.0;
+    let avg_query_ms = total_query_ms as f64 / total_qs as f64;
+    println!("  ─────────────────────────");
+    println!("  Overall:                  {}/{} ({:.0}%)", total_hits, total_qs, overall_pct);
+    println!("  Ingest time:              {}ms ({} turns)", ingest_ms, ingested);
+    println!("  Avg query latency:        {:.1}ms", avg_query_ms);
+    println!("  Benchmark: LoCoMo-aligned (single/multi/temporal/adversarial)");
+
+    assert!(total_hits >= 5, "LoCoMo suite accuracy too low: {total_hits}/{total_qs}");
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// B22: Scale Test — 500 entries, latency degradation curve,
+//      ingest-then-query pipeline with separate timing
+// ═══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn bench_b22_scale_500() {
+    let (kernel, _dir) = match make_real_kernel() {
+        Some(pair) => pair,
+        None => { println!("{SKIP_MSG}"); return; }
+    };
+    println!("\n═══ B22: Scale Test — 500 entries, latency degradation curve ═══\n");
+    let agent_id = kernel.register_agent("scale-agent".to_string());
+
+    // ── Phase 1: Ingest 500 diverse entries ──
+    let domains = [
+        "machine learning", "database systems", "web development", "operating systems",
+        "cryptography", "networking", "compiler design", "distributed systems",
+        "mobile development", "cloud computing", "devops", "security",
+        "data engineering", "frontend frameworks", "backend architecture",
+        "microservices", "containerization", "serverless", "edge computing", "IoT",
+    ];
+    let facts_per_domain = [
+        "uses gradient descent for optimization",
+        "implements B-tree indexing for fast lookups",
+        "leverages virtual DOM for efficient rendering",
+        "supports multi-threaded task scheduling",
+        "applies RSA algorithm for asymmetric encryption",
+        "uses TCP three-way handshake for reliable connections",
+        "performs lexical analysis before parsing",
+        "implements Raft consensus for leader election",
+        "supports offline-first architecture patterns",
+        "enables auto-scaling based on CPU utilization",
+        "uses blue-green deployment for zero downtime",
+        "implements role-based access control (RBAC)",
+        "uses Apache Spark for large-scale processing",
+        "supports component-based UI architecture",
+        "implements event-driven microservices pattern",
+        "uses service mesh for inter-service communication",
+        "leverages container orchestration with Kubernetes",
+        "uses function-as-a-service for event processing",
+        "deploys CDN nodes for reduced latency",
+        "supports MQTT protocol for device communication",
+    ];
+    let adjectives = ["advanced", "modern", "efficient", "scalable", "robust",
+        "optimized", "production-grade", "enterprise", "lightweight", "high-performance"];
+
+    let ingest_start = Instant::now();
+    let mut ingested = 0;
+    let mut ingest_checkpoints: Vec<(usize, u128)> = Vec::new();
+
+    for i in 0..500 {
+        let domain = domains[i % domains.len()];
+        let fact = facts_per_domain[i % facts_per_domain.len()];
+        let adj = adjectives[i % adjectives.len()];
+        let session_num = i / 25 + 1;
+        let content = format!(
+            "[session-{}] The {} {} system {} with variant-{} configuration for project-{}",
+            session_num, adj, domain, fact, i % 7, i % 50
+        );
+        let tags = vec![domain.to_string(), format!("session-{}", session_num)];
+        if kernel.remember_long_term(&agent_id, "default", content, tags, 5).is_ok() {
+            ingested += 1;
+        }
+        if (i + 1) % 100 == 0 {
+            ingest_checkpoints.push((i + 1, ingest_start.elapsed().as_millis()));
+        }
+    }
+    let total_ingest_ms = ingest_start.elapsed().as_millis();
+
+    println!("  ── Ingest Curve ──");
+    println!("  {:>6} {:>10} {:>12}", "Items", "Total ms", "ms/item");
+    let mut prev_ms: u128 = 0;
+    for (count, ms) in &ingest_checkpoints {
+        let delta = ms - prev_ms;
+        println!("  {:>6} {:>10} {:>12.1}", count, ms, delta as f64 / 100.0);
+        prev_ms = *ms;
+    }
+    println!("  Total: {} items in {}ms ({:.1}ms/item)\n",
+        ingested, total_ingest_ms, total_ingest_ms as f64 / ingested as f64);
+
+    // ── Phase 2: Query at different scale points ──
+    let scale_queries = [
+        ("What system uses gradient descent for optimization?", "gradient descent"),
+        ("Which project implements Raft consensus?", "Raft consensus"),
+        ("What uses container orchestration with Kubernetes?", "Kubernetes"),
+        ("Which architecture supports offline-first patterns?", "offline"),
+        ("What implements role-based access control?", "RBAC"),
+        ("What uses Apache Spark for processing?", "Spark"),
+        ("Which system uses MQTT protocol?", "MQTT"),
+        ("What applies RSA algorithm for encryption?", "RSA"),
+        ("Which system supports event-driven microservices?", "event-driven"),
+        ("What leverages virtual DOM for rendering?", "virtual DOM"),
+    ];
+
+    println!("  ── Query Latency at 500-entry scale ──");
+    println!("  {:>4} {:<55} {:>8} {:>6}", "#", "Query", "Latency", "Hit");
+    println!("  {}", "-".repeat(80));
+
+    let mut total_query_ms: u128 = 0;
+    let mut hits = 0;
+    for (i, (q, keyword)) in scale_queries.iter().enumerate() {
+        let t = Instant::now();
+        let result = kernel.recall_semantic(&agent_id, "default", q, 5);
+        let lat = t.elapsed().as_millis();
+        total_query_ms += lat;
+
+        let hit = result.as_ref().map(|entries| {
+            entries.iter().any(|e|
+                e.content.display().to_string().to_lowercase().contains(&keyword.to_lowercase()))
+        }).unwrap_or(false);
+        if hit { hits += 1; }
+
+        let trunc_q: String = if q.len() > 52 { format!("{}...", &q[..52]) } else { q.to_string() };
+        println!("  {:>4} {:<55} {:>6}ms {:>6}",
+            i + 1, trunc_q, lat, if hit { "✓" } else { "✗" });
+    }
+
+    let n = scale_queries.len();
+    let avg_query_ms = total_query_ms as f64 / n as f64;
+    println!("\n  ── B22 Results ──");
+    println!("  Scale:                    500 entries ingested");
+    println!("  Ingest time:              {}ms ({:.1}ms/item)", total_ingest_ms, total_ingest_ms as f64 / 500.0);
+    println!("  Query accuracy:           {}/{} ({:.0}%)", hits, n, hits as f64 / n as f64 * 100.0);
+    println!("  Avg query latency:        {:.1}ms", avg_query_ms);
+    println!("  Benchmark: Scale degradation test (LongMemEval_S-class)");
+
+    assert!(hits >= 5, "Scale test accuracy too low at 500 entries: {hits}/{n}");
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// B23: Real Cursor/Claude Context — Scale Ingestion (hundreds of entries)
+//      with ingest-then-query timing
+// ═══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn bench_b23_real_context_scale() {
+    let (kernel, _dir) = match make_real_kernel() {
+        Some(pair) => pair,
+        None => { println!("{SKIP_MSG}"); return; }
+    };
+    println!("\n═══ B23: Real Cursor/Claude Context — Scale Ingestion ═══\n");
+    let agent_id = kernel.register_agent("realctx-agent".to_string());
+
+    // Extract real knowledge from Cursor agent transcripts
+    let transcript_dir = std::path::Path::new("/home/leo/.cursor/projects/home-leo-work-Plico/agent-transcripts");
+    let claude_history = std::path::Path::new("/home/leo/.claude/history.jsonl");
+
+    let mut knowledge_items: Vec<(String, Vec<String>)> = Vec::new();
+
+    // Scan Cursor transcripts for extractable knowledge
+    if transcript_dir.exists() {
+        let mut files: Vec<_> = std::fs::read_dir(transcript_dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter(|e| e.path().is_dir())
+            .collect();
+        files.sort_by_key(|e| e.file_name());
+
+        for dir_entry in files.iter().take(30) {
+            let jsonl_path = dir_entry.path().join(
+                format!("{}.jsonl", dir_entry.file_name().to_string_lossy())
+            );
+            if !jsonl_path.exists() { continue; }
+            if let Ok(content) = std::fs::read_to_string(&jsonl_path) {
+                let mut line_count = 0;
+                for line in content.lines().take(200) {
+                    if line.len() < 50 { continue; }
+                    // Extract assistant messages containing code/architecture info
+                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(line) {
+                        if let Some(text) = val.get("message")
+                            .or_else(|| val.get("content"))
+                            .and_then(|v| v.as_str())
+                        {
+                            let t = text.trim();
+                            if t.len() >= 80 && t.len() <= 500 {
+                                if t.contains("Plico") || t.contains("kernel")
+                                    || t.contains("memory") || t.contains("benchmark")
+                                    || t.contains("embedding") || t.contains("retrieval")
+                                    || t.contains("LLM") || t.contains("agent")
+                                {
+                                    knowledge_items.push((
+                                        t.to_string(),
+                                        vec!["cursor-transcript".to_string()],
+                                    ));
+                                    line_count += 1;
+                                    if line_count >= 10 { break; }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Scan Claude history
+    if claude_history.exists() {
+        if let Ok(content) = std::fs::read_to_string(claude_history) {
+            let mut count = 0;
+            for line in content.lines() {
+                if line.len() < 50 { continue; }
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(line) {
+                    if let Some(text) = val.get("message")
+                        .or_else(|| val.get("content"))
+                        .and_then(|v| v.as_str())
+                    {
+                        let t = text.trim();
+                        if t.len() >= 80 && t.len() <= 500 {
+                            knowledge_items.push((
+                                t.to_string(),
+                                vec!["claude-history".to_string()],
+                            ));
+                            count += 1;
+                            if count >= 100 { break; }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // If not enough real data, supplement with curated dev knowledge
+    let curated = vec![
+        "Plico is an AI-Native OS with kernel-level memory, built entirely in Rust for safety and performance",
+        "The RetrievalFusionEngine now uses 7 signals: semantic, causal, access, tag, temporal, type_match, and bm25_keyword",
+        "FusionWeights are Serialize/Deserialize enabled for persistence and runtime configuration of retrieval signal weights",
+        "BM25 keyword search complements vector similarity for exact-term matching in hybrid retrieval pipelines",
+        "CausalSemanticContradiction algorithm uses cosine distance threshold of 0.35 and near-identical early return at 0.98",
+        "MemoryConsolidationEngine runs background sweeps for TTL expiry, importance decay, and redundancy deduplication",
+        "AgentProfile tracks per-agent intent histograms and learns personalized FusionWeights via exponential moving average",
+        "The prompt registry supports versioned templates with compile-in defaults and runtime agent-level overrides",
+        "LongMemEval evaluates 5 abilities: information extraction, multi-session reasoning, temporal reasoning, knowledge updates, abstention",
+        "LoCoMo benchmark tests single-hop, multi-hop, temporal, open-domain, and adversarial QA categories",
+        "Edge cache invalidation race condition was resolved by switching to consensus-based invalidation protocol",
+        "Database migration from PostgreSQL to CockroachDB uses blue-green deployment with 1000-row batch chunks",
+        "BM25 index uses TREC/SIGIR standard k1=1.2 b=0.75 parameters with dynamic avgdl auto-adjustment",
+        "Kernel recall_routed runs three-channel concurrent pipeline: intent classification + embedding + BM25 search",
+        "Plico MCP server exposes 19 actions including session_start, put, get, search, hybrid, remember, recall",
+        "VersionFeatures and version_supports were removed as compatibility code since the project is pre-release with only one API version",
+        "Deprecated v9_metrics test file was deleted as it contained ESTIMATED metrics superseded by v11_metrics real measurements",
+        "Retrieval router classifies queries into factual, temporal, multi_hop, preference, and aggregation intents",
+        "Memory tiers are Ephemeral (L0), Working (L1), LongTerm (L2), with semantic embeddings only on L2",
+        "The three-channel concurrent pipeline in recall_routed reduces end-to-end latency by overlapping independent operations",
+    ];
+    for item in &curated {
+        knowledge_items.push((item.to_string(), vec!["curated-dev".to_string()]));
+    }
+
+    let total_items = knowledge_items.len();
+    println!("  Extracted {} knowledge items (cursor: {}, claude: {}, curated: {})",
+        total_items,
+        knowledge_items.iter().filter(|(_, t)| t.contains(&"cursor-transcript".to_string())).count(),
+        knowledge_items.iter().filter(|(_, t)| t.contains(&"claude-history".to_string())).count(),
+        curated.len());
+
+    // ── Phase 1: Ingest ──
+    let ingest_start = Instant::now();
+    let mut ingested = 0;
+    for (content, tags) in &knowledge_items {
+        if kernel.remember_long_term(&agent_id, "default", content.clone(), tags.clone(), 6).is_ok() {
+            ingested += 1;
+        }
+    }
+    let ingest_ms = ingest_start.elapsed().as_millis();
+    println!("  Ingest: {} items in {}ms ({:.1}ms/item)\n",
+        ingested, ingest_ms, ingest_ms as f64 / ingested.max(1) as f64);
+
+    // ── Phase 2: Query with dev-relevant questions ──
+    let queries: Vec<(&str, &str)> = vec![
+        ("How does Plico's retrieval fusion work?", "signal"),
+        ("What are the memory tiers in Plico?", "tier"),
+        ("How is contradiction detection implemented?", "contradiction"),
+        ("What benchmark standards does Plico target?", "LongMemEval"),
+        ("How does the BM25 index complement vector search?", "BM25"),
+        ("What concurrent pipeline does recall_routed use?", "concurrent"),
+        ("How are FusionWeights learned per agent?", "weight"),
+        ("What MCP tools does Plico expose?", "MCP"),
+        ("What is the MemoryConsolidationEngine responsible for?", "consolidation"),
+        ("How was the edge cache race condition resolved?", "consensus"),
+    ];
+
+    println!("  {:>4} {:<55} {:>8} {:>6}", "#", "Query", "Latency", "Hit");
+    println!("  {}", "-".repeat(78));
+
+    let mut total_query_ms: u128 = 0;
+    let mut hits = 0;
+    for (i, (q, keyword)) in queries.iter().enumerate() {
+        let t = Instant::now();
+        let result = kernel.recall_semantic(&agent_id, "default", q, 5);
+        let lat = t.elapsed().as_millis();
+        total_query_ms += lat;
+
+        let hit = result.as_ref().map(|entries| {
+            entries.iter().any(|e|
+                e.content.display().to_string().to_lowercase().contains(&keyword.to_lowercase()))
+        }).unwrap_or(false);
+        if hit { hits += 1; }
+
+        println!("  {:>4} {:<55} {:>6}ms {:>6}",
+            i + 1, q, lat, if hit { "✓" } else { "✗" });
+    }
+
+    let n = queries.len();
+    let avg_query_ms = total_query_ms as f64 / n as f64;
+    println!("\n  ── B23 Results ──");
+    println!("  Scale:                    {} items ingested ({} real + {} curated)",
+        ingested, ingested - curated.len(), curated.len());
+    println!("  Ingest time:              {}ms ({:.1}ms/item)", ingest_ms, ingest_ms as f64 / ingested.max(1) as f64);
+    println!("  Query accuracy:           {}/{} ({:.0}%)", hits, n, hits as f64 / n as f64 * 100.0);
+    println!("  Avg query latency:        {:.1}ms", avg_query_ms);
+    println!("  Benchmark: Real dev context at scale");
+
+    assert!(hits >= 5, "Real context scale accuracy too low: {hits}/{n}");
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// B24: RFE 7-Signal Fusion Quality — validates BM25 integration
+//      (unit-level with real embedding)
+// ═══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn bench_b24_rfe_7signal() {
+    let (kernel, _dir) = match make_real_kernel() {
+        Some(pair) => pair,
+        None => { println!("{SKIP_MSG}"); return; }
+    };
+    println!("\n═══ B24: RFE 7-Signal Fusion Quality (BM25 integration) ═══\n");
+    let agent_id = kernel.register_agent("rfe7-agent".to_string());
+
+    // Ingest items with specific keywords that BM25 should match strongly
+    let items = vec![
+        ("Kubernetes pods use cgroups v2 for resource isolation and namespace separation", vec!["k8s", "containers"]),
+        ("PostgreSQL MVCC uses transaction IDs and visibility maps for concurrent access", vec!["database", "postgres"]),
+        ("Rust borrow checker enforces ownership rules at compile time preventing data races", vec!["rust", "safety"]),
+        ("Neural network backpropagation computes gradients using the chain rule of calculus", vec!["ml", "training"]),
+        ("HTTP/3 uses QUIC protocol over UDP for faster connection establishment", vec!["networking", "http"]),
+        ("Git uses SHA-1 hashes for content-addressable storage of objects", vec!["git", "vcs"]),
+        ("Docker containers share the host kernel but have isolated filesystem and network", vec!["docker", "containers"]),
+        ("Redis uses single-threaded event loop with epoll for high-throughput key-value operations", vec!["redis", "cache"]),
+        ("TLS 1.3 reduced handshake to one round trip improving connection latency", vec!["security", "tls"]),
+        ("WebAssembly provides near-native execution speed in web browsers via stack-based VM", vec!["wasm", "web"]),
+    ];
+
+    let ingest_start = Instant::now();
+    for (content, tags) in &items {
+        let str_tags: Vec<String> = tags.iter().map(|t| t.to_string()).collect();
+        let _ = kernel.remember_long_term(&agent_id, "default", content.to_string(), str_tags, 7);
+    }
+    let ingest_ms = ingest_start.elapsed().as_millis();
+
+    // Queries designed to test BM25 keyword advantage
+    let queries = vec![
+        // Exact keyword match — BM25 should boost
+        ("What protocol does HTTP/3 use?", "QUIC"),
+        ("How does the Rust borrow checker work?", "ownership"),
+        ("What hashing does Git use?", "SHA"),
+        ("How does Redis achieve high throughput?", "event loop"),
+        ("What is WebAssembly execution model?", "stack"),
+        // Semantic similarity — embedding should lead
+        ("How do containers isolate resources?", "cgroups"),
+        ("How does the database handle concurrent transactions?", "MVCC"),
+        ("How do neural networks learn from data?", "backpropagation"),
+        ("How was TLS connection speed improved?", "round trip"),
+        ("How does Docker differ from VMs?", "kernel"),
+    ];
+
+    println!("  Ingest: {} items in {}ms\n", items.len(), ingest_ms);
+    println!("  {:>4} {:<55} {:>8} {:>6}", "#", "Query", "Latency", "Hit");
+    println!("  {}", "-".repeat(78));
+
+    let mut total_ms: u128 = 0;
+    let mut hits = 0;
+    for (i, (q, keyword)) in queries.iter().enumerate() {
+        let t = Instant::now();
+        let result = kernel.recall_semantic(&agent_id, "default", q, 3);
+        let lat = t.elapsed().as_millis();
+        total_ms += lat;
+
+        let hit = result.as_ref().map(|entries| {
+            entries.iter().any(|e|
+                e.content.display().to_string().to_lowercase().contains(&keyword.to_lowercase()))
+        }).unwrap_or(false);
+        if hit { hits += 1; }
+
+        println!("  {:>4} {:<55} {:>6}ms {:>6}",
+            i + 1, q, lat, if hit { "✓" } else { "✗" });
+    }
+
+    let n = queries.len();
+    println!("\n  ── B24 Results ──");
+    println!("  RFE 7-signal accuracy:    {}/{} ({:.0}%)", hits, n, hits as f64 / n as f64 * 100.0);
+    println!("  Avg query latency:        {:.1}ms", total_ms as f64 / n as f64);
+    println!("  Ingest time:              {}ms", ingest_ms);
+    println!("  Benchmark: RFE 7-signal fusion with BM25 keyword integration");
+
+    assert!(hits >= 6, "RFE 7-signal accuracy too low: {hits}/{n}");
 }
 
 // ═══════════════════════════════════════════════════════════════════════

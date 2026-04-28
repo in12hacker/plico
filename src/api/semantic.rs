@@ -1683,52 +1683,6 @@ mod tests {
         assert!(v3 < v2);
     }
 
-    #[test]
-    fn test_version_supports_feature() {
-        let v15 = ApiVersion::parse("15.0.0").unwrap();
-        let v16 = ApiVersion::parse("16.0.0").unwrap();
-        let v17 = ApiVersion::parse("17.0.0").unwrap();
-        let v14 = ApiVersion::parse("14.0.0").unwrap();
-
-        // Batch operations introduced in v15
-        assert!(!v14.supports("batch_operations"));
-        assert!(v15.supports("batch_operations"));
-        assert!(v16.supports("batch_operations"));
-
-        // KG causal introduced in v16
-        assert!(!v15.supports("kg_causal"));
-        assert!(v16.supports("kg_causal"));
-        assert!(v17.supports("kg_causal"));
-
-        // Deprecation notices introduced in v17
-        assert!(!v16.supports("deprecation_notices"));
-        assert!(v17.supports("deprecation_notices"));
-
-        // Tenant management introduced in v14
-        assert!(v14.supports("tenant_management"));
-        assert!(!v13_supports_tenant(v14));
-    }
-
-    fn v13_supports_tenant(_v: ApiVersion) -> bool {
-        false
-    }
-
-    #[test]
-    fn test_version_supports_none_defaults_to_current() {
-        // None version should default to CURRENT which supports all features
-        assert!(version_supports(None, "batch_operations"));
-        assert!(version_supports(None, "kg_causal"));
-        assert!(version_supports(None, "deprecation_notices"));
-    }
-
-    #[test]
-    fn test_version_features_from_version() {
-        let features = VersionFeatures::from_version(ApiVersion::parse("17.0.0").unwrap());
-        assert!(features.deprecation_notices);
-        assert!(features.batch_operations);
-        assert!(features.kg_causal);
-        assert!(features.tenant_management);
-    }
 
     #[test]
     fn test_api_request_with_version() {

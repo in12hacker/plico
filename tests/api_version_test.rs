@@ -2,12 +2,10 @@
 //!
 //! Tests for the API versioning system including:
 //! - ApiVersion parsing and comparison
-//! - Feature support checks
-//! - Version features
+//! - Serialization/deserialization
 
 use plico::api::semantic::{
-    ApiVersion, ApiRequest, ApiResponse, VersionFeatures,
-    version_supports,
+    ApiVersion, ApiRequest, ApiResponse,
 };
 
 #[test]
@@ -59,134 +57,6 @@ fn test_version_comparison() {
     assert!(v2 > v1);
     assert!(v1 <= v1);
     assert!(v1 >= v1);
-}
-
-#[test]
-fn test_version_supports_feature() {
-    let v13 = ApiVersion::parse("13.0.0").unwrap();
-    let v14 = ApiVersion::parse("14.0.0").unwrap();
-    let v15 = ApiVersion::parse("15.0.0").unwrap();
-    let v16 = ApiVersion::parse("16.0.0").unwrap();
-    let v17 = ApiVersion::parse("17.0.0").unwrap();
-    let v18 = ApiVersion::parse("18.0.0").unwrap();
-    let v19 = ApiVersion::parse("19.0.0").unwrap();
-    let v20 = ApiVersion::parse("20.0.0").unwrap();
-    let v21 = ApiVersion::parse("21.0.0").unwrap();
-    let v22 = ApiVersion::parse("22.0.0").unwrap();
-    let v23 = ApiVersion::parse("23.0.0").unwrap();
-    let v24 = ApiVersion::parse("24.0.0").unwrap();
-    let v25 = ApiVersion::parse("25.0.0").unwrap();
-    let v26 = ApiVersion::parse("26.0.0").unwrap();
-
-    assert!(!v13.supports("batch_operations"));
-    assert!(!v14.supports("batch_operations"));
-    assert!(v15.supports("batch_operations"));
-    assert!(v16.supports("batch_operations"));
-    assert!(v17.supports("batch_operations"));
-    assert!(v18.supports("batch_operations"));
-    assert!(v19.supports("batch_operations"));
-    assert!(v20.supports("batch_operations"));
-    assert!(v21.supports("batch_operations"));
-    assert!(v22.supports("batch_operations"));
-    assert!(v23.supports("batch_operations"));
-    assert!(v24.supports("batch_operations"));
-    assert!(v25.supports("batch_operations"));
-    assert!(v26.supports("batch_operations"));
-
-    assert!(!v14.supports("kg_causal"));
-    assert!(!v15.supports("kg_causal"));
-    assert!(v16.supports("kg_causal"));
-    assert!(v17.supports("kg_causal"));
-    assert!(v18.supports("kg_causal"));
-    assert!(v19.supports("kg_causal"));
-    assert!(v20.supports("kg_causal"));
-    assert!(v21.supports("kg_causal"));
-    assert!(v22.supports("kg_causal"));
-    assert!(v23.supports("kg_causal"));
-    assert!(v24.supports("kg_causal"));
-    assert!(v25.supports("kg_causal"));
-    assert!(v26.supports("kg_causal"));
-
-    assert!(!v16.supports("deprecation_notices"));
-    assert!(v17.supports("deprecation_notices"));
-    assert!(v18.supports("deprecation_notices"));
-    assert!(v19.supports("deprecation_notices"));
-    assert!(v20.supports("deprecation_notices"));
-    assert!(v21.supports("deprecation_notices"));
-    assert!(v22.supports("deprecation_notices"));
-    assert!(v23.supports("deprecation_notices"));
-    assert!(v24.supports("deprecation_notices"));
-    assert!(v25.supports("deprecation_notices"));
-    assert!(v26.supports("deprecation_notices"));
-
-    assert!(!v13.supports("tenant_management"));
-    assert!(v14.supports("tenant_management"));
-    assert!(v15.supports("tenant_management"));
-    assert!(v16.supports("tenant_management"));
-    assert!(v17.supports("tenant_management"));
-    assert!(v18.supports("tenant_management"));
-    assert!(v19.supports("tenant_management"));
-    assert!(v20.supports("tenant_management"));
-    assert!(v21.supports("tenant_management"));
-    assert!(v22.supports("tenant_management"));
-    assert!(v23.supports("tenant_management"));
-    assert!(v24.supports("tenant_management"));
-    assert!(v25.supports("tenant_management"));
-    assert!(v26.supports("tenant_management"));
-
-    assert!(!v17.supports("model_hot_swap"));
-    assert!(v18.supports("model_hot_swap"));
-    assert!(v19.supports("model_hot_swap"));
-    assert!(v20.supports("model_hot_swap"));
-    assert!(v21.supports("model_hot_swap"));
-    assert!(v22.supports("model_hot_swap"));
-    assert!(v23.supports("model_hot_swap"));
-    assert!(v24.supports("model_hot_swap"));
-    assert!(v25.supports("model_hot_swap"));
-    assert!(v26.supports("model_hot_swap"));
-}
-
-#[test]
-fn test_version_supports_unknown_feature() {
-    let v = ApiVersion::parse("26.0.0").unwrap();
-    assert!(!v.supports("unknown_feature"));
-    assert!(!v.supports(""));
-}
-
-#[test]
-fn test_version_supports_none_defaults_to_current() {
-    assert!(version_supports(None, "batch_operations"));
-    assert!(version_supports(None, "kg_causal"));
-    assert!(version_supports(None, "deprecation_notices"));
-    assert!(version_supports(None, "tenant_management"));
-    assert!(version_supports(None, "model_hot_swap"));
-}
-
-#[test]
-fn test_version_features_from_version() {
-    let v26 = ApiVersion::parse("26.0.0").unwrap();
-    let features = VersionFeatures::from_version(v26);
-    assert!(features.deprecation_notices);
-    assert!(features.batch_operations);
-    assert!(features.kg_causal);
-    assert!(features.tenant_management);
-    assert!(features.model_hot_swap);
-
-    let v14 = ApiVersion::parse("14.0.0").unwrap();
-    let features14 = VersionFeatures::from_version(v14);
-    assert!(!features14.deprecation_notices);
-    assert!(!features14.kg_causal);
-    assert!(!features14.batch_operations);
-    assert!(features14.tenant_management);
-    assert!(!features14.model_hot_swap);
-
-    let v13 = ApiVersion::parse("13.0.0").unwrap();
-    let features13 = VersionFeatures::from_version(v13);
-    assert!(!features13.deprecation_notices);
-    assert!(!features13.kg_causal);
-    assert!(!features13.batch_operations);
-    assert!(!features13.tenant_management);
-    assert!(!features13.model_hot_swap);
 }
 
 #[test]

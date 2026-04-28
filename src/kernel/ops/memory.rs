@@ -439,7 +439,10 @@ impl crate::kernel::AIKernel {
     }
 
     /// Intent-aware semantic recall — classifies query intent, then routes to
-    /// the optimal retrieval strategy. LLM-first for classification, rule-based fallback.
+    /// the optimal retrieval strategy. Uses the 7-signal RFE for final ranking.
+    ///
+    /// Concurrent pipeline: intent classification, query embedding, and BM25 search
+    /// run in parallel (three independent channels), then RFE fuses all signals.
     pub fn recall_routed(
         &self,
         agent_id: &str,
@@ -450,14 +453,14 @@ impl crate::kernel::AIKernel {
             classify_by_rules, classify_by_llm_response,
             intent_classification_prompt, RetrievalConfig,
         };
+        use crate::fs::retrieval_fusion::{RetrievalFusionEngine, RetrievalQuery};
         use crate::llm::{ChatMessage, ChatOptions, LlmProvider};
 
         let ctx = PermissionContext::new(agent_id.to_string(), tenant_id.to_string());
         self.permissions.check(&ctx, PermissionAction::Read).map_err(|e| e.to_string())?;
 
-        // v31 concurrent optimization: intent classification and query embedding
-        // run in parallel since they have no data dependency.
-        let (classified, query_emb_result) = std::thread::scope(|s| {
+        // Three-channel concurrent pipeline: intent + embedding + BM25
+        let (classified, query_emb_result, bm25_hits) = std::thread::scope(|s| {
             let classify_handle = s.spawn(|| {
                 let prompt = {
                     let mut vars = std::collections::HashMap::new();
@@ -476,33 +479,56 @@ impl crate::kernel::AIKernel {
                 }
             });
 
-            let embed_handle = s.spawn(|| {
-                self.embedding.embed(query)
-            });
+            let embed_handle = s.spawn(|| self.embedding.embed(query));
+
+            let bm25_handle = s.spawn(|| self.fs.bm25_search(query, 50));
 
             let classified = classify_handle.join().unwrap();
             let emb_result = embed_handle.join().unwrap();
-            (classified, emb_result)
+            let bm25 = bm25_handle.join().unwrap();
+            (classified, emb_result, bm25)
         });
 
         let config = RetrievalConfig::for_intent(classified.intent);
 
+        // Build BM25 score map for RFE
+        let bm25_score_map: std::collections::HashMap<String, f32> =
+            bm25_hits.into_iter().collect();
+
         let results: Vec<MemoryEntry> = match query_emb_result {
             Ok(query_emb) => {
-                let mut entries: Vec<(MemoryEntry, f32)> = if let Some(ref mem_type) = config.typed_retrieval {
-                    self.memory.recall_semantic_typed(agent_id, &query_emb.embedding, config.top_k)
+                let candidates: Vec<(MemoryEntry, f32)> = if let Some(ref mem_type) = config.typed_retrieval {
+                    self.memory.recall_semantic_typed(agent_id, &query_emb.embedding, config.top_k * 2)
                         .into_iter()
                         .filter(|(e, _)| e.memory_type == *mem_type || e.memory_type == MemoryType::Untyped)
                         .collect()
                 } else {
-                    self.memory.recall_semantic(agent_id, &query_emb.embedding, config.top_k)
+                    self.memory.recall_semantic(agent_id, &query_emb.embedding, config.top_k * 2)
                 };
-                entries.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-                entries.truncate(config.top_k);
-                entries.into_iter()
+
+                let entries: Vec<MemoryEntry> = candidates.into_iter()
                     .map(|(e, _)| e)
                     .filter(|e| e.tenant_id == tenant_id)
-                    .collect()
+                    .collect();
+
+                // RFE 7-signal re-ranking with per-agent learned weights
+                let agent_weights = self.agent_profiles.get_weights(agent_id);
+                let rfe = RetrievalFusionEngine::new(agent_weights);
+                let kg_ref = self.knowledge_graph.as_deref();
+                let causal_graph = kg_ref.and_then(|_| {
+                    None::<&crate::memory::causal::CausalGraph>
+                });
+
+                let rfe_query = RetrievalQuery {
+                    query_embedding: &query_emb.embedding,
+                    query_tags: &[],
+                    query_memory_type: config.typed_retrieval,
+                    context_entry_id: None,
+                    bm25_scores: Some(&bm25_score_map),
+                };
+
+                let fused = rfe.rank(&entries, &rfe_query, causal_graph, config.top_k);
+                fused.into_iter().map(|r| r.entry).collect()
             }
             Err(_) => {
                 self.memory.recall_relevant(agent_id, config.top_k * 100)
@@ -520,15 +546,13 @@ impl crate::kernel::AIKernel {
             }
         };
 
-        // Record query to agent profile for adaptive learning (v31 Axiom 9)
+        // Record query to agent profile for adaptive learning (Axiom 9)
         {
-            let t_elapsed = std::time::Instant::now(); // approximate
             let mut profile = self.agent_profiles.get_or_create(agent_id);
             profile.record_query(classified.intent, 0.0);
             for entry in &results {
                 profile.record_memory_type_hit(entry.memory_type);
             }
-            let _ = t_elapsed;
             self.agent_profiles.update(profile);
         }
 

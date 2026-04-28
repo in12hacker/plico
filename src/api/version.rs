@@ -93,25 +93,6 @@ impl ApiVersion {
         Ok(ApiVersion { major, minor, patch })
     }
 
-    /// Check if this version supports a given feature.
-    ///
-    /// # Features
-    /// - `"batch_operations"` — batch_create, batch_memory_store, batch_submit_intent, batch_query (v15.0+)
-    /// - `"kg_causal"` — kg_causal_path, kg_impact_analysis, kg_temporal_changes (v16.0+)
-    /// - `"deprecation_notices"` — response includes deprecation field (v17.0+)
-    /// - `"tenant_management"` — create_tenant, list_tenants, tenant_share (v14.0+)
-    /// - `"model_hot_swap"` — switch_embedding_model, switch_llm_model, check_model_health (v18.0+)
-    pub fn supports(&self, feature: &str) -> bool {
-        match feature {
-            "batch_operations" => *self >= ApiVersion { major: 15, minor: 0, patch: 0 },
-            "kg_causal" => *self >= ApiVersion { major: 16, minor: 0, patch: 0 },
-            "deprecation_notices" => *self >= ApiVersion { major: 17, minor: 0, patch: 0 },
-            "tenant_management" => *self >= ApiVersion { major: 14, minor: 0, patch: 0 },
-            "model_hot_swap" => *self >= ApiVersion { major: 18, minor: 0, patch: 0 },
-            _ => false,
-        }
-    }
-
 }
 
 impl Default for ApiVersion {
@@ -133,39 +114,6 @@ impl std::str::FromStr for ApiVersion {
     }
 }
 
-/// Feature flags for version-specific behavior.
-#[derive(Debug, Clone, Default)]
-pub struct VersionFeatures {
-    /// True if the request supports batch operations (v15.0+).
-    pub batch_operations: bool,
-    /// True if the request supports KG causal reasoning (v16.0+).
-    pub kg_causal: bool,
-    /// True if the response should include deprecation notices (v17.0+).
-    pub deprecation_notices: bool,
-    /// True if the request supports tenant management (v14.0+).
-    pub tenant_management: bool,
-    /// True if the request supports model hot-swap (v18.0+).
-    pub model_hot_swap: bool,
-}
-
-impl VersionFeatures {
-    /// Derive feature flags from an API version.
-    pub fn from_version(version: ApiVersion) -> Self {
-        VersionFeatures {
-            batch_operations: version.supports("batch_operations"),
-            kg_causal: version.supports("kg_causal"),
-            deprecation_notices: version.supports("deprecation_notices"),
-            tenant_management: version.supports("tenant_management"),
-            model_hot_swap: version.supports("model_hot_swap"),
-        }
-    }
-}
-
-/// Check if a request version supports a given feature.
-/// Returns true for None (defaults to CURRENT, which supports all features).
-pub fn version_supports(version: Option<ApiVersion>, feature: &str) -> bool {
-    version.unwrap_or(ApiVersion::CURRENT).supports(feature)
-}
 
 #[cfg(test)]
 mod tests {
@@ -230,45 +178,6 @@ mod tests {
     #[test]
     fn default_is_current() {
         assert_eq!(ApiVersion::default(), ApiVersion::CURRENT);
-    }
-
-    #[test]
-    fn supports_feature_flags() {
-        let v14 = ApiVersion { major: 14, minor: 0, patch: 0 };
-        assert!(v14.supports("tenant_management"));
-        assert!(!v14.supports("batch_operations"));
-
-        let v15 = ApiVersion { major: 15, minor: 0, patch: 0 };
-        assert!(v15.supports("batch_operations"));
-        assert!(!v15.supports("kg_causal"));
-
-        let v18 = ApiVersion { major: 18, minor: 0, patch: 0 };
-        assert!(v18.supports("model_hot_swap"));
-        assert!(v18.supports("batch_operations"));
-    }
-
-    #[test]
-    fn supports_unknown_feature_returns_false() {
-        assert!(!ApiVersion::CURRENT.supports("nonexistent_feature"));
-    }
-
-    #[test]
-    fn version_supports_none_uses_current() {
-        assert!(version_supports(None, "model_hot_swap"));
-    }
-
-    #[test]
-    fn version_features_from_version() {
-        let features = VersionFeatures::from_version(ApiVersion { major: 18, minor: 0, patch: 0 });
-        assert!(features.batch_operations);
-        assert!(features.kg_causal);
-        assert!(features.deprecation_notices);
-        assert!(features.tenant_management);
-        assert!(features.model_hot_swap);
-
-        let old_features = VersionFeatures::from_version(ApiVersion { major: 13, minor: 0, patch: 0 });
-        assert!(!old_features.batch_operations);
-        assert!(!old_features.tenant_management);
     }
 
 }

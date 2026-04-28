@@ -7,6 +7,8 @@
 //! FusionWeights are per-agent learnable (see AgentProfile) and ship with
 //! sensible defaults that work out-of-the-box.
 
+use serde::{Deserialize, Serialize};
+
 use crate::memory::layered::{MemoryEntry, MemoryType, now_ms};
 use crate::memory::causal::CausalGraph;
 
@@ -19,10 +21,14 @@ pub struct RetrievalSignals {
     pub tag_overlap: f32,
     pub temporal_recency: f32,
     pub type_match: f32,
+    pub bm25_keyword: f32,
 }
 
 /// Tunable weights for each signal dimension. Defaults sum to 1.0.
-#[derive(Debug, Clone)]
+///
+/// Serializable for persistence and runtime configuration.
+/// Agents can self-derive optimal weights via EMA learning (AgentProfile).
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FusionWeights {
     pub semantic: f32,
     pub causal: f32,
@@ -30,17 +36,19 @@ pub struct FusionWeights {
     pub tag: f32,
     pub temporal: f32,
     pub type_match: f32,
+    pub bm25_keyword: f32,
 }
 
 impl Default for FusionWeights {
     fn default() -> Self {
         Self {
-            semantic: 0.40,
-            causal: 0.15,
-            access: 0.10,
-            tag: 0.15,
-            temporal: 0.10,
+            semantic: 0.35,
+            causal: 0.12,
+            access: 0.08,
+            tag: 0.12,
+            temporal: 0.08,
             type_match: 0.10,
+            bm25_keyword: 0.15,
         }
     }
 }
@@ -53,6 +61,27 @@ impl FusionWeights {
             + self.tag * signals.tag_overlap
             + self.temporal * signals.temporal_recency
             + self.type_match * signals.type_match
+            + self.bm25_keyword * signals.bm25_keyword
+    }
+
+    /// Sum of all weights (should be ~1.0 after normalization).
+    pub fn total(&self) -> f32 {
+        self.semantic + self.causal + self.access + self.tag
+            + self.temporal + self.type_match + self.bm25_keyword
+    }
+
+    /// Normalize weights so they sum to 1.0, preserving ratios.
+    pub fn normalize(&mut self) {
+        let t = self.total();
+        if t > 0.0 {
+            self.semantic /= t;
+            self.causal /= t;
+            self.access /= t;
+            self.tag /= t;
+            self.temporal /= t;
+            self.type_match /= t;
+            self.bm25_keyword /= t;
+        }
     }
 }
 
@@ -70,6 +99,8 @@ pub struct RetrievalQuery<'a> {
     pub query_tags: &'a [String],
     pub query_memory_type: Option<MemoryType>,
     pub context_entry_id: Option<&'a str>,
+    /// Pre-computed BM25 scores keyed by entry ID (from Bm25Index::search).
+    pub bm25_scores: Option<&'a std::collections::HashMap<String, f32>>,
 }
 
 /// The Retrieval Fusion Engine.
@@ -154,6 +185,10 @@ impl RetrievalFusionEngine {
             None => 0.5,
         };
 
+        let bm25_keyword = query.bm25_scores
+            .and_then(|scores| scores.get(&candidate.id).copied())
+            .unwrap_or(0.0);
+
         RetrievalSignals {
             semantic_score,
             causal_proximity,
@@ -161,6 +196,7 @@ impl RetrievalFusionEngine {
             tag_overlap,
             temporal_recency,
             type_match,
+            bm25_keyword,
         }
     }
 
@@ -234,8 +270,7 @@ mod tests {
     #[test]
     fn test_default_weights_sum_to_one() {
         let w = FusionWeights::default();
-        let sum = w.semantic + w.causal + w.access + w.tag + w.temporal + w.type_match;
-        assert!((sum - 1.0).abs() < 0.01, "weights sum to {}", sum);
+        assert!((w.total() - 1.0).abs() < 0.01, "weights sum to {}", w.total());
     }
 
     #[test]
@@ -248,6 +283,7 @@ mod tests {
             tag_overlap: 0.8,
             temporal_recency: 0.7,
             type_match: 1.0,
+            bm25_keyword: 0.6,
         };
         let score = w.fuse(&signals);
         assert!(score > 0.0 && score <= 1.0, "fused score = {}", score);
@@ -265,11 +301,34 @@ mod tests {
             query_tags: &["rust".to_string()],
             query_memory_type: Some(MemoryType::Semantic),
             context_entry_id: None,
+            bm25_scores: None,
         };
 
         let results = engine.rank(&[e1.clone(), e2.clone()], &query, None, 10);
         assert_eq!(results[0].entry.id, "a");
         assert!(results[0].fused_score > results[1].fused_score);
+    }
+
+    #[test]
+    fn test_bm25_signal_boosts_ranking() {
+        let engine = RetrievalFusionEngine::new(FusionWeights::default());
+        let emb = vec![1.0, 0.0, 0.0];
+        let e1 = make_entry("a", vec![], 0, Some(vec![0.5, 0.5, 0.0]));
+        let e2 = make_entry("b", vec![], 0, Some(vec![0.5, 0.5, 0.0]));
+
+        let mut bm25 = std::collections::HashMap::new();
+        bm25.insert("b".to_string(), 1.0_f32);
+
+        let query = RetrievalQuery {
+            query_embedding: &emb,
+            query_tags: &[],
+            query_memory_type: None,
+            context_entry_id: None,
+            bm25_scores: Some(&bm25),
+        };
+
+        let results = engine.rank(&[e1, e2], &query, None, 10);
+        assert_eq!(results[0].entry.id, "b", "BM25 boost should promote entry b");
     }
 
     #[test]
@@ -281,9 +340,35 @@ mod tests {
             query_tags: &["a".to_string(), "b".to_string(), "d".to_string()],
             query_memory_type: None,
             context_entry_id: None,
+            bm25_scores: None,
         };
         let signals = engine.score(&e, &query, None);
         let expected_jaccard = 2.0 / 4.0; // {a,b} / {a,b,c,d}
         assert!((signals.tag_overlap - expected_jaccard).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_weights_serialize_deserialize() {
+        let w = FusionWeights::default();
+        let json = serde_json::to_string(&w).unwrap();
+        let w2: FusionWeights = serde_json::from_str(&json).unwrap();
+        assert!((w.semantic - w2.semantic).abs() < 1e-6);
+        assert!((w.bm25_keyword - w2.bm25_keyword).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_normalize_preserves_ratios() {
+        let mut w = FusionWeights {
+            semantic: 2.0,
+            causal: 1.0,
+            access: 1.0,
+            tag: 1.0,
+            temporal: 1.0,
+            type_match: 1.0,
+            bm25_keyword: 1.0,
+        };
+        w.normalize();
+        assert!((w.total() - 1.0).abs() < 0.01);
+        assert!(w.semantic > w.causal);
     }
 }

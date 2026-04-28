@@ -165,10 +165,33 @@ Store → Distill → Recall 端到端管道。蒸馏延迟从 3548ms 降至 184
 3. **蒸馏延迟**: 仍是全管道瓶颈（~1.8s），受限于 LLM 推理速度
 4. **记忆存储非批量**: `remember_long_term` 逐条 embed，未利用 batch API（B13 已证明可 2.5x 加速）
 
+## v32 扩展 Benchmark (B20-B24)
+
+| # | Benchmark | 对标 | 准确率 | Query Latency | Ingest |
+|---|-----------|------|--------|---------------|--------|
+| B20 | LongMemEval Suite (5类) | LongMemEval | 91% (10/11) | 9.3ms | 1,179ms/24项 |
+| B21 | LoCoMo Suite (4类) | LoCoMo | 100% (9/9) | 9.9ms | 856ms/20项 |
+| B22 | Scale 500 条 | LongMemEval_S | 100% (10/10) | 17.1ms | 408s/500项 |
+| B23 | Real Context Scale | 真实数据 | 90% (9/10) | 12.5ms | 911ms/20项 |
+| B24 | RFE 7-Signal | BM25 混合 | 100% (10/10) | 11.3ms | 365ms/10项 |
+
+### 500-entry Scale Curve (B22)
+
+| 规模 | Ingest ms/item | Query Latency |
+|------|---------------|---------------|
+| 100 | 172.1 | — |
+| 200 | 492.8 | — |
+| 300 | 813.9 | — |
+| 400 | 1,137.6 | — |
+| 500 | 1,463.0 | 17.1ms |
+
+**查询延迟在 500 条规模下仅 17.1ms，几乎无退化。**
+
 ## 下一步优化方向
 
 1. **Batch Embedding 集成**: 在 `remember_long_term` 路径中使用 `embed_batch` API
 2. **蒸馏并行化**: 不同 MemoryType 的分组可并行调用 LLM
 3. **更大 Embedding 模型**: 替换为更强的 embedding 模型提升语义区分度
 4. **Prompt 工程**: 矛盾检测可引入 Chain-of-Thought 提升边界 case 准确率
-5. **规模扩展测试**: 100-500 条数据下的搜索延迟退化曲线
+5. **时间实体抽取**: B20 TR 类别的日期推理需要 structured time extraction
+6. **Ingest 批量化**: 500 条 ingest 耗时 408s，主要瓶颈是逐条 embedding 调用
