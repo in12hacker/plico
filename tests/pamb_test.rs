@@ -1,16 +1,29 @@
-//! Plico Agentic Memory Benchmark (PAMB) — 4 multi-agent collaboration scenarios.
+//! Plico Agentic Memory Benchmark (PAMB v2) — 8 multi-agent OS-level scenarios.
 //!
 //! Tests Plico's core Soul 2.0 axioms in realistic agentic workflows:
 //! - Scenario 1: Multi-agent knowledge sharing (Axiom #4)
 //! - Scenario 2: Cross-session memory persistence (Axiom #3 + #10)
 //! - Scenario 3: Memory distillation and forgetting (Axiom #9)
 //! - Scenario 4: Intent-aware retrieval routing (Axiom #2 + #7)
+//! - Scenario 5: Causal chain tracing accuracy (Axiom #8) [v30]
+//! - Scenario 6: Memory pressure fairness (Axiom #1) [v30]
+//! - Scenario 7: Foresight prediction accuracy (Axiom #7) [v30]
+//! - Scenario 8: Meta-memory self-awareness (Axiom #9) [v30]
 
 use plico::kernel::AIKernel;
 use plico::memory::{MemoryScope, MemoryType, MemoryTier, MemoryContent, MemoryEntry};
 use plico::fs::retrieval_router::{QueryIntent, ClassificationMethod};
 use plico::memory::forgetting::{default_ttl_ms, check_exact_dedup, DedupResult, check_contradiction_rules, ContradictionResult};
 use plico::memory::distillation::{distill_working_memory, to_long_term_entry};
+use plico::memory::causal::CausalGraph;
+use plico::memory::topology::{should_split, IntentHitRecord, split_by_intent};
+use plico::memory::cross_agent::try_distill_for_sharing;
+use plico::memory::foresight::{MarkovAccessChain, AccessEvent};
+use plico::memory::pressure::{eviction_priority, select_evictions, is_under_pressure};
+use plico::fs::adaptive_budget::{Ucb1Bandit, StrategyArm};
+use plico::memory::meta_memory::{MetaMemory, TuningAction};
+use plico::memory::temporal_causal::TemporalCausalIndex;
+use std::collections::HashMap;
 use tempfile::tempdir;
 
 fn now_ms() -> u64 {
@@ -372,4 +385,255 @@ fn pamb_s4_routing_uses_rule_fallback_without_llm() {
     let (_, classified) = kernel.recall_routed("kernel", "default", "When was it?").unwrap();
     assert_eq!(classified.method, ClassificationMethod::RuleBased,
         "With stub LLM, classification should fall back to rules");
+}
+
+// ═══════════════════════════════════════════════════════════════
+// S5: Causal Chain Tracing Accuracy (Axiom #8)
+// ═══════════════════════════════════════════════════════════════
+
+#[test]
+fn pamb_s5_causal_chain_single_linear() {
+    let entries = vec![
+        {
+            let mut e = MemoryEntry::ephemeral("agent-a", "config changed"); e.id = "c1".into(); e
+        },
+        {
+            let mut e = MemoryEntry::ephemeral("agent-a", "deploy triggered");
+            e.id = "c2".into(); e.causal_parent = Some("c1".into()); e
+        },
+        {
+            let mut e = MemoryEntry::ephemeral("agent-a", "error occurred");
+            e.id = "c3".into(); e.causal_parent = Some("c2".into()); e
+        },
+    ];
+    let graph = CausalGraph::build(&entries);
+    assert_eq!(graph.root_cause("c3"), "c1");
+    assert_eq!(graph.ancestors("c3"), vec!["c1", "c2"]);
+}
+
+#[test]
+fn pamb_s5_causal_chain_branching() {
+    let entries = vec![
+        { let mut e = MemoryEntry::ephemeral("a", "root decision"); e.id = "r".into(); e },
+        { let mut e = MemoryEntry::ephemeral("a", "branch A"); e.id = "a1".into(); e.causal_parent = Some("r".into()); e },
+        { let mut e = MemoryEntry::ephemeral("a", "branch B"); e.id = "b1".into(); e.causal_parent = Some("r".into()); e },
+        { let mut e = MemoryEntry::ephemeral("a", "leaf A"); e.id = "a2".into(); e.causal_parent = Some("a1".into()); e },
+    ];
+    let graph = CausalGraph::build(&entries);
+    assert_eq!(graph.descendants("r").len(), 3);
+    assert_eq!(graph.root_cause("a2"), "r");
+}
+
+#[test]
+fn pamb_s5_supersession_chain_latest_version() {
+    let entries = vec![
+        { let mut e = MemoryEntry::ephemeral("a", "fact v1"); e.id = "v1".into(); e },
+        { let mut e = MemoryEntry::ephemeral("a", "fact v2"); e.id = "v2".into(); e.supersedes = Some("v1".into()); e },
+        { let mut e = MemoryEntry::ephemeral("a", "fact v3"); e.id = "v3".into(); e.supersedes = Some("v2".into()); e },
+    ];
+    let graph = CausalGraph::build(&entries);
+    assert_eq!(graph.latest_version("v1"), "v3");
+    assert!(graph.is_superseded("v1"));
+    assert!(!graph.is_superseded("v3"));
+}
+
+#[test]
+fn pamb_s5_temporal_causal_root_trace() {
+    let entries = vec![
+        { let mut e = MemoryEntry::ephemeral("a", "config error"); e.id = "e1".into();
+          e.created_at = 1000; e.tags = vec!["config".into()]; e },
+        { let mut e = MemoryEntry::ephemeral("a", "service crash"); e.id = "e2".into();
+          e.created_at = 2000; e.causal_parent = Some("e1".into());
+          e.tags = vec!["crash".into(), "config".into()]; e },
+    ];
+    let index = TemporalCausalIndex::build(&entries);
+    let graph = CausalGraph::build(&entries);
+    let roots = index.trace_root_causes("config", 1500, 3000, &graph);
+    assert!(roots.contains(&"e1".to_string()), "should trace crash back to config error");
+}
+
+// ═══════════════════════════════════════════════════════════════
+// S6: Memory Pressure Fairness (Axiom #1)
+// ═══════════════════════════════════════════════════════════════
+
+#[test]
+fn pamb_s6_eviction_priority_correct_ordering() {
+    let now = 1000000;
+    let entries = vec![
+        { let mut e = MemoryEntry::ephemeral("a", "temp"); e.id = "e1".into();
+          e.memory_type = MemoryType::Untyped; e },
+        { let mut e = MemoryEntry::ephemeral("a", "fact"); e.id = "e2".into();
+          e.tier = MemoryTier::LongTerm; e.memory_type = MemoryType::Semantic;
+          e.access_count = 5; e },
+        { let mut e = MemoryEntry::ephemeral("a", "skill"); e.id = "e3".into();
+          e.tier = MemoryTier::Procedural; e.memory_type = MemoryType::Procedural;
+          e.access_count = 10; e },
+    ];
+    let p1 = eviction_priority(&entries[0], now);
+    let p2 = eviction_priority(&entries[1], now);
+    let p3 = eviction_priority(&entries[2], now);
+    assert!(p1 < p2 && p2 < p3, "Ephemeral < LongTerm < Procedural");
+}
+
+#[test]
+fn pamb_s6_over_quota_agent_evicted_first() {
+    let mut quotas = HashMap::new();
+    quotas.insert("greedy".to_string(), 1);
+    quotas.insert("modest".to_string(), 10);
+
+    let entries: Vec<MemoryEntry> = (0..5).map(|i| {
+        let mut e = MemoryEntry::ephemeral("greedy", format!("note {}", i));
+        e.id = format!("g{}", i);
+        e.tier = MemoryTier::Working;
+        e.memory_type = MemoryType::Semantic;
+        e
+    }).chain(std::iter::once({
+        let mut e = MemoryEntry::ephemeral("modest", "important");
+        e.id = "m1".into();
+        e.tier = MemoryTier::Working;
+        e.memory_type = MemoryType::Semantic;
+        e
+    })).collect();
+
+    let evictions = select_evictions(&entries, 3, &quotas, now_ms());
+    assert_eq!(evictions.len(), 3);
+    let greedy_evicted = evictions.iter().filter(|id| id.starts_with("g")).count();
+    assert!(greedy_evicted >= 2, "over-quota agent should bear most evictions");
+}
+
+#[test]
+fn pamb_s6_no_eviction_under_budget() {
+    let entries = vec![MemoryEntry::ephemeral("a", "note")];
+    assert!(!is_under_pressure(entries.len(), 100));
+    assert!(select_evictions(&entries, 100, &HashMap::new(), now_ms()).is_empty());
+}
+
+// ═══════════════════════════════════════════════════════════════
+// S7: Foresight Prediction Accuracy (Axiom #7)
+// ═══════════════════════════════════════════════════════════════
+
+#[test]
+fn pamb_s7_markov_chain_predicts_next_memory() {
+    let mut chain = MarkovAccessChain::new(0);
+    let events: Vec<AccessEvent> = vec![
+        AccessEvent { agent_id: "a".into(), memory_id: "m1".into(), timestamp_ms: 100 },
+        AccessEvent { agent_id: "a".into(), memory_id: "m2".into(), timestamp_ms: 200 },
+        AccessEvent { agent_id: "a".into(), memory_id: "m3".into(), timestamp_ms: 300 },
+        AccessEvent { agent_id: "a".into(), memory_id: "m1".into(), timestamp_ms: 400 },
+        AccessEvent { agent_id: "a".into(), memory_id: "m2".into(), timestamp_ms: 500 },
+        AccessEvent { agent_id: "a".into(), memory_id: "m3".into(), timestamp_ms: 600 },
+    ];
+    chain.build_from_events(&events, 10000);
+
+    let predictions = chain.predict("m1", 3);
+    assert!(!predictions.is_empty());
+    assert_eq!(predictions[0].0, "m2", "m1 should most likely lead to m2");
+}
+
+#[test]
+fn pamb_s7_multihop_prediction_reaches_distant_memory() {
+    let mut chain = MarkovAccessChain::new(0);
+    let events: Vec<AccessEvent> = (0..10).flat_map(|_| {
+        vec![
+            AccessEvent { agent_id: "a".into(), memory_id: "start".into(), timestamp_ms: 100 },
+            AccessEvent { agent_id: "a".into(), memory_id: "mid".into(), timestamp_ms: 200 },
+            AccessEvent { agent_id: "a".into(), memory_id: "end".into(), timestamp_ms: 300 },
+        ]
+    }).collect();
+    chain.build_from_events(&events, 10000);
+
+    let multihop = chain.predict_multihop("start", 2, 5);
+    let ids: Vec<&str> = multihop.iter().map(|(id, _)| id.as_str()).collect();
+    assert!(ids.contains(&"end"), "multihop should reach 'end' from 'start'");
+}
+
+#[test]
+fn pamb_s7_cross_agent_isolation() {
+    let mut chain = MarkovAccessChain::new(0);
+    let events = vec![
+        AccessEvent { agent_id: "a".into(), memory_id: "m1".into(), timestamp_ms: 100 },
+        AccessEvent { agent_id: "b".into(), memory_id: "m2".into(), timestamp_ms: 200 },
+    ];
+    chain.build_from_events(&events, 10000);
+    assert!(chain.predict("m1", 5).is_empty(), "cross-agent accesses should not create transitions");
+}
+
+// ═══════════════════════════════════════════════════════════════
+// S8: Meta-Memory Self-Awareness + Adaptive Budget (Axiom #9)
+// ═══════════════════════════════════════════════════════════════
+
+#[test]
+fn pamb_s8_meta_memory_detects_low_hit_rate() {
+    let mut meta = MetaMemory::default_tracker();
+    for _ in 0..25 {
+        meta.record_retrieval(QueryIntent::Factual, false);
+    }
+    let actions = meta.recommend_tuning();
+    assert!(actions.contains(&TuningAction::IncreaseTopK { by: 5 }),
+        "low hit rate should trigger IncreaseTopK recommendation");
+}
+
+#[test]
+fn pamb_s8_meta_memory_healthy_no_tuning() {
+    let mut meta = MetaMemory::default_tracker();
+    for _ in 0..20 {
+        meta.record_retrieval(QueryIntent::Factual, true);
+        meta.record_dedup(false);
+        meta.record_causal(true);
+        meta.record_foresight(true);
+    }
+    meta.record_shared_access(10, 8);
+    assert!(meta.recommend_tuning().is_empty(), "healthy system should need no tuning");
+}
+
+#[test]
+fn pamb_s8_ucb1_bandit_converges_to_best_strategy() {
+    let mut bandit = Ucb1Bandit::new(0.5);
+    for _ in 0..100 {
+        bandit.record(StrategyArm::Vector, 0.9);
+        bandit.record(StrategyArm::Bm25, 0.3);
+        bandit.record(StrategyArm::KnowledgeGraph, 0.5);
+        bandit.record(StrategyArm::TypedRecall, 0.4);
+    }
+    assert_eq!(bandit.select_arm(), StrategyArm::Vector,
+        "after convergence, should exploit best strategy");
+}
+
+#[test]
+fn pamb_s8_topology_split_triggers_on_diverse_intents() {
+    let entry = {
+        let mut e = MemoryEntry::ephemeral("a", "mixed content");
+        e.id = "mix".into();
+        e.tier = MemoryTier::LongTerm;
+        e
+    };
+    let mut record = IntentHitRecord::new("mix");
+    record.record_hit(QueryIntent::Factual);
+    record.record_hit(QueryIntent::Temporal);
+    record.record_hit(QueryIntent::MultiHop);
+    record.record_hit(QueryIntent::Preference);
+    assert!(should_split(&record), "diverse intent hits should trigger split");
+    let splits = split_by_intent(&entry, &record);
+    assert!(splits.len() >= 2, "should produce multiple specialized entries");
+}
+
+#[test]
+fn pamb_s8_cross_agent_distillation_produces_shared() {
+    let proc = {
+        let mut e = MemoryEntry::ephemeral("agent-a", "deploy via CI");
+        e.id = "p1".into();
+        e.tier = MemoryTier::Procedural;
+        e.memory_type = MemoryType::Procedural;
+        e.tags = vec!["deploy".into(), "ci".into()];
+        e
+    };
+    let other = {
+        let mut e = MemoryEntry::ephemeral("agent-b", "need CI help");
+        e.id = "o1".into();
+        e.tags = vec!["ci".into(), "help".into()];
+        e
+    };
+    let result = try_distill_for_sharing(&proc, &[proc.clone(), other], |_| None);
+    assert!(result.is_some(), "should distill for relevant agent");
+    assert_eq!(result.unwrap().distilled_entry.scope, MemoryScope::Shared);
 }

@@ -7,7 +7,7 @@
 //!
 //! All operations have CPU-only rule-based paths and optional LLM-enhanced paths.
 
-use crate::memory::layered::{MemoryEntry, MemoryContent, MemoryType, MemoryTier, MemoryScope};
+use crate::memory::layered::{MemoryEntry, MemoryContent, MemoryType, MemoryScope};
 use crate::fs::retrieval_router::QueryIntent;
 use std::collections::HashMap;
 use uuid::Uuid;
@@ -399,6 +399,8 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::memory::layered::MemoryTier;
+
     fn make_entry(id: &str, agent: &str, content: &str, mem_type: MemoryType) -> MemoryEntry {
         let mut e = MemoryEntry::ephemeral(agent, content);
         e.id = id.to_string();
