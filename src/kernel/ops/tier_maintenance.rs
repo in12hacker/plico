@@ -147,6 +147,8 @@ mod tests {
             original_ttl_ms: None,
             scope: crate::memory::MemoryScope::Private,
             memory_type: crate::memory::MemoryType::default(),
+            causal_parent: None,
+            supersedes: None,
         }
     }
 

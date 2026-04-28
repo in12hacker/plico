@@ -231,6 +231,8 @@ mod tests {
             original_ttl_ms: None,
             scope: crate::memory::layered::MemoryScope::Private,
             memory_type: crate::memory::layered::MemoryType::default(),
+            causal_parent: None,
+            supersedes: None,
         }
     }
 

@@ -210,6 +210,8 @@ mod tests {
             original_ttl_ms: None,
             scope: MemoryScope::Private,
             memory_type: mem_type,
+            causal_parent: None,
+            supersedes: None,
         }
     }
 

@@ -169,6 +169,8 @@ mod tests {
             original_ttl_ms: None,
             scope: MemoryScope::Shared,
             memory_type: crate::memory::MemoryType::Procedural,
+            causal_parent: None,
+            supersedes: None,
         }
     }
 

@@ -161,6 +161,14 @@ pub struct MemoryEntry {
     /// Cognitive memory type — episodic, semantic, procedural, or untyped.
     #[serde(default)]
     pub memory_type: MemoryType,
+
+    /// Causal parent — ID of the memory that causally led to this one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub causal_parent: Option<String>,
+
+    /// Supersedes — ID of the memory this one replaces (contradiction resolution).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supersedes: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -251,6 +259,8 @@ impl MemoryEntry {
             original_ttl_ms: None,
             scope: MemoryScope::Private,
             memory_type: MemoryType::Untyped,
+            causal_parent: None,
+            supersedes: None,
         }
     }
 
@@ -277,12 +287,26 @@ impl MemoryEntry {
             original_ttl_ms: None,
             scope: MemoryScope::Private,
             memory_type: MemoryType::Untyped,
+            causal_parent: None,
+            supersedes: None,
         }
     }
 
     /// Set the cognitive memory type.
     pub fn with_memory_type(mut self, memory_type: MemoryType) -> Self {
         self.memory_type = memory_type;
+        self
+    }
+
+    /// Set the causal parent (the memory that led to this one).
+    pub fn with_causal_parent(mut self, parent_id: impl Into<String>) -> Self {
+        self.causal_parent = Some(parent_id.into());
+        self
+    }
+
+    /// Mark this entry as superseding another (contradiction resolution).
+    pub fn with_supersedes(mut self, old_id: impl Into<String>) -> Self {
+        self.supersedes = Some(old_id.into());
         self
     }
 

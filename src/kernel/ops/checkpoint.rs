@@ -180,6 +180,8 @@ impl CheckpointMemory {
             original_ttl_ms: None,
             scope,
             memory_type: crate::memory::MemoryType::default(),
+            causal_parent: None,
+            supersedes: None,
         }
     }
 }
@@ -240,6 +242,8 @@ impl AgentCheckpoint {
             original_ttl_ms: None,
             scope: MemoryScope::Private,
             memory_type: crate::memory::MemoryType::default(),
+            causal_parent: None,
+            supersedes: None,
         }
     }
 }
@@ -452,6 +456,8 @@ mod tests {
             original_ttl_ms: None,
             scope: MemoryScope::Private,
             memory_type: crate::memory::MemoryType::default(),
+            causal_parent: None,
+            supersedes: None,
         };
 
         let cm = CheckpointMemory::from_entry(entry);

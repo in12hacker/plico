@@ -85,6 +85,8 @@ fn test_private_memory_invisible_to_other_agents() {
         original_ttl_ms: None,
         scope: MemoryScope::Private,
         memory_type: MemoryType::default(),
+        causal_parent: None,
+        supersedes: None,
     };
     mem.store(entry);
 
@@ -115,6 +117,8 @@ fn test_shared_memory_visible_to_all() {
         original_ttl_ms: None,
         scope: MemoryScope::Shared,
         memory_type: MemoryType::default(),
+        causal_parent: None,
+        supersedes: None,
     };
     mem.store(entry);
 
@@ -147,6 +151,8 @@ fn test_group_memory_visible_to_group_members() {
         original_ttl_ms: None,
         scope: MemoryScope::Group("engineering".into()),
         memory_type: MemoryType::default(),
+        causal_parent: None,
+        supersedes: None,
     };
     mem.store(entry);
 
@@ -174,6 +180,7 @@ fn test_get_shared_returns_only_shared_scope() {
         importance: 50, access_count: 0, last_accessed: now_ms(), created_at: now_ms(),
         tags: vec![], embedding: None, ttl_ms: None, original_ttl_ms: None,
         scope: MemoryScope::Private, memory_type: MemoryType::default(),
+        causal_parent: None, supersedes: None,
     });
     mem.store(MemoryEntry {
         id: "shared-1".into(),
@@ -184,6 +191,7 @@ fn test_get_shared_returns_only_shared_scope() {
         importance: 50, access_count: 0, last_accessed: now_ms(), created_at: now_ms(),
         tags: vec![], embedding: None, ttl_ms: None, original_ttl_ms: None,
         scope: MemoryScope::Shared, memory_type: MemoryType::default(),
+        causal_parent: None, supersedes: None,
     });
     mem.store(MemoryEntry {
         id: "group-1".into(),
@@ -194,6 +202,7 @@ fn test_get_shared_returns_only_shared_scope() {
         importance: 50, access_count: 0, last_accessed: now_ms(), created_at: now_ms(),
         tags: vec![], embedding: None, ttl_ms: None, original_ttl_ms: None,
         scope: MemoryScope::Group("team".into()), memory_type: MemoryType::default(),
+        causal_parent: None, supersedes: None,
     });
 
     let shared = mem.get_shared(MemoryTier::Working);
@@ -214,6 +223,7 @@ fn test_get_by_group_returns_only_matching_group() {
         importance: 50, access_count: 0, last_accessed: now_ms(), created_at: now_ms(),
         tags: vec![], embedding: None, ttl_ms: None, original_ttl_ms: None,
         scope: MemoryScope::Group("engineering".into()), memory_type: MemoryType::default(),
+        causal_parent: None, supersedes: None,
     });
     mem.store(MemoryEntry {
         id: "mkt-1".into(),
@@ -224,6 +234,7 @@ fn test_get_by_group_returns_only_matching_group() {
         importance: 50, access_count: 0, last_accessed: now_ms(), created_at: now_ms(),
         tags: vec![], embedding: None, ttl_ms: None, original_ttl_ms: None,
         scope: MemoryScope::Group("marketing".into()), memory_type: MemoryType::default(),
+        causal_parent: None, supersedes: None,
     });
 
     let eng = mem.get_by_group("engineering", MemoryTier::Procedural);
@@ -248,6 +259,7 @@ fn test_recall_visible_combines_private_shared_group() {
         importance: 50, access_count: 0, last_accessed: now_ms(), created_at: now_ms(),
         tags: vec![], embedding: None, ttl_ms: None, original_ttl_ms: None,
         scope: MemoryScope::Private, memory_type: MemoryType::default(),
+        causal_parent: None, supersedes: None,
     });
     mem.store(MemoryEntry {
         id: "other-private".into(),
@@ -258,6 +270,7 @@ fn test_recall_visible_combines_private_shared_group() {
         importance: 50, access_count: 0, last_accessed: now_ms(), created_at: now_ms(),
         tags: vec![], embedding: None, ttl_ms: None, original_ttl_ms: None,
         scope: MemoryScope::Private, memory_type: MemoryType::default(),
+        causal_parent: None, supersedes: None,
     });
     mem.store(MemoryEntry {
         id: "common-shared".into(),
@@ -268,6 +281,7 @@ fn test_recall_visible_combines_private_shared_group() {
         importance: 80, access_count: 0, last_accessed: now_ms(), created_at: now_ms(),
         tags: vec![], embedding: None, ttl_ms: None, original_ttl_ms: None,
         scope: MemoryScope::Shared, memory_type: MemoryType::default(),
+        causal_parent: None, supersedes: None,
     });
     mem.store(MemoryEntry {
         id: "team-group".into(),
@@ -278,6 +292,7 @@ fn test_recall_visible_combines_private_shared_group() {
         importance: 90, access_count: 0, last_accessed: now_ms(), created_at: now_ms(),
         tags: vec![], embedding: None, ttl_ms: None, original_ttl_ms: None,
         scope: MemoryScope::Group("devs".into()), memory_type: MemoryType::default(),
+        causal_parent: None, supersedes: None,
     });
 
     let visible = mem.recall_visible("agent-a", &["devs".into()]);
@@ -317,12 +332,14 @@ fn test_clear_agent_removes_all_tiers() {
         content: MemoryContent::Text("working note".into()),
         importance: 50, access_count: 0, last_accessed: now_ms(), created_at: now_ms(),
         tags: vec![], embedding: None, ttl_ms: None, original_ttl_ms: None, scope: MemoryScope::Private, memory_type: MemoryType::default(),
+        causal_parent: None, supersedes: None,
     });
     mem.store(MemoryEntry {
         id: "lt-1".into(), agent_id: agent.into(), tenant_id: "default".to_string(), tier: MemoryTier::LongTerm,
         content: MemoryContent::Text("long-term note".into()),
         importance: 80, access_count: 0, last_accessed: now_ms(), created_at: now_ms(),
         tags: vec![], embedding: None, ttl_ms: None, original_ttl_ms: None, scope: MemoryScope::Private, memory_type: MemoryType::default(),
+        causal_parent: None, supersedes: None,
     });
 
     assert_eq!(mem.get_all(agent).len(), 3);

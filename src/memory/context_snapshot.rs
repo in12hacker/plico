@@ -44,6 +44,8 @@ impl ContextSnapshot {
             original_ttl_ms: None,
             scope: crate::memory::layered::MemoryScope::Private,
             memory_type: crate::memory::layered::MemoryType::Episodic,
+            causal_parent: None,
+            supersedes: None,
         }
     }
 

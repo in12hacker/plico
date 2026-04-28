@@ -217,6 +217,8 @@ fn pamb_s3_contradiction_detection_catches_conflicts() {
         original_ttl_ms: None,
         scope: MemoryScope::Private,
         memory_type: MemoryType::Semantic,
+        causal_parent: None,
+        supersedes: None,
     };
 
     let new_entry = MemoryEntry {
@@ -235,6 +237,8 @@ fn pamb_s3_contradiction_detection_catches_conflicts() {
         original_ttl_ms: None,
         scope: MemoryScope::Private,
         memory_type: MemoryType::Semantic,
+        causal_parent: None,
+        supersedes: None,
     };
 
     let result = check_contradiction_rules(&new_entry, &[old_entry], 2);
@@ -260,6 +264,8 @@ fn pamb_s3_distillation_compresses_working_memory() {
         original_ttl_ms: None,
         scope: MemoryScope::Private,
         memory_type: MemoryType::Episodic,
+        causal_parent: None,
+        supersedes: None,
     }).collect();
 
     let distilled = distill_working_memory(&working_entries, |_| None);

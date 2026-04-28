@@ -115,6 +115,8 @@ pub fn to_long_term_entry(
         original_ttl_ms: None,
         scope: MemoryScope::Private,
         memory_type: distilled.memory_type,
+        causal_parent: None,
+        supersedes: None,
     }
 }
 
@@ -151,6 +153,8 @@ mod tests {
             original_ttl_ms: None,
             scope: MemoryScope::Private,
             memory_type: mem_type,
+            causal_parent: None,
+            supersedes: None,
         }
     }
 

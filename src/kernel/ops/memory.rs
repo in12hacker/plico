@@ -85,6 +85,8 @@ impl crate::kernel::AIKernel {
             original_ttl_ms: None,
             scope: MemoryScope::Private,
             memory_type: MemoryType::default(),
+            causal_parent: None,
+            supersedes: None,
         };
         let quota = self.agent_memory_quota(agent_id);
         self.memory.store_checked(entry, quota)
@@ -134,6 +136,8 @@ impl crate::kernel::AIKernel {
             original_ttl_ms: None,
             scope,
             memory_type: MemoryType::default(),
+            causal_parent: None,
+            supersedes: None,
         };
         let quota = self.agent_memory_quota(agent_id);
         self.memory.store_checked(entry, quota)
@@ -274,6 +278,8 @@ impl crate::kernel::AIKernel {
             original_ttl_ms: None,
             scope: scope.clone(),
             memory_type: MemoryType::default(),
+            causal_parent: None,
+            supersedes: None,
         };
         let quota = self.agent_memory_quota(agent_id);
         self.memory.store_checked(entry, quota)
@@ -478,6 +484,8 @@ impl crate::kernel::AIKernel {
             original_ttl_ms: None,
             scope,
             memory_type: MemoryType::Procedural,
+            causal_parent: None,
+            supersedes: None,
         };
         let quota = self.agent_memory_quota(agent_id);
         self.memory.store_checked(entry, quota).map_err(|e| e.to_string())?;
