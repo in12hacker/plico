@@ -73,6 +73,71 @@ pub fn distill_working_memory(
     distilled
 }
 
+/// Parallel distillation — processes each MemoryType group in its own thread.
+///
+/// When there are 2+ memory type groups, this achieves near-linear speedup
+/// since each LLM summarization call is independent.
+pub fn distill_working_memory_parallel(
+    entries: &[MemoryEntry],
+    summarizer: impl Fn(&str) -> Option<String> + Send + Sync,
+) -> Vec<DistilledEntry> {
+    if entries.is_empty() {
+        return Vec::new();
+    }
+
+    let mut by_type: HashMap<MemoryType, Vec<&MemoryEntry>> = HashMap::new();
+    for entry in entries {
+        by_type.entry(entry.memory_type).or_default().push(entry);
+    }
+
+    if by_type.len() <= 1 {
+        return distill_working_memory(entries, summarizer);
+    }
+
+    let groups: Vec<(MemoryType, Vec<String>, Vec<String>, u8, String)> = by_type
+        .into_iter()
+        .filter(|(_, group)| !group.is_empty())
+        .map(|(mem_type, group)| {
+            let source_ids: Vec<String> = group.iter().map(|e| e.id.clone()).collect();
+            let all_tags: Vec<String> = group.iter()
+                .flat_map(|e| e.tags.iter().cloned())
+                .collect::<std::collections::HashSet<_>>()
+                .into_iter()
+                .collect();
+            let max_importance = group.iter().map(|e| e.importance).max().unwrap_or(50);
+            let combined_text = group.iter()
+                .map(|e| e.content.display().to_string())
+                .collect::<Vec<_>>()
+                .join("\n");
+            (mem_type, source_ids, all_tags, max_importance, combined_text)
+        })
+        .collect();
+
+    std::thread::scope(|s| {
+        let handles: Vec<_> = groups
+            .iter()
+            .map(|(mem_type, source_ids, all_tags, max_importance, combined_text)| {
+                let summarizer = &summarizer;
+                s.spawn(move || {
+                    let content = match summarizer(combined_text) {
+                        Some(summary) => summary,
+                        None => combined_text.clone(),
+                    };
+                    DistilledEntry {
+                        content,
+                        memory_type: *mem_type,
+                        tags: all_tags.clone(),
+                        importance: *max_importance,
+                        source_ids: source_ids.clone(),
+                    }
+                })
+            })
+            .collect();
+
+        handles.into_iter().map(|h| h.join().unwrap()).collect()
+    })
+}
+
 /// Rule-based merge: deduplicate, concatenate, and truncate.
 fn rule_based_merge(entries: &[&MemoryEntry]) -> String {
     let mut seen = std::collections::HashSet::new();

@@ -455,27 +455,39 @@ impl crate::kernel::AIKernel {
         let ctx = PermissionContext::new(agent_id.to_string(), tenant_id.to_string());
         self.permissions.check(&ctx, PermissionAction::Read).map_err(|e| e.to_string())?;
 
-        let classified = {
-            let prompt = {
-                let mut vars = std::collections::HashMap::new();
-                vars.insert("query", query.to_string());
-                self.prompt_registry
-                    .render("intent_classification", &vars, Some(agent_id))
-                    .unwrap_or_else(|_| intent_classification_prompt(query))
-            };
-            let opts = ChatOptions { temperature: 0.0, max_tokens: Some(20) };
-            let msgs = [ChatMessage::system("You are an intent classifier."), ChatMessage::user(prompt)];
-            match self.llm_provider.chat(&msgs, &opts) {
-                Ok((response, _in_tok, _out_tok)) => {
-                    classify_by_llm_response(&response).unwrap_or_else(|| classify_by_rules(query))
+        // v31 concurrent optimization: intent classification and query embedding
+        // run in parallel since they have no data dependency.
+        let (classified, query_emb_result) = std::thread::scope(|s| {
+            let classify_handle = s.spawn(|| {
+                let prompt = {
+                    let mut vars = std::collections::HashMap::new();
+                    vars.insert("query", query.to_string());
+                    self.prompt_registry
+                        .render("intent_classification", &vars, Some(agent_id))
+                        .unwrap_or_else(|_| intent_classification_prompt(query))
+                };
+                let opts = ChatOptions { temperature: 0.0, max_tokens: Some(20) };
+                let msgs = [ChatMessage::system("You are an intent classifier."), ChatMessage::user(prompt)];
+                match self.llm_provider.chat(&msgs, &opts) {
+                    Ok((response, _in_tok, _out_tok)) => {
+                        classify_by_llm_response(&response).unwrap_or_else(|| classify_by_rules(query))
+                    }
+                    Err(_) => classify_by_rules(query),
                 }
-                Err(_) => classify_by_rules(query),
-            }
-        };
+            });
+
+            let embed_handle = s.spawn(|| {
+                self.embedding.embed(query)
+            });
+
+            let classified = classify_handle.join().unwrap();
+            let emb_result = embed_handle.join().unwrap();
+            (classified, emb_result)
+        });
 
         let config = RetrievalConfig::for_intent(classified.intent);
 
-        let results: Vec<MemoryEntry> = match self.embedding.embed(query) {
+        let results: Vec<MemoryEntry> = match query_emb_result {
             Ok(query_emb) => {
                 let mut entries: Vec<(MemoryEntry, f32)> = if let Some(ref mem_type) = config.typed_retrieval {
                     self.memory.recall_semantic_typed(agent_id, &query_emb.embedding, config.top_k)

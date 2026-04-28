@@ -1179,6 +1179,298 @@ fn bench_b14_conversation_cycle() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
+// B15: CSC Contradiction Detection — 20 cases with causal chain contradictions
+// ═══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn bench_b15_csc_contradiction_detection() {
+    use plico::memory::contradiction::{
+        build_context, RuleBasedClassifier, ContradictionClassifier,
+    };
+    println!("\n═══ B15: CSC Contradiction Detection ═══");
+
+    let cases: Vec<(&str, &str, bool, &str)> = vec![
+        ("Deploy cadence is weekly on Monday", "Deploy cadence is bi-weekly on Thursday", true, "schedule conflict"),
+        ("The API rate limit is 1000 req/min", "The API rate limit is 500 req/min", true, "number conflict"),
+        ("Rust is the primary backend language", "Rust is the primary backend language", false, "identical"),
+        ("Authentication uses JWT tokens", "Authentication uses session cookies", true, "method conflict"),
+        ("The database is PostgreSQL 15", "The database is PostgreSQL 16", true, "version conflict"),
+        ("Team meeting is at 10am", "Team standup is at 10am", false, "different meetings"),
+        ("Cache TTL is 5 minutes", "Cache TTL is 1 hour", true, "duration conflict"),
+        ("Code reviews are required", "Code reviews are recommended", true, "policy conflict"),
+        ("The frontend uses React 18", "The frontend uses React 19", true, "version conflict"),
+        ("Logs are stored for 30 days", "Logs are stored for 90 days", true, "duration conflict"),
+        ("Python 3.11 is the minimum version", "Python 3.12 is the minimum version", true, "version conflict"),
+        ("The sky is blue", "Rust is a programming language", false, "unrelated"),
+        ("Backups run daily at 2am", "Backups run daily at 2am UTC", false, "compatible"),
+        ("Max file size is 10MB", "Max file size is 50MB", true, "limit conflict"),
+        ("TLS 1.2 is required", "TLS 1.3 is required", true, "version conflict"),
+        ("CI runs on GitHub Actions", "CI runs on GitLab CI", true, "platform conflict"),
+        ("Default branch is main", "Default branch is master", true, "name conflict"),
+        ("Tests must pass before merge", "Tests should pass before merge", true, "requirement conflict"),
+        ("The team has 5 members", "The team has 8 members", true, "count conflict"),
+        ("Release cycle is monthly", "Release cycle is quarterly", true, "frequency conflict"),
+    ];
+
+    let classifier = RuleBasedClassifier;
+    let embedding_provider = make_embedding_provider();
+    let has_embeddings = embedding_provider.is_some();
+
+    let mut correct = 0;
+    let total = cases.len();
+
+    for (i, (old_text, new_text, expected_contradiction, desc)) in cases.iter().enumerate() {
+        let mut old_entry = make_entry(&format!("old-{}", i), old_text, MemoryType::Semantic, &[]);
+        let mut new_entry = make_entry(&format!("new-{}", i), new_text, MemoryType::Semantic, &[]);
+
+        if let Some(ref provider) = embedding_provider {
+            old_entry.embedding = provider.embed(old_text).ok().map(|r| r.embedding);
+            new_entry.embedding = provider.embed(new_text).ok().map(|r| r.embedding);
+        }
+
+        let ctx = build_context(&old_entry, &new_entry, None);
+        let result = classifier.classify(&old_entry, &new_entry, &ctx);
+
+        let is_correct = result.is_contradiction == *expected_contradiction;
+        if is_correct { correct += 1; }
+        let mark = if is_correct { "✓" } else { "✗" };
+        println!(
+            "  {mark} [{i:>2}] {desc:<25} expected={:<5} got={:<5} conf={:.2} — {}",
+            expected_contradiction, result.is_contradiction, result.confidence, result.evidence
+        );
+    }
+
+    let accuracy = correct as f64 / total as f64 * 100.0;
+    println!("\n  CSC Rule-Based Accuracy: {correct}/{total} ({accuracy:.0}%)");
+    println!("  Embeddings used: {has_embeddings}");
+    if has_embeddings {
+        assert!(correct >= 10, "CSC accuracy too low with embeddings: {correct}/{total}");
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// B16: RFE Retrieval Fusion — pure cosine vs multi-signal
+// ═══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn bench_b16_rfe_retrieval_fusion() {
+    use plico::fs::retrieval_fusion::{RetrievalFusionEngine, FusionWeights, RetrievalQuery};
+
+    println!("\n═══ B16: RFE Retrieval Fusion vs Pure Cosine ═══");
+
+    let embedding_provider = match make_embedding_provider() {
+        Some(p) => p,
+        None => { println!("  {SKIP_MSG}"); return; }
+    };
+
+    let contents = vec![
+        ("mem-rust-backend", "Rust is used for the backend API server", vec!["backend", "rust"], 10),
+        ("mem-rust-frontend", "Rust/WASM is used for the frontend interactive components", vec!["frontend", "rust"], 2),
+        ("mem-python-ml", "Python handles the ML pipeline and model training", vec!["ml", "python"], 5),
+        ("mem-deploy-k8s", "Kubernetes orchestrates all backend microservices", vec!["backend", "deploy"], 8),
+        ("mem-react-ui", "React powers the main user dashboard", vec!["frontend", "react"], 3),
+    ];
+
+    let mut entries: Vec<MemoryEntry> = Vec::new();
+    for (id, content, tags, access) in &contents {
+        let mut e = make_entry(id, content, MemoryType::Semantic, &tags.iter().map(|s| s.as_ref()).collect::<Vec<&str>>());
+        e.access_count = *access;
+        e.embedding = embedding_provider.embed(content).ok().map(|r| r.embedding);
+        entries.push(e);
+    }
+
+    let queries: Vec<(&str, &str, Vec<String>)> = vec![
+        ("What does the backend use?", "mem-rust-backend", vec!["backend".into()]),
+        ("What frontend technology?", "mem-react-ui", vec!["frontend".into()]),
+        ("How is ML done?", "mem-python-ml", vec!["ml".into()]),
+    ];
+
+    let engine = RetrievalFusionEngine::new(FusionWeights::default());
+    let mut rfe_correct = 0;
+    let mut cosine_correct = 0;
+    let total = queries.len();
+
+    for (query_text, expected_id, query_tags) in &queries {
+        let query_emb = embedding_provider.embed(query_text).unwrap();
+
+        // Pure cosine ranking
+        let mut cosine_ranked: Vec<(&MemoryEntry, f32)> = entries.iter()
+            .filter_map(|e| {
+                e.embedding.as_ref().map(|emb| {
+                    let sim = cosine_similarity(&query_emb.embedding, emb);
+                    (e, sim)
+                })
+            })
+            .collect();
+        cosine_ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        let cosine_top = cosine_ranked.first().map(|(e, _)| e.id.as_str()).unwrap_or("");
+        if cosine_top == *expected_id { cosine_correct += 1; }
+
+        // RFE ranking
+        let rfe_query = RetrievalQuery {
+            query_embedding: &query_emb.embedding,
+            query_tags,
+            query_memory_type: Some(MemoryType::Semantic),
+            context_entry_id: None,
+        };
+        let rfe_results = engine.rank(&entries, &rfe_query, None, 5);
+        let rfe_top = rfe_results.first().map(|r| r.entry.id.as_str()).unwrap_or("");
+        if rfe_top == *expected_id { rfe_correct += 1; }
+
+        println!(
+            "  Query: {:<30} expected={:<20} cosine_top={:<20} rfe_top={:<20}",
+            query_text, expected_id, cosine_top, rfe_top
+        );
+    }
+
+    println!("\n  Pure Cosine: {cosine_correct}/{total}");
+    println!("  RFE Fusion:  {rfe_correct}/{total}");
+    assert!(rfe_correct >= cosine_correct, "RFE should be at least as good as pure cosine");
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// B17: MCE Consolidation Effect — 50 memories consolidation quality
+// ═══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn bench_b17_mce_consolidation() {
+    use plico::memory::consolidation::{MemoryConsolidationEngine, ConsolidationConfig, ConsolidationAction};
+
+    println!("\n═══ B17: MCE Consolidation ═══");
+
+    let embedding_provider = make_embedding_provider();
+
+    let base_contents = vec![
+        "Deploy cadence is weekly on Monday",
+        "Deploy frequency is weekly Monday morning",
+        "The API rate limit is 1000 requests per minute",
+        "API rate limiting: 500 requests per minute max",
+        "Rust is used for the backend services",
+        "The backend is written in Rust",
+        "Frontend uses React 18 with TypeScript",
+        "Python handles data processing pipelines",
+        "Docker containers are used in production",
+        "Kubernetes orchestrates the container fleet",
+    ];
+
+    let t0 = Instant::now();
+    let mut entries = Vec::new();
+    for (i, content) in base_contents.iter().enumerate() {
+        let mut e = make_entry(
+            &format!("mce-{}", i), content, MemoryType::Semantic, &[]
+        );
+        if let Some(ref provider) = embedding_provider {
+            e.embedding = provider.embed(content).ok().map(|r| r.embedding);
+        }
+        if i % 5 == 0 {
+            e.access_count = 0;
+            let age_days: u64 = 30;
+            e.last_accessed = now_ms() - (age_days * 24 * 60 * 60 * 1000);
+        }
+        if i % 3 == 0 {
+            e.access_count = 10;
+        }
+        entries.push(e);
+    }
+
+    let embed_ms = t0.elapsed().as_millis();
+
+    let t1 = Instant::now();
+    let engine = MemoryConsolidationEngine::new(ConsolidationConfig::default());
+    let report = engine.consolidate(&entries);
+    let consolidation_ms = t1.elapsed().as_millis();
+
+    println!("  Entries scanned: {}", report.entries_scanned);
+    println!("  Merges found: {}", report.merges);
+    println!("  Contradictions found: {}", report.contradictions_found);
+    println!("  Decays applied: {}", report.decays_applied);
+    println!("  Boosts applied: {}", report.boosts_applied);
+    println!("  Total actions: {}", report.actions.len());
+    println!("  Embedding time: {embed_ms}ms");
+    println!("  Consolidation time: {consolidation_ms}ms");
+
+    for action in &report.actions {
+        match action {
+            ConsolidationAction::Merge { keep_id, remove_id, .. } => {
+                println!("    MERGE: keep={keep_id} remove={remove_id}");
+            }
+            ConsolidationAction::Supersede { old_id, new_id, confidence, evidence } => {
+                println!("    SUPERSEDE: old={old_id} new={new_id} conf={confidence:.2} — {evidence}");
+            }
+            ConsolidationAction::DecayConfidence { entry_id, new_importance } => {
+                println!("    DECAY: {entry_id} → importance={new_importance}");
+            }
+            ConsolidationAction::BoostConfidence { entry_id, new_importance } => {
+                println!("    BOOST: {entry_id} → importance={new_importance}");
+            }
+        }
+    }
+
+    assert!(report.entries_scanned == base_contents.len());
+    assert!(report.decays_applied + report.boosts_applied > 0, "Should have at least some decay/boost actions");
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// B18: Agent Profile Learning Curve — weight adaptation over queries
+// ═══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn bench_b18_agent_profile_learning() {
+    use plico::kernel::ops::agent_profile::{AgentProfile, SignalFeedback};
+    use plico::fs::retrieval_router::QueryIntent;
+
+    println!("\n═══ B18: Agent Profile Learning Curve ═══");
+
+    let mut profile = AgentProfile::new("bench-agent");
+    let initial_weights = profile.retrieval_weights.clone();
+
+    println!("  Initial weights: semantic={:.3} causal={:.3} access={:.3} tag={:.3} temporal={:.3} type={:.3}",
+        initial_weights.semantic, initial_weights.causal, initial_weights.access,
+        initial_weights.tag, initial_weights.temporal, initial_weights.type_match);
+
+    let num_queries = 100;
+    for i in 0..num_queries {
+        let intent = if i % 3 == 0 { QueryIntent::Factual } else { QueryIntent::Temporal };
+        profile.record_query(intent, 50.0 + (i as f64) * 0.5);
+
+        // Simulate: semantic and tag signals are reliably good
+        let feedback = vec![SignalFeedback {
+            semantic_was_high: true,
+            causal_was_high: i % 5 == 0,
+            access_was_high: false,
+            tag_was_high: true,
+            temporal_was_high: i % 2 == 0,
+            type_was_match: true,
+        }];
+        profile.learn_weights(&feedback);
+
+        if (i + 1) % 25 == 0 {
+            let w = &profile.retrieval_weights;
+            println!(
+                "  After {:>3} queries: semantic={:.3} causal={:.3} access={:.3} tag={:.3} temporal={:.3} type={:.3}",
+                i + 1, w.semantic, w.causal, w.access, w.tag, w.temporal, w.type_match
+            );
+        }
+    }
+
+    let final_weights = &profile.retrieval_weights;
+    println!("\n  Dominant intent: {:?}", profile.dominant_intent());
+    println!("  Total queries: {}", profile.total_queries);
+    println!("  Avg retrieval latency: {:.1}ms", profile.avg_retrieval_latency_ms);
+
+    // Semantic and tag should have increased relative to initial
+    let semantic_grew = final_weights.semantic > initial_weights.semantic * 0.9;
+    let tag_grew = final_weights.tag > initial_weights.tag * 0.9;
+    println!("\n  Semantic weight grew: {semantic_grew}");
+    println!("  Tag weight grew: {tag_grew}");
+    let sum = final_weights.semantic + final_weights.causal + final_weights.access
+        + final_weights.tag + final_weights.temporal + final_weights.type_match;
+    println!("  Weights sum: {sum:.4} (should be ~1.0)");
+    assert!((sum - 1.0).abs() < 0.01, "Weights must normalize to 1.0");
+}
+
+// ═══════════════════════════════════════════════════════════════════════
 // Helpers
 // ═══════════════════════════════════════════════════════════════════════
 

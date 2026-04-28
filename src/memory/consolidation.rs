@@ -276,7 +276,7 @@ fn cosine_sim(a: &[f32], b: &[f32]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::layered::{MemoryScope, MemoryTier, MemoryType};
+    use crate::memory::layered::{MemoryContent, MemoryScope, MemoryTier, MemoryType};
 
     fn make_entry(
         id: &str,
