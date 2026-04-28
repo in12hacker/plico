@@ -79,6 +79,7 @@ fn handle_store(kernel: &AIKernel, params: &serde_json::Value, agent_id: &str) -
                 ttl_ms,
                 original_ttl_ms: ttl_ms,
                 scope: crate::memory::MemoryScope::Private,
+                memory_type: crate::memory::MemoryType::default(),
             };
             let aid = crate::scheduler::AgentId(agent_id.to_string());
             let quota = kernel.scheduler.get_resources(&aid)

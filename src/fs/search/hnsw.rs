@@ -295,6 +295,7 @@ impl SemanticSearch for HnswBackend {
                         snippet: e.snippet,
                         content_type: e.content_type,
                         created_at: e.created_at,
+                        memory_type: None,
                     },
                 },
             );
@@ -346,6 +347,7 @@ mod tests {
             snippet: String::new(),
             content_type: "text".to_string(),
             created_at: 0,
+            memory_type: None,
         }
     }
 

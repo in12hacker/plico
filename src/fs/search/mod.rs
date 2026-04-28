@@ -39,6 +39,8 @@ pub struct SearchIndexMeta {
     pub content_type: String,
     /// Creation timestamp (Unix ms), used for time-range filtering.
     pub created_at: u64,
+    /// Cognitive memory type for type-aware retrieval.
+    pub memory_type: Option<crate::memory::layered::MemoryType>,
 }
 
 /// A search hit — a matching entry with relevance score.
@@ -65,6 +67,8 @@ pub struct SearchFilter {
     pub since: Option<i64>,
     /// Inclusive upper bound on creation time (Unix ms). None = no upper bound.
     pub until: Option<i64>,
+    /// Cognitive memory type filter.
+    pub memory_type: Option<crate::memory::layered::MemoryType>,
 }
 
 impl SearchFilter {
@@ -88,6 +92,11 @@ impl SearchFilter {
         }
         if let Some(until) = self.until {
             if (meta.created_at as i64) > until {
+                return false;
+            }
+        }
+        if let Some(ref mt) = self.memory_type {
+            if meta.memory_type.as_ref() != Some(mt) {
                 return false;
             }
         }
@@ -157,6 +166,7 @@ mod tests {
             snippet: "".into(),
             content_type: ct.into(),
             created_at: created,
+            memory_type: None,
         }
     }
 

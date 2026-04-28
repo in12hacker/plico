@@ -230,6 +230,7 @@ mod tests {
             ttl_ms: None,
             original_ttl_ms: None,
             scope: crate::memory::layered::MemoryScope::Private,
+            memory_type: crate::memory::layered::MemoryType::default(),
         }
     }
 

@@ -206,6 +206,7 @@ impl SemanticFS {
                             content_type: obj.meta.content_type.to_string(),
                             snippet: text.chars().take(256).collect(),
                             created_at: obj.meta.created_at,
+                            memory_type: None,
                         });
                         indexed += 1;
                     }
@@ -377,6 +378,7 @@ impl SemanticFS {
             snippet,
             content_type: format!("{:?}", meta.content_type).to_lowercase(),
             created_at: meta.created_at,
+            memory_type: None,
         });
 
         if !text.trim().is_empty() {
@@ -709,6 +711,7 @@ impl SemanticFS {
                     snippet: String::new(),
                     content_type: format!("{:?}", obj.meta.content_type).to_lowercase(),
                     created_at: obj.meta.created_at,
+                    memory_type: None,
                 };
                 if filter.matches(&meta_for_filter) {
                     rrf_scores.insert(cid.clone(), (rrf, 1usize));
@@ -849,6 +852,7 @@ impl SemanticFS {
                             snippet: String::new(),
                             content_type: format!("{}", obj.meta.content_type),
                             created_at: obj.meta.created_at,
+                            memory_type: None,
                         }) {
                             let snippet = String::from_utf8_lossy(&obj.data[..std::cmp::min(200, obj.data.len())]).to_string();
                             results.push(SearchResult { cid: cid.clone(), relevance: 0.8, meta: obj.meta, snippet });
@@ -1015,6 +1019,7 @@ impl SemanticFS {
             snippet,
             content_type: format!("{:?}", meta.content_type).to_lowercase(),
             created_at: meta.created_at,
+            memory_type: None,
         });
 
         if !text.trim().is_empty() {

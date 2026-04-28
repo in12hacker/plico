@@ -1018,6 +1018,7 @@ fn test_search_index_persistence_roundtrip() {
         snippet: "hello world".into(),
         content_type: "text".into(),
         created_at: 1000,
+        memory_type: None,
     });
     backend.upsert("cid-b", &vec![0.0, 1.0, 0.0], SearchIndexMeta {
         cid: "cid-b".into(),
@@ -1025,6 +1026,7 @@ fn test_search_index_persistence_roundtrip() {
         snippet: "foo bar".into(),
         content_type: "text".into(),
         created_at: 2000,
+        memory_type: None,
     });
 
     let snapshot = backend.snapshot();

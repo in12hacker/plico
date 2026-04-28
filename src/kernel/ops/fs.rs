@@ -135,6 +135,7 @@ impl crate::kernel::AIKernel {
             content_type: None,
             since,
             until,
+            memory_type: None,
         };
 
         let results = self.fs.search_with_filter(query, limit * 2, filter);

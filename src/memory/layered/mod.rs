@@ -25,6 +25,48 @@ pub enum MemoryScope {
 }
 
 
+/// Cognitive memory type — orthogonal to tier, classifies memory by nature.
+///
+/// Based on ENGRAM (ICLR 2026) and cognitive science:
+/// - Episodic: events and experiences with temporal context ("what happened when")
+/// - Semantic: stable facts and preferences ("user likes X")
+/// - Procedural: reusable workflows and skills ("how to do Y")
+/// - Untyped: legacy/unclassified entries
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+pub enum MemoryType {
+    Episodic,
+    Semantic,
+    Procedural,
+    #[default]
+    Untyped,
+}
+
+impl MemoryType {
+    pub fn name(&self) -> &'static str {
+        match self {
+            MemoryType::Episodic => "episodic",
+            MemoryType::Semantic => "semantic",
+            MemoryType::Procedural => "procedural",
+            MemoryType::Untyped => "untyped",
+        }
+    }
+
+    pub fn from_str_loose(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "episodic" | "event" | "episode" => MemoryType::Episodic,
+            "semantic" | "fact" | "knowledge" => MemoryType::Semantic,
+            "procedural" | "procedure" | "skill" | "workflow" => MemoryType::Procedural,
+            _ => MemoryType::Untyped,
+        }
+    }
+}
+
+impl std::fmt::Display for MemoryType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.name())
+    }
+}
+
 /// Memory tier classification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MemoryTier {
@@ -115,6 +157,10 @@ pub struct MemoryEntry {
     /// Visibility scope — Private (default), Shared, or Group.
     #[serde(default)]
     pub scope: MemoryScope,
+
+    /// Cognitive memory type — episodic, semantic, procedural, or untyped.
+    #[serde(default)]
+    pub memory_type: MemoryType,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -204,6 +250,7 @@ impl MemoryEntry {
             ttl_ms: None,
             original_ttl_ms: None,
             scope: MemoryScope::Private,
+            memory_type: MemoryType::Untyped,
         }
     }
 
@@ -229,7 +276,14 @@ impl MemoryEntry {
             ttl_ms: None,
             original_ttl_ms: None,
             scope: MemoryScope::Private,
+            memory_type: MemoryType::Untyped,
         }
+    }
+
+    /// Set the cognitive memory type.
+    pub fn with_memory_type(mut self, memory_type: MemoryType) -> Self {
+        self.memory_type = memory_type;
+        self
     }
 
     /// Record an access to this entry and refresh its TTL.
@@ -934,6 +988,68 @@ impl LayeredMemory {
             &all, budget_tokens, now, &semantic_scores
         );
         selected.into_iter().map(|(entry, _score)| entry).collect()
+    }
+
+    // ─── Cognitive Memory Type Retrieval ───────────────────────────
+
+    /// Filter entries by cognitive memory type from a specific tier.
+    pub fn get_by_type(
+        &self,
+        agent_id: &str,
+        tier: MemoryTier,
+        memory_type: MemoryType,
+    ) -> Vec<MemoryEntry> {
+        self.get_tier(agent_id, tier)
+            .into_iter()
+            .filter(|e| e.memory_type == memory_type)
+            .collect()
+    }
+
+    /// Per-type top-k semantic recall then merge (ENGRAM strategy).
+    ///
+    /// Instead of a single global top-k, retrieves top-k from each memory type
+    /// independently, then merges and re-ranks. This ensures minority types
+    /// (e.g., procedural) aren't drowned out by majority types (e.g., episodic).
+    pub fn recall_semantic_typed(
+        &self,
+        agent_id: &str,
+        query_embedding: &[f32],
+        k_per_type: usize,
+    ) -> Vec<(MemoryEntry, f32)> {
+        let mut lt = self.long_term.write().unwrap();
+        let entries = match lt.get_mut(agent_id) {
+            Some(e) => e,
+            None => return Vec::new(),
+        };
+
+        let mut by_type: HashMap<MemoryType, Vec<(usize, f32)>> = HashMap::new();
+
+        for (idx, entry) in entries.iter().enumerate() {
+            if let Some(emb) = entry.embedding.as_ref() {
+                let sim = cosine_similarity(query_embedding, emb);
+                if sim > 0.0 {
+                    by_type.entry(entry.memory_type).or_default().push((idx, sim));
+                }
+            }
+        }
+
+        let mut selected_indices: Vec<(usize, f32)> = Vec::new();
+        for (_mtype, mut scored) in by_type {
+            scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+            scored.truncate(k_per_type);
+            selected_indices.extend(scored);
+        }
+
+        for &(idx, _) in &selected_indices {
+            entries[idx].on_memory_access();
+        }
+
+        let mut results: Vec<(MemoryEntry, f32)> = selected_indices
+            .into_iter()
+            .map(|(idx, sim)| (entries[idx].clone(), sim))
+            .collect();
+        results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        results
     }
 
     // ─── Storage Governance (F-18) ─────────────────────────────────

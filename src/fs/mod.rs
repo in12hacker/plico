@@ -35,6 +35,8 @@ pub mod search;
 pub mod summarizer;
 pub mod graph;
 pub mod types;
+pub mod retrieval_router;
+pub mod query_augment;
 
 pub use semantic_fs::{SemanticFS, FSError, Query, SearchResult, AuditEntry, AuditAction, RecycleEntry, EventType, EventRelation, EventSummary};
 pub use context_loader::{ContextLoader, ContextLayer, LoadedContext};
@@ -47,3 +49,5 @@ pub use graph::{
     PetgraphBackend,
 };
 pub use reranker::{RerankerProvider, RerankError, RerankResult, LlamaCppReranker, create_reranker_provider};
+pub use retrieval_router::{QueryIntent, ClassifiedIntent, ClassificationMethod, RetrievalConfig, classify_by_rules, classify_by_llm_response, intent_classification_prompt};
+pub use query_augment::{AugmentedQuery, augment_query, expand_entities_from_kg, expand_with_tags, extract_time_range, rewrite_prompt, parse_rewrite_response};

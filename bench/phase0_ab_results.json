@@ -1,0 +1,64 @@
+{
+  "phase0_ab_test": {
+    "description": "Gemma 4 thinking mode A/B + lightweight model + dual model strategy",
+    "date": "2026-04-28",
+    "hardware": "NVIDIA GB10 (128GB unified LPDDR5X)",
+    "embedding_model": "jina-v5-small-retrieval Q4_K_M (port 18921)",
+    "configs": {
+      "v28_think_on": {
+        "description": "Gemma 4 26B-A4B Q4_K_M with thinking ON (v28 baseline)",
+        "llm_port": 18920,
+        "reasoning": "on (default)"
+      },
+      "nothink": {
+        "description": "Gemma 4 26B-A4B Q4_K_M with --reasoning off",
+        "llm_port": 18920,
+        "reasoning": "off"
+      },
+      "qwen7b": {
+        "description": "Qwen2.5-7B-Instruct Q4_K_M (lightweight model)",
+        "llm_port": 18923,
+        "reasoning": "n/a"
+      },
+      "dual": {
+        "description": "Gemma 4 reader (18920, --reasoning off) + Qwen2.5-7B judge (18923)",
+        "reader_port": 18920,
+        "judge_port": 18923,
+        "reasoning": "off (reader)"
+      }
+    },
+    "longmemeval": {
+      "samples": 5,
+      "category": "single-session-user",
+      "results": {
+        "v28_think_on": {"llm_score": 4.20, "exact_match": 0.60, "accuracy_4plus": 0.80, "note": "INFLATED: item 4 judged 5/5 for 'I don't know' vs gold 'Summer Vibes' — thinking mode made judge unreliable"},
+        "v28_corrected": {"llm_score": 3.40, "exact_match": 0.60, "accuracy_4plus": 0.60, "note": "Corrected score with item 4 = 1 (proper judge)"},
+        "nothink":       {"llm_score": 3.40, "exact_match": 0.60, "accuracy_4plus": 0.60},
+        "qwen7b":        {"llm_score": 3.20, "exact_match": 0.60, "accuracy_4plus": 0.60},
+        "dual":          {"llm_score": 3.40, "exact_match": 0.60, "accuracy_4plus": 0.60}
+      }
+    },
+    "locomo": {
+      "conversations": 2,
+      "qa_pairs": 235,
+      "results": {
+        "v28_think_on": {"llm_score": 2.425, "f1": 0.063, "bleu1": 0.045, "note": "v28 ran 40 QA pairs only (different sample), not directly comparable"},
+        "nothink":       {"llm_score": 2.97, "f1": 0.097, "bleu1": 0.066},
+        "qwen7b":        {"llm_score": 3.17, "f1": 0.087, "bleu1": 0.055},
+        "dual":          {"llm_score": 3.07, "f1": 0.095, "bleu1": 0.066}
+      }
+    },
+    "key_findings": [
+      "1. Thinking mode causes JUDGE UNRELIABILITY — v28 LongMemEval item 4 was judged 5/5 for completely wrong answer, inflating v28 score by 0.8 points",
+      "2. No-think mode produces SAME quality answers but with reliable judging — LongMemEval corrected score equals no-think",
+      "3. Qwen2.5-7B is SURPRISINGLY COMPETITIVE — LoCoMo LLM Score 3.17 vs Gemma4 no-think 2.97 (+7%)",
+      "4. Dual model (Gemma4 reader + Qwen7B judge) is VIABLE — LoCoMo 3.07, minimal quality delta vs single-model",
+      "5. No-think speed improvement: 37ms/token vs ~150ms/token with thinking — 4x faster generation"
+    ],
+    "recommendations": {
+      "default_config": "Gemma 4 with --reasoning off (no-think mode)",
+      "dual_model": "Use Qwen2.5-7B for routing/classification/judging tasks (fast, <100ms per call)",
+      "rationale": "Thinking mode wastes tokens on internal reasoning and corrupts judge reliability. No-think is Pareto-dominant."
+    }
+  }
+}

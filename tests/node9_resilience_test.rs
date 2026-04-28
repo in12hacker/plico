@@ -170,6 +170,7 @@ fn test_checkpoint_text_roundtrip() {
         ttl_ms: None,
         original_ttl_ms: None,
         scope: MemoryScope::Private,
+        memory_type: plico::memory::MemoryType::default(),
     };
 
     let cm = CheckpointMemory::from_entry(entry.clone());
@@ -213,6 +214,7 @@ fn test_checkpoint_procedure_roundtrip() {
         ttl_ms: None,
         original_ttl_ms: None,
         scope: MemoryScope::Shared,
+        memory_type: plico::memory::MemoryType::default(),
     };
 
     let cm = CheckpointMemory::from_entry(entry.clone());
@@ -251,6 +253,7 @@ fn test_checkpoint_knowledge_roundtrip() {
         ttl_ms: None,
         original_ttl_ms: None,
         scope: MemoryScope::Shared,
+        memory_type: plico::memory::MemoryType::default(),
     };
 
     let cm = CheckpointMemory::from_entry(entry.clone());
@@ -284,6 +287,7 @@ fn test_checkpoint_objectref_roundtrip() {
         ttl_ms: None,
         original_ttl_ms: None,
         scope: MemoryScope::Private,
+        memory_type: plico::memory::MemoryType::default(),
     };
 
     let cm = CheckpointMemory::from_entry(entry.clone());
@@ -314,6 +318,7 @@ fn test_checkpoint_structured_roundtrip() {
         ttl_ms: None,
         original_ttl_ms: None,
         scope: MemoryScope::Private,
+        memory_type: plico::memory::MemoryType::default(),
     };
 
     let cm = CheckpointMemory::from_entry(entry.clone());

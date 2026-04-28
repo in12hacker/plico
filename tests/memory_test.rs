@@ -25,6 +25,7 @@ fn make_entry(agent: &str, tier: MemoryTier, importance: u8, text: &str) -> Memo
         ttl_ms: None,
         original_ttl_ms: None,
         scope: plico::memory::MemoryScope::Private,
+        memory_type: plico::memory::MemoryType::default(),
     }
 }
 
@@ -280,6 +281,7 @@ fn test_promotion_ephemeral_to_working() {
         ttl_ms: None,
         original_ttl_ms: None,
         scope: plico::memory::MemoryScope::Private,
+        memory_type: plico::memory::MemoryType::default(),
     };
     mem.store(entry);
 
@@ -319,6 +321,7 @@ fn test_promotion_working_to_longterm() {
         ttl_ms: None,
         original_ttl_ms: None,
         scope: plico::memory::MemoryScope::Private,
+        memory_type: plico::memory::MemoryType::default(),
     };
     mem.store(entry);
 
@@ -357,6 +360,7 @@ fn test_no_promotion_below_threshold() {
         ttl_ms: None,
         original_ttl_ms: None,
         scope: plico::memory::MemoryScope::Private,
+        memory_type: plico::memory::MemoryType::default(),
     };
     mem.store(entry);
 
@@ -394,6 +398,7 @@ fn test_no_promotion_working_low_importance() {
         ttl_ms: None,
         original_ttl_ms: None,
         scope: plico::memory::MemoryScope::Private,
+        memory_type: plico::memory::MemoryType::default(),
     };
     mem.store(entry);
 
@@ -472,6 +477,7 @@ fn test_longterm_entries_not_promoted() {
         ttl_ms: None,
         original_ttl_ms: None,
         scope: plico::memory::MemoryScope::Private,
+        memory_type: plico::memory::MemoryType::default(),
     };
     mem.store(lt_entry);
 
@@ -496,6 +502,7 @@ fn test_longterm_entries_not_promoted() {
         ttl_ms: None,
         original_ttl_ms: None,
         scope: plico::memory::MemoryScope::Private,
+        memory_type: plico::memory::MemoryType::default(),
     };
     mem.store(proc_entry);
 

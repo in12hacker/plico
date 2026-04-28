@@ -146,6 +146,7 @@ mod tests {
             ttl_ms: None,
             original_ttl_ms: None,
             scope: crate::memory::MemoryScope::Private,
+            memory_type: crate::memory::MemoryType::default(),
         }
     }
 

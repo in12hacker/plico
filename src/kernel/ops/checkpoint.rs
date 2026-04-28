@@ -179,6 +179,7 @@ impl CheckpointMemory {
             ttl_ms: None,
             original_ttl_ms: None,
             scope,
+            memory_type: crate::memory::MemoryType::default(),
         }
     }
 }
@@ -227,9 +228,9 @@ impl AgentCheckpoint {
             id: format!("checkpoint-{}", self.checkpoint_id),
             agent_id: self.agent_id.clone(),
             tenant_id: self.tenant_id.clone(),
-            tier: MemoryTier::LongTerm, // Checkpoints are always persisted
+            tier: MemoryTier::LongTerm,
             content: MemoryContent::Structured(serde_json::to_value(self).unwrap_or_default()),
-            importance: 100, // Checkpoints are highest priority
+            importance: 100,
             access_count: 0,
             last_accessed: now,
             created_at: self.created_at_ms,
@@ -238,6 +239,7 @@ impl AgentCheckpoint {
             ttl_ms: None,
             original_ttl_ms: None,
             scope: MemoryScope::Private,
+            memory_type: crate::memory::MemoryType::default(),
         }
     }
 }
@@ -449,6 +451,7 @@ mod tests {
             ttl_ms: None,
             original_ttl_ms: None,
             scope: MemoryScope::Private,
+            memory_type: crate::memory::MemoryType::default(),
         };
 
         let cm = CheckpointMemory::from_entry(entry);

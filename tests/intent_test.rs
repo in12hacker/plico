@@ -113,6 +113,7 @@ fn test_procedural_memory_roundtrip() {
         ttl_ms: None,
         original_ttl_ms: None,
         scope: plico::memory::MemoryScope::Private,
+        memory_type: plico::memory::MemoryType::default(),
     };
 
     memory.store(entry);

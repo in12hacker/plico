@@ -6,7 +6,7 @@
 //! - Tier maintenance via TierMaintenance struct
 
 use crate::api::permission::{PermissionAction, PermissionContext};
-use crate::memory::{MemoryEntry, MemoryContent, MemoryTier, MemoryScope};
+use crate::memory::{MemoryEntry, MemoryContent, MemoryTier, MemoryType, MemoryScope};
 use crate::scheduler::AgentId;
 use crate::kernel::event_bus::KernelEvent;
 use crate::fs::embedding::types::EmbeddingProvider;
@@ -84,6 +84,7 @@ impl crate::kernel::AIKernel {
             ttl_ms: None,
             original_ttl_ms: None,
             scope: MemoryScope::Private,
+            memory_type: MemoryType::default(),
         };
         let quota = self.agent_memory_quota(agent_id);
         self.memory.store_checked(entry, quota)
@@ -132,6 +133,7 @@ impl crate::kernel::AIKernel {
             ttl_ms: None,
             original_ttl_ms: None,
             scope,
+            memory_type: MemoryType::default(),
         };
         let quota = self.agent_memory_quota(agent_id);
         self.memory.store_checked(entry, quota)
@@ -271,6 +273,7 @@ impl crate::kernel::AIKernel {
             ttl_ms: None,
             original_ttl_ms: None,
             scope: scope.clone(),
+            memory_type: MemoryType::default(),
         };
         let quota = self.agent_memory_quota(agent_id);
         self.memory.store_checked(entry, quota)
@@ -364,6 +367,73 @@ impl crate::kernel::AIKernel {
         }
     }
 
+    /// Intent-aware semantic recall — classifies query intent, then routes to
+    /// the optimal retrieval strategy. LLM-first for classification, rule-based fallback.
+    pub fn recall_routed(
+        &self,
+        agent_id: &str,
+        tenant_id: &str,
+        query: &str,
+    ) -> Result<(Vec<MemoryEntry>, crate::fs::retrieval_router::ClassifiedIntent), String> {
+        use crate::fs::retrieval_router::{
+            classify_by_rules, classify_by_llm_response,
+            intent_classification_prompt, RetrievalConfig,
+        };
+        use crate::llm::{ChatMessage, ChatOptions, LlmProvider};
+
+        let ctx = PermissionContext::new(agent_id.to_string(), tenant_id.to_string());
+        self.permissions.check(&ctx, PermissionAction::Read).map_err(|e| e.to_string())?;
+
+        let classified = {
+            let prompt = intent_classification_prompt(query);
+            let opts = ChatOptions { temperature: 0.0, max_tokens: Some(20) };
+            let msgs = [ChatMessage::system("You are an intent classifier."), ChatMessage::user(prompt)];
+            match self.llm_provider.chat(&msgs, &opts) {
+                Ok((response, _in_tok, _out_tok)) => {
+                    classify_by_llm_response(&response).unwrap_or_else(|| classify_by_rules(query))
+                }
+                Err(_) => classify_by_rules(query),
+            }
+        };
+
+        let config = RetrievalConfig::for_intent(classified.intent);
+
+        let results: Vec<MemoryEntry> = match self.embedding.embed(query) {
+            Ok(query_emb) => {
+                let mut entries: Vec<(MemoryEntry, f32)> = if let Some(ref mem_type) = config.typed_retrieval {
+                    self.memory.recall_semantic_typed(agent_id, &query_emb.embedding, config.top_k)
+                        .into_iter()
+                        .filter(|(e, _)| e.memory_type == *mem_type || e.memory_type == MemoryType::Untyped)
+                        .collect()
+                } else {
+                    self.memory.recall_semantic(agent_id, &query_emb.embedding, config.top_k)
+                };
+                entries.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+                entries.truncate(config.top_k);
+                entries.into_iter()
+                    .map(|(e, _)| e)
+                    .filter(|e| e.tenant_id == tenant_id)
+                    .collect()
+            }
+            Err(_) => {
+                self.memory.recall_relevant(agent_id, config.top_k * 100)
+                    .into_iter()
+                    .filter(|e| e.tenant_id == tenant_id)
+                    .filter(|e| {
+                        if let Some(ref mem_type) = config.typed_retrieval {
+                            e.memory_type == *mem_type || e.memory_type == MemoryType::Untyped
+                        } else {
+                            true
+                        }
+                    })
+                    .take(config.top_k)
+                    .collect()
+            }
+        };
+
+        Ok((results, classified))
+    }
+
     /// Store a procedural memory entry (L3 tier — learned skills/workflows).
     pub fn remember_procedural(
         &self,
@@ -407,6 +477,7 @@ impl crate::kernel::AIKernel {
             ttl_ms: None,
             original_ttl_ms: None,
             scope,
+            memory_type: MemoryType::Procedural,
         };
         let quota = self.agent_memory_quota(agent_id);
         self.memory.store_checked(entry, quota).map_err(|e| e.to_string())?;
@@ -919,5 +990,98 @@ mod tests {
         let entries = kernel.recall_shared("bob", None, None, 10);
         assert!(!entries.is_empty(), "B53 regression: recall_shared should work when agent_id is a name, not UUID");
         assert!(entries.iter().any(|e| e.content.display().to_string().contains("shared by name")));
+    }
+
+    // ─── Retrieval Router Tests ─────────────────────────────────────
+
+    #[test]
+    fn test_recall_routed_falls_back_to_rules() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        kernel.remember_long_term(
+            "kernel", "default",
+            "The meeting was on Monday".to_string(),
+            vec!["meeting".to_string()],
+            80,
+        ).ok();
+
+        let result = kernel.recall_routed("kernel", "default", "When was the meeting?");
+        assert!(result.is_ok());
+        let (entries, classified) = result.unwrap();
+        assert_eq!(
+            classified.intent,
+            crate::fs::retrieval_router::QueryIntent::Temporal,
+        );
+        assert_eq!(
+            classified.method,
+            crate::fs::retrieval_router::ClassificationMethod::RuleBased,
+        );
+        let _ = entries;
+    }
+
+    #[test]
+    fn test_recall_routed_factual_query() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        kernel.remember_long_term(
+            "kernel", "default",
+            "Plico is an AI-Native OS".to_string(),
+            vec!["plico".to_string()],
+            90,
+        ).ok();
+
+        let result = kernel.recall_routed("kernel", "default", "What is Plico?");
+        assert!(result.is_ok());
+        let (_entries, classified) = result.unwrap();
+        assert_eq!(
+            classified.intent,
+            crate::fs::retrieval_router::QueryIntent::Factual,
+        );
+    }
+
+    #[test]
+    fn test_recall_routed_preference_query() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let result = kernel.recall_routed("kernel", "default", "What does the user prefer?");
+        assert!(result.is_ok());
+        let (_entries, classified) = result.unwrap();
+        assert_eq!(
+            classified.intent,
+            crate::fs::retrieval_router::QueryIntent::Preference,
+        );
+    }
+
+    #[test]
+    fn test_recall_routed_aggregation_query() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let result = kernel.recall_routed("kernel", "default", "List all open bugs");
+        assert!(result.is_ok());
+        let (_entries, classified) = result.unwrap();
+        assert_eq!(
+            classified.intent,
+            crate::fs::retrieval_router::QueryIntent::Aggregation,
+        );
+    }
+
+    #[test]
+    fn test_recall_routed_multi_hop_query() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let result = kernel.recall_routed("kernel", "default", "Why did the server crash?");
+        assert!(result.is_ok());
+        let (_entries, classified) = result.unwrap();
+        assert_eq!(
+            classified.intent,
+            crate::fs::retrieval_router::QueryIntent::MultiHop,
+        );
+    }
+
+    #[test]
+    fn test_recall_routed_returns_config_matching_intent() {
+        use crate::fs::retrieval_router::RetrievalConfig;
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let (_entries, classified) = kernel.recall_routed(
+            "kernel", "default", "When was the last deployment?"
+        ).unwrap();
+        let config = RetrievalConfig::for_intent(classified.intent);
+        assert!(config.time_decay_boost, "temporal queries should have time_decay_boost");
+        assert!(config.use_kg, "temporal queries should use KG");
     }
 }

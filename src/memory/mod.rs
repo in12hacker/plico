@@ -18,7 +18,9 @@ pub mod layered;
 pub mod persist;
 pub mod relevance;
 pub mod context_snapshot;
+pub mod forgetting;
+pub mod distillation;
 
-pub use layered::{LayeredMemory, MemoryTier, MemoryEntry, MemoryContent, MemoryError, MemoryScope};
+pub use layered::{LayeredMemory, MemoryTier, MemoryType, MemoryEntry, MemoryContent, MemoryError, MemoryScope};
 pub use persist::{MemoryPersister, CASPersister, MemoryLoader, PersistError, PersistenceIndex, PersistedTier};
 

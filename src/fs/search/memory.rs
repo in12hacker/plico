@@ -71,6 +71,7 @@ impl InMemoryBackend {
                     snippet: e.snippet,
                     content_type: e.content_type,
                     created_at: e.created_at,
+                    memory_type: None,
                 };
             } else {
                 store.push(IndexEntry {
@@ -82,6 +83,7 @@ impl InMemoryBackend {
                         snippet: e.snippet,
                         content_type: e.content_type,
                         created_at: e.created_at,
+                        memory_type: None,
                     },
                 });
             }
@@ -235,6 +237,7 @@ mod tests {
                 snippet: "Rust AI systems".to_string(),
                 content_type: "text".to_string(),
                 created_at: 0,
+                memory_type: None,
             },
         );
         backend.upsert(
@@ -246,6 +249,7 @@ mod tests {
                 snippet: "Python web app".to_string(),
                 content_type: "text".to_string(),
                 created_at: 0,
+                memory_type: None,
             },
         );
 
@@ -268,6 +272,7 @@ mod tests {
             snippet: "".to_string(),
             content_type: "text".to_string(),
             created_at: 0,
+            memory_type: None,
         });
         backend.upsert("cid2", &sample_embedding(dim, 2.0), SearchIndexMeta {
             cid: "cid2".to_string(),
@@ -275,6 +280,7 @@ mod tests {
             snippet: "".to_string(),
             content_type: "text".to_string(),
             created_at: 0,
+            memory_type: None,
         });
 
         let filter = SearchFilter {
@@ -297,6 +303,7 @@ mod tests {
             snippet: "".to_string(),
             content_type: "text".to_string(),
             created_at: 0,
+            memory_type: None,
         });
 
         assert_eq!(backend.len(), 1);
@@ -314,6 +321,7 @@ mod tests {
             snippet: "old".to_string(),
             content_type: "text".to_string(),
             created_at: 0,
+            memory_type: None,
         });
         backend.upsert("cid1", &vec![0.0, 1.0, 0.0, 0.0], SearchIndexMeta {
             cid: "cid1".to_string(),
@@ -321,6 +329,7 @@ mod tests {
             snippet: "new".to_string(),
             content_type: "text".to_string(),
             created_at: 0,
+            memory_type: None,
         });
 
         assert_eq!(backend.len(), 1);
