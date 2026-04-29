@@ -12,6 +12,18 @@ use crate::kernel::event_bus::KernelEvent;
 use crate::fs::embedding::types::EmbeddingProvider;
 use super::observability::{OpType, OperationTimer};
 
+fn cosine_sim(a: &[f32], b: &[f32]) -> f32 {
+    if a.len() != b.len() || a.is_empty() { return 0.0; }
+    let (mut dot, mut na, mut nb) = (0.0_f32, 0.0_f32, 0.0_f32);
+    for (x, y) in a.iter().zip(b.iter()) {
+        dot += x * y;
+        na += x * x;
+        nb += y * y;
+    }
+    let denom = na.sqrt() * nb.sqrt();
+    if denom < 1e-10 { 0.0 } else { dot / denom }
+}
+
 /// Bundled parameters for storing a procedural memory entry.
 pub struct ProceduralEntry {
     pub name: String,
@@ -584,36 +596,77 @@ impl crate::kernel::AIKernel {
 
                 let fused = rfe.rank(&entries, &rfe_query, causal_graph, config.top_k * 3);
 
-                // Cross-encoder reranker: refine RFE candidates if available
-                if let Some(ref reranker) = self.reranker {
-                    let docs: Vec<(String, String)> = fused.iter().map(|r| {
-                        let text = match &r.entry.content {
-                            MemoryContent::Text(t) => t.clone(),
-                            _ => format!("{:?}", r.entry.content),
-                        };
-                        (r.entry.id.clone(), text)
-                    }).collect();
-                    match reranker.rerank(query, &docs) {
-                        Ok(reranked) => {
-                            let id_order: Vec<String> = reranked.iter()
-                                .take(config.top_k)
-                                .map(|r| r.id.clone())
-                                .collect();
-                            let entry_map: std::collections::HashMap<String, MemoryEntry> = fused
-                                .into_iter()
-                                .map(|r| (r.entry.id.clone(), r.entry))
-                                .collect();
-                            id_order.into_iter()
-                                .filter_map(|id| entry_map.get(&id).cloned())
-                                .collect()
+                // Intent-routed post-processing: reranker for precision intents,
+                // MMR diversity for multi-session intents (prevents single-session flooding).
+                if config.use_reranker {
+                    if let Some(ref reranker) = self.reranker {
+                        let docs: Vec<(String, String)> = fused.iter().map(|r| {
+                            let text = match &r.entry.content {
+                                MemoryContent::Text(t) => t.clone(),
+                                _ => format!("{:?}", r.entry.content),
+                            };
+                            (r.entry.id.clone(), text)
+                        }).collect();
+                        match reranker.rerank(query, &docs) {
+                            Ok(reranked) => {
+                                let id_order: Vec<String> = reranked.iter()
+                                    .take(config.top_k)
+                                    .map(|r| r.id.clone())
+                                    .collect();
+                                let entry_map: std::collections::HashMap<String, MemoryEntry> = fused
+                                    .into_iter()
+                                    .map(|r| (r.entry.id.clone(), r.entry))
+                                    .collect();
+                                id_order.into_iter()
+                                    .filter_map(|id| entry_map.get(&id).cloned())
+                                    .collect()
+                            }
+                            Err(e) => {
+                                tracing::warn!("reranker failed, using RFE order: {e}");
+                                fused.into_iter().take(config.top_k).map(|r| r.entry).collect()
+                            }
                         }
-                        Err(e) => {
-                            tracing::warn!("reranker failed, using RFE order: {e}");
-                            fused.into_iter().take(config.top_k).map(|r| r.entry).collect()
-                        }
+                    } else {
+                        fused.into_iter().take(config.top_k).map(|r| r.entry).collect()
                     }
                 } else {
-                    fused.into_iter().take(config.top_k).map(|r| r.entry).collect()
+                    // MMR diversity selection for multi-session/temporal intents:
+                    // greedily pick entries that are both relevant (high RFE score)
+                    // and diverse (low cosine similarity to already-selected entries).
+                    let lambda = 0.7_f32;
+                    let mut selected: Vec<MemoryEntry> = Vec::with_capacity(config.top_k);
+                    let mut selected_embs: Vec<Vec<f32>> = Vec::new();
+                    let mut remaining: Vec<_> = fused.into_iter().collect();
+
+                    while selected.len() < config.top_k && !remaining.is_empty() {
+                        let mut best_idx = 0;
+                        let mut best_mmr = f32::NEG_INFINITY;
+
+                        for (i, candidate) in remaining.iter().enumerate() {
+                            let relevance = candidate.fused_score;
+                            let max_sim = if selected_embs.is_empty() {
+                                0.0
+                            } else if let Some(ref emb) = candidate.entry.embedding {
+                                selected_embs.iter()
+                                    .map(|sel| cosine_sim(emb, sel))
+                                    .fold(0.0_f32, f32::max)
+                            } else {
+                                0.0
+                            };
+                            let mmr = lambda * relevance - (1.0 - lambda) * max_sim;
+                            if mmr > best_mmr {
+                                best_mmr = mmr;
+                                best_idx = i;
+                            }
+                        }
+
+                        let chosen = remaining.swap_remove(best_idx);
+                        if let Some(ref emb) = chosen.entry.embedding {
+                            selected_embs.push(emb.clone());
+                        }
+                        selected.push(chosen.entry);
+                    }
+                    selected
                 }
             }
             Err(_) => {

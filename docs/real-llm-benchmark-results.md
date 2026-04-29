@@ -225,9 +225,46 @@ Store → Distill → Recall 端到端管道。蒸馏延迟从 3548ms 降至 184
 3. 多会话推理(50%)需要 entity resolution 和 fact co-reference
 4. LoCoMo temporal 小幅提升(+4%)可能来自 Qwen3 更好的时间语义理解
 
-## 下一步优化方向
+## v35 结果（端到端评估）
 
-1. **异步 Ingest Pipeline**: LLM fact extraction 后台异步处理
-2. **选择性提取**: 仅对 >100 chars 的内容做 LLM 提取
-3. **KG Entity Linking**: entity co-reference 提升多会话推理
-4. **Structured Temporal Index**: 时间范围查询加速
+**重要方法论变更**：v35 从 retrieval-only 评估（检查 context 包含关键词）切换到端到端评估（LLM 生成答案→Judge 判断正确性）。v35 同时将 B25/B26 切换到完整 `recall_routed` 管道（v34 使用的是 `recall_semantic`，未使用意图分类/RFE/BM25/reranker）。
+
+### B25 LongMemEval Real — v35 端到端 (53.3%)
+
+| Category | v34 (retrieval-only) | v35 (end-to-end) |
+|----------|---------------------|-------------------|
+| single-session-user | 90% | 70% |
+| single-session-assistant | 90% | 90% |
+| single-session-preference | 20% | 10% |
+| temporal-reasoning | 60% | 50% |
+| knowledge-update | 90% | 70% |
+| multi-session | 50% | 30% |
+| **Overall** | **66.7%** | **53.3%** |
+
+### B26 LoCoMo Real — v35 端到端 (69.0%)
+
+| Category | v34 (retrieval-only) | v35 (end-to-end) | Δ |
+|----------|---------------------|-------------------|---|
+| single-hop | 23% | **62%** | **+39%** |
+| temporal | 61% | 61% | 0% |
+| common-sense | 40% | 20% | -20% |
+| multi-hop | 69% | **76%** | **+7%** |
+| adversarial | 100% | 100% | 0% |
+| **Overall** | **62.0%** | **69.0%** | **+7.0%** |
+
+### v35 关键发现
+
+1. **v34 的 B25/B26 未使用完整管道**：使用了 `recall_semantic` 而非 `recall_routed`，导致意图分类、RFE、BM25 融合、reranker 全部无效
+2. **端到端评估更严格但更真实**：比 retrieval-only 评估低 ~13pp 但更符合实际使用场景
+3. **LoCoMo single-hop +39%**：证明完整管道（意图路由 + RFE + BM25）对检索质量有显著帮助
+4. **偏好仍是核心瓶颈 (10%)**：需要深层推理而非简单检索
+5. **MMR 多样性选择**：防止 cross-encoder 集中单 session 结果，对 multi-hop (+7%) 有帮助
+6. **Answer LLM 质量是关键差距**：竞品使用 GPT-4/5 或 Claude 做 answer/judge，我们用本地 Gemma 4
+
+## 下一步优化方向 (v36)
+
+1. **Answer Prompt 优化**：针对不同问题类型定制生成提示
+2. **Intent 分类改进**：偏好问题被错误分类为 Aggregation
+3. **Context Window 消融**：top-15 可能过多，需找最优值
+4. **Query Bias Correction**：MemMachine +1.4%
+5. **Sentence-Level Chunking**：更细粒度索引

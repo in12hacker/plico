@@ -142,6 +142,11 @@ pub fn intent_classification_prompt(query: &str) -> String {
 }
 
 /// Per-intent retrieval configuration.
+///
+/// `top_k` values calibrated against MemMachine ablation study (2026):
+/// k=30 is the single most impactful parameter (+4.2%), k=50 degrades.
+/// `use_reranker` is intent-routed: disabled for multi-session/temporal
+/// queries where cross-encoder reduces diversity (wakamex/longmem finding).
 #[derive(Debug, Clone)]
 pub struct RetrievalConfig {
     pub top_k: usize,
@@ -153,13 +158,14 @@ pub struct RetrievalConfig {
     pub typed_retrieval: Option<crate::memory::MemoryType>,
     pub bm25_weight: f32,
     pub vector_weight: f32,
+    pub use_reranker: bool,
 }
 
 impl RetrievalConfig {
     pub fn for_intent(intent: QueryIntent) -> Self {
         match intent {
             QueryIntent::Factual => Self {
-                top_k: 5,
+                top_k: 20,
                 use_kg: false,
                 use_ppr: false,
                 use_bm25: true,
@@ -168,9 +174,10 @@ impl RetrievalConfig {
                 typed_retrieval: None,
                 bm25_weight: 1.0,
                 vector_weight: 1.0,
+                use_reranker: true,
             },
             QueryIntent::Temporal => Self {
-                top_k: 8,
+                top_k: 25,
                 use_kg: true,
                 use_ppr: false,
                 use_bm25: true,
@@ -179,9 +186,10 @@ impl RetrievalConfig {
                 typed_retrieval: Some(crate::memory::MemoryType::Episodic),
                 bm25_weight: 0.8,
                 vector_weight: 1.2,
+                use_reranker: false,
             },
             QueryIntent::MultiHop => Self {
-                top_k: 10,
+                top_k: 30,
                 use_kg: true,
                 use_ppr: true,
                 use_bm25: true,
@@ -190,9 +198,10 @@ impl RetrievalConfig {
                 typed_retrieval: None,
                 bm25_weight: 0.7,
                 vector_weight: 1.3,
+                use_reranker: false,
             },
             QueryIntent::Preference => Self {
-                top_k: 5,
+                top_k: 20,
                 use_kg: false,
                 use_ppr: false,
                 use_bm25: true,
@@ -201,9 +210,10 @@ impl RetrievalConfig {
                 typed_retrieval: Some(crate::memory::MemoryType::Semantic),
                 bm25_weight: 1.0,
                 vector_weight: 1.0,
+                use_reranker: true,
             },
             QueryIntent::Aggregation => Self {
-                top_k: 20,
+                top_k: 30,
                 use_kg: true,
                 use_ppr: false,
                 use_bm25: true,
@@ -212,6 +222,7 @@ impl RetrievalConfig {
                 typed_retrieval: None,
                 bm25_weight: 1.2,
                 vector_weight: 0.8,
+                use_reranker: false,
             },
         }
     }
@@ -355,7 +366,8 @@ mod tests {
         assert!(!config.use_ppr);
         assert!(config.use_bm25);
         assert!(config.use_vector);
-        assert_eq!(config.top_k, 5);
+        assert_eq!(config.top_k, 20);
+        assert!(config.use_reranker);
     }
 
     #[test]
@@ -363,7 +375,8 @@ mod tests {
         let config = RetrievalConfig::for_intent(QueryIntent::MultiHop);
         assert!(config.use_kg);
         assert!(config.use_ppr);
-        assert_eq!(config.top_k, 10);
+        assert_eq!(config.top_k, 30);
+        assert!(!config.use_reranker);
     }
 
     #[test]

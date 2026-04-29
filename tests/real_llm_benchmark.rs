@@ -2405,7 +2405,7 @@ fn bench_b25_longmemeval_real() {
         let agent_id = kernel.register_agent("lme-agent".to_string());
 
         let ingest_t = Instant::now();
-        let mut n_turns = 0;
+        let mut batch_items: Vec<(String, Vec<String>, u8)> = Vec::new();
         for (si, session) in sessions.iter().enumerate() {
             let turns = match session.as_array() { Some(t) => t, None => continue };
             let date_str = dates.and_then(|d| d.get(si))
@@ -2416,37 +2416,63 @@ fn bench_b25_longmemeval_real() {
                 if content.len() < 5 { continue; }
                 let mem_content = format!("[{}] {}: {}", date_str, role, content);
                 let tags = vec![format!("session-{si}"), "longmemeval".to_string()];
-                let _ = kernel.remember_long_term(&agent_id, "default", mem_content, tags, 5);
-                n_turns += 1;
+                batch_items.push((mem_content, tags, 5));
             }
         }
+        let n_turns = batch_items.len();
+        let _ = kernel.remember_long_term_batch(&agent_id, "default", &batch_items);
         let ingest_ms = ingest_t.elapsed().as_millis();
         total_ingest_ms += ingest_ms;
         total_ingested += n_turns;
 
+        // Full retrieval pipeline: intent classification + RFE 7-signal + reranker/MMR
         let query_t = Instant::now();
-        let results = kernel.recall_semantic(&agent_id, "default", question, 10);
+        let (results, classified) = match kernel.recall_routed(&agent_id, "default", question) {
+            Ok(r) => r,
+            Err(_) => (vec![], plico::fs::retrieval_router::ClassifiedIntent {
+                intent: plico::fs::retrieval_router::QueryIntent::Factual,
+                confidence: 0.0,
+                method: plico::fs::retrieval_router::ClassificationMethod::RuleBased,
+            }),
+        };
         let query_ms = query_t.elapsed().as_millis();
         total_query_ms += query_ms;
 
-        let context: String = results.as_ref().map(|entries| {
-            entries.iter().take(5)
-                .map(|e| e.content.display().to_string())
-                .collect::<Vec<_>>().join("\n")
-        }).unwrap_or_default();
+        // Structured context formatting (MemMachine finding: +2.0%)
+        let context: String = results.iter().take(15)
+            .enumerate()
+            .map(|(i, e)| {
+                let text = e.content.display().to_string();
+                format!("[Memory {}] {}", i + 1, text)
+            })
+            .collect::<Vec<_>>().join("\n\n");
 
         let judge_t = Instant::now();
         let hit = if context.is_empty() {
             false
         } else {
+            // Answer generation stage: LLM generates answer from context, then judge
+            let answer_prompt = format!(
+                "You are an AI assistant with access to conversation memories.\n\n\
+                 Retrieved memories:\n{}\n\n\
+                 Question: {}\n\n\
+                 Based ONLY on the memories above, provide a concise answer. \
+                 If the memories don't contain enough information, say \"I don't know\".",
+                &context[..context.len().min(3000)], question
+            );
+            let generated = llm_chat(&*llm, &answer_prompt).unwrap_or_default();
+
+            // Judge: does the generated answer match the expected answer?
             let kw_lower = expected.to_lowercase();
-            let ctx_lower = context.to_lowercase();
-            if ctx_lower.contains(&kw_lower) {
+            let gen_lower = generated.to_lowercase();
+            if gen_lower.contains(&kw_lower) {
                 true
             } else {
                 let judge_prompt = format!(
-                    "Given the following retrieved context:\n---\n{}\n---\n\nQuestion: {}\nExpected answer: {}\n\nDoes the retrieved context contain enough information to answer the question correctly? Reply ONLY 'yes' or 'no'.",
-                    &context[..context.len().min(1500)], question, expected
+                    "Question: {}\nExpected answer: {}\nGenerated answer: {}\n\n\
+                     Does the generated answer correctly address the question with information \
+                     matching the expected answer? Reply ONLY 'yes' or 'no'.",
+                    question, expected, &generated[..generated.len().min(500)]
                 );
                 llm_chat(&*llm, &judge_prompt)
                     .map(|r| r.trim().to_lowercase().starts_with("yes"))
@@ -2461,8 +2487,9 @@ fn bench_b25_longmemeval_real() {
         if hit { *hits += 1; }
 
         let trunc_q: String = if question.len() > 48 { format!("{}...", &question[..48]) } else { question.to_string() };
-        println!("  {:>3} {:<24} {:<50} {:>5}ms {:>5}ms {:>6}",
-            qi + 1, qtype, trunc_q, ingest_ms, query_ms, if hit { "✓" } else { "✗" });
+        println!("  {:>3} {:<24} {:<50} {:>5}ms {:>5}ms {:>6} [{}]",
+            qi + 1, qtype, trunc_q, ingest_ms, query_ms, if hit { "✓" } else { "✗" },
+            format!("{:?}", classified.intent));
     }
 
     println!("\n  ══ B25 LongMemEval Category Breakdown ══");
@@ -2545,7 +2572,7 @@ fn bench_b26_locomo_real() {
         let agent_id = kernel.register_agent("locomo-agent".to_string());
 
         let ingest_t = Instant::now();
-        let mut n_turns = 0;
+        let mut batch_items: Vec<(String, Vec<String>, u8)> = Vec::new();
         for si in 1..=50 {
             let session_key = format!("session_{si}");
             let date_key = format!("session_{si}_date_time");
@@ -2559,10 +2586,11 @@ fn bench_b26_locomo_real() {
                 if text.len() < 5 { continue; }
                 let content = format!("[{}] {}: {}", date, speaker, text);
                 let tags = vec![format!("session-{si}"), "locomo".to_string()];
-                let _ = kernel.remember_long_term(&agent_id, "default", content, tags, 5);
-                n_turns += 1;
+                batch_items.push((content, tags, 5));
             }
         }
+        let n_turns = batch_items.len();
+        let _ = kernel.remember_long_term_batch(&agent_id, "default", &batch_items);
         let ingest_ms = ingest_t.elapsed().as_millis();
         total_ingest_ms += ingest_ms;
         total_ingested += n_turns;
@@ -2583,29 +2611,55 @@ fn bench_b26_locomo_real() {
             let cat_id = qa["category"].as_u64().unwrap_or(0) as usize;
             let cat_name = category_names.get(cat_id).unwrap_or(&"unknown");
 
+            // Full retrieval pipeline: intent classification + RFE 7-signal + reranker/MMR
             let query_t = Instant::now();
-            let results = kernel.recall_semantic(&agent_id, "default", question, 10);
+            let (results, classified) = match kernel.recall_routed(&agent_id, "default", question) {
+                Ok(r) => r,
+                Err(_) => (vec![], plico::fs::retrieval_router::ClassifiedIntent {
+                    intent: plico::fs::retrieval_router::QueryIntent::Factual,
+                    confidence: 0.0,
+                    method: plico::fs::retrieval_router::ClassificationMethod::RuleBased,
+                }),
+            };
             let query_ms = query_t.elapsed().as_millis();
             total_query_ms += query_ms;
 
-            let context: String = results.as_ref().map(|entries| {
-                entries.iter().take(5)
-                    .map(|e| e.content.display().to_string())
-                    .collect::<Vec<_>>().join("\n")
-            }).unwrap_or_default();
+            // Structured context formatting
+            let context: String = results.iter().take(15)
+                .enumerate()
+                .map(|(i, e)| {
+                    let text = e.content.display().to_string();
+                    format!("[Memory {}] {}", i + 1, text)
+                })
+                .collect::<Vec<_>>().join("\n\n");
 
             let judge_t = Instant::now();
             let hit = if context.is_empty() {
                 false
             } else {
+                // Answer generation stage
+                let answer_prompt = format!(
+                    "You are an AI assistant with access to conversation memories.\n\n\
+                     Retrieved memories:\n{}\n\n\
+                     Question: {}\n\n\
+                     Based ONLY on the memories above, provide a concise answer. \
+                     If the memories don't contain enough information, say \"I don't know\".",
+                    &context[..context.len().min(3000)], question
+                );
+                let generated = llm_chat(&*llm, &answer_prompt).unwrap_or_default();
+
                 let kw_lower = expected.to_lowercase();
-                let ctx_lower = context.to_lowercase();
-                if kw_lower.len() <= 3 || ctx_lower.contains(&kw_lower) {
-                    ctx_lower.contains(&kw_lower)
+                let gen_lower = generated.to_lowercase();
+                if kw_lower.len() <= 3 {
+                    gen_lower.contains(&kw_lower)
+                } else if gen_lower.contains(&kw_lower) {
+                    true
                 } else {
                     let judge_prompt = format!(
-                        "Retrieved context:\n---\n{}\n---\nQuestion: {}\nExpected: {}\nDoes the context contain the answer? Reply ONLY 'yes' or 'no'.",
-                        &context[..context.len().min(1500)], question, expected
+                        "Question: {}\nExpected answer: {}\nGenerated answer: {}\n\n\
+                         Does the generated answer correctly address the question with information \
+                         matching the expected answer? Reply ONLY 'yes' or 'no'.",
+                        question, expected, &generated[..generated.len().min(500)]
                     );
                     llm_chat(&*llm, &judge_prompt)
                         .map(|r| r.trim().to_lowercase().starts_with("yes"))
@@ -2621,8 +2675,9 @@ fn bench_b26_locomo_real() {
             total_qa_tested += 1;
 
             let trunc_q: String = if question.len() > 50 { format!("{}...", &question[..50]) } else { question.to_string() };
-            println!("  {:>3} {:<14} {:<52} {:>5}ms {:>5}",
-                qi + 1, cat_name, trunc_q, query_ms, if hit { "✓" } else { "✗" });
+            println!("  {:>3} {:<14} {:<52} {:>5}ms {:>5} [{}]",
+                qi + 1, cat_name, trunc_q, query_ms, if hit { "✓" } else { "✗" },
+                format!("{:?}", classified.intent));
         }
         println!();
     }
