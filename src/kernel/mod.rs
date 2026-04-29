@@ -100,6 +100,8 @@ pub struct AIKernel {
     pub(crate) prompt_registry: Arc<crate::prompt::PromptRegistry>,
     /// Agent profile store — per-agent adaptive retrieval weights (v31).
     pub(crate) agent_profiles: Arc<ops::agent_profile::AgentProfileStore>,
+    /// Cross-encoder reranker for recall_routed final-stage refinement (v34).
+    pub(crate) reranker: Option<Arc<dyn crate::fs::reranker::RerankerProvider>>,
 }
 
 /// Check if the embedding model has changed since last run.
@@ -396,6 +398,7 @@ impl AIKernel {
             kg_builder,
             prompt_registry,
             agent_profiles: Arc::new(ops::agent_profile::AgentProfileStore::new()),
+            reranker: reranker.clone(),
         };
 
         kernel.register_builtin_tools();

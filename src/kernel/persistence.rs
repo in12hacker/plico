@@ -397,6 +397,13 @@ pub(crate) fn create_embedding_provider() -> Result<Arc<dyn EmbeddingProvider>, 
             let api_key = std::env::var("EMBEDDING_API_KEY").ok();
             match OpenAIEmbeddingBackend::new(&base_url, &model, api_key) {
                 Ok(b) => {
+                    let query_prefix = std::env::var("EMBEDDING_QUERY_PREFIX").ok();
+                    let b = if let Some(prefix) = query_prefix {
+                        tracing::info!("Embedding query prefix: {:?}", prefix);
+                        b.with_query_prefix(prefix)
+                    } else {
+                        b
+                    };
                     tracing::info!("Embedding backend: openai-compatible ({} via {})", model, base_url);
                     Arc::new(b) as Arc<dyn EmbeddingProvider>
                 }

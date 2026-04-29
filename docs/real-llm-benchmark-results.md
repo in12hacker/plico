@@ -187,11 +187,47 @@ Store → Distill → Recall 端到端管道。蒸馏延迟从 3548ms 降至 184
 
 **查询延迟在 500 条规模下仅 17.1ms，几乎无退化。**
 
+## v34 变更 — 模型选型 + 架构增强
+
+**模型变更** (2026-04-29):
+- Embedding: v5-small-retrieval → **Qwen3-Embedding-0.6B** (隐式偏好检测 +29%)
+- Reranker: 新增 **bge-reranker-v2-m3** cross-encoder 集成到 recall_routed
+- LLM: A/B 测试 GPT-OSS-20B，**Gemma 4 全胜** (100% vs 20%, 6.6x 快)
+- Ingest: 新增 regex preference extraction (默认开启) + LLM fact extraction (可选)
+
+### B25 LongMemEval Real — v34 基线 (66.7%)
+
+| Category | v33 | v34 | Δ |
+|----------|-----|-----|---|
+| single-session-user | — | 90% | |
+| single-session-assistant | — | 90% | |
+| single-session-preference | — | 20% | |
+| temporal-reasoning | — | 60% | |
+| knowledge-update | — | 90% | |
+| multi-session | — | 50% | |
+| **Overall** | **68.3%** | **66.7%** | -1.6% |
+
+### B26 LoCoMo Real — v34 基线 (62.0%)
+
+| Category | v33 | v34 | Δ |
+|----------|-----|-----|---|
+| single-hop | 23% | 23% | 0% |
+| temporal | 57% | **61%** | +4% |
+| common-sense | 40% | 40% | 0% |
+| multi-hop | 69% | 69% | 0% |
+| adversarial | 100% | 100% | 0% |
+| **Overall** | **61.0%** | **62.0%** | +1.0% |
+
+### v34 关键发现
+
+1. Embedding 升级 + Reranker 对 overall score 影响有限
+2. 偏好类别(20%)是最大瓶颈，需 ingest-time LLM extraction
+3. 多会话推理(50%)需要 entity resolution 和 fact co-reference
+4. LoCoMo temporal 小幅提升(+4%)可能来自 Qwen3 更好的时间语义理解
+
 ## 下一步优化方向
 
-1. **Batch Embedding 集成**: 在 `remember_long_term` 路径中使用 `embed_batch` API
-2. **蒸馏并行化**: 不同 MemoryType 的分组可并行调用 LLM
-3. **更大 Embedding 模型**: 替换为更强的 embedding 模型提升语义区分度
-4. **Prompt 工程**: 矛盾检测可引入 Chain-of-Thought 提升边界 case 准确率
-5. **时间实体抽取**: B20 TR 类别的日期推理需要 structured time extraction
-6. **Ingest 批量化**: 500 条 ingest 耗时 408s，主要瓶颈是逐条 embedding 调用
+1. **异步 Ingest Pipeline**: LLM fact extraction 后台异步处理
+2. **选择性提取**: 仅对 >100 chars 的内容做 LLM 提取
+3. **KG Entity Linking**: entity co-reference 提升多会话推理
+4. **Structured Temporal Index**: 时间范围查询加速

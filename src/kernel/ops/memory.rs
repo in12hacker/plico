@@ -262,6 +262,7 @@ impl crate::kernel::AIKernel {
         let embedding = self.embedding.embed(&content).ok().map(|r| r.embedding);
         let entry_id = uuid::Uuid::new_v4().to_string();
         let created_at = crate::memory::layered::now_ms();
+        let content_for_ingest = content.clone();
         let entry = MemoryEntry {
             id: entry_id.clone(),
             agent_id: agent_id.to_string(),
@@ -323,6 +324,63 @@ impl crate::kernel::AIKernel {
                 });
             }
             MemoryScope::Private => {}
+        }
+
+        // Ingest pipeline: always run zero-cost regex preference extraction.
+        // Full LLM fact extraction only when PLICO_INGEST_EXTRACT=1.
+        {
+            let text = content_for_ingest;
+            if text.trim().len() >= 10 {
+                use super::ingest::{extract_preference_signals, extract_facts};
+
+                // Regex preference extraction (always, zero LLM cost)
+                let mut extracted = extract_preference_signals(&text);
+
+                // Full LLM fact extraction (optional, expensive)
+                if std::env::var("PLICO_INGEST_EXTRACT").as_deref() == Ok("1") {
+                    let llm: &dyn crate::llm::LlmProvider = &self.llm_provider;
+                    let llm_facts = extract_facts(llm, &text);
+                    extracted.extend(llm_facts);
+                }
+
+                let quota = self.agent_memory_quota(agent_id);
+                for fact in &extracted {
+                    if fact.tags.contains(&"raw".to_string()) {
+                        continue; // Skip passthrough — already stored as original
+                    }
+                    let fact_embedding = self.embedding.embed(&fact.text).ok().map(|r| r.embedding);
+                    let mut fact_tags = tags.clone();
+                    fact_tags.extend(fact.tags.clone());
+                    let fact_entry = MemoryEntry {
+                        id: uuid::Uuid::new_v4().to_string(),
+                        agent_id: agent_id.to_string(),
+                        tenant_id: tenant_id.to_string(),
+                        tier: MemoryTier::LongTerm,
+                        content: MemoryContent::Text(fact.text.clone()),
+                        importance: importance.saturating_add(5).min(100),
+                        access_count: 0,
+                        last_accessed: created_at,
+                        created_at,
+                        tags: fact_tags,
+                        embedding: fact_embedding,
+                        ttl_ms: None,
+                        original_ttl_ms: None,
+                        scope: scope.clone(),
+                        memory_type: fact.fact_type.to_memory_type(),
+                        causal_parent: Some(entry_id.clone()),
+                        supersedes: None,
+                    };
+                    let _ = self.memory.store_checked(fact_entry, quota);
+                }
+                if !extracted.is_empty() {
+                    tracing::info!(
+                        count = extracted.len(),
+                        "ingest pipeline: extracted {} facts from memory {}",
+                        extracted.len(),
+                        entry_id,
+                    );
+                }
+            }
         }
 
         self.persist_memories();
@@ -405,7 +463,7 @@ impl crate::kernel::AIKernel {
     ) -> Result<Vec<MemoryEntry>, String> {
         let ctx = PermissionContext::new(agent_id.to_string(), tenant_id.to_string());
         self.permissions.check(&ctx, PermissionAction::Read).map_err(|e| e.to_string())?;
-        let query_emb = self.embedding.embed(query).map_err(|e| e.to_string())?;
+        let query_emb = self.embedding.embed_query(query).map_err(|e| e.to_string())?;
         let results = self.memory.recall_semantic(agent_id, &query_emb.embedding, k);
         Ok(results.into_iter()
             .map(|(entry, _score)| entry)
@@ -426,7 +484,7 @@ impl crate::kernel::AIKernel {
             return Vec::new();
         }
         let tenant_id_owned = tenant_id.to_string();
-        match self.embedding.embed(query) {
+        match self.embedding.embed_query(query) {
             Ok(emb) => self.memory.recall_relevant_semantic(agent_id, &emb.embedding, budget_tokens)
                 .into_iter()
                 .filter(|e| e.tenant_id == tenant_id_owned)
@@ -479,7 +537,7 @@ impl crate::kernel::AIKernel {
                 }
             });
 
-            let embed_handle = s.spawn(|| self.embedding.embed(query));
+            let embed_handle = s.spawn(|| self.embedding.embed_query(query));
 
             let bm25_handle = s.spawn(|| self.fs.bm25_search(query, 50));
 
@@ -524,8 +582,39 @@ impl crate::kernel::AIKernel {
                     bm25_scores: Some(&bm25_score_map),
                 };
 
-                let fused = rfe.rank(&entries, &rfe_query, causal_graph, config.top_k);
-                fused.into_iter().map(|r| r.entry).collect()
+                let fused = rfe.rank(&entries, &rfe_query, causal_graph, config.top_k * 3);
+
+                // Cross-encoder reranker: refine RFE candidates if available
+                if let Some(ref reranker) = self.reranker {
+                    let docs: Vec<(String, String)> = fused.iter().map(|r| {
+                        let text = match &r.entry.content {
+                            MemoryContent::Text(t) => t.clone(),
+                            _ => format!("{:?}", r.entry.content),
+                        };
+                        (r.entry.id.clone(), text)
+                    }).collect();
+                    match reranker.rerank(query, &docs) {
+                        Ok(reranked) => {
+                            let id_order: Vec<String> = reranked.iter()
+                                .take(config.top_k)
+                                .map(|r| r.id.clone())
+                                .collect();
+                            let entry_map: std::collections::HashMap<String, MemoryEntry> = fused
+                                .into_iter()
+                                .map(|r| (r.entry.id.clone(), r.entry))
+                                .collect();
+                            id_order.into_iter()
+                                .filter_map(|id| entry_map.get(&id).cloned())
+                                .collect()
+                        }
+                        Err(e) => {
+                            tracing::warn!("reranker failed, using RFE order: {e}");
+                            fused.into_iter().take(config.top_k).map(|r| r.entry).collect()
+                        }
+                    }
+                } else {
+                    fused.into_iter().take(config.top_k).map(|r| r.entry).collect()
+                }
             }
             Err(_) => {
                 self.memory.recall_relevant(agent_id, config.top_k * 100)

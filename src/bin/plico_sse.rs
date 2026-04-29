@@ -895,6 +895,7 @@ mod tests {
             cost_session_summary: None,
             cost_agent_trend: None,
             cost_anomaly: None,
+            import_results: None,
         }
     }
 

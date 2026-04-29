@@ -15,6 +15,9 @@ pub struct OpenAIEmbeddingBackend {
     model: String,
     api_key: Option<String>,
     dimension: OnceLock<usize>,
+    /// Optional instruction prefix for asymmetric retrieval models (e.g. Qwen3-Embedding).
+    /// When set, `embed_query` prepends this to the text.
+    query_prefix: Option<String>,
 }
 
 impl OpenAIEmbeddingBackend {
@@ -48,7 +51,15 @@ impl OpenAIEmbeddingBackend {
             model: model.to_string(),
             api_key,
             dimension: OnceLock::new(),
+            query_prefix: None,
         })
+    }
+
+    /// Set an instruction prefix for asymmetric retrieval models.
+    /// `embed_query` will prepend `"{prefix}{text}"` to queries.
+    pub fn with_query_prefix(mut self, prefix: impl Into<String>) -> Self {
+        self.query_prefix = Some(prefix.into());
+        self
     }
 
     fn get_dimension(&self) -> Result<usize, EmbedError> {
@@ -222,6 +233,16 @@ impl EmbeddingProvider for OpenAIEmbeddingBackend {
         }
     }
 
+    fn embed_query(&self, text: &str) -> Result<EmbedResult, EmbedError> {
+        match &self.query_prefix {
+            Some(prefix) => {
+                let prefixed = format!("{prefix}{text}");
+                self.embed(&prefixed)
+            }
+            None => self.embed(text),
+        }
+    }
+
     fn embed_batch(&self, texts: &[&str]) -> Result<Vec<EmbedResult>, EmbedError> {
         let owned: Vec<String> = texts.iter().map(|s| s.to_string()).collect();
         match tokio::runtime::Handle::try_current() {
@@ -252,6 +273,7 @@ impl Clone for OpenAIEmbeddingBackend {
             model: self.model.clone(),
             api_key: self.api_key.clone(),
             dimension: OnceLock::new(),
+            query_prefix: self.query_prefix.clone(),
         }
     }
 }
