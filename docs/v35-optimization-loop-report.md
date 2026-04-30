@@ -419,7 +419,7 @@ let sentence_spans = crate::fs::chunking::split_sentences(&text);
 1. **暴力扫描**: `recall_semantic` 是 O(n) 线性扫描，无向量索引
 2. **单体记忆**: 长对话记忆作为单一条目存储，embedding 是整段文本的平均
 3. **BM25 词汇匹配**: 无法处理同义词或释义
-4. **Reranker 禁用**: temporal/multi-hop 查询禁用 reranker（防止多样性损失）
+4. **Reranker multi-hop 回归**: 全意图启用 reranker 后 multi-hop -7pp，需要调优
 
 ### 9.3 评估限制
 
@@ -434,16 +434,24 @@ let sentence_spans = crate::fs::chunking::split_sentences(&text);
 
 ### 10.1 短期 (当前模型，1-2 天)
 
-| 方向 | 预期收益 | 难度 | 优先级 |
-|------|---------|------|--------|
-| 启用 PLICO_INGEST_EXTRACT=1 | +3-5pp | 低 | 高 |
-| Multi-sample voting (3x) | +2-3pp | 中 | 中 |
-| Answer prompt 精调 (更多 few-shot) | +1-2pp | 低 | 中 |
-| Cross-encoder 全查询启用 | +1-2pp | 低 | 低 |
+| 方向 | 预期收益 | 难度 | 优先级 | 状态 |
+|------|---------|------|--------|------|
+| Answer prompt 精调 (更多 few-shot) | +1-2pp | 低 | 中 | 未尝试 |
+| B26 multi-hop 恢复 | +5-7pp | 中 | 高 | Reranker 导致 -7pp, 需调查 |
+| Cross-encoder 阈值调优 | +1-2pp | 低 | 低 | 未尝试 |
 
-**PLICO_INGEST_EXTRACT**: 当前 ingest pipeline 已支持 LLM fact extraction（提取原子事实），但默认关闭。启用后每条记忆会生成 3-5 个原子事实条目，提供更细粒度的检索。代价是 ingest 延迟增加 ~3x。
+**B26 multi-hop 问题**: Reranker 全意图启用后, B26 multi-hop 从 69% 降至 62%。需要调查是否可以通过调整 reranker 阈值或混合策略来恢复。
 
-**Multi-sample voting**: 对每个查询生成 3 个答案，取多数投票。可以减少 LLM 非确定性的影响，但增加 3x 延迟。
+### 已验证不可行的方向 (不要再试)
+
+| 方向 | 实验结果 | 原因 |
+|------|---------|------|
+| PLICO_INGEST_EXTRACT=1 | B26 -27pp, 1874x 慢 | LLM fact 噪声, 无 quality filter |
+| Multi-sample voting (3x) | +2pp (方差内), +28% 延迟 | 增益不足 |
+| Query decomposition | B26 -14pp | 子查询丢失语义 |
+| HyDE | B26 -9pp | 假设答案过于具体 |
+| Sentence-level chunking | +35% ingest, 0pp | 暴力扫描下无效 |
+| CoT temporal prompting | 0pp overall | 模型算术能力不足 |
 
 ### 10.2 中期 (模型升级，1-2 周)
 
@@ -462,14 +470,17 @@ let sentence_spans = crate::fs::chunking::split_sentences(&text);
 
 | 方向 | 预期收益 | 难度 | 优先级 |
 |------|---------|------|--------|
-| Sentence-level retrieval (向量索引) | +5-10pp | 高 | 中 |
+| Sentence-level retrieval + HNSW | +5-10pp | 高 | 中 |
 | Knowledge graph 增强检索 | +5-10pp | 高 | 中 |
+| Fact quality filter (for ingest extract) | +3-5pp | 中 | 中 |
 | Agent-based retrieval (多轮) | +10-15pp | 高 | 低 |
 | Fine-tuned judge model | +2-5pp | 高 | 低 |
 
-**Sentence-level retrieval**: 需要向量索引 (HNSW) + 句子级 embedding。当前暴力扫描下句子分块无效，但有向量索引后可以高效检索句子级条目。
+**Sentence-level retrieval**: 当前暴力扫描下句子分块无效 (Round 7 已验证)，但有 HNSW 向量索引后可以高效检索句子级条目。
 
-**Knowledge graph 增强**: 当前 KG 主要用于因果图，未用于检索。可以用 KG 的实体关系图辅助多跳查询。
+**Knowledge graph 增强**: 当前 KG 主要用于因果图，未用于检索。可以用 KG 实体关系图辅助多跳查询。
+
+**Fact quality filter**: 为 PLICO_INGEST_EXTRACT 添加置信度过滤，只保留高质量事实。当前失败原因 (Round 8) 是噪声事实无差别写入。
 
 ---
 
@@ -552,9 +563,9 @@ cargo test
 | Chronos | Claude 3.5 | 95.6% | — | Temporal-aware retrieval |
 | APEX-MEM | GPT-4 | 86.2% | — | Adaptive retrieval |
 | WorldDB | GPT-4 | 96.4% | — | World model + memory |
-| **Plico** | **Gemma 4 26B** | **66.7%** | **61.0%** | RFE 7-signal + intent routing |
+| **Plico** | **Gemma 4 26B** | **76.7%** | **64.0%** | RFE 7-signal + intent routing + reranker |
 
-差距分析: 主要差距来自模型能力 (20-30pp)，其次是检索架构 (5-10pp)。
+差距分析: 主要差距来自模型能力 (20pp)，其次是检索架构 (5-10pp)。
 
 ---
 
