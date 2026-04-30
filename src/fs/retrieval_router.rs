@@ -132,10 +132,12 @@ pub fn intent_classification_prompt(query: &str) -> String {
          Output ONLY the category name, nothing else.\n\n\
          Categories:\n\
          - factual: looking up a single known fact or number (\"What is X?\", \"How many Y per day?\", \"Who did Z?\")\n\
-         - temporal: time-related queries (\"When did\", \"before\", \"after\", \"last week\")\n\
-         - multi_hop: requires connecting multiple pieces of information (\"Why did X cause Y?\")\n\
-         - preference: about preferences/opinions (\"What does user prefer?\", \"favorite\")\n\
-         - aggregation: requires listing or summarizing MULTIPLE distinct items (\"List all X\", \"Summarize all Y\")\n\n\
+         - temporal: queries ABOUT TIME or DATES (\"When did X happen?\", \"How many days between X and Y?\", \"Which event happened first?\")\n\
+         - multi_hop: requires connecting multiple pieces of information from different sources (\"Why did X cause Y?\", \"What is the relationship between X and Y?\")\n\
+         - preference: asking for recommendations, suggestions, opinions, or personal preferences (\"Can you recommend X?\", \"Suggest some Y\", \"What does user prefer?\", \"favorite\", \"What should I Z?\")\n\
+         - aggregation: requires counting or listing MULTIPLE distinct items across many entries (\"List all X\", \"How many total Y?\", \"Give me an overview of all Z\")\n\n\
+         IMPORTANT: \"Can you recommend/suggest X?\" is PREFERENCE (asking for personalized advice), \
+         NOT aggregation (counting items). \"How many X in total?\" is AGGREGATION.\n\n\
          Query: {query}\n\n\
          Category:"
     )
@@ -163,9 +165,12 @@ pub struct RetrievalConfig {
 
 impl RetrievalConfig {
     pub fn for_intent(intent: QueryIntent) -> Self {
-        match intent {
+        // Allow top_k override via env var for ablation experiments
+        let top_k_override: Option<usize> = std::env::var("PLICO_TOP_K")
+            .ok().and_then(|v| v.parse().ok());
+        let mut config = match intent {
             QueryIntent::Factual => Self {
-                top_k: 20,
+                top_k: 15,
                 use_kg: false,
                 use_ppr: false,
                 use_bm25: true,
@@ -177,7 +182,7 @@ impl RetrievalConfig {
                 use_reranker: true,
             },
             QueryIntent::Temporal => Self {
-                top_k: 25,
+                top_k: 15,
                 use_kg: true,
                 use_ppr: false,
                 use_bm25: true,
@@ -186,10 +191,10 @@ impl RetrievalConfig {
                 typed_retrieval: Some(crate::memory::MemoryType::Episodic),
                 bm25_weight: 0.8,
                 vector_weight: 1.2,
-                use_reranker: false,
+                use_reranker: true,
             },
             QueryIntent::MultiHop => Self {
-                top_k: 30,
+                top_k: 15,
                 use_kg: true,
                 use_ppr: true,
                 use_bm25: true,
@@ -198,10 +203,10 @@ impl RetrievalConfig {
                 typed_retrieval: None,
                 bm25_weight: 0.7,
                 vector_weight: 1.3,
-                use_reranker: false,
+                use_reranker: true,
             },
             QueryIntent::Preference => Self {
-                top_k: 20,
+                top_k: 15,
                 use_kg: false,
                 use_ppr: false,
                 use_bm25: true,
@@ -213,7 +218,7 @@ impl RetrievalConfig {
                 use_reranker: true,
             },
             QueryIntent::Aggregation => Self {
-                top_k: 30,
+                top_k: 15,
                 use_kg: true,
                 use_ppr: false,
                 use_bm25: true,
@@ -222,17 +227,26 @@ impl RetrievalConfig {
                 typed_retrieval: None,
                 bm25_weight: 1.2,
                 vector_weight: 0.8,
-                use_reranker: false,
+                use_reranker: true,
             },
+        };
+        // Apply top_k override if set
+        if let Some(k) = top_k_override {
+            config.top_k = k;
         }
+        config
     }
 }
 
 fn is_temporal_query_rule(q: &str) -> bool {
+    // Strong temporal signals — "before"/"after" removed (too ambiguous,
+    // e.g. "Where did X move to after Y?" is factual, not temporal)
     let temporal_keywords = [
-        "when", "what time", "before", "after", "last week", "yesterday",
+        "when", "what time", "last week", "yesterday",
         "last month", "last year", "ago", "since", "until", "during",
         "recently", "earlier", "later", "previous", "next",
+        "how many days", "how many weeks", "how many months",
+        "which happened first", "in order",
         "之前", "之后", "上周", "昨天", "上个月", "去年", "最近",
         "以前", "以后", "期间", "何时",
     ];
@@ -252,8 +266,9 @@ fn is_multi_hop_query_rule(q: &str) -> bool {
 fn is_preference_query_rule(q: &str) -> bool {
     let pref_keywords = [
         "prefer", "like", "favorite", "always", "usually", "tend to",
-        "habit", "opinion", "taste",
-        "喜欢", "偏好", "习惯", "总是", "通常",
+        "habit", "opinion", "taste", "recommend", "suggest", "should i",
+        "what would you", "best way to", "any tips", "any ideas",
+        "喜欢", "偏好", "习惯", "总是", "通常", "推荐", "建议",
     ];
     pref_keywords.iter().any(|kw| q.contains(kw))
 }
@@ -275,9 +290,10 @@ mod tests {
     fn test_classify_temporal_queries() {
         let cases = [
             "When did the meeting happen?",
-            "What happened before the deployment?",
+            "How many days passed between event A and event B?",
             "Show me logs from last week",
             "Events since yesterday",
+            "Which happened first, the wedding or the trip?",
         ];
         for q in cases {
             let result = classify_by_rules(q);
@@ -366,7 +382,7 @@ mod tests {
         assert!(!config.use_ppr);
         assert!(config.use_bm25);
         assert!(config.use_vector);
-        assert_eq!(config.top_k, 20);
+        assert_eq!(config.top_k, 15);
         assert!(config.use_reranker);
     }
 
@@ -375,8 +391,8 @@ mod tests {
         let config = RetrievalConfig::for_intent(QueryIntent::MultiHop);
         assert!(config.use_kg);
         assert!(config.use_ppr);
-        assert_eq!(config.top_k, 30);
-        assert!(!config.use_reranker);
+        assert_eq!(config.top_k, 15);
+        assert!(config.use_reranker);
     }
 
     #[test]

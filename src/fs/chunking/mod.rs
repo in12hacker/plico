@@ -77,7 +77,7 @@ pub fn chunk_document(
 }
 
 /// Split text into sentences using simple heuristics.
-fn split_sentences(text: &str) -> Vec<(usize, usize)> {
+pub fn split_sentences(text: &str) -> Vec<(usize, usize)> {
     let mut result = Vec::new();
     let mut start = 0;
 

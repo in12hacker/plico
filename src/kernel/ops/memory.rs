@@ -549,7 +549,12 @@ impl crate::kernel::AIKernel {
                 }
             });
 
-            let embed_handle = s.spawn(|| self.embedding.embed_query(query));
+            // Query bias correction (MemMachine +1.4%): strip role prefixes
+            // that bias embedding toward user-side content
+            let clean_query = query
+                .replace("user: ", "").replace("User: ", "")
+                .replace("assistant: ", "").replace("Assistant: ", "");
+            let embed_handle = s.spawn(move || self.embedding.embed_query(&clean_query));
 
             let bm25_handle = s.spawn(|| self.fs.bm25_search(query, 50));
 
@@ -696,6 +701,79 @@ impl crate::kernel::AIKernel {
         }
 
         Ok((results, classified))
+    }
+
+    /// HyDE-enhanced recall for complex queries (multi-hop, aggregation).
+    ///
+    /// Generates a hypothetical answer via LLM, embeds it, and does a second
+    /// semantic search to find memories containing answer-like content.
+    /// Merges with the standard routed recall results.
+    /// Inspired by Gao et al. "Precise Zero-Shot Dense Retrieval" (2023).
+    pub fn recall_hyde(
+        &self,
+        agent_id: &str,
+        tenant_id: &str,
+        query: &str,
+    ) -> Result<(Vec<MemoryEntry>, crate::fs::retrieval_router::ClassifiedIntent), String> {
+        use crate::llm::{ChatMessage, ChatOptions, LlmProvider};
+
+        // Standard routed recall (intent classification + RFE + reranker/MMR)
+        let (routed_results, classified) = self.recall_routed(agent_id, tenant_id, query)?;
+
+        // Only apply HyDE for complex intents
+        if classified.intent != crate::fs::retrieval_router::QueryIntent::MultiHop
+            && classified.intent != crate::fs::retrieval_router::QueryIntent::Aggregation
+        {
+            return Ok((routed_results, classified));
+        }
+
+        // Generate hypothetical answer
+        let hyde_prompt = format!(
+            "Given the following question, write a short hypothetical answer \
+             (2-3 sentences) that could plausibly answer it. Use specific details \
+             and names if possible. This is for retrieval — be concrete.\n\n\
+             Question: {}\n\nHypothetical answer:",
+            query
+        );
+        let opts = ChatOptions { temperature: 0.3, max_tokens: Some(150) };
+        let msgs = [ChatMessage::user(hyde_prompt)];
+        let hypothetical = match self.llm_provider.chat(&msgs, &opts) {
+            Ok((response, _, _)) => response.trim().to_string(),
+            Err(_) => return Ok((routed_results, classified)),
+        };
+
+        if hypothetical.is_empty() || hypothetical.len() < 10 {
+            return Ok((routed_results, classified));
+        }
+
+        // Embed the hypothetical answer for a second semantic search
+        let hyde_emb = match self.embedding.embed_query(&hypothetical) {
+            Ok(r) => r.embedding,
+            Err(_) => return Ok((routed_results, classified)),
+        };
+
+        // Semantic search with hypothetical embedding
+        let hyde_candidates = self.memory.recall_semantic(agent_id, &hyde_emb, 15);
+        let hyde_entries: Vec<MemoryEntry> = hyde_candidates.into_iter()
+            .map(|(e, _)| e)
+            .filter(|e| e.tenant_id == tenant_id)
+            .collect();
+
+        // Merge: routed results first (higher quality), then HyDE results for diversity
+        let mut seen_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut merged: Vec<MemoryEntry> = Vec::new();
+        for entry in routed_results {
+            if seen_ids.insert(entry.id.clone()) {
+                merged.push(entry);
+            }
+        }
+        for entry in hyde_entries {
+            if seen_ids.insert(entry.id.clone()) {
+                merged.push(entry);
+            }
+        }
+
+        Ok((merged, classified))
     }
 
     /// Store a procedural memory entry (L3 tier — learned skills/workflows).

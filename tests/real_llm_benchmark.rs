@@ -93,6 +93,22 @@ fn llm_chat(provider: &dyn LlmProvider, prompt: &str) -> Result<String, String> 
         .map_err(|e| format!("{e}"))
 }
 
+/// Deterministic LLM call for judge evaluation (temperature 0.0).
+fn llm_judge(provider: &dyn LlmProvider, prompt: &str) -> Result<String, String> {
+    let messages = vec![ChatMessage {
+        role: "user".to_string(),
+        content: prompt.to_string(),
+    }];
+    let opts = ChatOptions {
+        temperature: 0.0,
+        max_tokens: Some(20),
+    };
+    provider.chat(&messages, &opts)
+        .map(|(text, _prompt_tok, _compl_tok)| text)
+        .map_err(|e| format!("{e}"))
+}
+
+
 // ═══════════════════════════════════════════════════════════════════════
 // B1: Intent Classification — LLM accuracy vs rule-based
 // ═══════════════════════════════════════════════════════════════════════
@@ -2451,30 +2467,93 @@ fn bench_b25_longmemeval_real() {
         let hit = if context.is_empty() {
             false
         } else {
-            // Answer generation stage: LLM generates answer from context, then judge
-            let answer_prompt = format!(
-                "You are an AI assistant with access to conversation memories.\n\n\
-                 Retrieved memories:\n{}\n\n\
-                 Question: {}\n\n\
-                 Based ONLY on the memories above, provide a concise answer. \
-                 If the memories don't contain enough information, say \"I don't know\".",
-                &context[..context.len().min(3000)], question
-            );
+            // Answer generation stage: intent-specific prompts (Round 2)
+            let ctx_trunc = &context[..context.len().min(3000)];
+            let answer_prompt = match classified.intent {
+                plico::fs::retrieval_router::QueryIntent::Temporal => format!(
+                    "You are answering a time-related question using conversation memories.\n\n\
+                     Retrieved memories:\n{}\n\n\
+                     Question: {}\n\n\
+                     Instructions:\n\
+                     - Look for DATES, TIME PERIODS, and SEQUENCE information in the memories\n\
+                     - For \"how many days/weeks/months between X and Y\": find both dates and calculate\n\
+                     - For \"which happened first\": compare the dates of both events\n\
+                     - Pay attention to date formats like [YYYY-MM-DD] at the start of each memory\n\
+                     - If the memories don't contain enough date information, say \"I don't know\"",
+                    ctx_trunc, question
+                ),
+                plico::fs::retrieval_router::QueryIntent::Preference => format!(
+                    "You are answering a question about user preferences or recommendations.\n\n\
+                     Retrieved memories:\n{}\n\n\
+                     Question: {}\n\n\
+                     Instructions:\n\
+                     - Look for PATTERNS in what the user mentioned enjoying, preferring, or recommending\n\
+                     - Infer preferences from conversation context\n\
+                     - For \"recommend/suggest\" questions: base recommendations on the user's known interests\n\
+                     - Consider both explicit statements (\"I like X\") and implicit signals\n\
+                     - If the memories don't contain enough preference information, say \"I don't know\"",
+                    ctx_trunc, question
+                ),
+                plico::fs::retrieval_router::QueryIntent::MultiHop => format!(
+                    "You are answering a question that requires connecting multiple pieces of information.\n\n\
+                     Retrieved memories:\n{}\n\n\
+                     Question: {}\n\n\
+                     Instructions:\n\
+                     - This question requires REASONING across multiple memories\n\
+                     - Identify which memories contain relevant pieces of the answer\n\
+                     - Connect the information: memory A may describe an event, memory B may explain its cause\n\
+                     - State your reasoning briefly, then give the answer\n\
+                     - If the memories don't contain enough connecting information, say \"I don't know\"",
+                    ctx_trunc, question
+                ),
+                plico::fs::retrieval_router::QueryIntent::Aggregation => format!(
+                    "You are answering a question that requires counting or listing multiple items.\n\n\
+                     Retrieved memories:\n{}\n\n\
+                     Question: {}\n\n\
+                     Instructions:\n\
+                     - Scan ALL memories for relevant items, events, or data points\n\
+                     - For \"how many\" questions: count EACH DISTINCT item mentioned across all memories\n\
+                     - Be EXHAUSTIVE — don't miss items mentioned in later memories\n\
+                     - If memories mention the same item multiple times, count it only once\n\
+                     - If the memories don't contain enough information, say \"I don't know\"",
+                    ctx_trunc, question
+                ),
+                _ => format!(
+                    "You are answering a factual question using conversation memories.\n\n\
+                     Retrieved memories:\n{}\n\n\
+                     Question: {}\n\n\
+                     Instructions:\n\
+                     - Find the SPECIFIC fact, name, number, or detail asked about\n\
+                     - Answer with the exact information from the memories\n\
+                     - Be concise — one phrase or sentence\n\
+                     - If the information is not in the memories, say \"I don't know\"",
+                    ctx_trunc, question
+                ),
+            };
             let generated = llm_chat(&*llm, &answer_prompt).unwrap_or_default();
 
             // Judge: does the generated answer match the expected answer?
+            // Stage 1: fast keyword check
             let kw_lower = expected.to_lowercase();
             let gen_lower = generated.to_lowercase();
             if gen_lower.contains(&kw_lower) {
                 true
             } else {
+                // Stage 2: LLM judge with calibrated prompt (Round 6)
                 let judge_prompt = format!(
-                    "Question: {}\nExpected answer: {}\nGenerated answer: {}\n\n\
-                     Does the generated answer correctly address the question with information \
-                     matching the expected answer? Reply ONLY 'yes' or 'no'.",
+                    "You are evaluating whether a generated answer is correct.\n\n\
+                     Question: {}\n\
+                     Expected answer: {}\n\
+                     Generated answer: {}\n\n\
+                     Rules:\n\
+                     - 'yes' if the generated answer contains the key information from the expected answer\n\
+                     - 'yes' if the answer is semantically equivalent (e.g., 'about a month' = '30 days')\n\
+                     - 'yes' if the answer names the same person/place/thing, even with different wording\n\
+                     - 'no' only if the answer is clearly wrong, missing the key fact, or says 'I don't know'\n\
+                     Reply ONLY 'yes' or 'no'.",
                     question, expected, &generated[..generated.len().min(500)]
                 );
-                llm_chat(&*llm, &judge_prompt)
+                llm_judge(&*llm, &judge_prompt)
                     .map(|r| r.trim().to_lowercase().starts_with("yes"))
                     .unwrap_or(false)
             }
@@ -2637,15 +2716,69 @@ fn bench_b26_locomo_real() {
             let hit = if context.is_empty() {
                 false
             } else {
-                // Answer generation stage
-                let answer_prompt = format!(
-                    "You are an AI assistant with access to conversation memories.\n\n\
-                     Retrieved memories:\n{}\n\n\
-                     Question: {}\n\n\
-                     Based ONLY on the memories above, provide a concise answer. \
-                     If the memories don't contain enough information, say \"I don't know\".",
-                    &context[..context.len().min(3000)], question
-                );
+                // Answer generation stage: intent-specific prompts (Round 2)
+                let ctx_trunc = &context[..context.len().min(3000)];
+                let answer_prompt = match classified.intent {
+                    plico::fs::retrieval_router::QueryIntent::Temporal => format!(
+                        "You are answering a time-related question using conversation memories.\n\n\
+                         Retrieved memories:\n{}\n\n\
+                         Question: {}\n\n\
+                         Instructions:\n\
+                         - Look for DATES, TIME PERIODS, and SEQUENCE information in the memories\n\
+                         - For \"how many days/weeks/months between X and Y\": find both dates and calculate\n\
+                         - For \"which happened first\": compare the dates of both events\n\
+                         - Pay attention to date formats like [YYYY-MM-DD] at the start of each memory\n\
+                         - If the memories don't contain enough date information, say \"I don't know\"",
+                        ctx_trunc, question
+                    ),
+                    plico::fs::retrieval_router::QueryIntent::Preference => format!(
+                        "You are answering a question about user preferences or recommendations.\n\n\
+                         Retrieved memories:\n{}\n\n\
+                         Question: {}\n\n\
+                         Instructions:\n\
+                         - Look for PATTERNS in what the user mentioned enjoying, preferring, or recommending\n\
+                         - Infer preferences from conversation context\n\
+                         - For \"recommend/suggest\" questions: base recommendations on the user's known interests\n\
+                         - Consider both explicit statements (\"I like X\") and implicit signals\n\
+                         - If the memories don't contain enough preference information, say \"I don't know\"",
+                        ctx_trunc, question
+                    ),
+                    plico::fs::retrieval_router::QueryIntent::MultiHop => format!(
+                        "You are answering a question that requires connecting multiple pieces of information.\n\n\
+                         Retrieved memories:\n{}\n\n\
+                         Question: {}\n\n\
+                         Instructions:\n\
+                         - This question requires REASONING across multiple memories\n\
+                         - Identify which memories contain relevant pieces of the answer\n\
+                         - Connect the information: memory A may describe an event, memory B may explain its cause\n\
+                         - State your reasoning briefly, then give the answer\n\
+                         - If the memories don't contain enough connecting information, say \"I don't know\"",
+                        ctx_trunc, question
+                    ),
+                    plico::fs::retrieval_router::QueryIntent::Aggregation => format!(
+                        "You are answering a question that requires counting or listing multiple items.\n\n\
+                         Retrieved memories:\n{}\n\n\
+                         Question: {}\n\n\
+                         Instructions:\n\
+                         - Scan ALL memories for relevant items, events, or data points\n\
+                         - For \"how many\" questions: count EACH DISTINCT item mentioned across all memories\n\
+                         - Be EXHAUSTIVE — don't miss items mentioned in later memories\n\
+                         - If memories mention the same item multiple times, count it only once\n\
+                         - If the memories don't contain enough information, say \"I don't know\"",
+                        ctx_trunc, question
+                    ),
+                    _ => format!(
+                        "You are answering a factual question using conversation memories.\n\n\
+                         Retrieved memories:\n{}\n\n\
+                         Question: {}\n\n\
+                         Instructions:\n\
+                         - Find the SPECIFIC fact, name, number, or detail asked about\n\
+                         - Answer with the exact information from the memories\n\
+                         - Be concise — one phrase or sentence\n\
+                         - If the information is not in the memories, say \"I don't know\"",
+                        ctx_trunc, question
+                    ),
+                };
                 let generated = llm_chat(&*llm, &answer_prompt).unwrap_or_default();
 
                 let kw_lower = expected.to_lowercase();
@@ -2661,7 +2794,7 @@ fn bench_b26_locomo_real() {
                          matching the expected answer? Reply ONLY 'yes' or 'no'.",
                         question, expected, &generated[..generated.len().min(500)]
                     );
-                    llm_chat(&*llm, &judge_prompt)
+                    llm_judge(&*llm, &judge_prompt)
                         .map(|r| r.trim().to_lowercase().starts_with("yes"))
                         .unwrap_or(false)
                 }

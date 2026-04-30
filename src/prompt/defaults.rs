@@ -38,10 +38,12 @@ pub fn register_defaults(reg: &mut PromptRegistry) {
              Output ONLY the category name, nothing else.\n\n\
              Categories:\n\
              - factual: looking up a single known fact or number (\"What is X?\", \"How many Y per day?\", \"Who did Z?\")\n\
-             - temporal: time-related queries (\"When did\", \"before\", \"after\", \"last week\")\n\
-             - multi_hop: requires connecting multiple pieces of information (\"Why did X cause Y?\")\n\
-             - preference: about preferences/opinions (\"What does user prefer?\", \"favorite\")\n\
-             - aggregation: requires listing or summarizing MULTIPLE distinct items (\"List all X\", \"Summarize all Y\")\n\n\
+             - temporal: queries ABOUT TIME or DATES (\"When did X happen?\", \"How many days between X and Y?\", \"Which event happened first?\")\n\
+             - multi_hop: requires connecting multiple pieces of information from different sources (\"Why did X cause Y?\", \"What is the relationship between X and Y?\")\n\
+             - preference: asking for recommendations, suggestions, opinions, or personal preferences (\"Can you recommend X?\", \"Suggest some Y\", \"What does user prefer?\", \"favorite\", \"What should I Z?\")\n\
+             - aggregation: requires counting or listing MULTIPLE distinct items across many entries (\"List all X\", \"How many total Y?\", \"Give me an overview of all Z\")\n\n\
+             IMPORTANT: \"Can you recommend/suggest X?\" is PREFERENCE (asking for personalized advice), \
+             NOT aggregation (counting items). \"How many X in total?\" is AGGREGATION.\n\n\
              Query: {{query}}\n\n\
              Category:",
             &["query"],
@@ -179,4 +181,105 @@ pub fn register_defaults(reg: &mut PromptRegistry) {
             &["content"],
         ).with_max_tokens(512),
     );
+
+    // ── Intent-specific answer generation prompts ──
+
+    reg.register_default(
+        PromptTemplate::new(
+            "answer_factual",
+            "You are answering a factual question using conversation memories.\n\n\
+             Retrieved memories:\n{{context}}\n\n\
+             Question: {{question}}\n\n\
+             Instructions:\n\
+             - Find the specific fact, name, number, location, or detail asked about\n\
+             - Answer with the exact information from the memories\n\
+             - If multiple memories mention different facts, pick the most relevant one\n\
+             - Be concise but complete — include all relevant details\n\
+             - If the information is not in the memories, say \"I don't know\"",
+            &["context", "question"],
+        ).with_max_tokens(200),
+    );
+
+    reg.register_default(
+        PromptTemplate::new(
+            "answer_temporal",
+            "You are answering a time-related question using conversation memories.\n\n\
+             Retrieved memories:\n{{context}}\n\n\
+             Question: {{question}}\n\n\
+             Instructions:\n\
+             - Look for DATES, TIME PERIODS, and SEQUENCE information in the memories\n\
+             - For \"how many days/weeks/months between X and Y\": find both dates and calculate\n\
+             - For \"which happened first\": compare the dates of both events\n\
+             - For \"when did X happen\": find the specific date associated with event X\n\
+             - Pay attention to date formats like [YYYY-MM-DD] at the start of each memory\n\
+             - If the memories don't contain enough date information, say \"I don't know\"",
+            &["context", "question"],
+        ).with_max_tokens(200),
+    );
+
+    reg.register_default(
+        PromptTemplate::new(
+            "answer_preference",
+            "You are answering a question about user preferences or recommendations using conversation memories.\n\n\
+             Retrieved memories:\n{{context}}\n\n\
+             Question: {{question}}\n\n\
+             Instructions:\n\
+             - Look for PATTERNS in what the user mentioned enjoying, preferring, or recommending\n\
+             - Infer preferences from conversation context (e.g., if they mention buying from a store often, that's a preference)\n\
+             - For \"recommend/suggest\" questions: base recommendations on the user's known interests and past mentions\n\
+             - Consider both explicit statements (\"I like X\") and implicit signals (frequently mentioned topics)\n\
+             - Provide specific, personalized suggestions based on the memories\n\
+             - If the memories don't contain enough preference information, say \"I don't know\"",
+            &["context", "question"],
+        ).with_max_tokens(200),
+    );
+
+    reg.register_default(
+        PromptTemplate::new(
+            "answer_multi_hop",
+            "You are answering a question that requires connecting multiple pieces of information from different conversation memories.\n\n\
+             Retrieved memories:\n{{context}}\n\n\
+             Question: {{question}}\n\n\
+             Instructions:\n\
+             - This question requires REASONING across multiple memories\n\
+             - Identify which memories contain relevant pieces of the answer\n\
+             - Connect the information: memory A may describe an event, memory B may explain its cause\n\
+             - For \"why\" questions: find the cause-effect chain across memories\n\
+             - For \"relationship\" questions: identify how entities are connected across different conversations\n\
+             - State your reasoning briefly, then give the answer\n\
+             - If the memories don't contain enough connecting information, say \"I don't know\"",
+            &["context", "question"],
+        ).with_max_tokens(200),
+    );
+
+    reg.register_default(
+        PromptTemplate::new(
+            "answer_aggregation",
+            "You are answering a question that requires counting or listing multiple items from conversation memories.\n\n\
+             Retrieved memories:\n{{context}}\n\n\
+             Question: {{question}}\n\n\
+             Instructions:\n\
+             - Scan ALL memories for relevant items, events, or data points\n\
+             - For \"how many\" questions: count EACH DISTINCT item mentioned across all memories\n\
+             - For \"list all\" questions: enumerate every relevant item found\n\
+             - Be EXHAUSTIVE — don't miss items mentioned in later memories\n\
+             - If memories mention the same item multiple times, count it only once\n\
+             - State the count/list clearly, then briefly cite which memories support it\n\
+             - If the memories don't contain enough information, say \"I don't know\"",
+            &["context", "question"],
+        ).with_max_tokens(200),
+    );
+
+    reg.register_default(
+        PromptTemplate::new(
+            "query_decomposition",
+            "The following question requires information from multiple conversation sessions. \
+             Break it into 2-3 simpler sub-questions that can each be answered from a single session or context.\n\n\
+             Original question: {{question}}\n\n\
+             Output one sub-question per line, nothing else. Each sub-question should be self-contained \
+             and searchable independently.",
+            &["question"],
+        ).with_max_tokens(200),
+    );
+
 }
