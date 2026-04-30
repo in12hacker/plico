@@ -46,6 +46,14 @@ pub use super::prefetch_profile::AgentProfileStore;
 use super::prefetch_cache::IntentAssemblyCache;
 use super::prefetch_profile::{IntentFeedbackEntry, DEFAULT_MAX_FEEDBACK_ENTRIES};
 
+// ── Brain modules (Axiom 2/7/9: intent decomposition, skill discovery, temporal projection) ──
+use super::goal_generator::GoalGenerator;
+use super::intent_decomposer::IntentDecomposer;
+use super::skill_discovery::SkillDiscriminator;
+use super::self_healing::{PlanAdaptor, FailureClassifier};
+use super::cross_domain_skill::CrossDomainSkillComposer;
+use super::temporal_projection::TemporalProjectionEngine;
+
 /// RRF fusion constant — dampens rank differences between paths.
 const RRF_K: f32 = 60.0;
 
@@ -221,6 +229,20 @@ pub struct IntentPrefetcher {
     cost_ledger: Arc<std::sync::RwLock<Option<Arc<crate::kernel::ops::cost_ledger::TokenCostLedger>>>>,
     /// F-2: Current session ID for cost tracking.
     current_session_id: std::sync::RwLock<Option<String>>,
+
+    // ── Brain modules (Axiom 2/7/9) ──
+    /// Axiom 9: Learns reusable skill patterns from repeated operation sequences.
+    pub skill_discriminator: Arc<SkillDiscriminator>,
+    /// Axiom 7: Projects likely intents based on time-of-day patterns.
+    pub temporal_engine: Arc<TemporalProjectionEngine>,
+    /// Axiom 2: Generates goals from agent history for proactive context.
+    pub goal_generator: Arc<GoalGenerator>,
+    /// Axiom 10: Classifies failures and adapts execution plans.
+    pub plan_adaptor: Arc<PlanAdaptor>,
+    /// Axiom 9: Discovers cross-domain skill compositions.
+    pub cross_domain_composer: Arc<CrossDomainSkillComposer>,
+    /// Axiom 2: Decomposes intents into operation sequences using agent profile.
+    pub intent_decomposer: Arc<IntentDecomposer>,
 }
 
 impl IntentPrefetcher {
@@ -234,6 +256,7 @@ impl IntentPrefetcher {
         ctx_loader: Arc<ContextLoader>,
         root: std::path::PathBuf,
     ) -> Self {
+        let profile_store = Arc::new(AgentProfileStore::default());
         Self {
             assemblies: Arc::new(RwLock::new(HashMap::new())),
             allocation_cache: Arc::new(AllocationCache::new()),
@@ -245,7 +268,7 @@ impl IntentPrefetcher {
             ctx_loader,
             max_age_ms: 3_600_000, // 1 hour
             intent_cache: Arc::new(IntentAssemblyCache::default()),
-            profile_store: Arc::new(AgentProfileStore::default()),
+            profile_store: profile_store.clone(),
             feedback_history: RwLock::new(Vec::new()),
             max_feedback_entries: DEFAULT_MAX_FEEDBACK_ENTRIES,
             root,
@@ -253,6 +276,14 @@ impl IntentPrefetcher {
             cache_hits: std::sync::atomic::AtomicU64::new(0),
             cost_ledger: Arc::new(std::sync::RwLock::new(None)),
             current_session_id: std::sync::RwLock::new(None),
+
+            // ── Brain modules ──
+            skill_discriminator: Arc::new(SkillDiscriminator::new(3)),
+            temporal_engine: Arc::new(TemporalProjectionEngine::new()),
+            goal_generator: Arc::new(GoalGenerator::new()),
+            plan_adaptor: Arc::new(PlanAdaptor::new()),
+            cross_domain_composer: Arc::new(CrossDomainSkillComposer::new(2)),
+            intent_decomposer: Arc::new(IntentDecomposer::new(profile_store)),
         }
     }
 
@@ -428,6 +459,17 @@ impl IntentPrefetcher {
                 HashMap::new()
             };
 
+        // Brain: IntentDecomposer — decompose intent into operations from historical patterns
+        let intent_keywords: Vec<String> = intent.split_whitespace()
+            .map(|w| w.to_string())
+            .collect();
+        let mut enhanced_cids = related_cids;
+        if let Some(decomposed_ops) = self.intent_decomposer.decompose(&intent_keywords, agent_id) {
+            tracing::debug!("IntentDecomposer: intent '{}' decomposed into {:?}", intent, decomposed_ops);
+            // Use decomposed operations as additional recall hints
+            enhanced_cids.extend(decomposed_ops);
+        }
+
         // Kick off background prefetch — clone refs for the async task
         let assemblies = Arc::clone(&self.assemblies);
         let allocation_cache = Arc::clone(&self.allocation_cache);
@@ -442,7 +484,7 @@ impl IntentPrefetcher {
         let max_age = self.max_age_ms;
         // Use the actual prefetcher's intent cache, not a new one
         let intent_cache = Arc::clone(&self.intent_cache);
-        let related_cids_clone = related_cids.clone();
+        let related_cids_clone = enhanced_cids.clone();
 
         // Spawn background task using std thread (no tokio feature needed)
         std::thread::spawn(move || {
@@ -667,7 +709,14 @@ impl IntentPrefetcher {
                 }
                 Some(Ok(result))
             }
-            AssemblyState::Failed(err) => Some(Err(err.clone())),
+            AssemblyState::Failed(err) => {
+                // Brain: PlanAdaptor — record failure and get adaptation suggestion
+                let failure_type = FailureClassifier::classify(err, "prefetch");
+                let adaptation = self.plan_adaptor.record_and_adapt(assembly_id, &failure_type);
+                tracing::debug!("PlanAdaptor: assembly {} failed ({:?}), suggestion: {:?}",
+                    assembly_id, failure_type, adaptation);
+                Some(Err(err.clone()))
+            }
             AssemblyState::Used | AssemblyState::Unused | AssemblyState::Cancelled => None,
         }
     }
@@ -738,6 +787,25 @@ impl IntentPrefetcher {
             // Use a default budget and no related_cids for background prefetch
             let _ = self.trigger_cognitive_prefetch(agent_id, predicted, known_tags);
         }
+
+        // Brain: Record intent completion across all brain modules
+        let intent_keywords: Vec<String> = intent.split_whitespace()
+            .map(|w| w.to_string())
+            .collect();
+        let ops = vec!["intent".to_string(), intent.to_string()];
+
+        // GoalGenerator: record goal pattern
+        self.goal_generator.record_goal(agent_id, &intent_keywords, &ops, true);
+
+        // SkillDiscriminator: record operation sequence
+        self.skill_discriminator.record_sequence(agent_id, ops.clone(), true, 0);
+
+        // TemporalProjectionEngine: record intent timing
+        self.temporal_engine.record_intent(intent, now_ms());
+
+        // CrossDomainSkillComposer: record cross-domain skill pattern
+        let domains = vec!["intent".to_string(); ops.len()];
+        self.cross_domain_composer.record_sequence(&ops, &domains, true);
 
         predicted_next
     }

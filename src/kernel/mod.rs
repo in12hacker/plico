@@ -73,9 +73,9 @@ pub struct AIKernel {
     pub(crate) message_bus: Arc<MessageBus>,
     pub(crate) event_bus: Arc<EventBus>,
     /// Hook registry — lifecycle interception for tool calls (F-1, Node 19).
-    pub(crate) hook_registry: Arc<hook::HookRegistry>,
+    pub hook_registry: Arc<hook::HookRegistry>,
     /// Proactive context assembly — semantic prefetch engine.
-    pub(crate) prefetch: Arc<ops::prefetch::IntentPrefetcher>,
+    pub prefetch: Arc<ops::prefetch::IntentPrefetcher>,
     /// Agent authentication — cryptographic token store.
     pub(crate) key_store: Arc<AgentKeyStore>,
     /// Tenant registry — manages all tenants in the system.

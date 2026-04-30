@@ -599,6 +599,27 @@ pub fn start_session_orchestrate(params: SessionStartParams<'_>) -> Result<Start
         tracing::debug!("warmed {} cache entries from agent profile for {}", cache_warmed, agent_id);
     }
 
+    // 5b+. Axiom 7: Temporal projection — warm cache based on time-of-day patterns
+    let current_hour = {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        ((now % 86400) / 3600) as u32
+    };
+    let projected_intents = prefetch.temporal_engine.project(current_hour);
+    if !projected_intents.is_empty() {
+        tracing::debug!("temporal projection: {} likely intents for hour {}", projected_intents.len(), current_hour);
+    }
+
+    // 5b+. Axiom 2: Goal generation — suggest goals from agent history
+    if let Some(ref hint) = intent_hint {
+        let suggested_goals = prefetch.goal_generator.generate_goals(agent_id, hint);
+        if !suggested_goals.is_empty() {
+            tracing::debug!("generated {} suggested goals from history", suggested_goals.len());
+        }
+    }
+
     // 5c. Restore from latest checkpoint if exists
     // (checkpoint_agent stores via semantic_create which persists to CAS)
     // We don't auto-restore here — that's done via explicit AgentRestore call.
@@ -733,6 +754,17 @@ pub fn end_session_orchestrate(
     );
     // Clear only the ephemeral tier — preserve working and long-term memories
     let _cleared = memory.clear_ephemeral(agent_id);
+
+    // 3b. Axiom 9: Record session operation patterns for skill discovery
+    if let Some(p) = prefetch {
+        // Record a synthetic operation sequence from session activity
+        // The session's intent (if any) represents the operation performed
+        if let Some(ref intent) = session.current_intent {
+            let ops = vec!["session".to_string(), intent.clone()];
+            p.skill_discriminator.record_sequence(agent_id, ops, true, 0);
+            p.temporal_engine.record_intent(intent, now_ms());
+        }
+    }
 
     // 4. Get actual token cost from cost ledger (F-2: TokenCostLedger integration)
     let (input_tokens, output_tokens) = prefetch

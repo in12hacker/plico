@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 //! plico-mcp — MCP (Model Context Protocol) Server for Plico
 //!
 //! Thin JSON-RPC 2.0 adapter over Plico's kernel, communicating via stdio.

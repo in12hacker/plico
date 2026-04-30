@@ -139,6 +139,16 @@ pub fn generate_instructions() -> String {
 | memory_stats | Memory tier statistics | tier |
 | intent_declare | Prefetch context | intent, token_budget |
 | intent_fetch | Get prefetched context | assembly_id |
+| kg_add_node | Add KG node | label, node_type, properties |
+| kg_add_edge | Add KG edge | src_id, dst_id, edge_type, weight |
+| kg_find_paths | Find paths between nodes | src_id, dst_id, max_depth, weighted |
+| kg_causal_path | Find causal chain | from_id, to_id, depth |
+| kg_impact | Impact analysis | node_id, depth |
+| kg_list_nodes | List KG nodes | node_type |
+| kg_list_edges | List KG edges | — |
+| batch_create | Batch CAS store | items=[{content, tags}] |
+| batch_remember | Batch memory store | items=[{content, tags, importance}] |
+| context_assemble | Assemble context from CIDs | cids, token_budget |
 
 ## Scoping Model
 - agent: your agent ID (auto-registered on first call)
@@ -228,7 +238,10 @@ pub fn tool_definitions() -> Vec<Value> {
                         "type": "string",
                         "enum": ["session_start","session_end","put","get","remember","recall","recall_semantic",
                                  "search","hybrid","intent_declare","intent_fetch","delta","growth","status",
-                                 "discover","memory_stats","help"],
+                                 "discover","memory_stats","help",
+                                 "kg_add_node","kg_add_edge","kg_find_paths","kg_causal_path","kg_impact",
+                                 "kg_list_nodes","kg_list_edges",
+                                 "batch_create","batch_remember","context_assemble"],
                         "description": "Single operation mode"
                     },
                     "pipeline": {
@@ -254,7 +267,22 @@ pub fn tool_definitions() -> Vec<Value> {
                     "params": { "type": "object", "description": "Additional/cold-path parameters" },
                     "limit": { "type": "number", "description": "Max results for search/hybrid" },
                     "require_tags": { "type": "array", "items": { "type": "string" }, "description": "For search" },
-                    "exclude_tags": { "type": "array", "items": { "type": "string" }, "description": "For search" }
+                    "exclude_tags": { "type": "array", "items": { "type": "string" }, "description": "For search" },
+                    "label": { "type": "string", "description": "For kg_add_node: node label" },
+                    "node_type": { "type": "string", "enum": ["entity","fact","document","agent","memory"], "description": "For kg_add_node/list_nodes" },
+                    "properties": { "type": "object", "description": "For kg_add_node: JSON properties" },
+                    "src_id": { "type": "string", "description": "For kg_add_edge/find_paths: source node ID" },
+                    "dst_id": { "type": "string", "description": "For kg_add_edge/find_paths: destination node ID" },
+                    "edge_type": { "type": "string", "enum": ["causes","related_to","similar_to","part_of","mentions","follows","associates_with","reminds"], "description": "For kg_add_edge" },
+                    "weight": { "type": "number", "description": "For kg_add_edge: edge weight 0.0-1.0" },
+                    "from_id": { "type": "string", "description": "For kg_causal_path: cause node ID" },
+                    "to_id": { "type": "string", "description": "For kg_causal_path: effect node ID" },
+                    "node_id": { "type": "string", "description": "For kg_impact: node to analyze" },
+                    "max_depth": { "type": "number", "description": "For kg_find_paths: max path depth" },
+                    "depth": { "type": "number", "description": "For kg_causal_path/impact: max depth" },
+                    "weighted": { "type": "boolean", "description": "For kg_find_paths: use weighted pathfinding" },
+                    "items": { "type": "array", "items": { "type": "object" }, "description": "For batch_create/remember: array of items" },
+                    "cids": { "type": "array", "items": { "type": "object" }, "description": "For context_assemble: [{cid, relevance?}]" }
                 },
                 "oneOf": [
                     { "required": ["action", "agent_id"] },
