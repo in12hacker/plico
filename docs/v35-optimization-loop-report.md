@@ -365,6 +365,12 @@ let sentence_spans = crate::fs::chunking::split_sentences(&text);
 | CoT temporal | 日期计算需要推理步骤 | +6pp temporal, 0pp overall | 模型算术能力不足 | ❌ |
 | Judge 校准 | 减少评判噪声 | 方差略减 | 保留但不改变排名 | ✅ |
 | Sentence chunking | 细粒度检索提高召回 | +35% ingest, 0pp | 暴力扫描下无效 | ❌ |
+| Reranker 全意图 | 精排提升所有类别 | +10pp B25 | **第二大改进** | ✅ |
+| Few-shot answer examples | 示例帮助模型理解格式 | B25 -3.4pp | 小模型偏好简洁指令 | ❌ |
+| Hybrid reranker+MMR | 兼顾精度和多跳多样性 | B26 60-62% | MMR 无法恢复被淘汰的多会话结果 | ❌ |
+| Selective reranker | 保留 multi-hop 的 MMR | B26 62.7%, B25 -2pp | overall 收益减少 | ❌ |
+| Batch embedding | 降低 ingest 延迟 | N/A | 已在 benchmark API 中实现 | — |
+| Model upgrade | 更大模型 = 更好推理 | Blocked | 需下载 ~40GB GGUF | 待定 |
 
 ---
 
@@ -383,6 +389,20 @@ let sentence_spans = crate::fs::chunking::split_sentences(&text);
 
 **结论**: 下一步改进必须在答案生成层或模型层。
 
+### 8.3 小模型的 Few-shot Prompting 适得其反
+
+Gemma 4 26B 对 few-shot 示例不敏感甚至负面 (-3.4pp)。长 prompt 消耗上下文窗口, 示例可能误导模型。小模型偏好简洁的指令式 prompt。
+
+**对比**: GPT-4/Claude 通常从 few-shot 中受益。这是一个关键的模型规模差异。
+
+### 8.4 Cross-encoder Reranker 的固有多跳回归
+
+Reranker 倾向于将结果集中到单一高相关性会话, 而 multi-hop 查询需要跨多个会话的结果。已验证的恢复方案全部失败:
+- Hybrid reranker+MMR: MMR 在 reranker 之后运行, 无法恢复被淘汰的多会话结果
+- Selective reranker: multi-hop 恢复但 overall 收益减少
+
+**Tradeoff**: 保持 reranker-all, 接受 multi-hop -7pp, 换取 overall +10pp B25。
+
 ### 8.2 Gemma 4 26B 的能力天花板
 
 | 任务类型 | Gemma 4 表现 | 瓶颈 |
@@ -399,9 +419,9 @@ let sentence_spans = crate::fs::chunking::split_sentences(&text);
 | MemMachine | GPT-4o | 93.0% |
 | Chronos | Claude 3.5 | 95.6% |
 | APEX-MEM | GPT-4 | 86.2% |
-| **Plico** | **Gemma 4 26B** | **66.7%** |
+| **Plico** | **Gemma 4 26B** | **76.7%** |
 
-差距 ~20-30pp 主要来自模型能力差异。
+差距 ~20pp 主要来自模型能力差异。
 
 ---
 
@@ -436,11 +456,11 @@ let sentence_spans = crate::fs::chunking::split_sentences(&text);
 
 | 方向 | 预期收益 | 难度 | 优先级 | 状态 |
 |------|---------|------|--------|------|
-| Answer prompt 精调 (更多 few-shot) | +1-2pp | 低 | 中 | 未尝试 |
-| B26 multi-hop 恢复 | +5-7pp | 中 | 高 | Reranker 导致 -7pp, 需调查 |
 | Cross-encoder 阈值调优 | +1-2pp | 低 | 低 | 未尝试 |
 
-**B26 multi-hop 问题**: Reranker 全意图启用后, B26 multi-hop 从 69% 降至 62%。需要调查是否可以通过调整 reranker 阈值或混合策略来恢复。
+**已验证不可行的短期方向**:
+- Answer prompt 精调 (few-shot): B25 -3.4pp, Gemma 4 偏好简洁指令 (Round 11)
+- B26 multi-hop 恢复 (hybrid reranker+MMR): 固有回归, MMR 无法恢复 (Round 12)
 
 ### 已验证不可行的方向 (不要再试)
 
@@ -452,6 +472,9 @@ let sentence_spans = crate::fs::chunking::split_sentences(&text);
 | HyDE | B26 -9pp | 假设答案过于具体 |
 | Sentence-level chunking | +35% ingest, 0pp | 暴力扫描下无效 |
 | CoT temporal prompting | 0pp overall | 模型算术能力不足 |
+| Few-shot answer examples | B25 -3.4pp | 小模型偏好简洁指令, 示例反而误导 |
+| Hybrid reranker+MMR (lambda=0.7/0.85) | B26 60-62% | MMR 无法恢复被 reranker 淘汰的多会话结果 |
+| Selective reranker (MultiHop=MMR-only) | B26 62.7%, B25 -2pp | Multi-hop 恢复但 overall 收益减少 |
 
 ### 10.2 中期 (模型升级，1-2 周)
 
@@ -506,8 +529,9 @@ let sentence_spans = crate::fs::chunking::split_sentences(&text);
 | 配置 | B25 | B26 | 备注 |
 |------|-----|-----|------|
 | v35 基线 (recall_semantic) | 53.3% | 62.0% | 无意图路由/RFE |
-| v35 recall_routed | 68.3% | 70.0% | 完整管道 (单次运行) |
-| v35 recall_routed (多次均值) | **66.7%** | **61.0%** | 真实基线 |
+| v35 recall_routed (单次) | 68.3% | 70.0% | 完整管道, 异常值 |
+| v35 recall_routed (多次均值) | 66.7% | 61.0% | 真实基线 |
+| v35 最终 (reranker all) | **76.7%** | **64.0%** | 当前最优 |
 | SOTA (GPT-4/Claude) | 90%+ | 90%+ | 模型能力差距 |
 
 ---

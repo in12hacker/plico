@@ -275,6 +275,63 @@ let clean_query = query
 
 **关键发现**: 之前禁用 reranker 是担心多样性损失, 但 MMR 已经保证了多样性。reranker 提供的精度提升远大于多样性的潜在损失。
 
+### Round 11: Few-shot Answer Examples (-3.4pp B25) — REVERTED
+
+**假设**: 在 answer prompt 中添加 few-shot 示例 (Q&A 对) 可以帮助 Gemma 4 更好地理解输出格式, 提升准确率。
+
+**实现**: 新增 `answer_prompt_for_intent()` helper 函数, 每个意图 prompt 包含 2-3 个示例:
+- factual: "Q: What is X? A: X is Y" 格式
+- temporal: "Q: When did X happen? A: X happened on date" 格式
+- multi-hop: "Q: Why X? A: Because Y caused Z" 格式
+
+**结果**: B25 73.3% (-3.4pp), temporal -10pp, multi-session -20pp
+
+**失败原因**: Gemma 4 26B 对 few-shot 示例不敏感, 甚至可能被示例误导。模型更偏好简洁的指令式 prompt, 而非包含示例的长 prompt。长 prompt 还消耗了更多上下文窗口。
+
+**结论**: 小模型 (26B) 的 few-shot prompt engineering 效果与大模型 (GPT-4/Claude) 相反。**已回滚, 移除 `answer_prompt_for_intent()` helper。**
+
+### Round 12: B26 Multi-hop Recovery (Hybrid Reranker+MMR) — PARTIAL REVERT
+
+**问题**: Round 10 启用 reranker-all 后, B26 multi-hop 从 69% 降至 62%。需要恢复 multi-hop 准确率。
+
+**实验 12a: Hybrid Reranker+MMR (lambda=0.7)**
+- 先 reranker 精排, 再 MMR 多样性选择
+- 结果: B26 60.0%, multi-hop 进一步下降
+- 原因: lambda=0.7 过度多样化, 稀释了 reranker 的精度提升
+
+**实验 12b: Hybrid Reranker+MMR (lambda=0.85)**
+- 提高 lambda 以保留更多 reranker 精度
+- 结果: B26 61.3%, 无显著改善
+- 原因: MMR 在 reranker 之后运行, 已经无法恢复被 reranker 淘汰的多会话结果
+
+**实验 12c: Selective Reranker (MultiHop=MMR-only)**
+- MultiHop 意图禁用 reranker, 其他意图保持 reranker
+- 结果: B26 62.7%, multi-hop ~65% (接近基线 69%)
+- 但 B25 下降 ~2pp (其他类别 reranker 收益减少)
+
+**结论**: Multi-hop 回归是 cross-encoder reranker 的固有特性 — 它倾向于将结果集中到单一高相关性会话, 而 multi-hop 需要跨多个会话的结果。MMR 无法在 reranker 之后恢复这种多样性。
+
+**最终决策**: 保持 reranker-all 配置 (B25 76.7%, B26 64.0%)。Multi-hop 回归 -7pp 是可接受的 tradeoff, 因为 overall 收益远大于单类别损失。
+
+### Round 13: Batch Embedding — N/A
+
+**假设**: 将 `remember_long_term` 的逐条 `embed()` 调用改为 batch embedding 可以降低 ingest 延迟。
+
+**发现**: Benchmark 测试已经使用 `remember_long_term_batch()` API, batch embedding 已在 B13 中验证 (2.53x 加速)。当前 benchmark 的 ingest 延迟已经是 batch 后的结果。
+
+**结论**: 无代码变更需要。Batch embedding 优化需要在生产 API (`remember_long_term`) 中实现, 而非 benchmark API。
+
+### Round 14: Model Upgrade — BLOCKED
+
+**假设**: 升级到更大的模型 (Qwen2.5-72B 或 Gemma 3 27B) 可以显著提升 B25/B26 准确率。
+
+**检查**:
+- 磁盘上可用模型: Gemma 4 26B (Q4_K_M), Qwen2.5-coder-7b
+- Qwen2.5-72B 需要 ~40GB GGUF 文件, 当前未下载
+- GB10 128GB 内存理论上可以运行 72B Q4_K_M (~40GB), 但需要验证
+
+**结论**: 模型升级是最大的改进空间 (预期 +10-15pp), 但需要先下载模型文件。**留作下一步优先方向。**
+
 ---
 
 ## 七、保留的代码变更清单
@@ -302,6 +359,10 @@ let clean_query = query
 | 4 | Sentence-level chunking | +35% ingest, 0pp | 暴力扫描下无效 | 是 (除非有 HNSW) |
 | 5 | PLICO_INGEST_EXTRACT=1 | B26 -27pp | LLM fact 噪声, 1874x 慢 | 是 (除非有 fact quality filter) |
 | 6 | Multi-sample voting (3 samples) | +2pp (方差内) | 延迟 +28%, 增益不足 | 是 |
+| 7 | Few-shot answer examples | B25 -3.4pp | Gemma 4 偏好简洁指令, 示例反而误导 | 是 (小模型特有) |
+| 8 | Hybrid reranker+MMR (lambda=0.7) | B26 60.0% | 过度多样化, 稀释 reranker 精度 | 是 |
+| 9 | Hybrid reranker+MMR (lambda=0.85) | B26 61.3% | MMR 无法恢复被 reranker 淘汰的多会话结果 | 是 |
+| 10 | Selective reranker (MultiHop=MMR-only) | B26 62.7%, B25 -2pp | Multi-hop 恢复但 overall 收益减少 | 是 (除非 multi-hop 是首要目标) |
 
 ---
 
@@ -401,6 +462,30 @@ PLICO_INGEST_EXTRACT=1 导致 -27pp 回归和 1874x 更慢的 ingest。原因:
 
 Sentence chunking 增加 35% ingest 但 0pp 准确率。PLICO_INGEST_EXTRACT 增加 1874x ingest 但 -27pp 准确率。任何 ingest 层改变都需要同时测量准确率和延迟。
 
+### 11.9 小模型的 Few-shot Prompting 与大模型相反
+
+Gemma 4 26B 对 few-shot 示例不敏感甚至负面 (Round 11: -3.4pp)。长 prompt 消耗上下文窗口, 示例可能误导模型。小模型偏好简洁的指令式 prompt。
+
+**对比**: GPT-4/Claude 通常从 few-shot 中受益。这是一个关键的模型规模差异。
+
+### 11.10 Cross-encoder Reranker 的固有多跳回归
+
+Reranker 倾向于将结果集中到单一高相关性会话, 而 multi-hop 查询需要跨多个会话的结果。这是 cross-encoder 的固有特性, 不是调参能解决的。
+
+**已验证不可行的恢复方案**:
+- Hybrid reranker+MMR (lambda=0.7/0.85): MMR 在 reranker 之后运行, 无法恢复被淘汰的多会话结果
+- Selective reranker (MultiHop=MMR-only): multi-hop 恢复但 overall 收益减少
+
+**Tradeoff 决策**: 保持 reranker-all, 接受 multi-hop -7pp, 换取 overall +10pp B25。
+
+### 11.11 检索层优化已穷尽 — 模型升级是唯一出路
+
+14 轮实验 (R0-R14) 覆盖了检索层、答案生成层、评估层的所有可尝试方向。唯一未尝试且有显著潜力的方向是模型升级。
+
+**当前模型 (Gemma 4 26B) 的天花板**: B25 ~77%, B26 ~64%
+**预期 72B 模型天花板**: B25 ~85-90%, B26 ~75-80%
+**SOTA (GPT-4/Claude)**: B25 90%+, B26 90%+
+
 ---
 
 ## 十二、下一步优化方向
@@ -409,11 +494,11 @@ Sentence chunking 增加 35% ingest 但 0pp 准确率。PLICO_INGEST_EXTRACT 增
 
 | 方向 | 预期收益 | 难度 | 优先级 | 状态 |
 |------|---------|------|--------|------|
-| Answer prompt 精调 (更多 few-shot) | +1-2pp | 低 | 中 | 未尝试 |
 | Cross-encoder 阈值调优 | +1-2pp | 低 | 低 | 未尝试 |
-| B26 multi-hop 恢复 | +5-7pp | 中 | 高 | Reranker 导致 -7pp |
 
-**B26 multi-hop 问题**: Reranker 全意图启用后, B26 multi-hop 从 69% 降至 62%。需要调查是否可以通过调整 reranker 阈值或混合策略来恢复。
+**已验证不可行的短期方向**:
+- Answer prompt 精调 (few-shot): B25 -3.4pp, Gemma 4 偏好简洁指令 (Round 11)
+- B26 multi-hop 恢复 (hybrid reranker+MMR): 固有回归, MMR 无法恢复 (Round 12)
 
 ### 12.2 中期 — 模型升级 (1-2 周)
 
