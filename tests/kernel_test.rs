@@ -4975,16 +4975,25 @@ fn test_full_ai_os_loop_convergence() {
 }
 
 #[test]
-fn test_skill_discriminator_records_sequence() {
-    // Verify N23 F-1 SkillDiscriminator records operation sequences
-    use plico::kernel::ops::skill_discovery::SkillDiscriminator;
+fn test_trajectory_tracker_records_operations() {
+    // Verify Soul v3.0 TrajectoryTracker records operation sequences
+    use plico::kernel::cognition::TrajectoryTracker;
 
-    let sd = SkillDiscriminator::new(2);
-    sd.record_sequence("agent-1", vec!["read".to_string(), "search".to_string()], true, 150);
-    sd.record_sequence("agent-1", vec!["read".to_string(), "search".to_string()], true, 150);
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let tracker = TrajectoryTracker::new();
 
-    let candidates = sd.get_skill_candidates("agent-1");
-    assert!(!candidates.is_empty(), "should detect repeated sequence as skill candidate");
+    rt.block_on(async {
+        tracker.record_operation("agent-1", "read", true).await;
+        tracker.record_operation("agent-1", "search", true).await;
+        tracker.record_operation("agent-1", "create", false).await;
+        tracker.record_failure("agent-1", "create").await;
+
+        let trajectory = tracker.get_recent_trajectory("agent-1", 10).await;
+        assert_eq!(trajectory.len(), 3, "should record 3 operations");
+
+        let failures = tracker.get_recent_failures("agent-1", 10).await;
+        assert_eq!(failures.len(), 1, "should detect 1 failure");
+    });
 }
 
 #[test]

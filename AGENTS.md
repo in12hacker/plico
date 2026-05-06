@@ -73,6 +73,14 @@ src/
 │   └── mod.rs           # Re-exports
 ├── kernel/              # AI Kernel — orchestrates all subsystems
 │   ├── mod.rs           # AIKernel struct, constructor, handle_api_request dispatch
+│   ├── cognition/       # Soul v3.0 — Cognitive Symbiotic Engine
+│   │   ├── mod.rs       # Re-exports + shared types (CognitiveError, Skill, etc.)
+│   │   ├── cognitive_loop.rs # CognitiveLoop — active context optimization
+│   │   ├── context_quality.rs # ContextQualityEngine — context compression/deduplication
+│   │   ├── intent_network.rs  # IntentSemanticNetwork — causal/temporal/semantic relations
+│   │   ├── skill_forge.rs     # SkillForge — automatic skill extraction/validation/evolution
+│   │   ├── trajectory_tracker.rs # TrajectoryTracker — agent behavior pattern tracking
+│   │   └── ...            # skill_registry, skill_validator, skill_composer, experience_miner, wasm_runtime, dsl_interpreter
 │   ├── api_dispatch.rs  # Thin dispatch → handlers/ (14 domain handler modules)
 │   ├── handlers/        # Domain-specific API request handlers
 │   │   └── {cas,memory,agent,graph,intent,events,session,system,tools,messaging,permission,tenant,model,storage}.rs
@@ -209,6 +217,7 @@ docs/                    # Tier B — iteration-end human docs (not maintained p
 | Temporal | `src/temporal/INDEX.md` | Time expression → Unix ms range resolution |
 | LLM providers | `src/llm/INDEX.md` | LlmProvider trait, Ollama/OpenAI/Stub backends |
 | MCP client | `src/mcp/INDEX.md` | External tool integration via MCP protocol |
+| Cognitive engine | `src/kernel/cognition/INDEX.md` | Soul v3.0 — CognitiveLoop, SkillForge, IntentSemanticNetwork |
 | Event bus | `src/kernel/event_bus.rs` | Kernel pub/sub, persisted event log |
 | Kernel ops | `src/kernel/ops/INDEX.md` | 25 operation files (session, delta, prefetch, hybrid, kg_builder, etc.) |
 | KernelClient | `src/client.rs` | Transport abstraction: EmbeddedClient + RemoteClient (UDS/TCP) |
@@ -255,11 +264,13 @@ docs/                    # Tier B — iteration-end human docs (not maintained p
 - `plicod` listens on **TCP + UDS** — no HTTP endpoints; UDS is primary for local clients, TCP for remote; supports `start/stop/status` subcommands with PID-file multi-instance protection
 - `aicli` defaults to daemon mode (connects via UDS); use `--embedded` for direct kernel access
 - Agent lifecycle requests (`AgentStatus`, `AgentSuspend`, etc.) do NOT auto-register agents — they fail if the agent does not exist
+- **Soul v3.0**: Plico is a **cognitive symbiont** — it optimizes the Agent's input quality (context compression, proactive prefetch, skill recommendation) but never replaces the Agent's decision-making. See `system-v3.md` for full principles.
 - All known soul violations from prior iterations have been resolved:
   - Behavioral pipeline removed from `semantic_fs`
   - Dashboard hardcoded dev data removed; replaced by `SystemStatus` (runtime metrics only)
   - Project-management KGNodeType/KGEdgeType removed from graph types
   - All test scenarios converted from human-centric to AI-native
+  - Legacy "brain modules" (intent_decomposer, goal_generator, etc.) removed from `kernel/ops/` — replaced by `cognition/` module following Soul v3.0 principles
 
 ## Cross-Cutting Patterns
 

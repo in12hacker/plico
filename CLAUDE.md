@@ -10,7 +10,7 @@ When creating or updating `AGENTS.md`, `INDEX.md`, or any project navigation ind
 
 **太初 (Plico)** is an AI-native operating system kernel designed from scratch exclusively for AI agents — no human CLI/GUI, no human filesystem paths. All data management is performed by AI through AI-friendly semantic APIs. The system is model-agnostic and does not depend on any specific AI or agent. "太初" means "Genesis / In the Beginning" — the primordial state where an AI-OS becomes self-aware.
 
-The design document is in `system.md` and `system-v2.md` (Soul 2.0, written in Chinese).
+The design document is in `system.md` and `system-v3.md` (Soul 3.0, written in Chinese).
 The complete reference is in `docs/genesis-reference.md`.
 
 ## Architecture
@@ -23,6 +23,7 @@ Application Layer (AI Agent Ecosystem)
 AI-Friendly Interface Layer (Semantic API/CLI, Natural Language Interface)
         ↓
 AI Kernel Layer
+  ├─ Cognitive Loop       — Soul v3.0: active context optimization, skill evolution, intent semantic network
   ├─ Agent Scheduler      — lifecycle management (create/pause/resume/destroy)
   ├─ Layered Memory       — Ephemeral Context → Working Memory → Long-term Memory → Procedural Memory
   ├─ Model & Tool Runtime — load/run/unload models; external tools as "skills"

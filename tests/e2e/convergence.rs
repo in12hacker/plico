@@ -1,6 +1,7 @@
 //! E2E Convergence Tests (Node 25)
 //!
 //! Tests the complete AI-OS loop: declare intent → plan → execute → learn → predict → complete
+//! Soul v3.0: Validates cognitive symbiotic engine integration.
 
 #[cfg(test)]
 mod tests {
@@ -8,12 +9,11 @@ mod tests {
     fn test_kernel_ops_modules_exist() {
         let _ = core::mem::size_of::<plico::kernel::ops::intent::IntentPlan>();
         let _ = core::mem::size_of::<plico::kernel::ops::intent_executor::ExecutionStats>();
-        let _ = core::mem::size_of::<plico::kernel::ops::skill_discovery::SkillDiscriminator>();
-        let _ = core::mem::size_of::<plico::kernel::ops::self_healing::PlanAdaptor>();
-        let _ = core::mem::size_of::<plico::kernel::ops::intent_decomposer::IntentDecomposer>();
-        let _ = core::mem::size_of::<plico::kernel::ops::cross_domain_skill::CrossDomainSkillComposer>();
-        let _ = core::mem::size_of::<plico::kernel::ops::goal_generator::GoalGenerator>();
-        let _ = core::mem::size_of::<plico::kernel::ops::temporal_projection::TemporalProjectionEngine>();
+        let _ = core::mem::size_of::<plico::kernel::cognition::CognitiveLoop>();
+        let _ = core::mem::size_of::<plico::kernel::cognition::SkillForge>();
+        let _ = core::mem::size_of::<plico::kernel::cognition::IntentSemanticNetwork>();
+        let _ = core::mem::size_of::<plico::kernel::cognition::TrajectoryTracker>();
+        let _ = core::mem::size_of::<plico::kernel::cognition::ContextQualityEngine>();
     }
 
     #[test]
@@ -39,87 +39,79 @@ mod tests {
     }
 
     #[test]
-    fn test_skill_discriminator_record() {
-        use plico::kernel::ops::skill_discovery::SkillDiscriminator;
+    fn test_trajectory_tracker_records_operations() {
+        use plico::kernel::cognition::TrajectoryTracker;
+        let rt = tokio::runtime::Runtime::new().unwrap();
 
-        let disc = SkillDiscriminator::new(2);
-        disc.record_sequence("agent-1", vec!["read".to_string(), "call".to_string()], true, 100);
-        disc.record_sequence("agent-1", vec!["read".to_string(), "call".to_string()], true, 100);
+        let tracker = TrajectoryTracker::new();
+        rt.block_on(async {
+            tracker.record_operation("agent-1", "read", true).await;
+            tracker.record_operation("agent-1", "search", true).await;
+            tracker.record_operation("agent-1", "create", false).await;
+            tracker.record_failure("agent-1", "create").await;
 
-        let candidates = disc.get_skill_candidates("agent-1");
-        assert!(!candidates.is_empty());
+            let trajectory = tracker.get_recent_trajectory("agent-1", 10).await;
+            assert_eq!(trajectory.len(), 3);
+
+            let failures = tracker.get_recent_failures("agent-1", 10).await;
+            assert_eq!(failures.len(), 1);
+        });
     }
 
     #[test]
-    fn test_failure_classifier() {
-        use plico::kernel::ops::self_healing::{FailureClassifier, FailureType};
+    fn test_intent_semantic_network_learning() {
+        use plico::kernel::cognition::{IntentSemanticNetwork, TrajectoryPoint};
+        let rt = tokio::runtime::Runtime::new().unwrap();
 
-        let ft = FailureClassifier::classify("permission denied", "test-step");
-        assert!(matches!(ft, FailureType::PermissionDenied));
-
-        let ft2 = FailureClassifier::classify("resource exhausted", "test-step");
-        assert!(matches!(ft2, FailureType::ResourceExhausted));
-    }
-
-    #[test]
-    fn test_plan_adaptor_adapt() {
-        use plico::kernel::ops::self_healing::{PlanAdaptor, FailureType, Adaptation};
-
-        let adaptor = PlanAdaptor::new();
-        let adapt = adaptor.record_and_adapt("step-1", &FailureType::ToolNotFound);
-
-        assert!(matches!(adapt, Adaptation::ReplaceTool { .. } | Adaptation::RetryWithNewParams));
-    }
-
-    #[test]
-    fn test_temporal_projection_engine() {
-        use plico::kernel::ops::temporal_projection::TemporalProjectionEngine;
-
-        let engine = TemporalProjectionEngine::new();
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as u64;
-
-        engine.record_intent("test-intent", now);
-        let projected = engine.project(10);
-        let _ = projected;
-    }
-
-    #[test]
-    fn test_cross_domain_skill_composer() {
-        use plico::kernel::ops::cross_domain_skill::CrossDomainSkillComposer;
-
-        let composer = CrossDomainSkillComposer::new(2);
-        composer.record_sequence(
-            &["read:storage".to_string(), "call:tool".to_string()],
-            &["storage".to_string(), "tool".to_string()],
-            true,
-        );
-        composer.record_sequence(
-            &["read:storage".to_string(), "call:tool".to_string()],
-            &["storage".to_string(), "tool".to_string()],
-            true,
+        let network = IntentSemanticNetwork::new(
+            std::sync::Arc::new(plico::fs::embedding::StubEmbeddingProvider),
         );
 
-        let candidates = composer.get_composition_candidates();
-        assert!(!candidates.is_empty());
+        rt.block_on(async {
+            let trajectory = vec![
+                TrajectoryPoint {
+                    timestamp_ms: 1000,
+                    intent: "fix auth bug".to_string(),
+                    operation: "read".to_string(),
+                    success: true,
+                    context_cids: vec![],
+                },
+                TrajectoryPoint {
+                    timestamp_ms: 2000,
+                    intent: "deploy fix".to_string(),
+                    operation: "call".to_string(),
+                    success: true,
+                    context_cids: vec![],
+                },
+            ];
+
+            let report = network.learn_from_history("agent-1", &trajectory).await.unwrap_or_default();
+            assert!(report.new_nodes > 0, "should create intent nodes");
+            assert!(report.new_edges > 0, "should create precedence edges");
+        });
     }
 
     #[test]
-    fn test_goal_generator() {
-        use plico::kernel::ops::goal_generator::GoalGenerator;
+    fn test_skill_forge_extraction() {
+        use plico::kernel::cognition::SkillForge;
+        let rt = tokio::runtime::Runtime::new().unwrap();
 
-        let generator = GoalGenerator::new();
-        generator.record_goal(
-            "agent-1",
-            &["auth".to_string(), "deploy".to_string()],
-            &["read".to_string(), "call".to_string()],
-            true,
-        );
+        let forge = SkillForge::new();
+        rt.block_on(async {
+            let result = forge.extract_candidate("agent-1", "read auth docs").await;
+            assert!(result.is_ok());
+        });
+    }
 
-        let goals = generator.generate_goals("agent-1", "auth deploy workflow");
-        assert!(!goals.is_empty());
+    #[test]
+    fn test_cognitive_config_defaults() {
+        use plico::kernel::cognition::CognitiveConfig;
+
+        let config = CognitiveConfig::default();
+        assert!(config.proactive_prefetch_enabled);
+        assert!(config.failure_pattern_detection_enabled);
+        assert!(config.skill_extraction_enabled);
+        assert_eq!(config.context_compression_threshold, 0.7);
     }
 
     #[test]
@@ -128,6 +120,7 @@ mod tests {
         let _ = std::env::set_var("LLM_BACKEND", "stub");
         let dir = tempfile::tempdir().unwrap();
         let kernel = plico::AIKernel::new(dir.path().to_path_buf()).expect("kernel init");
+        let rt = tokio::runtime::Runtime::new().unwrap();
 
         // Step 1: Register agent
         let agent_id = kernel.register_agent("e2e-agent".to_string());
@@ -169,7 +162,7 @@ mod tests {
         kernel.kg_add_edge(&node1, &node2, plico::fs::graph::KGEdgeType::Causes, None, &agent_id, "default")
             .expect("causal edge failed");
 
-        // Step 3: Declare intent (triggers async prefetch)
+        // Step 3: Declare intent (triggers async prefetch + CognitiveLoop)
         let declare_resp = kernel.handle_api_request(plico::api::semantic::ApiRequest::DeclareIntent {
             agent_id: agent_id.clone(),
             intent: "fix auth bug and deploy fix".to_string(),
@@ -180,13 +173,11 @@ mod tests {
         let assembly_id = declare_resp.assembly_id.expect("no assembly_id returned");
 
         // Step 4: Fetch assembled context (wait for async prefetch)
-        // In stub mode, embedding fails so assembly enters Failed state — that's OK
         std::thread::sleep(std::time::Duration::from_millis(200));
         let fetch_resp = kernel.handle_api_request(plico::api::semantic::ApiRequest::FetchAssembledContext {
             agent_id: agent_id.clone(),
             assembly_id: assembly_id.clone(),
         });
-        // In stub mode, prefetch fails due to no embedding backend — verify PlanAdaptor recorded it
         if !fetch_resp.ok {
             assert!(fetch_resp.error.as_ref().unwrap().contains("failed to embed"),
                 "expected embedding failure in stub mode, got: {:?}", fetch_resp.error);
@@ -247,20 +238,19 @@ mod tests {
         let memories = recall_resp.memory.unwrap_or_default();
         assert!(!memories.is_empty(), "should have at least one remembered memory");
 
-        // Step 11: Verify skill discriminator (brain module)
-        let sd = &kernel.prefetch.skill_discriminator;
-        sd.record_sequence(&agent_id, vec!["read".to_string(), "search".to_string()], true, 150);
-        let _ = sd.get_skill_candidates(&agent_id);
+        // Step 11: Verify CognitiveLoop trajectory tracking (Soul v3.0)
+        let cognitive_loop = kernel.prefetch.cognitive_loop.get()
+            .expect("CognitiveLoop should be initialized");
+        let trajectory: Vec<plico::kernel::cognition::TrajectoryPoint> = rt.block_on(async {
+            cognitive_loop.trajectory_tracker.get_recent_trajectory(&agent_id, 100).await
+        });
+        assert!(!trajectory.is_empty(), "TrajectoryTracker should record intent declarations");
 
-        // Step 12: Verify temporal projection (brain module)
-        let tp = &kernel.prefetch.temporal_engine;
-        let now_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as u64;
-        tp.record_intent("fix auth bug", now_ms);
-        let current_hour = ((now_ms % 86400000) / 3600000) as u32;
-        let _ = tp.project(current_hour);
+        // Step 12: Verify IntentSemanticNetwork learning (Soul v3.0)
+        let intent_network = &cognitive_loop.intent_network;
+        let report = rt.block_on(async {
+            intent_network.learn_from_history(&agent_id, &trajectory).await
+        }).unwrap_or_default();
+        println!("IntentSemanticNetwork: {} nodes, {} edges learned", report.new_nodes, report.new_edges);
     }
-
 }

@@ -599,24 +599,16 @@ pub fn start_session_orchestrate(params: SessionStartParams<'_>) -> Result<Start
         tracing::debug!("warmed {} cache entries from agent profile for {}", cache_warmed, agent_id);
     }
 
-    // 5b+. Axiom 7: Temporal projection — warm cache based on time-of-day patterns
-    let current_hour = {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-        ((now % 86400) / 3600) as u32
-    };
-    let projected_intents = prefetch.temporal_engine.project(current_hour);
-    if !projected_intents.is_empty() {
-        tracing::debug!("temporal projection: {} likely intents for hour {}", projected_intents.len(), current_hour);
-    }
-
-    // 5b+. Axiom 2: Goal generation — suggest goals from agent history
-    if let Some(ref hint) = intent_hint {
-        let suggested_goals = prefetch.goal_generator.generate_goals(agent_id, hint);
-        if !suggested_goals.is_empty() {
-            tracing::debug!("generated {} suggested goals from history", suggested_goals.len());
+    // Soul v3.0: Register session with CognitiveLoop for proactive optimization
+    if let Some(cognitive_loop) = prefetch.cognitive_loop.get() {
+        let cognitive_loop = Arc::clone(cognitive_loop);
+        let agent_id = agent_id.to_string();
+        let session_id = session_id.clone();
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(async move {
+                cognitive_loop.register_session(&agent_id, &session_id).await;
+                tracing::debug!("CognitiveLoop registered session {} for agent {}", session_id, agent_id);
+            });
         }
     }
 
@@ -755,14 +747,18 @@ pub fn end_session_orchestrate(
     // Clear only the ephemeral tier — preserve working and long-term memories
     let _cleared = memory.clear_ephemeral(agent_id);
 
-    // 3b. Axiom 9: Record session operation patterns for skill discovery
+    // Soul v3.0: End session in CognitiveLoop for skill extraction and trajectory finalization
     if let Some(p) = prefetch {
-        // Record a synthetic operation sequence from session activity
-        // The session's intent (if any) represents the operation performed
-        if let Some(ref intent) = session.current_intent {
-            let ops = vec!["session".to_string(), intent.clone()];
-            p.skill_discriminator.record_sequence(agent_id, ops, true, 0);
-            p.temporal_engine.record_intent(intent, now_ms());
+        if let Some(cognitive_loop) = p.cognitive_loop.get() {
+            let cognitive_loop = Arc::clone(cognitive_loop);
+            let agent_id = agent_id.to_string();
+            let session_id = session_id.to_string();
+            if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                handle.spawn(async move {
+                    cognitive_loop.end_session(&agent_id, &session_id).await;
+                    tracing::debug!("CognitiveLoop ended session {} for agent {}", session_id, agent_id);
+                });
+            }
         }
     }
 

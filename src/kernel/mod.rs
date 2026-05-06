@@ -21,6 +21,7 @@
 //! - `ops/` — operation groups (fs, agent, memory, events, graph, dispatch, intent, messaging, dashboard)
 
 mod builtin_tools;
+pub mod cognition;
 pub mod event_bus;
 pub mod hook;
 pub mod persistence;
@@ -102,6 +103,8 @@ pub struct AIKernel {
     pub(crate) agent_profiles: Arc<ops::agent_profile::AgentProfileStore>,
     /// Cross-encoder reranker for recall_routed final-stage refinement (v34).
     pub(crate) reranker: Option<Arc<dyn crate::fs::reranker::RerankerProvider>>,
+    /// Cognitive Loop — Soul v3.0 cognitive symbiotic engine.
+    pub(crate) cognitive_loop: Option<Arc<crate::kernel::cognition::CognitiveLoop>>,
 }
 
 /// Check if the embedding model has changed since last run.
@@ -290,6 +293,28 @@ impl AIKernel {
         // F-2: Wire cost ledger into prefetcher for embedding cost tracking
         prefetch.set_cost_ledger(Arc::clone(&cost_ledger));
 
+        // Soul v3.0: Initialize cognitive symbiotic engine and wire into prefetcher
+        let cognitive_loop = {
+            let context_analyzer = Arc::new(crate::kernel::cognition::ContextQualityEngine::new(
+                Arc::new(embedding.clone()) as Arc<dyn EmbeddingProvider>,
+                search_backend.clone(),
+                memory.clone(),
+            ));
+            let intent_network = Arc::new(crate::kernel::cognition::IntentSemanticNetwork::new(
+                Arc::new(embedding.clone()) as Arc<dyn EmbeddingProvider>,
+            ));
+            let skill_forge = Arc::new(crate::kernel::cognition::SkillForge::new());
+            let cognitive_loop = crate::kernel::cognition::CognitiveLoop::new(
+                context_analyzer,
+                intent_network,
+                skill_forge,
+            );
+            let arc = Arc::new(cognitive_loop);
+            // Wire into prefetcher so declare_intent / on_intent_complete can access it
+            let _ = prefetch.cognitive_loop.set(Arc::clone(&arc));
+            Some(arc)
+        };
+
         // F-20 M1: Restore prefetch state from disk (intent cache + agent profiles)
         if let Err(e) = prefetch.restore() {
             tracing::warn!("prefetch restore failed (ok if first run): {}", e);
@@ -399,6 +424,7 @@ impl AIKernel {
             prompt_registry,
             agent_profiles: Arc::new(ops::agent_profile::AgentProfileStore::new()),
             reranker: reranker.clone(),
+            cognitive_loop,
         };
 
         kernel.register_builtin_tools();

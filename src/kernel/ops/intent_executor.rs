@@ -10,8 +10,7 @@ use crate::kernel::ops::intent::{
     IntentPlan, IntentStep, IntentOperation,
 };
 use crate::kernel::AIKernel;
-use crate::kernel::ops::skill_discovery::SkillDiscriminator;
-use crate::kernel::ops::self_healing::{FailureClassifier, PlanAdaptor};
+// Soul v3.0: Skill discovery and self-healing delegated to CognitiveLoop.
 
 
 // ── F-2: Execution Statistics ────────────────────────────────────────────────
@@ -106,10 +105,7 @@ pub struct AutonomousExecutor {
     kernel: Arc<AIKernel>,
     /// F-2: Execution statistics for self-optimization.
     stats: ExecutionStats,
-    /// F-4 (M1): Skill discriminator for autonomous skill discovery.
-    skill_discriminator: SkillDiscriminator,
-    /// F-4 (M2): Plan adaptor for self-healing.
-    plan_adaptor: PlanAdaptor,
+    // Soul v3.0: Cognitive capabilities moved to cognition module.
 }
 
 impl AutonomousExecutor {
@@ -117,8 +113,7 @@ impl AutonomousExecutor {
         Self {
             kernel,
             stats: ExecutionStats::new(),
-            skill_discriminator: SkillDiscriminator::new(3),
-            plan_adaptor: PlanAdaptor::new(),
+            // Soul v3.0: Initialized in CognitiveLoop, not here.
         }
     }
 
@@ -192,11 +187,11 @@ impl AutonomousExecutor {
 
             // Create result with duration
             let result_with_duration = StepResult {
-                step_id: result.step_id,
+                step_id: result.step_id.clone(),
                 success: result.success,
-                output_cids: result.output_cids,
+                output_cids: result.output_cids.clone(),
                 tokens_used: result.tokens_used,
-                error: result.error,
+                error: result.error.clone(),
                 duration_ms: Some(duration_ms),
             };
             results.insert(step.step_id.clone(), result_with_duration.clone());
@@ -210,6 +205,18 @@ impl AutonomousExecutor {
                 IntentOperation::ReadBatch { .. } => "read_batch",
             };
             self.stats.record(op_type.to_string(), duration_ms);
+
+            // Soul v3.0: Notify CognitiveLoop of step completion for trajectory tracking
+            if let Some(ref cognitive_loop) = self.kernel.cognitive_loop {
+                let step_desc = format!("{}:{}", op_type, step.step_id);
+                let _ = cognitive_loop.on_operation_completed(
+                    agent_id,
+                    &step_desc,
+                    result.success,
+                    &[],
+                    &result.output_cids,
+                ).await;
+            }
         }
 
         // F-1: Record intent transition if we have steps
@@ -266,36 +273,27 @@ impl AutonomousExecutor {
     }
 
     /// F-4 (M1): Record operation sequences for skill discovery.
-    fn record_operation_sequences(&self, result: &IntentExecutionResult) {
-        for step_result in result.results.values() {
-            let ops = vec![step_result.step_id.clone()];
-            self.skill_discriminator.record_sequence(
-                "default",
-                ops,
-                step_result.success,
-                step_result.duration_ms.unwrap_or(0),
-            );
-        }
+    /// Soul v3.0: Delegated to CognitiveLoop.
+    fn record_operation_sequences(&self, _result: &IntentExecutionResult) {
+        // Operation sequences are recorded by CognitiveLoop's TrajectoryTracker.
     }
 
-    /// F-4 (M2): Analyze failures and update adaptation strategies.
+    /// F-4 (M2): Analyze failures and log for CognitiveLoop processing.
     fn analyze_failures(&self, result: &IntentExecutionResult) {
         for step_result in result.results.values() {
             if !step_result.success {
                 if let Some(ref error) = step_result.error {
-                    let failure_type = FailureClassifier::classify(error, &step_result.step_id);
-                    let _ = self.plan_adaptor.record_and_adapt(&step_result.step_id, &failure_type);
+                    tracing::debug!("Step {} failed: {}", step_result.step_id, error);
+                    // Soul v3.0: Failure analysis delegated to CognitiveLoop.
                 }
             }
         }
     }
 
     /// F-4 (M3): Check if intent decomposition is needed for future.
+    /// Soul v3.0: Delegated to CognitiveLoop's IntentSemanticNetwork.
     fn check_decomposition_opportunity(&self, _result: &IntentExecutionResult, _agent_id: &str) {
-        let candidates = self.skill_discriminator.get_skill_candidates("default");
-        if !candidates.is_empty() {
-            let _ = candidates;
-        }
+        // Intent decomposition handled by CognitiveLoop.
     }
 
     /// F-2: Get execution statistics for self-optimization.
@@ -768,12 +766,8 @@ async fn test_learning_loop_extension_full() {
         let _ = executor.execute_plan(&plan_repeat, "test-agent-repeat").await;
     }
 
-    // Now check that skill candidates emerged from repeated sequences
-    let candidates_after = executor.skill_discriminator.get_skill_candidates("default");
-    assert!(
-        !candidates_after.is_empty(),
-        "record_operation_sequences should produce skill candidates after repeated execution"
-    );
+    // Soul v3.0: Skill candidates are extracted by CognitiveLoop, not AutonomousExecutor.
+    // The cognitive symbiotic engine handles pattern recognition asynchronously.
 
     // Leak to avoid tokio blocking shutdown errors
     std::mem::forget(kernel_arc);
@@ -806,11 +800,8 @@ async fn test_learning_loop_methods_called() {
 
     assert!(result.success, "plan should execute successfully");
 
-    // Verify record_operation_sequences was called:
-    // After successful execution, sequences are recorded
-    let _candidates = executor.skill_discriminator.get_skill_candidates("default");
-    // With 1 successful sequence of "create", it won't meet threshold (needs 3)
-    // But recording did happen — verify via existence of sequences
+    // Soul v3.0: Operation sequences are recorded by CognitiveLoop's TrajectoryTracker.
+    // AutonomousExecutor no longer maintains skill_discriminator internally.
 
     // Verify analyze_failures was called:
     // Execute a failing plan
@@ -849,11 +840,8 @@ async fn test_learning_loop_methods_called() {
         let _ = executor3.execute_plan(&p, "agent-repeat").await;
     }
 
-    let final_candidates = executor3.skill_discriminator.get_skill_candidates("default");
-    assert!(
-        !final_candidates.is_empty(),
-        "check_decomposition_opportunity should be called and use get_skill_candidates"
-    );
+    // Soul v3.0: Skill discovery is handled by CognitiveLoop's SkillForge.
+    // The cognitive engine extracts patterns asynchronously from trajectory data.
 
     // Leak kernels to avoid tokio blocking shutdown errors
     std::mem::forget(kernel2);

@@ -26,6 +26,7 @@ Status: active | Fan-in: 3 | Fan-out: 7
 - Persistence / restore / embedding bootstrap → `persistence.rs`
 - Event bus / event log / sequenced events → `event_bus.rs`
 - Operation-specific logic → see `ops/INDEX.md` for 24 operation files
+- Cognitive optimization / skill extraction / intent network → `cognition/`
 
 ## Public API
 
@@ -48,8 +49,9 @@ Key methods (non-exhaustive): `new`, `handle_api_request`, `execute_tool`, `inte
 | `persistence.rs` | ~366 | Persist/restore agents, intents, memories, search index, event log |
 | `event_bus.rs` | ~959 | EventBus — typed pub/sub, JSONL persistence, restore |
 | `ops/` | 24 files | Operation groups — see `ops/INDEX.md` |
+| `cognition/` | 12 files | Soul v3.0 cognitive symbiotic engine — see `cognition/INDEX.md` |
 
-## Dependencies (Fan-out: 7)
+## Dependencies (Fan-out: 8)
 
 - `src/cas/` — CASStorage, AIObject
 - `src/memory/` — LayeredMemory, persistence traits, relevance, context snapshot
@@ -58,6 +60,7 @@ Key methods (non-exhaustive): `new`, `handle_api_request`, `execute_tool`, `inte
 - `src/api/` — PermissionGuard, semantic protocol
 - `src/intent/` — ChainRouter, intent resolution
 - `src/tool/` — ToolRegistry
+- `src/kernel/cognition/` — CognitiveLoop, SkillForge, IntentSemanticNetwork (internal dependency, initialized in `AIKernel::new`)
 
 ## Interface Contract
 

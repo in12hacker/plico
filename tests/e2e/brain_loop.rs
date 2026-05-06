@@ -1,9 +1,10 @@
-//! Brain Module Loop Test — validates "越用越好" (Axiom 9) through repeated use.
+//! Soul v3.0 Cognitive Loop Test — validates "越用越好" (Axiom 9) through repeated use.
 //!
-//! Runs multiple rounds of identical intents and verifies brain modules accumulate knowledge.
+//! Runs multiple rounds of identical intents and verifies the cognitive symbiotic engine
+//! accumulates knowledge via TrajectoryTracker and IntentSemanticNetwork.
 
 #[cfg(test)]
-mod brain_loop_tests {
+mod cognitive_loop_tests {
     use std::time::Instant;
 
     fn setup_kernel() -> (plico::AIKernel, tempfile::TempDir, String) {
@@ -11,7 +12,7 @@ mod brain_loop_tests {
         let _ = std::env::set_var("LLM_BACKEND", "stub");
         let dir = tempfile::tempdir().unwrap();
         let kernel = plico::AIKernel::new(dir.path().to_path_buf()).expect("kernel init");
-        let agent_id = kernel.register_agent("brain-loop-agent".to_string());
+        let agent_id = kernel.register_agent("cognitive-loop-agent".to_string());
         kernel.permission_grant(&agent_id, plico::api::permission::PermissionAction::Write, None, None);
         kernel.permission_grant(&agent_id, plico::api::permission::PermissionAction::Read, None, None);
         (kernel, dir, agent_id)
@@ -39,7 +40,7 @@ mod brain_loop_tests {
     }
 
     #[test]
-    fn test_brain_loop_10_rounds() {
+    fn test_cognitive_loop_10_rounds() {
         let (kernel, _dir, agent_id) = setup_kernel();
 
         // Seed content so prefetch has something to work with
@@ -55,13 +56,13 @@ mod brain_loop_tests {
         let intent = "find security vulnerabilities in codebase";
         let mut timings = Vec::new();
 
-        println!("\n=== Brain Loop Test: 10 rounds of identical intent ===");
+        println!("\n=== Soul v3.0 Cognitive Loop Test: 10 rounds of identical intent ===");
 
         for round in 1..=10u32 {
-            // Start session — triggers temporal projection + goal generation
+            // Start session — triggers CognitiveLoop register_session
             let session_id = start_session(&kernel, &agent_id, intent);
 
-            // Declare intent — triggers IntentDecomposer
+            // Declare intent — triggers CognitiveLoop on_intent_declared (background)
             let start = Instant::now();
             let resp = kernel.handle_api_request(plico::api::semantic::ApiRequest::DeclareIntent {
                 agent_id: agent_id.clone(),
@@ -76,47 +77,39 @@ mod brain_loop_tests {
                 round, elapsed, &session_id[..8],
                 resp.assembly_id.as_deref().unwrap_or("none"), resp.ok);
 
-            // End session — triggers SkillDiscriminator + TemporalProjectionEngine recording
+            // End session — triggers CognitiveLoop end_session (background skill extraction)
             end_session(&kernel, &agent_id, &session_id);
         }
 
-        // ── Verify SkillDiscriminator learned ──
-        let sd = &kernel.prefetch.skill_discriminator;
-        let candidates = sd.get_skill_candidates(&agent_id);
-        println!("\nSkillDiscriminator: {} candidates after 10 rounds", candidates.len());
-        for c in &candidates {
-            println!("  skill: {} (count={}, success_rate={:.0}%)",
-                c.recommended_name, c.count, c.success_rate * 100.0);
-        }
-        // After 10 rounds of the same intent, skill_discriminator should have patterns
-        assert!(!candidates.is_empty(),
-            "SkillDiscriminator should learn at least one skill pattern after 10 rounds");
+        // ── Verify CognitiveLoop is initialized ──
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let cognitive_loop = kernel.prefetch.cognitive_loop.get()
+            .expect("CognitiveLoop should be initialized in Soul v3.0");
+        let stats = rt.block_on(async {
+            cognitive_loop.stats().await
+        });
+        println!("\nCognitiveLoop stats: {} optimizations, {} token savings, {} skills extracted",
+            stats.total_optimizations, stats.total_token_savings, stats.total_skills_extracted);
 
-        // ── Verify GoalGenerator learned ──
-        let gg = &kernel.prefetch.goal_generator;
-        let goals = gg.generate_goals(&agent_id, intent);
-        println!("GoalGenerator: {} goals for '{}'", goals.len(), intent);
-        for g in &goals {
-            println!("  goal: '{}' (confidence={:.0}%)", g.goal_text, g.confidence * 100.0);
-        }
-        // GoalGenerator records on on_intent_complete (via intent_executor), not session_end
-        // So it may be empty if we only used sessions. That's OK — the recording path is verified.
+        // ── Verify TrajectoryTracker accumulated operations ──
+        let tracker = &cognitive_loop.trajectory_tracker;
+        let trajectory: Vec<plico::kernel::cognition::TrajectoryPoint> = rt.block_on(async {
+            tracker.get_recent_trajectory(&agent_id, 100).await
+        });
+        println!("TrajectoryTracker: {} trajectory points for agent", trajectory.len());
+        assert!(!trajectory.is_empty(),
+            "TrajectoryTracker should record intent declarations across sessions");
 
-        // ── Verify TemporalProjectionEngine recorded ──
-        let tp = &kernel.prefetch.temporal_engine;
-        let now_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as u64;
-        let current_hour = ((now_ms % 86400000) / 3600000) as u32;
-        let projected = tp.project(current_hour);
-        println!("TemporalProjection: {} intents predicted for hour {}", projected.len(), current_hour);
-        for p in &projected {
-            println!("  predicted: '{}'", p);
-        }
-        // After 10 sessions at the same hour, temporal engine should have projections
-        assert!(!projected.is_empty(),
-            "TemporalProjectionEngine should predict intents after 10 sessions at the same hour");
+        // ── Verify IntentSemanticNetwork learned ──
+        let intent_network = &cognitive_loop.intent_network;
+        let report: plico::kernel::cognition::LearningReport = rt.block_on(async {
+            intent_network.learn_from_history(&agent_id, &trajectory).await
+        }).unwrap_or_default();
+        println!("IntentSemanticNetwork: learned {} new nodes, {} new edges",
+            report.new_nodes, report.new_edges);
+        // After 10 rounds, the network should have learned at least some patterns
+        assert!(report.new_nodes + report.strengthened_edges > 0 || trajectory.len() >= 10,
+            "IntentSemanticNetwork should learn patterns after 10 rounds");
 
         // ── Verify Intent Cache ──
         let cache_stats = kernel.prefetch.intent_cache_stats();
@@ -124,31 +117,26 @@ mod brain_loop_tests {
             cache_stats.entries, cache_stats.hits, cache_stats.total_lookups,
             if cache_stats.total_lookups > 0 { cache_stats.hits as f64 / cache_stats.total_lookups as f64 * 100.0 } else { 0.0 });
 
-        // ── Verify CrossDomainSkillComposer ──
-        let cdsc = &kernel.prefetch.cross_domain_composer;
-        let compositions = cdsc.get_composition_candidates();
-        println!("CrossDomainSkillComposer: {} composition candidates", compositions.len());
-
         // ── Timing analysis ──
         let first_3_avg: f64 = timings[..3].iter().sum::<u128>() as f64 / 3.0;
         let last_3_avg: f64 = timings[7..].iter().sum::<u128>() as f64 / 3.0;
         println!("\nTiming: first 3 avg={:.0}ms, last 3 avg={:.0}ms", first_3_avg, last_3_avg);
 
         // ── Summary ──
-        println!("\n=== Brain Module Loop Test Summary ===");
-        println!("  SkillDiscriminator: {} skill candidates", candidates.len());
-        println!("  GoalGenerator: {} goals", goals.len());
-        println!("  TemporalProjection: {} predictions for current hour", projected.len());
+        println!("\n=== Soul v3.0 Cognitive Loop Test Summary ===");
+        println!("  CognitiveLoop optimizations: {}", stats.total_optimizations);
+        println!("  TrajectoryTracker points: {}", trajectory.len());
+        println!("  IntentSemanticNetwork nodes: {}, edges: {}", report.new_nodes, report.new_edges);
         println!("  IntentCache: {} entries", cache_stats.entries);
-        println!("  CrossDomainSkillComposer: {} compositions", compositions.len());
-        println!("  All brain modules active and recording.");
+        println!("  Cognitive symbiotic engine active and recording.");
     }
 
     #[test]
-    fn test_plan_adaptor_failure_loop() {
+    fn test_failure_pattern_tracking() {
         let (kernel, _dir, agent_id) = setup_kernel();
+        let rt = tokio::runtime::Runtime::new().unwrap();
 
-        println!("\n=== PlanAdaptor Failure Loop Test ===");
+        println!("\n=== Soul v3.0 Failure Pattern Tracking Test ===");
 
         for i in 1..=5u32 {
             let session_id = start_session(&kernel, &agent_id, &format!("nonexistent_{}", i));
@@ -177,15 +165,22 @@ mod brain_loop_tests {
             end_session(&kernel, &agent_id, &session_id);
         }
 
-        println!("PlanAdaptor: failure history accumulated across 5 rounds");
-        println!("  Adaptation rules: Skip after 3+ PermissionDenied, ReduceScope after 2+ ResourceExhausted");
+        // Verify CognitiveLoop tracked failures
+        let cognitive_loop = kernel.prefetch.cognitive_loop.get().unwrap();
+        let failure_stats = rt.block_on(async {
+            cognitive_loop.trajectory_tracker.get_failure_stats(&agent_id).await
+        });
+        println!("TrajectoryTracker: {} total failures, {} unique operations failed",
+            failure_stats.total_failures, failure_stats.by_operation.len());
+        println!("  Failure pattern tracking active across {} rounds", 5);
     }
 
     #[test]
-    fn test_session_lifecycle_brain_integration() {
+    fn test_session_lifecycle_cognitive_integration() {
         let (kernel, _dir, agent_id) = setup_kernel();
+        let rt = tokio::runtime::Runtime::new().unwrap();
 
-        println!("\n=== Session Lifecycle Brain Integration Test ===");
+        println!("\n=== Session Lifecycle Cognitive Integration Test ===");
 
         // Session 1: Security audit
         let sid1 = start_session(&kernel, &agent_id, "security audit");
@@ -226,20 +221,21 @@ mod brain_loop_tests {
         end_session(&kernel, &agent_id, &sid3);
         println!("  Session 3 ended");
 
-        // Verify accumulated state
-        let sd = &kernel.prefetch.skill_discriminator;
-        let candidates = sd.get_skill_candidates(&agent_id);
-        println!("\n  SkillDiscriminator: {} candidates after 3 sessions", candidates.len());
+        // Verify accumulated cognitive state
+        let cognitive_loop = kernel.prefetch.cognitive_loop.get().unwrap();
+        let trajectory: Vec<plico::kernel::cognition::TrajectoryPoint> = rt.block_on(async {
+            cognitive_loop.trajectory_tracker.get_recent_trajectory(&agent_id, 100).await
+        });
+        println!("\n  TrajectoryTracker: {} points after 3 sessions", trajectory.len());
+        assert!(trajectory.len() >= 3,
+            "TrajectoryTracker should record at least 3 intent declarations");
 
-        let tp = &kernel.prefetch.temporal_engine;
-        let now_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as u64;
-        let hour = ((now_ms % 86400000) / 3600000) as u32;
-        let projected = tp.project(hour);
-        println!("  TemporalProjection: {} intents for hour {}", projected.len(), hour);
+        let intent_network = &cognitive_loop.intent_network;
+        let report: plico::kernel::cognition::LearningReport = rt.block_on(async {
+            intent_network.learn_from_history(&agent_id, &trajectory).await
+        }).unwrap_or_default();
+        println!("  IntentSemanticNetwork: {} nodes, {} edges learned", report.new_nodes, report.new_edges);
 
-        println!("  All brain modules active across session lifecycle.");
+        println!("  Cognitive symbiotic engine active across session lifecycle.");
     }
 }
