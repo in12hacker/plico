@@ -1,6 +1,6 @@
 # Plico 基线性能评测报告 (v38)
 
-> 生成时间: 2026-05-07 16:31:14
+> 生成时间: 2026-05-07 16:35:23
 > 评测系统: Plico (usearch HNSW cos f16 + all-MiniLM-L6-v2)
 > 评测模型: Gemma-4-26B-A4B-it-Q4_K_M (Reader/Judge), Qwen2.5-7B-Instruct (A/B Judge)
 
