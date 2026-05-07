@@ -1195,6 +1195,8 @@ impl LayeredMemory {
     }
 
     /// Update importance of a specific memory entry.
+    // TODO: Expose these methods via API if needed in the future
+    #[allow(dead_code)]
     fn update_importance(&self, agent_id: &str, entry_id: &str, new_importance: u8) {
         for tier_lock in [&self.working, &self.long_term, &self.procedural] {
             let mut map = tier_lock.write().unwrap();
@@ -1208,6 +1210,7 @@ impl LayeredMemory {
     }
 
     /// Remove a specific memory entry by ID.
+    #[allow(dead_code)]
     fn remove_entry(&self, agent_id: &str, entry_id: &str) -> bool {
         for tier_lock in [&self.working, &self.long_term] {
             let mut map = tier_lock.write().unwrap();
@@ -1223,6 +1226,7 @@ impl LayeredMemory {
     }
 
     /// Find a memory entry by ID.
+    #[allow(dead_code)]
     fn find_entry(&self, agent_id: &str, entry_id: &str) -> Option<MemoryEntry> {
         for tier_lock in [&self.working, &self.long_term, &self.procedural] {
             let map = tier_lock.read().unwrap();

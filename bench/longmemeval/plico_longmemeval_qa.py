@@ -104,7 +104,7 @@ def ingest_sessions(client: PlicoClient, item: dict, item_idx: int) -> str:
             try:
                 client.batch_create(batch_items, agent_id=agent_id)
                 break
-            except (ConnectionError, OSError):
+            except (ConnectionError, OSError, TimeoutError):
                 if attempt < 2:
                     time.sleep(0.3)
                     client.close()
@@ -117,7 +117,11 @@ def evaluate_item(
     judge_url: str, judge_model: str,
 ) -> list[dict]:
     """Evaluate one LongMemEval item."""
+    t_ingest_start = time.perf_counter()
     agent_id = ingest_sessions(client, item, item_idx)
+    t_ingest_end = time.perf_counter()
+    ingest_time_s = t_ingest_end - t_ingest_start
+    
     time.sleep(0.5)
 
     question_field = item.get("question", "")
@@ -140,7 +144,11 @@ def evaluate_item(
         if not question:
             continue
 
+        if len(results) > 0 and len(results) % 10 == 0:
+            print(f"    [Item {item_idx}] Processed {len(results)}/{len(questions)} QAs...", flush=True)
+
         context = ""
+        t_search_start = time.perf_counter()
         # Try intent-aware routed recall first
         for attempt in range(3):
             try:
@@ -178,16 +186,21 @@ def evaluate_item(
                         client.close()
             snippets = [r.get("snippet", "") for r in resp.get("results", []) if r.get("snippet")]
             context = "\n".join(snippets)
+        t_search_end = time.perf_counter()
 
         prompt = READER_PROMPT.format(context=context, question=question)
+        t_reader_start = time.perf_counter()
         answer = call_llm(reader_url, reader_model, prompt)
+        t_reader_end = time.perf_counter()
 
         jp = JUDGE_PROMPT.format(question=question, gold=gold, answer=answer)
+        t_judge_start = time.perf_counter()
         score_str = call_llm(judge_url, judge_model, jp, max_tokens=256)
         try:
             score = int(re.search(r"[1-5]", score_str).group())
         except (AttributeError, ValueError):
             score = 1
+        t_judge_end = time.perf_counter()
 
         gold_lower = gold.lower().strip()
         answer_lower = answer.lower().strip()
@@ -202,6 +215,11 @@ def evaluate_item(
             "llm_score": score,
             "exact_match": exact_match,
             "has_context": len(context) > 0,
+            "latency_ingest_s": ingest_time_s / max(1, len(questions)),
+            "latency_search_s": t_search_end - t_search_start,
+            "latency_reader_s": t_reader_end - t_reader_start,
+            "latency_judge_s": t_judge_end - t_judge_start,
+            "latency_online_s": (t_search_end - t_search_start) + (t_reader_end - t_reader_start)
         })
 
     return results
@@ -235,12 +253,19 @@ def main():
         i, item = i_item
         client = PlicoClient(host=args.host, port=args.port)
         try:
+            t_start = time.perf_counter()
             results = evaluate_item(
                 client, item, i,
                 args.reader_url, args.reader_model,
                 judge_url, judge_model,
             )
-            print(f"[{i+1}/{len(items)}] Item {i}... {len(results)} QAs")
+            t_end = time.perf_counter()
+            elapsed_s = t_end - t_start
+            print(f"[{i+1}/{len(items)}] Item {i}... {len(results)} QAs (took {elapsed_s:.1f}s)", flush=True)
+            
+            for r in results:
+                r["e2e_latency_s"] = elapsed_s / max(1, len(results))
+                
             return results
         except Exception as e:
             print(f"[{i+1}/{len(items)}] Item {i}... ERROR: {e}")
@@ -275,8 +300,10 @@ def main():
             "exact_match": avg_em,
             "accuracy_4plus": accuracy,
             "context_hit_rate": ctx_rate,
+            "avg_online_latency_s": sum(r.get("latency_online_s", 0) for r in items_list) / len(items_list) if items_list else 0,
+            "avg_search_latency_s": sum(r.get("latency_search_s", 0) for r in items_list) / len(items_list) if items_list else 0,
         }
-        print(f"  {cat:20s}  n={len(items_list):3d}  LLM={avg_score:.2f}  EM={avg_em:.3f}  Acc@4+={accuracy:.3f}  ctx={ctx_rate:.2f}")
+        print(f"  {cat:20s}  n={len(items_list):3d}  LLM={avg_score:.2f}  EM={avg_em:.3f}  Acc@4+={accuracy:.3f}  ctx={ctx_rate:.2f}  lat={summary[cat]['avg_online_latency_s']:.2f}s")
 
     output_path = args.output or os.path.join(os.path.dirname(__file__), "longmemeval_results.json")
     with open(output_path, "w") as f:

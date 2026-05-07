@@ -27,15 +27,11 @@ impl SkillComposer {
         let mut names = Vec::new();
 
         for skill in skills {
-            match skill {
-                Skill::Knowledge(k) => {
-                    names.push(k.name.clone());
-                    all_knowledge.extend(k.knowledge.clone());
-                    all_triggers.extend(k.trigger_conditions.clone());
-                    all_sources.extend(k.sources.clone());
-                }
-                // Skip non-knowledge skills for now
-                _ => {}
+            if let Skill::Knowledge(k) = skill {
+                names.push(k.name.clone());
+                all_knowledge.extend(k.knowledge.clone());
+                all_triggers.extend(k.trigger_conditions.clone());
+                all_sources.extend(k.sources.clone());
             }
         }
 

@@ -397,7 +397,7 @@ impl CheckpointStore {
         let new_cids: std::collections::HashSet<&str> = index.values()
             .flat_map(|v| v.iter().map(|s| s.as_str()))
             .collect();
-        for (_agent, old_cids) in &old_index {
+        for old_cids in old_index.values() {
             for cid in old_cids {
                 if !new_cids.contains(cid.as_str()) {
                     let _ = cas.delete(cid);

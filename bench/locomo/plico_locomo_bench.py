@@ -123,7 +123,7 @@ def ingest_conversation(client: PlicoClient, conv: dict, conv_idx: int) -> str:
             try:
                 client.batch_create(batch_items, agent_id=agent_id)
                 break
-            except (ConnectionError, OSError):
+            except (ConnectionError, OSError, TimeoutError):
                 if attempt < 2:
                     time.sleep(0.3)
                     client.close()
@@ -134,25 +134,40 @@ def ingest_conversation(client: PlicoClient, conv: dict, conv_idx: int) -> str:
 def search_for_context(client: PlicoClient, question: str, agent_id: str, conv_idx: int, k: int = 15,
                        category: str = "unknown") -> str:
     """Search plicod for relevant context using intent-aware routed recall."""
-    try:
-        resp = client.recall_routed(
-            agent_id=agent_id,
-            query=question,
-            k=k,
-        )
-        memories = resp.get("memory", [])
-        if memories:
-            return "\n".join(memories)
-    except Exception:
-        pass
+    for attempt in range(3):
+        try:
+            resp = client.recall_routed(
+                agent_id=agent_id,
+                query=question,
+                k=k,
+            )
+            memories = resp.get("memory", [])
+            if memories:
+                return "\n".join(memories)
+            break
+        except (ConnectionError, OSError, TimeoutError):
+            if attempt < 2:
+                time.sleep(0.5)
+                client.close()
+        except Exception:
+            break
 
     # Fallback to basic search
-    resp = client.search(
-        query=question,
-        agent_id=agent_id,
-        limit=k,
-        require_tags=[f"locomo:conv{conv_idx}"],
-    )
+    resp = {"results": []}
+    for attempt in range(3):
+        try:
+            resp = client.search(
+                query=question,
+                agent_id=agent_id,
+                limit=k,
+                require_tags=[f"locomo:conv{conv_idx}"],
+            )
+            break
+        except (ConnectionError, OSError, TimeoutError):
+            if attempt < 2:
+                time.sleep(0.5)
+                client.close()
+                
     snippets = []
     for r in resp.get("results", []):
         snippet = r.get("snippet", "")
@@ -222,7 +237,11 @@ def evaluate_conversation(
     judge_url: str, judge_model: str,
 ) -> list[dict]:
     """Evaluate all QA pairs for one conversation."""
+    t_ingest_start = time.perf_counter()
     agent_id = ingest_conversation(client, conv, conv_idx)
+    t_ingest_end = time.perf_counter()
+    ingest_time_s = t_ingest_end - t_ingest_start
+    
     time.sleep(1)
 
     qa_pairs = conv.get("qa", conv.get("qa_pairs", conv.get("questions", [])))
@@ -238,7 +257,13 @@ def evaluate_conversation(
         if not question or not gold_answer:
             continue
 
+        if len(results) > 0 and len(results) % 20 == 0:
+            print(f"    [Conv {conv_idx}] Processed {len(results)}/{len(qa_pairs)} QAs...", flush=True)
+
+        t_search_start = time.perf_counter()
         context = search_for_context(client, question, agent_id, conv_idx, category=category)
+        t_search_end = time.perf_counter()
+        
         # Select intent-specific prompt
         if category == "temporal":
             prompt = TEMPORAL_PROMPT.format(context=context, question=question)
@@ -246,17 +271,22 @@ def evaluate_conversation(
             prompt = MULTI_HOP_PROMPT.format(context=context, question=question)
         else:
             prompt = READER_PROMPT.format(context=context, question=question)
+            
+        t_reader_start = time.perf_counter()
         answer = call_llm(reader_url, reader_model, prompt)
+        t_reader_end = time.perf_counter()
 
         f1 = compute_f1(answer, gold_answer)
         bleu = compute_bleu1(answer, gold_answer)
 
+        t_judge_start = time.perf_counter()
         judge_prompt = JUDGE_PROMPT.format(question=question, gold=gold_answer, answer=answer)
         score_str = call_llm(judge_url, judge_model, judge_prompt, max_tokens=256)
         try:
             llm_score = int(re.search(r"[1-5]", score_str).group())
         except (AttributeError, ValueError):
             llm_score = 1
+        t_judge_end = time.perf_counter()
 
         results.append({
             "conv_idx": conv_idx,
@@ -268,6 +298,11 @@ def evaluate_conversation(
             "bleu1": bleu,
             "llm_score": llm_score,
             "has_context": len(context) > 0,
+            "latency_ingest_s": ingest_time_s / max(1, len(qa_pairs)),
+            "latency_search_s": t_search_end - t_search_start,
+            "latency_reader_s": t_reader_end - t_reader_start,
+            "latency_judge_s": t_judge_end - t_judge_start,
+            "latency_online_s": (t_search_end - t_search_start) + (t_reader_end - t_reader_start)
         })
 
     return results
@@ -302,12 +337,20 @@ def main():
         i, conv = i_conv
         client = PlicoClient(host=args.host, port=args.port)
         try:
+            t_start = time.perf_counter()
             results = evaluate_conversation(
                 client, conv, i,
                 args.reader_url, args.reader_model,
                 judge_url, judge_model,
             )
-            print(f"[{i+1}/{len(conversations)}] Conversation {i}... {len(results)} QAs")
+            t_end = time.perf_counter()
+            elapsed_s = t_end - t_start
+            print(f"[{i+1}/{len(conversations)}] Conversation {i}... {len(results)} QAs (took {elapsed_s:.1f}s)", flush=True)
+            
+            # 注入端到端计时
+            for r in results:
+                r["e2e_latency_s"] = elapsed_s / max(1, len(results))
+                
             return results
         except Exception as e:
             print(f"[{i+1}/{len(conversations)}] Conversation {i}... ERROR: {e}")
@@ -343,8 +386,10 @@ def main():
             "bleu1": avg_bleu,
             "llm_score": avg_llm,
             "context_hit_rate": context_rate,
+            "avg_online_latency_s": sum(r.get("latency_online_s", 0) for r in items) / len(items) if items else 0,
+            "avg_search_latency_s": sum(r.get("latency_search_s", 0) for r in items) / len(items) if items else 0,
         }
-        print(f"  {cat:20s}  n={len(items):3d}  F1={avg_f1:.3f}  BLEU={avg_bleu:.3f}  LLM={avg_llm:.2f}  ctx={context_rate:.2f}")
+        print(f"  {cat:20s}  n={len(items):3d}  F1={avg_f1:.3f}  BLEU={avg_bleu:.3f}  LLM={avg_llm:.2f}  ctx={context_rate:.2f}  lat={summary[cat]['avg_online_latency_s']:.2f}s")
 
     output_path = args.output or os.path.join(os.path.dirname(__file__), "locomo_results.json")
     output = {"summary": summary, "details": all_results}

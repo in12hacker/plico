@@ -102,7 +102,7 @@ impl PetgraphBackend {
             }
         };
 
-        let db_with_mutex = db.map(|d| Mutex::new(d));
+        let db_with_mutex = db.map(Mutex::new);
 
         let (nodes, out_e, in_e) = if let Some(ref mtx) = db_with_mutex {
             let database = mtx.lock().unwrap();

@@ -15,6 +15,10 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+# Add parent directory to path to import plico_client
+sys.path.append(str(Path(__file__).resolve().parent.parent))
+from plico_client import PlicoClient
+
 BENCH_ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = BENCH_ROOT / "data" / "memoryagentbench" / "data"
 RESULTS_DIR = BENCH_ROOT / "results"
@@ -43,16 +47,24 @@ def chunk_text(text: str, chunk_chars: int = 2048) -> list[str]:
 
 
 def run_benchmark():
-    from sentence_transformers import SentenceTransformer
-    from usearch.index import Index
+    try:
+        from sentence_transformers import SentenceTransformer
+        from usearch.index import Index
+    except ImportError:
+        print("WARNING: sentence_transformers or usearch not installed. Skipping offline equivalent mode.")
+        model = None
+        Index = None
 
     ar_file = DATA_DIR / "Accurate_Retrieval-00000-of-00001.parquet"
     if not ar_file.exists():
         print(f"ERROR: {ar_file} not found")
         sys.exit(1)
 
-    print(f"Loading embedding model: {EMBED_MODEL} ...")
-    model = SentenceTransformer(EMBED_MODEL)
+    if model is not None and Index is not None:
+        print(f"Loading embedding model: {EMBED_MODEL} ...")
+        model = SentenceTransformer(EMBED_MODEL)
+    else:
+        print("Skipping offline model load.")
 
     print("Loading MemoryAgentBench AR data ...")
     df = pd.read_parquet(ar_file)
@@ -64,6 +76,7 @@ def run_benchmark():
     all_results = []
     total_questions = 0
     total_hits = 0
+    total_plico_hits = 0
 
     for di, row in df.iterrows():
         context = row["context"]
@@ -75,16 +88,35 @@ def run_benchmark():
         chunks = chunk_text(context, chunk_chars=2048)
         if not chunks:
             continue
+            
+        print(f"  [doc {di+1}/{len(df)}] Processing {source} ({len(chunks)} chunks, {len(questions)} questions)...", flush=True)
+
+        # Ingest to Plico
+        client = PlicoClient(port=17878)
+        agent_id = f"mab-ar-{di}"
+        batch_items = [{"content": c, "tags": [f"mab:doc{di}"]} for c in chunks]
+        for attempt in range(3):
+            try:
+                client.batch_create(batch_items, agent_id=agent_id)
+                break
+            except (ConnectionError, OSError, TimeoutError):
+                if attempt < 2:
+                    time.sleep(0.5)
+                    client.close()
 
         # Embed chunks
-        chunk_embeddings = model.encode(chunks, batch_size=64, show_progress_bar=False)
+        if model is not None and Index is not None:
+            chunk_embeddings = model.encode(chunks, batch_size=64, show_progress_bar=False)
 
-        # Build index
-        idx = Index(ndim=EMBED_DIM, metric="cos", dtype="f16")
-        for ci, emb in enumerate(chunk_embeddings):
-            idx.add(ci, emb.astype(np.float32))
+            # Build index
+            idx = Index(ndim=EMBED_DIM, metric="cos", dtype="f16")
+            for ci, emb in enumerate(chunk_embeddings):
+                idx.add(ci, emb.astype(np.float32))
+        else:
+            idx = None
 
         doc_hits = 0
+        doc_plico_hits = 0
         doc_total = 0
 
         for qi, (question, answer_variants) in enumerate(zip(questions, answers_list)):
@@ -101,20 +133,42 @@ def run_benchmark():
                 continue
 
             # Search
-            query_emb = model.encode(question)
-            k = min(5, len(chunks))
-            matches = idx.search(query_emb.astype(np.float32), k)
+            if idx is not None and model is not None:
+                query_emb = model.encode(question)
+                k = min(5, len(chunks))
+                matches = idx.search(query_emb.astype(np.float32), k)
 
-            retrieved_text = " ".join(chunks[int(key)] for key in matches.keys).lower()
-            hit = expected.lower() in retrieved_text
+                retrieved_text = " ".join(chunks[int(key)] for key in matches.keys).lower()
+                hit = expected.lower() in retrieved_text
+            else:
+                hit = False
+            
+            # Plico API Search
+            try:
+                client = PlicoClient(port=17878)
+                resp = client.search(
+                    query=question,
+                    agent_id=f"mab-ar-{di}",
+                    limit=5,
+                    require_tags=[f"mab:doc{di}"]
+                )
+                plico_retrieved = " ".join(r.get("snippet", "") for r in resp.get("results", [])).lower()
+                plico_hit = expected.lower() in plico_retrieved
+            except Exception as e:
+                print(f"Plico search error: {e}")
+                plico_hit = False
 
             if hit:
                 doc_hits += 1
                 total_hits += 1
+            if plico_hit:
+                doc_plico_hits += 1
+                total_plico_hits += 1
             doc_total += 1
             total_questions += 1
 
         doc_acc = round(doc_hits / max(doc_total, 1) * 100, 1)
+        doc_plico_acc = round(doc_plico_hits / max(doc_total, 1) * 100, 1)
         all_results.append({
             "doc_idx": int(di),
             "source": source,
@@ -122,6 +176,8 @@ def run_benchmark():
             "n_questions": doc_total,
             "hits": doc_hits,
             "accuracy": doc_acc,
+            "plico_hits": doc_plico_hits,
+            "plico_accuracy": doc_plico_acc
         })
 
         if (di + 1) % 5 == 0:
@@ -132,13 +188,15 @@ def run_benchmark():
 
     report = {
         "benchmark": "MemoryAgentBench Accurate Retrieval",
-        "system": f"Plico-equivalent (usearch cos f16 + {EMBED_MODEL})",
+        "system": f"Plico API + Offline equivalent ({EMBED_MODEL})",
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "overall": {
             "n_documents": len(all_results),
             "n_questions": total_questions,
-            "total_hits": total_hits,
-            "hit_rate": overall_acc,
+            "offline_hits": total_hits,
+            "offline_hit_rate": total_hits / max(total_questions, 1) * 100,
+            "plico_hits": total_plico_hits,
+            "plico_hit_rate": total_plico_hits / max(total_questions, 1) * 100,
             "chunk_size": "2048 chars",
         },
         "per_document": all_results,
@@ -150,14 +208,18 @@ def run_benchmark():
     print("\n" + "=" * 70)
     print("MemoryAgentBench AR Benchmark Results")
     print("=" * 70)
+    print("MemoryAgentBench AR Benchmark Results")
+    print("=" * 70)
     print(f"  Documents: {len(all_results)}")
     print(f"  Questions: {total_questions}")
-    print(f"  Hits: {total_hits}")
-    print(f"  Hit Rate: {overall_acc}%")
+    print(f"  Offline Hits: {total_hits}")
+    print(f"  Offline Hit Rate: {total_hits / max(total_questions, 1) * 100:.1f}%")
+    print(f"  Plico Hits: {total_plico_hits}")
+    print(f"  Plico Hit Rate: {total_plico_hits / max(total_questions, 1) * 100:.1f}%")
     print()
     print("Per document:")
     for r in all_results:
-        print(f"  [{r['source']:<25}] {r['accuracy']:>5.1f}% ({r['hits']}/{r['n_questions']}) chunks={r['n_chunks']}")
+        print(f"  [{r['source']:<25}] Plico: {r['plico_accuracy']:>5.1f}% ({r['plico_hits']}/{r['n_questions']}) | Offline: {r['accuracy']:>5.1f}% ({r['hits']}/{r['n_questions']}) chunks={r['n_chunks']}")
     print(f"\nResults saved to: {RESULTS_FILE}")
     return report
 

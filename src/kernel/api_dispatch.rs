@@ -8,6 +8,7 @@ use super::ops;
 use super::ops::observability::{OperationTimer, OpType};
 
 impl super::AIKernel {
+    #[allow(dead_code)]
     fn extract_agent_id(req: &ApiRequest) -> Option<String> {
         match req {
             ApiRequest::Create { agent_id, .. } |

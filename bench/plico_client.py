@@ -9,7 +9,7 @@ MAX_MSG = 16 * 1024 * 1024  # 16 MiB, matches server
 
 
 class PlicoClient:
-    def __init__(self, host: str = "127.0.0.1", port: int = 7878, timeout: float = 60.0):
+    def __init__(self, host: str = "127.0.0.1", port: int = 7878, timeout: float = 300.0):
         self.host = host
         self.port = port
         self.timeout = timeout
@@ -72,7 +72,7 @@ class PlicoClient:
             self._send(payload)
             resp_bytes = self._recv()
             return json.loads(resp_bytes)
-        except (ConnectionError, OSError):
+        except (ConnectionError, OSError, TimeoutError):
             self._sock = None
             self.connect()
             self._send(payload)

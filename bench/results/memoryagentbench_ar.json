@@ -1,12 +1,14 @@
 {
   "benchmark": "MemoryAgentBench Accurate Retrieval",
-  "system": "Plico-equivalent (usearch cos f16 + all-MiniLM-L6-v2)",
-  "timestamp": "2026-04-26T19:07:54",
+  "system": "Plico API + Offline equivalent (all-MiniLM-L6-v2)",
+  "timestamp": "2026-05-07T16:28:55",
   "overall": {
     "n_documents": 20,
     "n_questions": 1880,
-    "total_hits": 195,
-    "hit_rate": 10.4,
+    "offline_hits": 0,
+    "offline_hit_rate": 0.0,
+    "plico_hits": 66,
+    "plico_hit_rate": 3.5106382978723407,
     "chunk_size": "2048 chars"
   },
   "per_document": [
@@ -15,16 +17,20 @@
       "source": "ruler_qa1_197K",
       "n_chunks": 605,
       "n_questions": 100,
-      "hits": 52,
-      "accuracy": 52.0
+      "hits": 0,
+      "accuracy": 0.0,
+      "plico_hits": 31,
+      "plico_accuracy": 31.0
     },
     {
       "doc_idx": 1,
       "source": "ruler_qa2_421K",
       "n_chunks": 1094,
       "n_questions": 100,
-      "hits": 39,
-      "accuracy": 39.0
+      "hits": 0,
+      "accuracy": 0.0,
+      "plico_hits": 34,
+      "plico_accuracy": 34.0
     },
     {
       "doc_idx": 2,
@@ -32,7 +38,9 @@
       "n_chunks": 1,
       "n_questions": 100,
       "hits": 0,
-      "accuracy": 0.0
+      "accuracy": 0.0,
+      "plico_hits": 0,
+      "plico_accuracy": 0.0
     },
     {
       "doc_idx": 3,
@@ -40,23 +48,29 @@
       "n_chunks": 1,
       "n_questions": 100,
       "hits": 0,
-      "accuracy": 0.0
+      "accuracy": 0.0,
+      "plico_hits": 0,
+      "plico_accuracy": 0.0
     },
     {
       "doc_idx": 4,
       "source": "eventqa_full",
       "n_chunks": 1,
       "n_questions": 100,
-      "hits": 1,
-      "accuracy": 1.0
+      "hits": 0,
+      "accuracy": 0.0,
+      "plico_hits": 0,
+      "plico_accuracy": 0.0
     },
     {
       "doc_idx": 5,
       "source": "eventqa_full",
       "n_chunks": 944,
       "n_questions": 100,
-      "hits": 1,
-      "accuracy": 1.0
+      "hits": 0,
+      "accuracy": 0.0,
+      "plico_hits": 1,
+      "plico_accuracy": 1.0
     },
     {
       "doc_idx": 6,
@@ -64,7 +78,9 @@
       "n_chunks": 1,
       "n_questions": 100,
       "hits": 0,
-      "accuracy": 0.0
+      "accuracy": 0.0,
+      "plico_hits": 0,
+      "plico_accuracy": 0.0
     },
     {
       "doc_idx": 7,
@@ -72,7 +88,9 @@
       "n_chunks": 1,
       "n_questions": 100,
       "hits": 0,
-      "accuracy": 0.0
+      "accuracy": 0.0,
+      "plico_hits": 0,
+      "plico_accuracy": 0.0
     },
     {
       "doc_idx": 8,
@@ -80,7 +98,9 @@
       "n_chunks": 1,
       "n_questions": 100,
       "hits": 0,
-      "accuracy": 0.0
+      "accuracy": 0.0,
+      "plico_hits": 0,
+      "plico_accuracy": 0.0
     },
     {
       "doc_idx": 9,
@@ -88,7 +108,9 @@
       "n_chunks": 1,
       "n_questions": 100,
       "hits": 0,
-      "accuracy": 0.0
+      "accuracy": 0.0,
+      "plico_hits": 0,
+      "plico_accuracy": 0.0
     },
     {
       "doc_idx": 10,
@@ -96,7 +118,9 @@
       "n_chunks": 154,
       "n_questions": 100,
       "hits": 0,
-      "accuracy": 0.0
+      "accuracy": 0.0,
+      "plico_hits": 0,
+      "plico_accuracy": 0.0
     },
     {
       "doc_idx": 11,
@@ -104,7 +128,9 @@
       "n_chunks": 1,
       "n_questions": 100,
       "hits": 0,
-      "accuracy": 0.0
+      "accuracy": 0.0,
+      "plico_hits": 0,
+      "plico_accuracy": 0.0
     },
     {
       "doc_idx": 12,
@@ -112,7 +138,9 @@
       "n_chunks": 1,
       "n_questions": 100,
       "hits": 0,
-      "accuracy": 0.0
+      "accuracy": 0.0,
+      "plico_hits": 0,
+      "plico_accuracy": 0.0
     },
     {
       "doc_idx": 13,
@@ -120,7 +148,9 @@
       "n_chunks": 1,
       "n_questions": 100,
       "hits": 0,
-      "accuracy": 0.0
+      "accuracy": 0.0,
+      "plico_hits": 0,
+      "plico_accuracy": 0.0
     },
     {
       "doc_idx": 14,
@@ -128,7 +158,9 @@
       "n_chunks": 1,
       "n_questions": 100,
       "hits": 0,
-      "accuracy": 0.0
+      "accuracy": 0.0,
+      "plico_hits": 0,
+      "plico_accuracy": 0.0
     },
     {
       "doc_idx": 15,
@@ -136,7 +168,9 @@
       "n_chunks": 310,
       "n_questions": 100,
       "hits": 0,
-      "accuracy": 0.0
+      "accuracy": 0.0,
+      "plico_hits": 0,
+      "plico_accuracy": 0.0
     },
     {
       "doc_idx": 16,
@@ -144,31 +178,39 @@
       "n_chunks": 1,
       "n_questions": 100,
       "hits": 0,
-      "accuracy": 0.0
+      "accuracy": 0.0,
+      "plico_hits": 0,
+      "plico_accuracy": 0.0
     },
     {
       "doc_idx": 17,
       "source": "longmemeval_s*",
       "n_chunks": 1,
       "n_questions": 60,
-      "hits": 39,
-      "accuracy": 65.0
+      "hits": 0,
+      "accuracy": 0.0,
+      "plico_hits": 0,
+      "plico_accuracy": 0.0
     },
     {
       "doc_idx": 18,
       "source": "longmemeval_s*",
       "n_chunks": 1,
       "n_questions": 60,
-      "hits": 32,
-      "accuracy": 53.3
+      "hits": 0,
+      "accuracy": 0.0,
+      "plico_hits": 0,
+      "plico_accuracy": 0.0
     },
     {
       "doc_idx": 19,
       "source": "longmemeval_s*",
       "n_chunks": 1,
       "n_questions": 60,
-      "hits": 31,
-      "accuracy": 51.7
+      "hits": 0,
+      "accuracy": 0.0,
+      "plico_hits": 0,
+      "plico_accuracy": 0.0
     }
   ]
 }

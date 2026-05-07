@@ -104,7 +104,7 @@ def ingest_question_docs(client: PlicoClient, item: dict, q_idx: int) -> str:
                     agent_id=agent_id,
                 )
                 break
-            except (ConnectionError, OSError):
+            except (ConnectionError, OSError, TimeoutError):
                 if attempt < 2:
                     time.sleep(0.3)
                     client.close()
@@ -116,7 +116,11 @@ def evaluate_question(
     reader_url: str, reader_model: str,
 ) -> dict:
     """Evaluate one HotPotQA question."""
+    t_ingest_start = time.perf_counter()
     agent_id = ingest_question_docs(client, item, q_idx)
+    t_ingest_end = time.perf_counter()
+    ingest_time_s = t_ingest_end - t_ingest_start
+    
     time.sleep(0.3)
 
     question = item["question"]
@@ -125,6 +129,7 @@ def evaluate_question(
     qtype = item.get("type", "unknown")
 
     resp = {"results": []}
+    t_search_start = time.perf_counter()
     for attempt in range(3):
         try:
             resp = client.search(
@@ -140,9 +145,12 @@ def evaluate_question(
                 client.close()
     snippets = [r.get("snippet", "") for r in resp.get("results", []) if r.get("snippet")]
     context = "\n".join(snippets)
+    t_search_end = time.perf_counter()
 
     prompt = READER_PROMPT.format(context=context, question=question)
+    t_reader_start = time.perf_counter()
     answer = call_llm(reader_url, reader_model, prompt)
+    t_reader_end = time.perf_counter()
 
     em = exact_match_score(answer, gold_answer)
     f1 = f1_score(answer, gold_answer)
@@ -169,6 +177,11 @@ def evaluate_question(
         "level": level,
         "type": qtype,
         "num_context_docs": len(snippets),
+        "latency_ingest_s": ingest_time_s,
+        "latency_search_s": t_search_end - t_search_start,
+        "latency_reader_s": t_reader_end - t_reader_start,
+        "latency_online_s": (t_search_end - t_search_start) + (t_reader_end - t_reader_start),
+        "e2e_latency_s": (t_reader_end - t_ingest_start)
     }
 
 
@@ -227,8 +240,9 @@ def main():
             "em": avg_em,
             "f1": avg_f1,
             "sp_f1": avg_sp,
+            "avg_online_latency_s": sum(r.get("latency_online_s", 0) for r in items_list) / len(items_list) if items_list else 0,
         }
-        print(f"  {qtype:15s}  n={len(items_list):3d}  EM={avg_em:.3f}  F1={avg_f1:.3f}  SP_F1={avg_sp:.3f}")
+        print(f"  {qtype:15s}  n={len(items_list):3d}  EM={avg_em:.3f}  F1={avg_f1:.3f}  SP_F1={avg_sp:.3f}  lat={summary[qtype]['avg_online_latency_s']:.2f}s")
 
     output_path = args.output or os.path.join(os.path.dirname(__file__), "hotpotqa_results.json")
     with open(output_path, "w") as f:

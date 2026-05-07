@@ -50,9 +50,8 @@ pub fn atomic_write_json<T: serde::Serialize>(path: &Path, data: &T) {
 pub fn atomic_write_bytes(path: &Path, data: &[u8]) -> std::io::Result<()> {
     let tmp = path.with_extension("tmp");
     std::fs::write(&tmp, data)?;
-    std::fs::rename(&tmp, path).map_err(|e| {
+    std::fs::rename(&tmp, path).inspect_err(|_| {
         let _ = std::fs::remove_file(&tmp);
-        e
     })
 }
 
