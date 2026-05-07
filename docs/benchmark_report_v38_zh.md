@@ -1,6 +1,6 @@
 # Plico 基线性能评测报告 (v38)
 
-> 生成时间: 2026-05-07 16:35:23
+> 生成时间: 2026-05-07 16:55:15
 > 评测系统: Plico (usearch HNSW cos f16 + all-MiniLM-L6-v2)
 > 评测模型: Gemma-4-26B-A4B-it-Q4_K_M (Reader/Judge), Qwen2.5-7B-Instruct (A/B Judge)
 
@@ -15,7 +15,14 @@
 - 平均在线延迟: 4.78s
 - 平均搜索延迟: 2.3208s
 
-*LoCoMo A/B 对照未运行或仍在进行中*
+### Gemma Reader + Qwen Judge A/B 对照
+- 样本数: 1542
+- F1 Score: **0.143**
+- BLEU-1: **0.099**
+- LLM Score: **3.44**
+- Context Hit Rate: **0.98**
+- 平均在线延迟: 4.62s
+- 平均搜索延迟: 2.1966s
 
 ## 维度 2: 长期记忆 — LongMemEval
 
