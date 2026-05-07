@@ -5,6 +5,7 @@
 //!
 //! Design: F-14 in docs/design-node4-collaborative-ecosystem.md
 
+use crate::util::now_ms;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
@@ -318,12 +319,6 @@ impl TaskStore {
     }
 }
 
-fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64
-}
 
 #[cfg(test)]
 mod tests {

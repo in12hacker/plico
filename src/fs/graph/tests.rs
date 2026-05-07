@@ -1,13 +1,8 @@
 //! Graph backend tests.
 
+use crate::util::now_ms;
 use crate::fs::graph::{KGNode, KGEdge, KGNodeType, KGEdgeType, PetgraphBackend, KnowledgeGraph};
 
-fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
-}
 
 fn make_node(id: &str, node_type: KGNodeType, tags: Vec<String>, agent: &str) -> KGNode {
     KGNode {

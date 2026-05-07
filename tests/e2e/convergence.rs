@@ -123,7 +123,7 @@ mod tests {
         let rt = tokio::runtime::Runtime::new().unwrap();
 
         // Step 1: Register agent
-        let agent_id = kernel.register_agent("e2e-agent".to_string());
+        let agent_id = kernel.register_agent("e2e-agent".to_string()).unwrap();
         kernel.permission_grant(&agent_id, plico::api::permission::PermissionAction::Write, None, None);
         kernel.permission_grant(&agent_id, plico::api::permission::PermissionAction::Read, None, None);
 

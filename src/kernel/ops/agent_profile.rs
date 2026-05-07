@@ -74,13 +74,14 @@ impl AgentProfile {
         let learning_rate = (0.3 / (1.0 + self.total_queries as f32 / 50.0)).max(0.01);
 
         let mut nudge = FusionWeights {
-            semantic: 0.0,
-            causal: 0.0,
-            access: 0.0,
-            tag: 0.0,
-            temporal: 0.0,
-            type_match: 0.0,
-            bm25_keyword: 0.0,
+            semantic: 0.20,
+            causal: 0.10,
+            access: 0.10,
+            tag: 0.15,
+            temporal: 0.10,
+            type_match: 0.15,
+            bm25_keyword: 0.15,
+            kg_multi_hop: 0.05,
         };
 
         for fb in used_signals {

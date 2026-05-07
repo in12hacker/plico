@@ -179,7 +179,7 @@ fn test_kernel_agent_isolation() {
 fn test_kernel_agent_registration() {
     let (kernel, _dir) = make_kernel();
 
-    let id = kernel.register_agent("MyAgent".to_string());
+    let id = kernel.register_agent("MyAgent".to_string()).unwrap();
     assert!(!id.is_empty());
 
     let agents = kernel.list_agents();
@@ -343,7 +343,7 @@ fn test_kernel_memory_stats() {
 fn test_kernel_resolve_agent_by_name() {
     let (kernel, _dir) = make_kernel();
 
-    let id = kernel.register_agent("resolver-test-agent".to_string());
+    let id = kernel.register_agent("resolver-test-agent".to_string()).unwrap();
     assert!(!id.is_empty());
 
     // Resolve by name
@@ -356,7 +356,7 @@ fn test_kernel_resolve_agent_by_name() {
 fn test_kernel_resolve_agent_by_uuid() {
     let (kernel, _dir) = make_kernel();
 
-    let id = kernel.register_agent("uuid-test-agent".to_string());
+    let id = kernel.register_agent("uuid-test-agent".to_string()).unwrap();
 
     // Resolve by UUID directly
     let resolved = kernel.resolve_agent(&id);
@@ -376,7 +376,7 @@ fn test_kernel_resolve_agent_not_found() {
 fn test_kernel_agent_status() {
     let (kernel, _dir) = make_kernel();
 
-    let id = kernel.register_agent("status-test".to_string());
+    let id = kernel.register_agent("status-test".to_string()).unwrap();
     let status = kernel.agent_status(&id);
 
     assert!(status.is_some());
@@ -389,7 +389,7 @@ fn test_kernel_agent_status() {
 fn test_kernel_agent_suspend_resume() {
     let (kernel, _dir) = make_kernel();
 
-    let id = kernel.register_agent("suspend-test".to_string());
+    let id = kernel.register_agent("suspend-test".to_string()).unwrap();
 
     kernel.agent_suspend(&id).expect("suspend should succeed");
     let status = kernel.agent_status(&id).unwrap();
@@ -404,7 +404,7 @@ fn test_kernel_agent_suspend_resume() {
 fn test_kernel_checkpoint_and_restore() {
     let (kernel, _dir) = make_kernel();
 
-    let agent_id = kernel.register_agent("checkpoint-agent".to_string());
+    let agent_id = kernel.register_agent("checkpoint-agent".to_string()).unwrap();
     kernel.remember_working(&agent_id, "default", "before checkpoint".to_string(), vec![]).unwrap();
 
     let cid = kernel.checkpoint_agent(&agent_id).expect("checkpoint should succeed");
@@ -419,7 +419,7 @@ fn test_kernel_checkpoint_and_restore() {
 fn test_kernel_register_skill() {
     let (kernel, _dir) = make_kernel();
 
-    let agent_id = kernel.register_agent("skill-host".to_string());
+    let agent_id = kernel.register_agent("skill-host".to_string()).unwrap();
     let node_id = kernel.register_skill(&agent_id, "test-skill", "A test skill", vec!["test".to_string()]);
 
     assert!(node_id.is_ok());
@@ -431,7 +431,7 @@ fn test_kernel_register_skill() {
 fn test_kernel_discover_skills() {
     let (kernel, _dir) = make_kernel();
 
-    let agent_id = kernel.register_agent("skill-discoverer".to_string());
+    let agent_id = kernel.register_agent("skill-discoverer".to_string()).unwrap();
     kernel.register_skill(&agent_id, "skill-a", "Description A", vec!["tag1".to_string()]).unwrap();
     kernel.register_skill(&agent_id, "skill-b", "Description B", vec!["tag2".to_string()]).unwrap();
 
@@ -492,7 +492,7 @@ fn test_kernel_restore_deleted() {
 fn test_kernel_agent_lifecycle() {
     let (kernel, _dir) = make_kernel();
 
-    let id = kernel.register_agent("LifecycleAgent".to_string());
+    let id = kernel.register_agent("LifecycleAgent".to_string()).unwrap();
 
     let (_, state, pending) = kernel.agent_status(&id).expect("status");
     assert_eq!(state, "Created");
@@ -537,7 +537,7 @@ fn test_kernel_agent_persists_across_restart() {
     let id;
     {
         let kernel = AIKernel::new(root.clone()).expect("kernel init");
-        id = kernel.register_agent("PersistentAgent".to_string());
+        id = kernel.register_agent("PersistentAgent".to_string()).unwrap();
         let agents = kernel.list_agents();
         assert_eq!(agents.len(), 1);
         assert_eq!(agents[0].name, "PersistentAgent");
@@ -780,7 +780,7 @@ fn test_e2e_agent_autonomy_cycle() {
 
         let dispatch = rt.block_on(async { kernel.start_dispatch_loop() });
 
-        agent_id = kernel.register_agent("E2ETestAgent".to_string());
+        agent_id = kernel.register_agent("E2ETestAgent".to_string()).unwrap();
         let (_, state, _) = kernel.agent_status(&agent_id).expect("status");
         assert_eq!(state, "Created");
 
@@ -870,7 +870,7 @@ fn test_e2e_tool_cognitive_memory_cycle() {
     let root = dir.path().to_path_buf();
 
     // 1. Register an agent
-    let agent_id = kernel.register_agent("ToolTestAgent".to_string());
+    let agent_id = kernel.register_agent("ToolTestAgent".to_string()).unwrap();
 
     // 2. Discover tools via tool_list
     let list_resp = kernel.handle_api_request(ApiRequest::ToolList {
@@ -1064,8 +1064,8 @@ fn test_e2e_intent_resources_messaging() {
     let (kernel, _dir) = make_kernel();
 
     // 1. Register two agents with different resources
-    let agent_a = kernel.register_agent("Agent-Alpha".to_string());
-    let agent_b = kernel.register_agent("Agent-Beta".to_string());
+    let agent_a = kernel.register_agent("Agent-Alpha".to_string()).unwrap();
+    let agent_b = kernel.register_agent("Agent-Beta".to_string()).unwrap();
 
     // 2. Set resources for Agent-Alpha: memory_quota=5, only cas.search allowed
     kernel.agent_set_resources(
@@ -1155,8 +1155,8 @@ fn test_intent_router_temporal() {
 #[test]
 fn test_messaging_permission_denied() {
     let (kernel, _dir) = make_kernel();
-    let agent_a = kernel.register_agent("Sender".to_string());
-    let agent_b = kernel.register_agent("Receiver".to_string());
+    let agent_a = kernel.register_agent("Sender".to_string()).unwrap();
+    let agent_b = kernel.register_agent("Receiver".to_string()).unwrap();
 
     // agent_a has no SendMessage grant — should fail
     let result = kernel.send_message(&agent_a, &agent_b, serde_json::json!("hello"));
@@ -1215,7 +1215,7 @@ fn test_kg_remove_node_cascades_edges() {
 #[test]
 fn test_agent_complete_sets_state() {
     let (kernel, _dir) = make_kernel();
-    let id = kernel.register_agent("CompletableAgent".to_string());
+    let id = kernel.register_agent("CompletableAgent".to_string()).unwrap();
 
     // Transition Created→Waiting via intent submission
     kernel.submit_intent(
@@ -1233,7 +1233,7 @@ fn test_agent_complete_sets_state() {
 #[test]
 fn test_completed_agent_rejects_intents() {
     let (kernel, _dir) = make_kernel();
-    let id = kernel.register_agent("DoneAgent".to_string());
+    let id = kernel.register_agent("DoneAgent".to_string()).unwrap();
 
     // Transition Created→Waiting→Completed
     kernel.submit_intent(
@@ -1257,7 +1257,7 @@ fn test_completed_agent_rejects_intents() {
 #[test]
 fn test_terminated_agent_rejects_intents() {
     let (kernel, _dir) = make_kernel();
-    let id = kernel.register_agent("KilledAgent".to_string());
+    let id = kernel.register_agent("KilledAgent".to_string()).unwrap();
     kernel.agent_terminate(&id).unwrap();
 
     let result = kernel.submit_intent(
@@ -1273,7 +1273,7 @@ fn test_terminated_agent_rejects_intents() {
 #[test]
 fn test_remember_respects_memory_quota() {
     let (kernel, _dir) = make_kernel();
-    let id = kernel.register_agent("QuotaAgent".to_string());
+    let id = kernel.register_agent("QuotaAgent".to_string()).unwrap();
     kernel.agent_set_resources(&id, Some(2), None, None).unwrap();
 
     kernel.remember(&id, "default", "first".to_string()).unwrap();
@@ -1288,7 +1288,7 @@ fn test_remember_respects_memory_quota() {
 fn test_memory_tier_api_via_handle_request() {
     use plico::api::semantic::ApiRequest;
     let (kernel, _dir) = make_kernel();
-    let id = kernel.register_agent("MemTierAgent".to_string());
+    let id = kernel.register_agent("MemTierAgent".to_string()).unwrap();
     kernel.remember(&id, "default", "test entry".to_string()).unwrap();
 
     let memories = kernel.recall(&id, "default");
@@ -1321,7 +1321,7 @@ fn test_v07_graph_scheduler_e2e_roundtrip() {
     let (kernel, _dir) = make_kernel();
 
     // 1. Register agent with memory_quota=5
-    let agent_id = kernel.register_agent("v07-e2e-agent".to_string());
+    let agent_id = kernel.register_agent("v07-e2e-agent".to_string()).unwrap();
     kernel.agent_set_resources(&agent_id, Some(5), None, None).unwrap();
 
     // Use "kernel" (trusted) for operations requiring Delete permission
@@ -1387,7 +1387,7 @@ fn test_v07_graph_scheduler_e2e_roundtrip() {
 fn test_list_nodes_pagination() {
     use plico::api::semantic::ApiRequest;
     let (kernel, _dir) = make_kernel();
-    let agent_id = kernel.register_agent("paginator".to_string());
+    let agent_id = kernel.register_agent("paginator".to_string()).unwrap();
 
     for i in 0..10 {
         let _ = kernel.kg_add_node(&format!("n{}", i), plico::fs::KGNodeType::Entity, serde_json::Value::Null, &agent_id, "default");
@@ -1412,7 +1412,7 @@ fn test_list_nodes_pagination() {
 fn test_list_edges_pagination() {
     use plico::api::semantic::ApiRequest;
     let (kernel, _dir) = make_kernel();
-    let agent_id = kernel.register_agent("edge-pager".to_string());
+    let agent_id = kernel.register_agent("edge-pager".to_string()).unwrap();
 
     let mut src_ids = Vec::new();
     let mut dst_ids = Vec::new();
@@ -1437,7 +1437,7 @@ fn test_list_edges_pagination() {
 fn test_pagination_beyond_total() {
     use plico::api::semantic::ApiRequest;
     let (kernel, _dir) = make_kernel();
-    let agent_id = kernel.register_agent("beyond".to_string());
+    let agent_id = kernel.register_agent("beyond".to_string()).unwrap();
 
     for i in 0..3 {
         let _ = kernel.kg_add_node(&format!("x{}", i), plico::fs::KGNodeType::Entity, serde_json::Value::Null, &agent_id, "default");
@@ -1458,7 +1458,7 @@ fn test_pagination_beyond_total() {
 fn test_agent_fail_sets_state() {
     use plico::api::semantic::ApiRequest;
     let (kernel, _dir) = make_kernel();
-    let agent_id = kernel.register_agent("fail-test".to_string());
+    let agent_id = kernel.register_agent("fail-test".to_string()).unwrap();
 
     // Transition Created→Waiting before failing
     kernel.submit_intent(
@@ -1479,7 +1479,7 @@ fn test_agent_fail_sets_state() {
 fn test_agent_fail_via_api() {
     use plico::api::semantic::ApiRequest;
     let (kernel, _dir) = make_kernel();
-    let agent_id = kernel.register_agent("api-fail-test".to_string());
+    let agent_id = kernel.register_agent("api-fail-test".to_string()).unwrap();
 
     // Transition Created→Waiting before failing via API
     kernel.submit_intent(
@@ -1502,7 +1502,7 @@ fn test_agent_fail_via_api() {
 #[test]
 fn test_agent_fail_already_terminal_rejected() {
     let (kernel, _dir) = make_kernel();
-    let agent_id = kernel.register_agent("double-fail".to_string());
+    let agent_id = kernel.register_agent("double-fail".to_string()).unwrap();
 
     // Transition Created→Waiting before first fail
     kernel.submit_intent(
@@ -1522,7 +1522,7 @@ fn test_agent_fail_already_terminal_rejected() {
 #[test]
 fn test_context_load_l0() {
     let (kernel, _dir) = make_kernel();
-    let agent_id = kernel.register_agent("ctx-test".to_string());
+    let agent_id = kernel.register_agent("ctx-test".to_string()).unwrap();
     let cid = kernel.semantic_create(
         b"This is a test document with enough content to produce a meaningful L0 summary for testing purposes".to_vec(),
         vec!["test".to_string()],
@@ -1539,7 +1539,7 @@ fn test_context_load_l0() {
 #[test]
 fn test_context_load_l2() {
     let (kernel, _dir) = make_kernel();
-    let agent_id = kernel.register_agent("ctx-l2-test".to_string());
+    let agent_id = kernel.register_agent("ctx-l2-test".to_string()).unwrap();
     let content = "Full content for L2 test. This should be returned in its entirety.";
     let cid = kernel.semantic_create(
         content.as_bytes().to_vec(),
@@ -1571,7 +1571,7 @@ fn test_context_load_invalid_layer() {
 fn test_context_load_via_api() {
     use plico::api::semantic::ApiRequest;
     let (kernel, _dir) = make_kernel();
-    let agent_id = kernel.register_agent("ctx-api-test".to_string());
+    let agent_id = kernel.register_agent("ctx-api-test".to_string()).unwrap();
     let cid = kernel.semantic_create(
         b"API context loading roundtrip test content".to_vec(),
         vec!["test".to_string()],
@@ -1595,7 +1595,7 @@ fn test_context_load_via_api() {
 #[test]
 fn test_context_load_tool() {
     let (kernel, _dir) = make_kernel();
-    let agent_id = kernel.register_agent("ctx-tool-test".to_string());
+    let agent_id = kernel.register_agent("ctx-tool-test".to_string()).unwrap();
     let cid = kernel.semantic_create(
         b"Tool-based context loading test".to_vec(),
         vec!["test".to_string()],
@@ -1617,7 +1617,7 @@ fn test_context_load_tool() {
 #[test]
 fn test_intent_execute_sync_stores_result_in_memory() {
     let (kernel, _dir) = make_kernel();
-    let agent_id = kernel.register_agent("sync-exec-test".to_string());
+    let agent_id = kernel.register_agent("sync-exec-test".to_string()).unwrap();
     let router = ChainRouter::new(None);
 
     kernel.semantic_create(
@@ -1655,7 +1655,7 @@ fn test_intent_execute_sync_stores_result_in_memory() {
 #[test]
 fn test_intent_execute_sync_below_threshold_not_executed() {
     let (kernel, _dir) = make_kernel();
-    let agent_id = kernel.register_agent("threshold-test".to_string());
+    let agent_id = kernel.register_agent("threshold-test".to_string()).unwrap();
     let router = ChainRouter::new(None);
 
     let result = execution::execute_sync(
@@ -1677,7 +1677,7 @@ fn test_intent_execute_sync_below_threshold_not_executed() {
 #[test]
 fn test_intent_execute_sync_learn_creates_procedural_memory() {
     let (kernel, _dir) = make_kernel();
-    let agent_id = kernel.register_agent("learn-test".to_string());
+    let agent_id = kernel.register_agent("learn-test".to_string()).unwrap();
     let router = ChainRouter::new(None);
 
     kernel.semantic_create(
@@ -1713,7 +1713,7 @@ async fn test_result_consumer_captures_dispatch_outcomes() {
 
     let (kernel, _dir) = make_kernel_arc();
 
-    let agent_id = kernel.register_agent("consumer-test".to_string());
+    let agent_id = kernel.register_agent("consumer-test".to_string()).unwrap();
     kernel.permission_grant(&agent_id, PermissionAction::Write, None, None);
 
     let dispatch = kernel.start_dispatch_loop();
@@ -1739,7 +1739,7 @@ async fn test_result_consumer_captures_dispatch_outcomes() {
 #[test]
 fn test_e2e_autonomous_loop_resolve_execute_learn_reuse() {
     let (kernel, _dir) = make_kernel();
-    let agent_id = kernel.register_agent("e2e-loop".to_string());
+    let agent_id = kernel.register_agent("e2e-loop".to_string()).unwrap();
     let router = ChainRouter::new(None);
 
     kernel.semantic_create(
@@ -1948,7 +1948,7 @@ fn test_history_and_rollback_via_api() {
 #[test]
 fn test_multi_step_intent_execution() {
     let (kernel, _dir) = make_kernel();
-    let agent_id = kernel.register_agent("multi-step".to_string());
+    let agent_id = kernel.register_agent("multi-step".to_string()).unwrap();
     let router = ChainRouter::new(None);
 
     // "create a note and then search for notes" should resolve to 2 actions
@@ -1968,7 +1968,7 @@ fn test_multi_step_intent_execution() {
 #[test]
 fn test_multi_step_learn_creates_multi_step_procedure() {
     let (kernel, _dir) = make_kernel();
-    let agent_id = kernel.register_agent("multi-learn".to_string());
+    let agent_id = kernel.register_agent("multi-learn".to_string()).unwrap();
     let router = ChainRouter::new(None);
 
     // First create some data so the search part succeeds
@@ -2007,7 +2007,7 @@ fn test_multi_step_learn_creates_multi_step_procedure() {
 #[test]
 fn test_multi_step_reuse_replays_all_steps() {
     let (kernel, _dir) = make_kernel();
-    let agent_id = kernel.register_agent("multi-reuse".to_string());
+    let agent_id = kernel.register_agent("multi-reuse".to_string()).unwrap();
     let router = ChainRouter::new(None);
 
     kernel.semantic_create(
@@ -2048,7 +2048,7 @@ fn test_multi_step_reuse_replays_all_steps() {
 #[test]
 fn test_recall_procedural_api_returns_full_structure() {
     let (kernel, _dir) = make_kernel();
-    let agent_id = kernel.register_agent("recall-proc-test".to_string());
+    let agent_id = kernel.register_agent("recall-proc-test".to_string()).unwrap();
 
     let store_req = plico::api::semantic::ApiRequest::RememberProcedural {
         agent_id: agent_id.clone(),
@@ -2101,8 +2101,8 @@ fn test_recall_procedural_api_returns_full_structure() {
 #[test]
 fn test_memory_scope_private_isolation() {
     let (kernel, _dir) = make_kernel();
-    let agent_a = kernel.register_agent("agent-a".to_string());
-    let agent_b = kernel.register_agent("agent-b".to_string());
+    let agent_a = kernel.register_agent("agent-a".to_string()).unwrap();
+    let agent_b = kernel.register_agent("agent-b".to_string()).unwrap();
 
     use plico::api::permission::PermissionAction;
     kernel.permission_grant(&agent_a, PermissionAction::Write, None, None);
@@ -2121,8 +2121,8 @@ fn test_memory_scope_private_isolation() {
 #[test]
 fn test_memory_scope_shared_cross_agent() {
     let (kernel, _dir) = make_kernel();
-    let agent_a = kernel.register_agent("agent-a".to_string());
-    let agent_b = kernel.register_agent("agent-b".to_string());
+    let agent_a = kernel.register_agent("agent-a".to_string()).unwrap();
+    let agent_b = kernel.register_agent("agent-b".to_string()).unwrap();
 
     use plico::api::permission::PermissionAction;
     use plico::memory::MemoryScope;
@@ -2158,9 +2158,9 @@ fn test_memory_scope_shared_cross_agent() {
 #[test]
 fn test_memory_scope_group_visibility() {
     let (kernel, _dir) = make_kernel();
-    let agent_a = kernel.register_agent("agent-a".to_string());
-    let agent_b = kernel.register_agent("agent-b".to_string());
-    let agent_c = kernel.register_agent("agent-c".to_string());
+    let agent_a = kernel.register_agent("agent-a".to_string()).unwrap();
+    let agent_b = kernel.register_agent("agent-b".to_string()).unwrap();
+    let agent_c = kernel.register_agent("agent-c".to_string()).unwrap();
 
     use plico::api::permission::PermissionAction;
     use plico::memory::MemoryScope;
@@ -2189,8 +2189,8 @@ fn test_memory_scope_group_visibility() {
 #[test]
 fn test_shared_procedural_memory_cross_agent() {
     let (kernel, _dir) = make_kernel();
-    let agent_a = kernel.register_agent("agent-a".to_string());
-    let agent_b = kernel.register_agent("agent-b".to_string());
+    let agent_a = kernel.register_agent("agent-a".to_string()).unwrap();
+    let agent_b = kernel.register_agent("agent-b".to_string()).unwrap();
 
     use plico::api::permission::PermissionAction;
     use plico::memory::MemoryScope;
@@ -2230,7 +2230,7 @@ fn test_shared_procedural_memory_cross_agent() {
 #[test]
 fn test_memory_scope_api_round_trip() {
     let (kernel, _dir) = make_kernel();
-    let agent_id = kernel.register_agent("scope-api-test".to_string());
+    let agent_id = kernel.register_agent("scope-api-test".to_string()).unwrap();
 
     use plico::api::permission::PermissionAction;
     kernel.permission_grant(&agent_id, PermissionAction::Write, None, None);
@@ -2263,8 +2263,8 @@ fn test_cross_agent_workflow_reuse_via_shared_scope() {
     let (kernel, _dir) = make_kernel();
     let router = ChainRouter::new(None);
 
-    let agent_a = kernel.register_agent("teacher-agent".to_string());
-    let agent_b = kernel.register_agent("student-agent".to_string());
+    let agent_a = kernel.register_agent("teacher-agent".to_string()).unwrap();
+    let agent_b = kernel.register_agent("student-agent".to_string()).unwrap();
 
     use plico::api::permission::PermissionAction;
     use plico::memory::MemoryScope;
@@ -2346,8 +2346,8 @@ fn test_shared_procedure_appears_as_tool() {
     let (kernel, _dir) = make_kernel_arc();
     let router = ChainRouter::new(None);
 
-    let agent_a = kernel.register_agent("teacher".to_string());
-    let agent_b = kernel.register_agent("student".to_string());
+    let agent_a = kernel.register_agent("teacher".to_string()).unwrap();
+    let agent_b = kernel.register_agent("student".to_string()).unwrap();
 
     use plico::api::permission::PermissionAction;
     use plico::memory::MemoryScope;
@@ -2425,7 +2425,7 @@ fn test_shared_procedure_appears_as_tool() {
 #[test]
 fn test_checkpoint_creates_cas_object() {
     let (kernel, _dir) = make_kernel_arc();
-    let agent_id = kernel.register_agent("checkpointer".into());
+    let agent_id = kernel.register_agent("checkpointer".into()).unwrap();
 
     use plico::api::permission::PermissionAction;
     kernel.permission_grant(&agent_id, PermissionAction::Read, None, None);
@@ -2448,7 +2448,7 @@ fn test_checkpoint_creates_cas_object() {
 #[test]
 fn test_restore_checkpoint_replaces_memory() {
     let (kernel, _dir) = make_kernel_arc();
-    let agent_id = kernel.register_agent("restorer".into());
+    let agent_id = kernel.register_agent("restorer".into()).unwrap();
 
     use plico::api::permission::PermissionAction;
     kernel.permission_grant(&agent_id, PermissionAction::Read, None, None);
@@ -2486,7 +2486,7 @@ fn test_restore_checkpoint_replaces_memory() {
 #[test]
 fn test_checkpoint_deduplication() {
     let (kernel, _dir) = make_kernel_arc();
-    let agent_id = kernel.register_agent("dedup-tester".into());
+    let agent_id = kernel.register_agent("dedup-tester".into()).unwrap();
 
     use plico::api::permission::PermissionAction;
     kernel.permission_grant(&agent_id, PermissionAction::Read, None, None);
@@ -2511,7 +2511,7 @@ fn test_checkpoint_unknown_agent_fails() {
 #[test]
 fn test_restore_unknown_checkpoint_fails() {
     let (kernel, _dir) = make_kernel_arc();
-    let agent_id = kernel.register_agent("orphan".into());
+    let agent_id = kernel.register_agent("orphan".into()).unwrap();
 
     use plico::api::permission::PermissionAction;
     kernel.permission_grant(&agent_id, PermissionAction::Read, None, None);
@@ -2523,7 +2523,7 @@ fn test_restore_unknown_checkpoint_fails() {
 #[test]
 fn test_checkpoint_via_api() {
     let (kernel, _dir) = make_kernel_arc();
-    let agent_id = kernel.register_agent("api-check".into());
+    let agent_id = kernel.register_agent("api-check".into()).unwrap();
 
     use plico::api::permission::PermissionAction;
     kernel.permission_grant(&agent_id, PermissionAction::Read, None, None);
@@ -2550,7 +2550,7 @@ fn test_checkpoint_via_api() {
 #[test]
 fn test_suspend_auto_checkpoints() {
     let (kernel, _dir) = make_kernel_arc();
-    let agent_id = kernel.register_agent("auto-cp".into());
+    let agent_id = kernel.register_agent("auto-cp".into()).unwrap();
 
     use plico::api::permission::PermissionAction;
     kernel.permission_grant(&agent_id, PermissionAction::Read, None, None);
@@ -2582,7 +2582,7 @@ fn test_suspend_auto_checkpoints() {
 #[test]
 fn test_full_suspend_resume_cycle_preserves_memory() {
     let (kernel, _dir) = make_kernel_arc();
-    let agent_id = kernel.register_agent("cycle-test".into());
+    let agent_id = kernel.register_agent("cycle-test".into()).unwrap();
 
     use plico::api::permission::PermissionAction;
     kernel.permission_grant(&agent_id, PermissionAction::Read, None, None);
@@ -2646,7 +2646,7 @@ fn test_event_subscribe_and_poll_empty() {
 #[test]
 fn test_event_bus_object_stored_notification() {
     let (kernel, _dir) = make_kernel();
-    let agent = kernel.register_agent("watcher".into());
+    let agent = kernel.register_agent("watcher".into()).unwrap();
 
     let sub_id = kernel.event_subscribe();
 
@@ -2669,7 +2669,7 @@ fn test_event_bus_object_stored_notification() {
 #[test]
 fn test_event_bus_agent_state_change_notification() {
     let (kernel, _dir) = make_kernel();
-    let agent = kernel.register_agent("lifecycle".into());
+    let agent = kernel.register_agent("lifecycle".into()).unwrap();
 
     // Move agent to Waiting state first (Created → Suspended is illegal)
     kernel.submit_intent(
@@ -2694,7 +2694,7 @@ fn test_event_bus_agent_state_change_notification() {
 #[test]
 fn test_event_bus_memory_stored_notification() {
     let (kernel, _dir) = make_kernel();
-    let agent = kernel.register_agent("learner".into());
+    let agent = kernel.register_agent("learner".into()).unwrap();
 
     let sub_id = kernel.event_subscribe();
 
@@ -2711,8 +2711,8 @@ fn test_event_bus_memory_stored_notification() {
 #[test]
 fn test_event_bus_cross_agent_reactive_workflow() {
     let (kernel, _dir) = make_kernel();
-    let agent_a = kernel.register_agent("producer".into());
-    let _agent_b = kernel.register_agent("consumer".into());
+    let agent_a = kernel.register_agent("producer".into()).unwrap();
+    let _agent_b = kernel.register_agent("consumer".into()).unwrap();
 
     let sub_b = kernel.event_subscribe();
 
@@ -2737,7 +2737,7 @@ fn test_event_bus_cross_agent_reactive_workflow() {
 #[test]
 fn test_event_bus_unsubscribe_stops_events() {
     let (kernel, _dir) = make_kernel();
-    let agent = kernel.register_agent("temp".into());
+    let agent = kernel.register_agent("temp".into()).unwrap();
 
     let sub_id = kernel.event_subscribe();
     assert!(kernel.event_unsubscribe(&sub_id));
@@ -2752,7 +2752,7 @@ fn test_event_bus_via_api() {
     use plico::api::semantic::ApiRequest;
 
     let (kernel, _dir) = make_kernel();
-    let agent = kernel.register_agent("api-user".into());
+    let agent = kernel.register_agent("api-user".into()).unwrap();
 
     let resp = kernel.handle_api_request(ApiRequest::EventSubscribe { agent_id: agent.clone(), event_types: None, agent_ids: None });
     assert!(resp.ok);
@@ -2772,7 +2772,7 @@ fn test_event_bus_via_api() {
 #[test]
 fn test_event_bus_intent_submitted_notification() {
     let (kernel, _dir) = make_kernel();
-    let agent = kernel.register_agent("intender".into());
+    let agent = kernel.register_agent("intender".into()).unwrap();
 
     let sub_id = kernel.event_subscribe();
 
@@ -2793,7 +2793,7 @@ fn test_event_bus_intent_submitted_notification() {
 #[test]
 fn test_event_bus_filtered_subscribe_by_type() {
     let (kernel, _dir) = make_kernel();
-    let agent = kernel.register_agent("filter-test".into());
+    let agent = kernel.register_agent("filter-test".into()).unwrap();
 
     let filter = plico::kernel::event_bus::EventFilter {
         event_types: Some(vec!["ObjectStored".into()]),
@@ -2812,8 +2812,8 @@ fn test_event_bus_filtered_subscribe_by_type() {
 #[test]
 fn test_event_bus_filtered_subscribe_by_agent() {
     let (kernel, _dir) = make_kernel();
-    let agent_a = kernel.register_agent("producer-a".into());
-    let agent_b = kernel.register_agent("producer-b".into());
+    let agent_a = kernel.register_agent("producer-a".into()).unwrap();
+    let agent_b = kernel.register_agent("producer-b".into()).unwrap();
 
     let filter = plico::kernel::event_bus::EventFilter {
         event_types: None,
@@ -2839,7 +2839,7 @@ fn test_event_bus_filtered_subscribe_via_api() {
     use plico::api::semantic::ApiRequest;
 
     let (kernel, _dir) = make_kernel();
-    let agent = kernel.register_agent("api-filter".into());
+    let agent = kernel.register_agent("api-filter".into()).unwrap();
 
     let resp = kernel.handle_api_request(ApiRequest::EventSubscribe {
         agent_id: agent.clone(),
@@ -2866,7 +2866,7 @@ fn test_system_status_via_api() {
     use plico::api::semantic::ApiRequest;
 
     let (kernel, _dir) = make_kernel();
-    let agent = kernel.register_agent("status-tester".into());
+    let agent = kernel.register_agent("status-tester".into()).unwrap();
     kernel.semantic_create(b"status-data".to_vec(), vec!["test".into()], &agent, None).unwrap();
 
     let resp = kernel.handle_api_request(ApiRequest::SystemStatus);
@@ -2879,7 +2879,7 @@ fn test_system_status_via_api() {
 #[test]
 fn test_context_assemble_within_budget() {
     let (kernel, _dir) = make_kernel();
-    let agent = kernel.register_agent("ctx-test".into());
+    let agent = kernel.register_agent("ctx-test".into()).unwrap();
 
     let cid1 = kernel.semantic_create(b"First document about Rust.".to_vec(), vec!["rust".into()], &agent, None).unwrap();
     let cid2 = kernel.semantic_create(b"Second document about Python.".to_vec(), vec!["python".into()], &agent, None).unwrap();
@@ -2900,7 +2900,7 @@ fn test_context_assemble_via_api() {
     use plico::api::semantic::{ApiRequest, ContextAssembleCandidate};
 
     let (kernel, _dir) = make_kernel();
-    let agent = kernel.register_agent("ctx-api".into());
+    let agent = kernel.register_agent("ctx-api".into()).unwrap();
 
     let cid = kernel.semantic_create(b"API test document.".to_vec(), vec![], &agent, None).unwrap();
 
@@ -2918,7 +2918,7 @@ fn test_context_assemble_via_api() {
 #[test]
 fn test_context_assemble_tight_budget_downgrades() {
     let (kernel, _dir) = make_kernel();
-    let agent = kernel.register_agent("ctx-tight".into());
+    let agent = kernel.register_agent("ctx-tight".into()).unwrap();
 
     let big_content = "word ".repeat(2000);
     let cid = kernel.semantic_create(big_content.as_bytes().to_vec(), vec![], &agent, None).unwrap();
@@ -2940,7 +2940,7 @@ fn test_context_assemble_tight_budget_downgrades() {
 #[test]
 fn test_agent_usage_returns_defaults() {
     let (kernel, _dir) = make_kernel();
-    let agent = kernel.register_agent("usage-test".into());
+    let agent = kernel.register_agent("usage-test".into()).unwrap();
 
     let usage = kernel.agent_usage(&agent).unwrap();
     assert_eq!(usage.agent_id, agent);
@@ -2954,7 +2954,7 @@ fn test_agent_usage_returns_defaults() {
 #[test]
 fn test_agent_usage_tracks_memory() {
     let (kernel, _dir) = make_kernel();
-    let agent = kernel.register_agent("mem-track".into());
+    let agent = kernel.register_agent("mem-track".into()).unwrap();
 
     kernel.remember(&agent, "default", "fact one".into()).unwrap();
     kernel.remember(&agent, "default", "fact two".into()).unwrap();
@@ -2966,7 +2966,7 @@ fn test_agent_usage_tracks_memory() {
 #[test]
 fn test_agent_usage_tracks_tool_calls() {
     let (kernel, _dir) = make_kernel();
-    let agent = kernel.register_agent("tool-track".into());
+    let agent = kernel.register_agent("tool-track".into()).unwrap();
 
     kernel.execute_tool("cas.create", &serde_json::json!({
         "content": "test", "tags": ["t1"]
@@ -2979,7 +2979,7 @@ fn test_agent_usage_tracks_tool_calls() {
 #[test]
 fn test_agent_usage_reflects_quotas() {
     let (kernel, _dir) = make_kernel();
-    let agent = kernel.register_agent("quota-reflect".into());
+    let agent = kernel.register_agent("quota-reflect".into()).unwrap();
 
     kernel.agent_set_resources(&agent, Some(100), Some(5000), Some(vec!["cas.read".into()])).unwrap();
 
@@ -2992,7 +2992,7 @@ fn test_agent_usage_reflects_quotas() {
 #[test]
 fn test_agent_usage_via_api() {
     let (kernel, _dir) = make_kernel();
-    let agent = kernel.register_agent("api-usage".into());
+    let agent = kernel.register_agent("api-usage".into()).unwrap();
 
     kernel.remember(&agent, "default", "data".into()).unwrap();
 
@@ -3021,8 +3021,8 @@ fn test_agent_usage_not_found() {
 #[test]
 fn test_discover_agents_returns_all() {
     let (kernel, _dir) = make_kernel();
-    kernel.register_agent("alice".into());
-    kernel.register_agent("bob".into());
+    kernel.register_agent("alice".into()).unwrap();
+    kernel.register_agent("bob".into()).unwrap();
 
     let cards = kernel.discover_agents(None, None);
     assert_eq!(cards.len(), 2);
@@ -3034,8 +3034,8 @@ fn test_discover_agents_returns_all() {
 #[test]
 fn test_discover_agents_filter_by_state() {
     let (kernel, _dir) = make_kernel();
-    let _a = kernel.register_agent("active-agent".into());
-    let b = kernel.register_agent("terminated-agent".into());
+    let _a = kernel.register_agent("active-agent".into()).unwrap();
+    let b = kernel.register_agent("terminated-agent".into()).unwrap();
 
     kernel.agent_terminate(&b).unwrap();
 
@@ -3047,10 +3047,10 @@ fn test_discover_agents_filter_by_state() {
 #[test]
 fn test_discover_agents_filter_by_tool() {
     let (kernel, _dir) = make_kernel();
-    let a = kernel.register_agent("cas-agent".into());
+    let a = kernel.register_agent("cas-agent".into()).unwrap();
     kernel.agent_set_resources(&a, None, None, Some(vec!["cas.create".into(), "cas.read".into()])).unwrap();
 
-    let _b = kernel.register_agent("mem-agent".into());
+    let _b = kernel.register_agent("mem-agent".into()).unwrap();
 
     let cards = kernel.discover_agents(None, Some("cas"));
     assert!(cards.iter().any(|c| c.name == "cas-agent"));
@@ -3061,8 +3061,8 @@ fn test_discover_agents_filter_by_tool() {
 #[test]
 fn test_discover_agents_via_api() {
     let (kernel, _dir) = make_kernel();
-    let caller = kernel.register_agent("caller".into());
-    kernel.register_agent("peer".into());
+    let caller = kernel.register_agent("caller".into()).unwrap();
+    kernel.register_agent("peer".into()).unwrap();
 
     let resp = kernel.handle_api_request(plico::api::semantic::ApiRequest::DiscoverAgents {
         state_filter: None,
@@ -3077,7 +3077,7 @@ fn test_discover_agents_via_api() {
 #[test]
 fn test_agent_card_includes_usage() {
     let (kernel, _dir) = make_kernel();
-    let a = kernel.register_agent("tracked".into());
+    let a = kernel.register_agent("tracked".into()).unwrap();
     kernel.remember(&a, "default", "test memory".into()).unwrap();
     kernel.execute_tool("cas.create", &serde_json::json!({"content": "x", "tags": ["t"]}), &a);
 
@@ -3092,8 +3092,8 @@ fn test_agent_card_includes_usage() {
 #[test]
 fn test_delegate_task_creates_intent_and_message() {
     let (kernel, _dir) = make_kernel();
-    let alice = kernel.register_agent("alice".into());
-    let bob = kernel.register_agent("bob".into());
+    let alice = kernel.register_agent("alice".into()).unwrap();
+    let bob = kernel.register_agent("bob".into()).unwrap();
 
     let (intent_id, msg_id) = kernel.delegate_task(
         &alice, &bob,
@@ -3117,8 +3117,8 @@ fn test_delegate_task_creates_intent_and_message() {
 #[test]
 fn test_delegate_task_rejects_terminal_agent() {
     let (kernel, _dir) = make_kernel();
-    let alice = kernel.register_agent("alice".into());
-    let bob = kernel.register_agent("bob".into());
+    let alice = kernel.register_agent("alice".into()).unwrap();
+    let bob = kernel.register_agent("bob".into()).unwrap();
     kernel.agent_terminate(&bob).unwrap();
 
     let result = kernel.delegate_task(
@@ -3134,7 +3134,7 @@ fn test_delegate_task_rejects_terminal_agent() {
 #[test]
 fn test_delegate_task_rejects_unknown_agent() {
     let (kernel, _dir) = make_kernel();
-    let alice = kernel.register_agent("alice".into());
+    let alice = kernel.register_agent("alice".into()).unwrap();
 
     let result = kernel.delegate_task(
         &alice, "ghost",
@@ -3149,8 +3149,8 @@ fn test_delegate_task_rejects_unknown_agent() {
 #[test]
 fn test_delegate_task_via_api() {
     let (kernel, _dir) = make_kernel();
-    let alice = kernel.register_agent("alice".into());
-    let bob = kernel.register_agent("bob".into());
+    let alice = kernel.register_agent("alice".into()).unwrap();
+    let bob = kernel.register_agent("bob".into()).unwrap();
 
     let resp = kernel.handle_api_request(plico::api::semantic::ApiRequest::DelegateTask {
         task_id: "task-1".into(),
@@ -3172,7 +3172,7 @@ fn test_delegate_task_via_api() {
 #[test]
 fn test_event_history_records_agent_lifecycle() {
     let (kernel, _dir) = make_kernel();
-    let aid = kernel.register_agent("observer".into());
+    let aid = kernel.register_agent("observer".into()).unwrap();
 
     let resp = kernel.handle_api_request(plico::api::semantic::ApiRequest::EventHistory {
         since_seq: None,
@@ -3193,7 +3193,7 @@ fn test_event_history_records_agent_lifecycle() {
 #[test]
 fn test_event_history_since_seq() {
     let (kernel, _dir) = make_kernel();
-    let aid = kernel.register_agent("a1".into());
+    let aid = kernel.register_agent("a1".into()).unwrap();
 
     let baseline = kernel.handle_api_request(plico::api::semantic::ApiRequest::EventHistory {
         since_seq: None, agent_id_filter: None, limit: None,
@@ -3225,8 +3225,8 @@ fn test_event_history_since_seq() {
 #[test]
 fn test_event_history_by_agent() {
     let (kernel, _dir) = make_kernel();
-    let a1 = kernel.register_agent("alpha".into());
-    let a2 = kernel.register_agent("beta".into());
+    let a1 = kernel.register_agent("alpha".into()).unwrap();
+    let a2 = kernel.register_agent("beta".into()).unwrap();
 
     kernel.handle_api_request(plico::api::semantic::ApiRequest::Create {
         api_version: None,
@@ -3265,7 +3265,7 @@ fn test_event_history_by_agent() {
 #[test]
 fn test_event_history_via_api_full() {
     let (kernel, _dir) = make_kernel();
-    let aid = kernel.register_agent("api-agent".into());
+    let aid = kernel.register_agent("api-agent".into()).unwrap();
     kernel.handle_api_request(plico::api::semantic::ApiRequest::Create {
         api_version: None,
         content: "data".into(),
@@ -3295,8 +3295,8 @@ fn test_event_history_via_api_full() {
 #[test]
 fn test_event_history_api_agent_filter() {
     let (kernel, _dir) = make_kernel();
-    let a1 = kernel.register_agent("filter-a".into());
-    let a2 = kernel.register_agent("filter-b".into());
+    let a1 = kernel.register_agent("filter-a".into()).unwrap();
+    let a2 = kernel.register_agent("filter-b".into()).unwrap();
 
     kernel.handle_api_request(plico::api::semantic::ApiRequest::Create {
         api_version: None,
@@ -3329,7 +3329,7 @@ fn test_event_history_api_agent_filter() {
 #[test]
 fn test_event_history_api_limit() {
     let (kernel, _dir) = make_kernel();
-    let aid = kernel.register_agent("limiter".into());
+    let aid = kernel.register_agent("limiter".into()).unwrap();
     for i in 0..5 {
         kernel.handle_api_request(plico::api::semantic::ApiRequest::Create {
             api_version: None,
@@ -3353,7 +3353,7 @@ fn test_event_history_api_limit() {
 #[test]
 fn test_event_history_monotonic_sequence() {
     let (kernel, _dir) = make_kernel();
-    let aid = kernel.register_agent("mono".into());
+    let aid = kernel.register_agent("mono".into()).unwrap();
     for i in 0..10 {
         kernel.handle_api_request(plico::api::semantic::ApiRequest::Create {
             api_version: None,
@@ -3387,7 +3387,7 @@ fn test_event_log_persists_across_restart() {
     let event_count_before;
     {
         let kernel = AIKernel::new(dir.path().to_path_buf()).expect("kernel init");
-        let aid = kernel.register_agent("persist-test".into());
+        let aid = kernel.register_agent("persist-test".into()).unwrap();
         kernel.handle_api_request(plico::api::semantic::ApiRequest::Create {
             api_version: None,
             content: "persist-data".into(),
@@ -3427,7 +3427,7 @@ fn test_event_log_sequence_continues_after_restore() {
     let max_seq_before;
     {
         let kernel = AIKernel::new(dir.path().to_path_buf()).expect("kernel init");
-        kernel.register_agent("seq-test".into());
+        kernel.register_agent("seq-test".into()).unwrap();
         kernel.persist_all();
 
         let resp = kernel.handle_api_request(plico::api::semantic::ApiRequest::EventHistory {
@@ -3439,7 +3439,7 @@ fn test_event_log_sequence_continues_after_restore() {
 
     {
         let kernel2 = AIKernel::new(dir.path().to_path_buf()).expect("kernel2 init");
-        let aid = kernel2.register_agent("seq-test-2".into());
+        let aid = kernel2.register_agent("seq-test-2".into()).unwrap();
         kernel2.handle_api_request(plico::api::semantic::ApiRequest::Create {
             api_version: None,
             content: "new-data".into(),
@@ -3464,7 +3464,7 @@ fn test_event_log_sequence_continues_after_restore() {
 #[test]
 fn test_event_log_explicit_persist() {
     let (kernel, _dir) = make_kernel();
-    let aid = kernel.register_agent("explicit-persist".into());
+    let aid = kernel.register_agent("explicit-persist".into()).unwrap();
     kernel.handle_api_request(plico::api::semantic::ApiRequest::Create {
         api_version: None,
         content: "test".into(),
@@ -3493,7 +3493,7 @@ fn test_event_log_explicit_persist() {
 #[test]
 fn test_register_skill_creates_kg_node() {
     let (kernel, _dir) = make_kernel();
-    let aid = kernel.register_agent("skill-agent".into());
+    let aid = kernel.register_agent("skill-agent".into()).unwrap();
 
     let resp = kernel.handle_api_request(plico::api::semantic::ApiRequest::RegisterSkill {
         agent_id: aid.clone(),
@@ -3521,7 +3521,7 @@ fn test_register_skill_rejects_unknown_agent() {
 #[test]
 fn test_discover_skills_returns_registered() {
     let (kernel, _dir) = make_kernel();
-    let aid = kernel.register_agent("discoverable".into());
+    let aid = kernel.register_agent("discoverable".into()).unwrap();
 
     kernel.handle_api_request(plico::api::semantic::ApiRequest::RegisterSkill {
         agent_id: aid.clone(),
@@ -3551,7 +3551,7 @@ fn test_discover_skills_returns_registered() {
 #[test]
 fn test_discover_skills_by_query() {
     let (kernel, _dir) = make_kernel();
-    let aid = kernel.register_agent("query-agent".into());
+    let aid = kernel.register_agent("query-agent".into()).unwrap();
 
     kernel.handle_api_request(plico::api::semantic::ApiRequest::RegisterSkill {
         agent_id: aid.clone(),
@@ -3579,7 +3579,7 @@ fn test_discover_skills_by_query() {
 #[test]
 fn test_discover_skills_by_tag() {
     let (kernel, _dir) = make_kernel();
-    let aid = kernel.register_agent("tag-agent".into());
+    let aid = kernel.register_agent("tag-agent".into()).unwrap();
 
     kernel.handle_api_request(plico::api::semantic::ApiRequest::RegisterSkill {
         agent_id: aid.clone(),
@@ -3607,8 +3607,8 @@ fn test_discover_skills_by_tag() {
 #[test]
 fn test_discover_skills_cross_agent() {
     let (kernel, _dir) = make_kernel();
-    let a1 = kernel.register_agent("agent-alpha".into());
-    let a2 = kernel.register_agent("agent-beta".into());
+    let a1 = kernel.register_agent("agent-alpha".into()).unwrap();
+    let a2 = kernel.register_agent("agent-beta".into()).unwrap();
 
     kernel.handle_api_request(plico::api::semantic::ApiRequest::RegisterSkill {
         agent_id: a1.clone(),
@@ -4021,7 +4021,7 @@ fn test_kernel_execute_tool_agent_register_and_status() {
 fn test_kernel_execute_tool_agent_suspend_resume() {
     let (kernel, _dir) = make_kernel();
 
-    let agent_id = kernel.register_agent("suspend-test".into());
+    let agent_id = kernel.register_agent("suspend-test".into()).unwrap();
 
     let suspend_params = serde_json::json!({"agent_id": agent_id});
     let suspend_result = kernel.execute_tool("agent.suspend", &suspend_params, "cli");
@@ -4062,7 +4062,7 @@ fn test_kernel_execute_tool_message_send() {
 
     kernel.permission_grant("cli", plico::api::permission::PermissionAction::SendMessage, None, None);
 
-    let to_agent = kernel.register_agent("recipient".into());
+    let to_agent = kernel.register_agent("recipient".into()).unwrap();
 
     let params = serde_json::json!({
         "to": to_agent,
@@ -4078,7 +4078,7 @@ fn test_kernel_execute_tool_message_send() {
 fn test_kernel_remember_longterm_by_name() {
     // F-3: verify name-based agent lookup works for memory operations
     let (kernel, _dir) = make_kernel();
-    let agent_id = kernel.register_agent("MemoryAgent".into());
+    let agent_id = kernel.register_agent("MemoryAgent".into()).unwrap();
 
     let result = kernel.remember_long_term(&agent_id, "default", "persistent fact".into(), vec!["fact".into()], 50);
     assert!(result.is_ok(), "remember_long_term should succeed: {:?}", result.err());
@@ -4087,7 +4087,7 @@ fn test_kernel_remember_longterm_by_name() {
 #[test]
 fn test_kernel_recall_filters_by_tier() {
     let (kernel, _dir) = make_kernel();
-    let agent_id = kernel.register_agent("RecallTierAgent".into());
+    let agent_id = kernel.register_agent("RecallTierAgent".into()).unwrap();
 
     kernel.remember_working(&agent_id, "default", "working memory".into(), vec![]).unwrap();
     kernel.remember(&agent_id, "default", "ephemeral memory".into()).unwrap();
@@ -4099,7 +4099,7 @@ fn test_kernel_recall_filters_by_tier() {
 #[test]
 fn test_kernel_memory_stats_by_tier() {
     let (kernel, _dir) = make_kernel();
-    let agent_id = kernel.register_agent("StatsAgent".into());
+    let agent_id = kernel.register_agent("StatsAgent".into()).unwrap();
 
     kernel.remember_working(&agent_id, "default", "working data".into(), vec![]).unwrap();
     kernel.remember(&agent_id, "default", "ephemeral data".into()).unwrap();
@@ -4120,7 +4120,7 @@ fn test_kernel_resolve_unknown_agent_returns_none() {
 #[test]
 fn test_kernel_agent_register_returns_uuid() {
     let (kernel, _dir) = make_kernel();
-    let id = kernel.register_agent("NamedAgent".into());
+    let id = kernel.register_agent("NamedAgent".into()).unwrap();
     // UUID format: 8-4-4-4-12 hex chars
     assert!(id.len() == 36, "agent ID should be UUID format, got: {}", id);
     assert!(id.chars().all(|c| c.is_ascii_hexdigit() || c == '-'), "should be valid UUID");
@@ -4131,7 +4131,7 @@ fn test_kernel_agent_register_returns_uuid() {
 #[test]
 fn test_kernel_kg_add_node_and_find() {
     let (kernel, _dir) = make_kernel();
-    let agent_id = kernel.register_agent("KGAgent".into());
+    let agent_id = kernel.register_agent("KGAgent".into()).unwrap();
 
     let node_id = kernel.kg_add_node("TestNode", plico::fs::graph::KGNodeType::Entity, serde_json::json!({}), &agent_id, "default").unwrap();
     assert!(!node_id.is_empty());
@@ -4143,7 +4143,7 @@ fn test_kernel_kg_add_node_and_find() {
 #[test]
 fn test_kernel_kg_idempotent_node_creation() {
     let (kernel, _dir) = make_kernel();
-    let agent_id = kernel.register_agent("IdemKGAgent".into());
+    let agent_id = kernel.register_agent("IdemKGAgent".into()).unwrap();
 
     // Add the same label+type twice
     let id1 = kernel.kg_add_node("IdemNode", plico::fs::graph::KGNodeType::Fact, serde_json::json!({}), &agent_id, "default").unwrap();
@@ -4157,7 +4157,7 @@ fn test_kernel_kg_idempotent_node_creation() {
 #[test]
 fn test_kernel_kg_edge_lifecycle() {
     let (kernel, _dir) = make_kernel();
-    let agent_id = kernel.register_agent("EdgeAgent".into());
+    let agent_id = kernel.register_agent("EdgeAgent".into()).unwrap();
 
     let src = kernel.kg_add_node("SRC", plico::fs::graph::KGNodeType::Entity, serde_json::json!({}), &agent_id, "default").unwrap();
     let dst = kernel.kg_add_node("DST", plico::fs::graph::KGNodeType::Entity, serde_json::json!({}), &agent_id, "default").unwrap();
@@ -4173,7 +4173,7 @@ fn test_kernel_kg_edge_lifecycle() {
 #[test]
 fn test_kernel_semantic_create_and_delete_roundtrip() {
     let (kernel, _dir) = make_kernel();
-    let agent_id = kernel.register_agent("FSDeleteAgent".into());
+    let agent_id = kernel.register_agent("FSDeleteAgent".into()).unwrap();
 
     let cid = kernel.semantic_create(b"delete me".to_vec(), vec!["temp".into()], &agent_id, None).unwrap();
     kernel.permission_grant(&agent_id, plico::api::permission::PermissionAction::Delete, None, None);
@@ -4184,7 +4184,7 @@ fn test_kernel_semantic_create_and_delete_roundtrip() {
 #[test]
 fn test_kernel_semantic_delete_nonexistent_returns_error() {
     let (kernel, _dir) = make_kernel();
-    let agent_id = kernel.register_agent("FSErrAgent".into());
+    let agent_id = kernel.register_agent("FSErrAgent".into()).unwrap();
 
     kernel.permission_grant(&agent_id, plico::api::permission::PermissionAction::Delete, None, None);
     let result = kernel.semantic_delete("0000000000000000000000000000000000000000000000000000000000000000", &agent_id, "default");
@@ -4194,7 +4194,7 @@ fn test_kernel_semantic_delete_nonexistent_returns_error() {
 #[test]
 fn test_kernel_semantic_search_with_require_tags() {
     let (kernel, _dir) = make_kernel();
-    let agent_id = kernel.register_agent("SearchAgent".into());
+    let agent_id = kernel.register_agent("SearchAgent".into()).unwrap();
 
     kernel.semantic_create(b"doc with tags a and b".to_vec(), vec!["a".into(), "b".into()], &agent_id, None).unwrap();
     kernel.semantic_create(b"doc with only a".to_vec(), vec!["a".into()], &agent_id, None).unwrap();
@@ -4208,7 +4208,7 @@ fn test_kernel_semantic_search_with_require_tags() {
 #[test]
 fn test_kernel_events_list_returns_list() {
     let (kernel, _dir) = make_kernel();
-    let _agent_id = kernel.register_agent("EventAgent".into());
+    let _agent_id = kernel.register_agent("EventAgent".into()).unwrap();
 
     // Events should return a list (empty is fine)
     let empty_tags: &[String] = &[];
@@ -4224,8 +4224,8 @@ fn test_b53_recall_shared_via_api() {
     use plico::memory::MemoryScope;
 
     let (kernel, _dir) = make_kernel();
-    let agent_a = kernel.register_agent("sharer".into());
-    let agent_b = kernel.register_agent("reader".into());
+    let agent_a = kernel.register_agent("sharer".into()).unwrap();
+    let agent_b = kernel.register_agent("reader".into()).unwrap();
 
     // Agent A stores a shared long-term memory
     kernel.remember_long_term_scoped(
@@ -4256,7 +4256,7 @@ fn test_b53_recall_without_scope_returns_own_memories() {
     use plico::api::semantic::ApiRequest;
 
     let (kernel, _dir) = make_kernel();
-    let agent_a = kernel.register_agent("solo".into());
+    let agent_a = kernel.register_agent("solo".into()).unwrap();
     kernel.remember(&agent_a, "default", "my private note".into()).unwrap();
 
     let resp = kernel.handle_api_request(ApiRequest::Recall {
@@ -4278,7 +4278,7 @@ fn test_b52_delete_invalid_cid_returns_not_found() {
     use plico::api::semantic::ApiRequest;
 
     let (kernel, _dir) = make_kernel();
-    let agent_id = kernel.register_agent("deleter".into());
+    let agent_id = kernel.register_agent("deleter".into()).unwrap();
 
     // Use a valid hex CID format that doesn't exist in CAS
     let fake_cid = "aa".repeat(32); // 64 hex chars — valid format, doesn't exist
@@ -4422,7 +4422,7 @@ fn test_kernel_handle_remember_via_api() {
     use plico::api::semantic::ApiRequest;
 
     let (kernel, _dir) = make_kernel();
-    let agent_id = kernel.register_agent("remember-agent".to_string());
+    let agent_id = kernel.register_agent("remember-agent".to_string()).unwrap();
 
     let resp = kernel.handle_api_request(ApiRequest::Remember {
         agent_id: agent_id.clone(),
@@ -4451,7 +4451,7 @@ fn test_kernel_handle_recall_via_api() {
     use plico::api::semantic::ApiRequest;
 
     let (kernel, _dir) = make_kernel();
-    let agent_id = kernel.register_agent("recall-agent".to_string());
+    let agent_id = kernel.register_agent("recall-agent".to_string()).unwrap();
 
     // Store a memory first
     kernel.remember(&agent_id, "default", "First memory for recall".to_string()).unwrap();
@@ -4480,7 +4480,7 @@ fn test_kernel_concurrent_api_requests() {
     use std::sync::Arc;
 
     let (kernel, _dir) = make_kernel_arc();
-    let agent_id = kernel.register_agent("concurrent-agent".to_string());
+    let agent_id = kernel.register_agent("concurrent-agent".to_string()).unwrap();
 
     // Pre-clone agent_id for each thread since FnMut closures can only consume once
     let agent_ids: Vec<String> = (0..5).map(|_| agent_id.clone()).collect();
@@ -4519,8 +4519,8 @@ fn test_kernel_list_agents_returns_registered() {
     let (kernel, _dir) = make_kernel();
 
     // Register two agents
-    let id1 = kernel.register_agent("AgentOne".to_string());
-    let id2 = kernel.register_agent("AgentTwo".to_string());
+    let id1 = kernel.register_agent("AgentOne".to_string()).unwrap();
+    let id2 = kernel.register_agent("AgentTwo".to_string()).unwrap();
     assert_ne!(id1, id2, "Two agents should have different IDs");
 
     // List via API
@@ -4544,7 +4544,7 @@ fn test_kg_add_node_and_get_via_api() {
     use plico::fs::graph::KGNodeType;
 
     let (kernel, _dir) = make_kernel();
-    let agent_id = kernel.register_agent("kg-api-agent".into());
+    let agent_id = kernel.register_agent("kg-api-agent".into()).unwrap();
     kernel.permission_grant(&agent_id, plico::api::permission::PermissionAction::Write, None, None);
 
     // Add a node via API
@@ -4576,7 +4576,7 @@ fn test_kg_add_edge_via_api() {
     use plico::fs::graph::{KGNodeType, KGEdgeType};
 
     let (kernel, _dir) = make_kernel();
-    let agent_id = kernel.register_agent("kg-edge-agent".into());
+    let agent_id = kernel.register_agent("kg-edge-agent".into()).unwrap();
     kernel.permission_grant(&agent_id, plico::api::permission::PermissionAction::Write, None, None);
 
     // Add two nodes via API
@@ -4628,7 +4628,7 @@ fn test_kg_update_and_remove_node_via_api() {
     use plico::fs::graph::KGNodeType;
 
     let (kernel, _dir) = make_kernel();
-    let agent_id = kernel.register_agent("kg-update-agent".into());
+    let agent_id = kernel.register_agent("kg-update-agent".into()).unwrap();
     kernel.permission_grant(&agent_id, plico::api::permission::PermissionAction::Write, None, None);
     kernel.permission_grant(&agent_id, plico::api::permission::PermissionAction::Delete, None, None);
 
@@ -4678,7 +4678,7 @@ fn test_kg_remove_edge_via_api() {
     use plico::fs::graph::{KGNodeType, KGEdgeType};
 
     let (kernel, _dir) = make_kernel();
-    let agent_id = kernel.register_agent("kg-rm-edge-agent".into());
+    let agent_id = kernel.register_agent("kg-rm-edge-agent".into()).unwrap();
     kernel.permission_grant(&agent_id, plico::api::permission::PermissionAction::Write, None, None);
     kernel.permission_grant(&agent_id, plico::api::permission::PermissionAction::Delete, None, None);
 
@@ -4730,7 +4730,7 @@ fn test_session_start_end_via_api() {
     use plico::memory::MemoryTier;
 
     let (kernel, _dir) = make_kernel();
-    let agent_id = kernel.register_agent("session-api-agent".into());
+    let agent_id = kernel.register_agent("session-api-agent".into()).unwrap();
 
     // Start session
     let start_resp = kernel.handle_api_request(ApiRequest::StartSession {
@@ -4760,7 +4760,7 @@ fn test_tenant_lifecycle_via_api() {
     use plico::api::semantic::ApiRequest;
 
     let (kernel, _dir) = make_kernel();
-    let admin_id = kernel.register_agent("tenant-admin".into());
+    let admin_id = kernel.register_agent("tenant-admin".into()).unwrap();
     kernel.permission_grant(&admin_id, plico::api::permission::PermissionAction::Write, None, None);
     kernel.permission_grant(&admin_id, plico::api::permission::PermissionAction::CrossTenant, None, None);
 
@@ -4787,7 +4787,7 @@ fn test_batch_create_via_api() {
     use plico::api::semantic::ContentEncoding;
 
     let (kernel, _dir) = make_kernel();
-    let agent_id = kernel.register_agent("batch-api-agent".into());
+    let agent_id = kernel.register_agent("batch-api-agent".into()).unwrap();
     kernel.permission_grant(&agent_id, plico::api::permission::PermissionAction::Write, None, None);
 
     let items = vec![
@@ -4821,7 +4821,7 @@ fn test_batch_memory_store_via_api() {
     use plico::api::semantic::{ApiRequest, BatchMemoryEntry};
 
     let (kernel, _dir) = make_kernel();
-    let agent_id = kernel.register_agent("batch-mem-agent".into());
+    let agent_id = kernel.register_agent("batch-mem-agent".into()).unwrap();
     kernel.permission_grant(&agent_id, plico::api::permission::PermissionAction::Write, None, None);
 
     let entries = vec![
@@ -4871,7 +4871,7 @@ fn test_full_ai_os_loop_convergence() {
     let (kernel, _dir) = make_kernel();
 
     // Step 1: Register agent with permissions
-    let agent_id = kernel.register_agent("e2e-agent".into());
+    let agent_id = kernel.register_agent("e2e-agent".into()).unwrap();
     kernel.permission_grant(&agent_id, plico::api::permission::PermissionAction::Write, None, None);
     kernel.permission_grant(&agent_id, plico::api::permission::PermissionAction::Read, None, None);
 
@@ -5007,7 +5007,7 @@ fn test_hook_registry_causal_hook_handler_in_kernel() {
     let _ = std::env::set_var("RUST_LOG", "off");
     let (kernel, _dir) = make_kernel();
 
-    let agent_id = kernel.register_agent("causal-hook-test".into());
+    let agent_id = kernel.register_agent("causal-hook-test".into()).unwrap();
     kernel.permission_grant(&agent_id, plico::api::permission::PermissionAction::Write, None, None);
     kernel.permission_grant(&agent_id, plico::api::permission::PermissionAction::Read, None, None);
 

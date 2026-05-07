@@ -321,7 +321,7 @@ pub fn make_kernel() -> (AIKernel, tempfile::TempDir) {
 
 /// Helper: register an agent with full permissions.
 pub fn register_with_permissions(kernel: &AIKernel, name: &str) -> String {
-    let agent_id = kernel.register_agent(name.to_string());
+    let agent_id = kernel.register_agent(name.to_string()).unwrap();
     kernel.permission_grant(&agent_id, PermissionAction::Read, None, None);
     kernel.permission_grant(&agent_id, PermissionAction::Write, None, None);
     kernel.permission_grant(&agent_id, PermissionAction::Delete, None, None);

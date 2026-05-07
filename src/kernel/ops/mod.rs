@@ -3,6 +3,7 @@
 //! Each submodule contains one logical group of AIKernel methods.
 //! All impl blocks extend AIKernel — Rust allows multiple impl blocks per type.
 
+pub mod security;
 pub mod fs;
 pub mod agent;
 pub mod memory;

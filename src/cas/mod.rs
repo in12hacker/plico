@@ -11,6 +11,7 @@
 //! - [`object`] — AIObject and AIObjectMeta definitions
 //! - [`storage`] — CAS storage engine
 
+pub mod gc;
 pub mod object;
 pub mod storage;
 

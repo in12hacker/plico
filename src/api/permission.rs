@@ -25,6 +25,7 @@
 //! guard.check(&ctx, PermissionAction::Network).unwrap_err(); // Err: permission denied
 //! ```
 
+use crate::util::now_ms;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::RwLock;
@@ -610,9 +611,3 @@ mod tests {
     }
 }
 
-fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
-}

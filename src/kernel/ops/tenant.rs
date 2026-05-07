@@ -2,6 +2,7 @@
 //!
 //! Handles tenant lifecycle: create, list, and cross-tenant resource sharing.
 
+use crate::util::now_ms;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::RwLock;
@@ -222,12 +223,6 @@ impl TenantShare {
     }
 }
 
-fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
-}
 
 #[cfg(test)]
 mod tests {

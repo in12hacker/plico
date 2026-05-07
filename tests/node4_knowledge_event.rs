@@ -25,8 +25,8 @@ fn make_kernel() -> (AIKernel, tempfile::TempDir) {
 fn test_knowledge_shared_scope_shared_emits_event() {
     let (kernel, _dir) = make_kernel();
 
-    let agent_a = kernel.register_agent("agent-a".to_string());
-    let agent_b = kernel.register_agent("agent-b".to_string());
+    let agent_a = kernel.register_agent("agent-a".to_string()).unwrap();
+    let agent_b = kernel.register_agent("agent-b".to_string()).unwrap();
 
     use plico::api::permission::PermissionAction;
     kernel.permission_grant(&agent_a, PermissionAction::Read, None, None);
@@ -81,8 +81,8 @@ fn test_knowledge_shared_scope_shared_emits_event() {
 fn test_knowledge_shared_scope_private_does_not_emit() {
     let (kernel, _dir) = make_kernel();
 
-    let agent_a = kernel.register_agent("agent-a".to_string());
-    let agent_b = kernel.register_agent("agent-b".to_string());
+    let agent_a = kernel.register_agent("agent-a".to_string()).unwrap();
+    let agent_b = kernel.register_agent("agent-b".to_string()).unwrap();
 
     use plico::api::permission::PermissionAction;
     kernel.permission_grant(&agent_a, PermissionAction::Read, None, None);
@@ -128,8 +128,8 @@ fn test_knowledge_shared_scope_private_does_not_emit() {
 fn test_knowledge_shared_scope_group_emits_event() {
     let (kernel, _dir) = make_kernel();
 
-    let agent_a = kernel.register_agent("agent-a".to_string());
-    let agent_b = kernel.register_agent("agent-b".to_string());
+    let agent_a = kernel.register_agent("agent-a".to_string()).unwrap();
+    let agent_b = kernel.register_agent("agent-b".to_string()).unwrap();
 
     use plico::api::permission::PermissionAction;
     kernel.permission_grant(&agent_a, PermissionAction::Read, None, None);
@@ -177,7 +177,7 @@ fn test_knowledge_shared_scope_group_emits_event() {
 fn test_knowledge_shared_event_summary_metadata_concat() {
     let (kernel, _dir) = make_kernel();
 
-    let agent_id = kernel.register_agent("test-agent".to_string());
+    let agent_id = kernel.register_agent("test-agent".to_string()).unwrap();
 
     use plico::api::permission::PermissionAction;
     kernel.permission_grant(&agent_id, PermissionAction::Read, None, None);
@@ -225,7 +225,7 @@ fn test_knowledge_shared_event_summary_metadata_concat() {
 fn test_knowledge_superseded_event_on_update() {
     let (kernel, _dir) = make_kernel();
 
-    let agent_id = kernel.register_agent("test-agent".to_string());
+    let agent_id = kernel.register_agent("test-agent".to_string()).unwrap();
 
     use plico::api::permission::PermissionAction;
     kernel.permission_grant(&agent_id, PermissionAction::Read, None, None);
@@ -287,7 +287,7 @@ fn test_knowledge_superseded_event_on_update() {
 fn test_growth_report_reflects_knowledge_shared() {
     let (kernel, _dir) = make_kernel();
 
-    let agent_id = kernel.register_agent("growth-agent".to_string());
+    let agent_id = kernel.register_agent("growth-agent".to_string()).unwrap();
 
     use plico::api::permission::PermissionAction;
     kernel.permission_grant(&agent_id, PermissionAction::Read, None, None);
@@ -330,8 +330,8 @@ fn test_growth_report_reflects_knowledge_shared() {
 fn test_knowledge_event_broadcast_with_slow_consumer() {
     let (kernel, _dir) = make_kernel();
 
-    let agent_a = kernel.register_agent("agent-a".to_string());
-    let agent_b = kernel.register_agent("agent-b".to_string());
+    let agent_a = kernel.register_agent("agent-a".to_string()).unwrap();
+    let agent_b = kernel.register_agent("agent-b".to_string()).unwrap();
 
     use plico::api::permission::PermissionAction;
     kernel.permission_grant(&agent_a, PermissionAction::Read, None, None);

@@ -288,7 +288,7 @@ mod tests {
     fn test_execute_sync_basic_single_action() {
         let kernel = make_test_kernel();
         let router = make_router();
-        kernel.register_agent("TestAgent".to_string());
+        kernel.register_agent("TestAgent".to_string()).unwrap();
 
         let result = execute_sync(&kernel, &router, "put hello world", "TestAgent", 0.0, false);
         // Heuristic router may not resolve this to an exact action, but should not panic
@@ -301,7 +301,7 @@ mod tests {
     fn test_execute_sync_multi_action() {
         let kernel = make_test_kernel();
         let router = make_router();
-        kernel.register_agent("MultiAgent".to_string());
+        kernel.register_agent("MultiAgent".to_string()).unwrap();
 
         // Multi-action text
         let result = execute_sync(&kernel, &router, "put test1 --tags a and put test2 --tags b", "MultiAgent", 0.0, false);
@@ -314,7 +314,7 @@ mod tests {
     fn test_execute_sync_below_threshold() {
         let kernel = make_test_kernel();
         let router = make_router();
-        kernel.register_agent("ThreshAgent".to_string());
+        kernel.register_agent("ThreshAgent".to_string()).unwrap();
 
         // Very low confidence text - heuristic router may error on garbage
         let result = execute_sync(&kernel, &router, "xyzabc123 gibberish", "ThreshAgent", 0.9, false);
@@ -331,7 +331,7 @@ mod tests {
     fn test_execute_sync_with_learning() {
         let kernel = make_test_kernel();
         let router = make_router();
-        kernel.register_agent("LearnAgent".to_string());
+        kernel.register_agent("LearnAgent".to_string()).unwrap();
 
         // With learn=true, after successful execution a procedure is stored
         let result = execute_sync(&kernel, &router, "status", "LearnAgent", 0.0, true);
@@ -344,7 +344,7 @@ mod tests {
     #[test]
     fn test_recall_learned_workflow_empty() {
         let kernel = make_test_kernel();
-        kernel.register_agent("NoWorkflowAgent".to_string());
+        kernel.register_agent("NoWorkflowAgent".to_string()).unwrap();
 
         let result = recall_learned_workflow(&kernel, "NoWorkflowAgent", "nonexistent workflow text");
         assert!(result.is_none(), "no workflow should return None");
@@ -353,7 +353,7 @@ mod tests {
     #[test]
     fn test_execute_actions_sequence_all_ok() {
         let kernel = make_test_kernel();
-        kernel.register_agent("SeqAgent".to_string());
+        kernel.register_agent("SeqAgent".to_string()).unwrap();
 
         let actions = vec![
             ApiRequest::Create {
@@ -388,7 +388,7 @@ mod tests {
     fn test_execute_sync_empty_text() {
         let kernel = make_test_kernel();
         let router = make_router();
-        kernel.register_agent("EmptyAgent".to_string());
+        kernel.register_agent("EmptyAgent".to_string()).unwrap();
 
         // Empty string - router may fail but should not panic
         let _ = execute_sync(&kernel, &router, "", "EmptyAgent", 0.0, false);
@@ -398,7 +398,7 @@ mod tests {
     fn test_execute_sync_learn_creates_procedural() {
         let kernel = make_test_kernel();
         let router = make_router();
-        kernel.register_agent("LearnProceduralAgent".to_string());
+        kernel.register_agent("LearnProceduralAgent".to_string()).unwrap();
 
         // With learn=true, a successful execution should create a procedural memory
         let result = execute_sync(&kernel, &router, "status", "LearnProceduralAgent", 0.0, true);

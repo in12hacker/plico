@@ -100,6 +100,7 @@ impl crate::kernel::AIKernel {
                         let cid = self.fs.create_with_embedding(
                             bytes, tags, agent_id_str.clone(), intent,
                             emb_result.embedding.clone(),
+                            true, // skip_kg_edges: batch create avoids per-item similarity search
                         ).map_err(|e| e.to_string())?;
                         // Notify KG builder for batch-created items
                         if let Some(ref handle) = self.kg_builder {

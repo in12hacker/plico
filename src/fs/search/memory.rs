@@ -3,12 +3,13 @@
 //! Suitable for prototypes and up to ~10k entries. For larger corpora,
 //! use `HnswBackend` which provides HNSW ANN indexing with persistence.
 
+use std::collections::HashMap;
 use std::sync::RwLock;
 
 use super::{SearchFilter, SearchHit, SearchIndexEntry, SearchIndexMeta, SemanticSearch};
 
 pub struct InMemoryBackend {
-    entries: RwLock<Vec<IndexEntry>>,
+    entries: RwLock<HashMap<String, IndexEntry>>,
 }
 
 struct IndexEntry {
@@ -20,7 +21,7 @@ struct IndexEntry {
 impl InMemoryBackend {
     pub fn new() -> Self {
         Self {
-            entries: RwLock::new(Vec::new()),
+            entries: RwLock::new(HashMap::new()),
         }
     }
 
@@ -49,7 +50,7 @@ impl InMemoryBackend {
 
     /// Export all index entries for persistence.
     pub fn snapshot(&self) -> Vec<SearchIndexEntry> {
-        self.entries.read().unwrap().iter().map(|e| SearchIndexEntry {
+        self.entries.read().unwrap().values().map(|e| SearchIndexEntry {
             cid: e.cid.clone(),
             embedding: e.embedding.clone(),
             tags: e.meta.tags.clone(),
@@ -63,30 +64,18 @@ impl InMemoryBackend {
     pub fn restore(&self, entries: Vec<SearchIndexEntry>) {
         let mut store = self.entries.write().unwrap();
         for e in entries {
-            if let Some(existing) = store.iter_mut().find(|existing| existing.cid == e.cid) {
-                existing.embedding = e.embedding;
-                existing.meta = SearchIndexMeta {
-                    cid: e.cid.clone(),
+            store.insert(e.cid.clone(), IndexEntry {
+                cid: e.cid.clone(),
+                embedding: e.embedding,
+                meta: SearchIndexMeta {
+                    cid: e.cid,
                     tags: e.tags,
                     snippet: e.snippet,
                     content_type: e.content_type,
                     created_at: e.created_at,
                     memory_type: None,
-                };
-            } else {
-                store.push(IndexEntry {
-                    cid: e.cid.clone(),
-                    embedding: e.embedding,
-                    meta: SearchIndexMeta {
-                        cid: e.cid,
-                        tags: e.tags,
-                        snippet: e.snippet,
-                        content_type: e.content_type,
-                        created_at: e.created_at,
-                        memory_type: None,
-                    },
-                });
-            }
+                },
+            });
         }
     }
 }
@@ -101,7 +90,7 @@ impl SemanticSearch for InMemoryBackend {
     fn upsert(&self, cid: &str, embedding: &[f32], meta: SearchIndexMeta) {
         let mut entries = self.entries.write().unwrap();
 
-        if let Some(existing) = entries.iter_mut().find(|e| e.cid == cid) {
+        if let Some(existing) = entries.get_mut(cid) {
             let is_stub = embedding.iter().all(|&v| v == 0.0);
             if !is_stub {
                 existing.embedding = embedding.to_vec();
@@ -110,7 +99,7 @@ impl SemanticSearch for InMemoryBackend {
             return;
         }
 
-        entries.push(IndexEntry {
+        entries.insert(cid.to_string(), IndexEntry {
             cid: cid.to_string(),
             embedding: embedding.to_vec(),
             meta,
@@ -119,14 +108,14 @@ impl SemanticSearch for InMemoryBackend {
 
     fn delete(&self, cid: &str) {
         let mut entries = self.entries.write().unwrap();
-        entries.retain(|e| e.cid != cid);
+        entries.remove(cid);
     }
 
     fn search(&self, query: &[f32], k: usize, filter: &SearchFilter) -> Vec<SearchHit> {
         let entries = self.entries.read().unwrap();
 
         let mut scored: Vec<_> = entries
-            .iter()
+            .values()
             .filter(|e| filter.matches(&e.meta))
             .map(|e| {
                 let score = Self::cosine(query, &e.embedding);
@@ -151,7 +140,7 @@ impl SemanticSearch for InMemoryBackend {
         self.entries
             .read()
             .unwrap()
-            .iter()
+            .values()
             .filter(|e| filter.matches(&e.meta))
             .map(|e| e.cid.clone())
             .collect()

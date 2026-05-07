@@ -121,7 +121,7 @@ impl AgentProfileStore {
         let profiles = self.profiles.read().unwrap();
         let json = serde_json::to_string_pretty(&*profiles)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-        std::fs::write(dir.join("profiles.json"), json)
+        crate::kernel::persistence::atomic_write_bytes(&dir.join("profiles.json"), json.as_bytes())
     }
 
     /// Restore profiles from `dir/profiles.json`.

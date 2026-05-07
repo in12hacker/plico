@@ -39,7 +39,7 @@ fn test_crash_recovery_cas_data_persists() {
 
     // Create kernel and ingest articles
     let kernel1 = AIKernel::new(root.clone()).expect("kernel init");
-    let agent_id = kernel1.register_agent("ingest-agent".to_string());
+    let agent_id = kernel1.register_agent("ingest-agent".to_string()).unwrap();
 
     use plico::api::permission::PermissionAction;
     kernel1.permission_grant(&agent_id, PermissionAction::Read, None, None);
@@ -88,7 +88,7 @@ fn test_crash_recovery_kg_data_persists() {
     let _ = std::env::set_var("LLM_BACKEND", "stub");
 
     let kernel1 = AIKernel::new(root.clone()).expect("kernel init");
-    let agent_id = kernel1.register_agent("kg-agent".to_string());
+    let agent_id = kernel1.register_agent("kg-agent".to_string()).unwrap();
 
     use plico::api::permission::PermissionAction;
     kernel1.permission_grant(&agent_id, PermissionAction::Read, None, None);
@@ -154,7 +154,7 @@ fn test_crash_recovery_memories_persist() {
     let _ = std::env::set_var("LLM_BACKEND", "stub");
 
     let kernel1 = AIKernel::new(root.clone()).expect("kernel init");
-    let agent_id = kernel1.register_agent("memory-agent".to_string());
+    let agent_id = kernel1.register_agent("memory-agent".to_string()).unwrap();
 
     use plico::api::permission::PermissionAction;
     kernel1.permission_grant(&agent_id, PermissionAction::Read, None, None);
@@ -204,8 +204,8 @@ fn test_crash_recovery_task_operations_within_session() {
 
     let kernel1 = AIKernel::new(root.clone()).expect("kernel init");
 
-    let coordinator = kernel1.register_agent("coordinator".to_string());
-    let worker = kernel1.register_agent("worker".to_string());
+    let coordinator = kernel1.register_agent("coordinator".to_string()).unwrap();
+    let worker = kernel1.register_agent("worker".to_string()).unwrap();
 
     use plico::api::permission::PermissionAction;
     kernel1.permission_grant(&coordinator, PermissionAction::Read, None, None);
@@ -257,7 +257,7 @@ fn test_full_ingest_kg_query_sequence() {
     let _ = std::env::set_var("LLM_BACKEND", "stub");
 
     let kernel = AIKernel::new(root).expect("kernel init");
-    let agent_id = kernel.register_agent("full-test-agent".to_string());
+    let agent_id = kernel.register_agent("full-test-agent".to_string()).unwrap();
 
     use plico::api::permission::PermissionAction;
     kernel.permission_grant(&agent_id, PermissionAction::Read, None, None);

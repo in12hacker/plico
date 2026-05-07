@@ -7,7 +7,7 @@
 //! - Cost anomaly detection
 
 use std::sync::{RwLock, Arc};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use serde::{Deserialize, Serialize};
 
 /// Global cost ledger registry — allows LLM/embedding providers to record costs
@@ -70,16 +70,19 @@ pub struct CostAnomaly {
     pub avg_cost_per_session_after: u64,
 }
 
+/// Maximum number of cost entries retained in memory.
+const MAX_COST_ENTRIES: usize = 50_000;
+
 /// Token cost ledger — records and aggregates token costs.
 pub struct TokenCostLedger {
-    entries: RwLock<Vec<CostEntry>>,
+    entries: RwLock<VecDeque<CostEntry>>,
     session_totals: RwLock<HashMap<String, SessionCostSummary>>,
 }
 
 impl TokenCostLedger {
     pub fn new() -> Self {
         Self {
-            entries: RwLock::new(Vec::new()),
+            entries: RwLock::new(VecDeque::new()),
             session_totals: RwLock::new(HashMap::new()),
         }
     }
@@ -88,7 +91,10 @@ impl TokenCostLedger {
     /// model_id can be empty string for stub mode.
     pub fn record(&self, entry: CostEntry) {
         let mut entries = self.entries.write().unwrap();
-        entries.push(entry.clone());
+        if entries.len() >= MAX_COST_ENTRIES {
+            entries.pop_front();
+        }
+        entries.push_back(entry.clone());
 
         // Update session summary
         drop(entries);
@@ -215,7 +221,7 @@ impl TokenCostLedger {
         let totals = self.session_totals.read().unwrap();
         let json = serde_json::to_string_pretty(&*totals)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-        std::fs::write(dir.join("cost_ledger.json"), json)
+        crate::kernel::persistence::atomic_write_bytes(&dir.join("cost_ledger.json"), json.as_bytes())
     }
 
     /// Restore session_totals from `dir/cost_ledger.json`.

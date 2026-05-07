@@ -29,16 +29,31 @@ pub(crate) fn ensure_v1_suffix(url: &str) -> String {
 ///
 /// Writes to a `.json.tmp` file first, then renames on success.
 /// This prevents partial writes from corrupting the persisted file.
-pub(crate) fn atomic_write_json<T: serde::Serialize>(path: &Path, data: &T) {
+pub fn atomic_write_json<T: serde::Serialize>(path: &Path, data: &T) {
     let tmp = path.with_extension("json.tmp");
     match serde_json::to_string_pretty(data) {
         Ok(json) => {
             if std::fs::write(&tmp, &json).is_ok() {
-                let _ = std::fs::rename(&tmp, path);
+                if let Err(e) = std::fs::rename(&tmp, path) {
+                    tracing::warn!("Atomic rename failed for {}: {e}", path.display());
+                }
             }
         }
         Err(e) => tracing::warn!("Failed to serialize for {}: {e}", path.display()),
     }
+}
+
+/// Atomically write raw bytes to a file.
+///
+/// Writes to a `.tmp` file first, then renames on success.
+/// Cleans up the temp file on failure.
+pub fn atomic_write_bytes(path: &Path, data: &[u8]) -> std::io::Result<()> {
+    let tmp = path.with_extension("tmp");
+    std::fs::write(&tmp, data)?;
+    std::fs::rename(&tmp, path).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        e
+    })
 }
 
 impl AIKernel {
@@ -240,7 +255,8 @@ impl AIKernel {
 
     pub(crate) fn persist_event_log(&self) {
         // JSONL persistence is handled inline on each emit() call in EventBus.
-        // This method is used for periodic batch snapshots and shutdown saves.
+        // This periodic snapshot overwrites the entire file to prevent
+        // unbounded growth from duplicate appends.
         let events = self.event_bus.snapshot_events();
         if events.is_empty() {
             return;
@@ -248,7 +264,8 @@ impl AIKernel {
         let path = self.event_log_path();
         if let Ok(mut file) = std::fs::OpenOptions::new()
             .create(true)
-            .append(true)
+            .write(true)
+            .truncate(true)
             .open(&path)
         {
             use std::io::Write;
@@ -583,8 +600,8 @@ mod tests {
         let dir = tempdir().unwrap();
         let kernel = crate::kernel::AIKernel::new(dir.path().to_path_buf()).expect("kernel init");
 
-        kernel.register_agent("PersistAgent1".to_string());
-        kernel.register_agent("PersistAgent2".to_string());
+        kernel.register_agent("PersistAgent1".to_string()).unwrap();
+        kernel.register_agent("PersistAgent2".to_string()).unwrap();
 
         kernel.persist_agents();
 
@@ -603,7 +620,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let kernel = crate::kernel::AIKernel::new(dir.path().to_path_buf()).expect("kernel init");
 
-        kernel.register_agent("PermAgent".to_string());
+        kernel.register_agent("PermAgent".to_string()).unwrap();
         kernel.permission_grant("PermAgent", crate::api::permission::PermissionAction::Read, None, None);
 
         kernel.persist_permissions();

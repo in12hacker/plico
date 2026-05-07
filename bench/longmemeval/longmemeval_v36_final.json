@@ -1,0 +1,620 @@
+{
+  "summary": {
+    "overall": {
+      "count": 60,
+      "llm_score": 1.2,
+      "exact_match": 0.03333333333333333,
+      "accuracy_4plus": 0.05,
+      "context_hit_rate": 0.25
+    },
+    "single-session-user": {
+      "count": 60,
+      "llm_score": 1.2,
+      "exact_match": 0.03333333333333333,
+      "accuracy_4plus": 0.05,
+      "context_hit_rate": 0.25
+    }
+  },
+  "details": [
+    {
+      "item_idx": 0,
+      "category": "single-session-user",
+      "question": "What degree did I graduate with?",
+      "gold": "Business Administration",
+      "predicted": "Business Administration",
+      "llm_score": 5,
+      "exact_match": 1.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 1,
+      "category": "single-session-user",
+      "question": "How long is my daily commute to work?",
+      "gold": "45 minutes each way",
+      "predicted": "90 minutes (45 minutes each way).",
+      "llm_score": 5,
+      "exact_match": 1.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 2,
+      "category": "single-session-user",
+      "question": "Where did I redeem a $5 coupon on coffee creamer?",
+      "gold": "Target",
+      "predicted": "I don't know.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 3,
+      "category": "single-session-user",
+      "question": "What play did I attend at the local community theater?",
+      "gold": "The Glass Menagerie",
+      "predicted": "I don't know.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 4,
+      "category": "single-session-user",
+      "question": "What is the name of the playlist I created on Spotify?",
+      "gold": "Summer Vibes",
+      "predicted": "I don't know.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 5,
+      "category": "single-session-user",
+      "question": "What was my last name before I changed it?",
+      "gold": "Johnson",
+      "predicted": "I don't know.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 6,
+      "category": "single-session-user",
+      "question": "Where do I take yoga classes?",
+      "gold": "Serenity Yoga",
+      "predicted": "At home.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 7,
+      "category": "single-session-user",
+      "question": "What color did I repaint my bedroom walls?",
+      "gold": "a lighter shade of gray",
+      "predicted": "I don't know.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": false
+    },
+    {
+      "item_idx": 8,
+      "category": "single-session-user",
+      "question": "When did I volunteer at the local animal shelter's fundraising dinner?",
+      "gold": "February 14th",
+      "predicted": "I don't know.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 9,
+      "category": "single-session-user",
+      "question": "Where did I buy my new tennis racket from?",
+      "gold": "the sports store downtown",
+      "predicted": "A sports store downtown.",
+      "llm_score": 5,
+      "exact_match": 0.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 10,
+      "category": "single-session-user",
+      "question": "What was my previous occupation?",
+      "gold": "Marketing specialist at a small startup",
+      "predicted": "I don't know.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 11,
+      "category": "single-session-user",
+      "question": "How much did I spend on a designer handbag?",
+      "gold": "$800",
+      "predicted": "I don't know.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 12,
+      "category": "single-session-user",
+      "question": "How many playlists do I have on Spotify?",
+      "gold": "20",
+      "predicted": "I don't know.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 13,
+      "category": "single-session-user",
+      "question": "Where did I attend for my study abroad program?",
+      "gold": "University of Melbourne in Australia",
+      "predicted": "University of Saskatchewan (USask)",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 14,
+      "category": "single-session-user",
+      "question": "What was the discount I got on my first purchase from the new clothing brand?",
+      "gold": "10%",
+      "predicted": "I don't know.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 15,
+      "category": "single-session-user",
+      "question": "How long did it take me to assemble the IKEA bookshelf?",
+      "gold": "4 hours",
+      "predicted": "I don't know.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": true
+    },
+    {
+      "item_idx": 16,
+      "category": "single-session-user",
+      "question": "What did I buy for my sister's birthday gift?",
+      "gold": "a yellow dress",
+      "predicted": "I don't know.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": false
+    },
+    {
+      "item_idx": 17,
+      "category": "single-session-user",
+      "question": "What speed is my new internet plan?",
+      "gold": "500 Mbps",
+      "predicted": "I don't know.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": false
+    },
+    {
+      "item_idx": 18,
+      "category": "single-session-user",
+      "question": "How many shirts did I pack for my 5-day trip to Costa Rica?",
+      "gold": "7",
+      "predicted": "I don't know.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": false
+    },
+    {
+      "item_idx": 19,
+      "category": "single-session-user",
+      "question": "What was my previous stance on spirituality?",
+      "gold": "A staunch atheist",
+      "predicted": "I don't know.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": false
+    },
+    {
+      "item_idx": 20,
+      "category": "single-session-user",
+      "question": "What brand are my favorite running shoes?",
+      "gold": "Nike",
+      "predicted": "I don't know.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": false
+    },
+    {
+      "item_idx": 21,
+      "category": "single-session-user",
+      "question": "What certification did I complete last month?",
+      "gold": "Data Science",
+      "predicted": "I don't know.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": false
+    },
+    {
+      "item_idx": 22,
+      "category": "single-session-user",
+      "question": "How many bikes do I own?",
+      "gold": "three",
+      "predicted": "I don't know.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": false
+    },
+    {
+      "item_idx": 23,
+      "category": "single-session-user",
+      "question": "What breed is my dog?",
+      "gold": "Golden Retriever",
+      "predicted": "I don't know.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": false
+    },
+    {
+      "item_idx": 24,
+      "category": "single-session-user",
+      "question": "How many largemouth bass did I catch on my fishing trip to Lake Michigan?",
+      "gold": "12",
+      "predicted": "I don't know.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": false
+    },
+    {
+      "item_idx": 25,
+      "category": "single-session-user",
+      "question": "How many amateur comedians did I watch perform at the open mic night?",
+      "gold": "10",
+      "predicted": "I don't know.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": false
+    },
+    {
+      "item_idx": 26,
+      "category": "single-session-user",
+      "question": "What is the name of my cat?",
+      "gold": "Luna",
+      "predicted": "I don't know.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": false
+    },
+    {
+      "item_idx": 27,
+      "category": "single-session-user",
+      "question": "How old was I when my grandma gave me the silver necklace?",
+      "gold": "18",
+      "predicted": "I don't know.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": false
+    },
+    {
+      "item_idx": 28,
+      "category": "single-session-user",
+      "question": "What is my preferred gin-to-vermouth ratio for a classic gin martini?",
+      "gold": "3:1",
+      "predicted": "I don't know.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": false
+    },
+    {
+      "item_idx": 29,
+      "category": "single-session-user",
+      "question": "How much RAM did I upgrade my laptop to?",
+      "gold": "16GB",
+      "predicted": "I don't know.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": false
+    },
+    {
+      "item_idx": 30,
+      "category": "single-session-user",
+      "question": "How much is the painting of a sunset worth in terms of the amount I paid for it?",
+      "gold": "The painting is worth triple what I paid for it.",
+      "predicted": "I don't know.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": false
+    },
+    {
+      "item_idx": 31,
+      "category": "single-session-user",
+      "question": "Where did I attend my cousin's wedding?",
+      "gold": "The Grand Ballroom",
+      "predicted": "I don't know.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": false
+    },
+    {
+      "item_idx": 32,
+      "category": "single-session-user",
+      "question": "Where did I complete my Bachelor's degree in Computer Science?",
+      "gold": "University of California, Los Angeles (UCLA)",
+      "predicted": "I don't know.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": false
+    },
+    {
+      "item_idx": 33,
+      "category": "single-session-user",
+      "question": "How long did it take to move to the new apartment?",
+      "gold": "5 hours",
+      "predicted": "I don't know.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": false
+    },
+    {
+      "item_idx": 34,
+      "category": "single-session-user",
+      "question": "What type of cocktail recipe did I try last weekend?",
+      "gold": "lavender gin fizz",
+      "predicted": "I don't know.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": false
+    },
+    {
+      "item_idx": 35,
+      "category": "single-session-user",
+      "question": "What type of rice is my favorite?",
+      "gold": "Japanese short-grain rice",
+      "predicted": "I don't know.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": false
+    },
+    {
+      "item_idx": 36,
+      "category": "single-session-user",
+      "question": "Who did I have a conversation with about destiny?",
+      "gold": "Sarah",
+      "predicted": "I don't know.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": false
+    },
+    {
+      "item_idx": 37,
+      "category": "single-session-user",
+      "question": "Where did I buy my new bookshelf from?",
+      "gold": "IKEA",
+      "predicted": "I don't know.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": false
+    },
+    {
+      "item_idx": 38,
+      "category": "single-session-user",
+      "question": "What time do I stop checking work emails and messages?",
+      "gold": "7 pm",
+      "predicted": "I don't know.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": false
+    },
+    {
+      "item_idx": 39,
+      "category": "single-session-user",
+      "question": "How many copies of my favorite artist's debut album were released worldwide?",
+      "gold": "500",
+      "predicted": "I don't know.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": false
+    },
+    {
+      "item_idx": 40,
+      "category": "single-session-user",
+      "question": "How long have I been collecting vintage cameras?",
+      "gold": "three months",
+      "predicted": "I don't know.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": false
+    },
+    {
+      "item_idx": 41,
+      "category": "single-session-user",
+      "question": "Where did I go on a week-long trip with my family?",
+      "gold": "Hawaii",
+      "predicted": "I don't know.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": false
+    },
+    {
+      "item_idx": 42,
+      "category": "single-session-user",
+      "question": "What did I bake for my niece's birthday party?",
+      "gold": "a lemon blueberry cake",
+      "predicted": "I don't know.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": false
+    },
+    {
+      "item_idx": 43,
+      "category": "single-session-user",
+      "question": "What is the name of the music streaming service have I been using lately?",
+      "gold": "Spotify",
+      "predicted": "I don't know.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": false
+    },
+    {
+      "item_idx": 44,
+      "category": "single-session-user",
+      "question": "How long did I wait for the decision on my asylum application?",
+      "gold": "over a year",
+      "predicted": "I don't know.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": false
+    },
+    {
+      "item_idx": 45,
+      "category": "single-session-user",
+      "question": "What type of action figure did I buy from a thrift store?",
+      "gold": "a blue Snaggletooth",
+      "predicted": "I don't know.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": false
+    },
+    {
+      "item_idx": 46,
+      "category": "single-session-user",
+      "question": "How long was I in Japan for?",
+      "gold": "two weeks",
+      "predicted": "I don't know.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": false
+    },
+    {
+      "item_idx": 47,
+      "category": "single-session-user",
+      "question": "Where did I attend the Imagine Dragons concert?",
+      "gold": "Xfinity Center",
+      "predicted": "I don't know.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": false
+    },
+    {
+      "item_idx": 48,
+      "category": "single-session-user",
+      "question": "How much screen time have I been averaging on Instagram per day?",
+      "gold": "2 hours",
+      "predicted": "I don't know.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": false
+    },
+    {
+      "item_idx": 49,
+      "category": "single-session-user",
+      "question": "What type of bulb did I replace in my bedside lamp?",
+      "gold": "Philips LED bulb",
+      "predicted": "I don't know.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": false
+    },
+    {
+      "item_idx": 50,
+      "category": "single-session-user",
+      "question": "What size is my new Samsung TV?",
+      "gold": "55-inch",
+      "predicted": "I don't know.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": false
+    },
+    {
+      "item_idx": 51,
+      "category": "single-session-user",
+      "question": "What book am I currently reading?",
+      "gold": "The Seven Husbands of Evelyn Hugo",
+      "predicted": "I don't know.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": false
+    },
+    {
+      "item_idx": 52,
+      "category": "single-session-user",
+      "question": "How many skeins of worsted weight yarn did I find in my stash?",
+      "gold": "17",
+      "predicted": "I don't know.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": false
+    },
+    {
+      "item_idx": 53,
+      "category": "single-session-user",
+      "question": "How many hours did I spend watching documentaries on Netflix last month?",
+      "gold": "10",
+      "predicted": "I don't know.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": false
+    },
+    {
+      "item_idx": 54,
+      "category": "single-session-user",
+      "question": "What time do I usually get home from work on weeknights?",
+      "gold": "6:30 pm",
+      "predicted": "I don't know.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": false
+    },
+    {
+      "item_idx": 55,
+      "category": "single-session-user",
+      "question": "What is my ethnicity?",
+      "gold": "A mix of Irish and Italian",
+      "predicted": "I don't know.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": false
+    },
+    {
+      "item_idx": 56,
+      "category": "single-session-user",
+      "question": "How much time do I dedicate to practicing guitar every day?",
+      "gold": "30 minutes",
+      "predicted": "I don't know.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": false
+    },
+    {
+      "item_idx": 57,
+      "category": "single-session-user",
+      "question": "Where does my sister Emily live?",
+      "gold": "Denver",
+      "predicted": "I don't know.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": false
+    },
+    {
+      "item_idx": 58,
+      "category": "single-session-user",
+      "question": "How long did Alex marinate the BBQ ribs in special sauce?",
+      "gold": "24 hours",
+      "predicted": "I don't know.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": false
+    },
+    {
+      "item_idx": 59,
+      "category": "single-session-user",
+      "question": "Who gave me a new stand mixer as a birthday gift?",
+      "gold": "my sister",
+      "predicted": "I don't know.",
+      "llm_score": 1,
+      "exact_match": 0.0,
+      "has_context": false
+    }
+  ]
+}

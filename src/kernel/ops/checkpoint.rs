@@ -363,6 +363,12 @@ impl CheckpointStore {
     /// Each checkpoint is serialized as a JSON string and stored as a CAS object.
     /// The index file maps agent_id → Vec<checkpoint_cid>.
     pub fn persist(&self, root: &Path, cas: &CASStorage) {
+        // Load old index to collect CIDs that will be replaced
+        let old_index: HashMap<String, Vec<String>> = std::fs::read_to_string(Self::index_path(root))
+            .ok()
+            .and_then(|json| serde_json::from_str(&json).ok())
+            .unwrap_or_default();
+
         let checkpoints = self.checkpoints.read().unwrap();
         let mut index: HashMap<String, Vec<String>> = HashMap::new();
 
@@ -382,7 +388,22 @@ impl CheckpointStore {
             }
         }
 
+        // Release the lock before cleanup
+        drop(checkpoints);
+
         atomic_write_json(&Self::index_path(root), &index);
+
+        // Delete old CAS objects that are no longer referenced
+        let new_cids: std::collections::HashSet<&str> = index.values()
+            .flat_map(|v| v.iter().map(|s| s.as_str()))
+            .collect();
+        for (_agent, old_cids) in &old_index {
+            for cid in old_cids {
+                if !new_cids.contains(cid.as_str()) {
+                    let _ = cas.delete(cid);
+                }
+            }
+        }
     }
 
     /// Restore checkpoints from CAS and the index file.

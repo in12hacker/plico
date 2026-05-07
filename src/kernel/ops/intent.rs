@@ -7,6 +7,7 @@
 //! Soul 2.0 Axiom 2: "意图先于操作" — OS accepts structured intent declaration
 //! and handles assembly, not Agent.
 
+use crate::util::now_ms;
 use std::collections::HashMap;
 use std::sync::RwLock;
 use serde::{Deserialize, Serialize};
@@ -843,12 +844,6 @@ impl From<IntentValidationError> for IntentError {
     }
 }
 
-fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64
-}
 
 #[cfg(test)]
 mod tests {

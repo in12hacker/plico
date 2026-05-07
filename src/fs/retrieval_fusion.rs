@@ -22,6 +22,8 @@ pub struct RetrievalSignals {
     pub temporal_recency: f32,
     pub type_match: f32,
     pub bm25_keyword: f32,
+    /// KG connectivity signal from multi-hop traversal (v39).
+    pub kg_multi_hop: f32,
 }
 
 /// Tunable weights for each signal dimension. Defaults sum to 1.0.
@@ -37,18 +39,20 @@ pub struct FusionWeights {
     pub temporal: f32,
     pub type_match: f32,
     pub bm25_keyword: f32,
+    pub kg_multi_hop: f32,
 }
 
 impl Default for FusionWeights {
     fn default() -> Self {
         Self {
-            semantic: 0.35,
-            causal: 0.12,
+            semantic: 0.30,
+            causal: 0.10,
             access: 0.08,
-            tag: 0.12,
-            temporal: 0.08,
+            tag: 0.10,
+            temporal: 0.07,
             type_match: 0.10,
             bm25_keyword: 0.15,
+            kg_multi_hop: 0.10,
         }
     }
 }
@@ -62,12 +66,14 @@ impl FusionWeights {
             + self.temporal * signals.temporal_recency
             + self.type_match * signals.type_match
             + self.bm25_keyword * signals.bm25_keyword
+            + self.kg_multi_hop * signals.kg_multi_hop
     }
 
     /// Sum of all weights (should be ~1.0 after normalization).
     pub fn total(&self) -> f32 {
         self.semantic + self.causal + self.access + self.tag
             + self.temporal + self.type_match + self.bm25_keyword
+            + self.kg_multi_hop
     }
 
     /// Normalize weights so they sum to 1.0, preserving ratios.
@@ -81,6 +87,7 @@ impl FusionWeights {
             self.temporal /= t;
             self.type_match /= t;
             self.bm25_keyword /= t;
+            self.kg_multi_hop /= t;
         }
     }
 }
@@ -107,6 +114,8 @@ pub struct RetrievalQuery<'a> {
 pub struct RetrievalFusionEngine {
     weights: FusionWeights,
     temporal_half_life_ms: u64,
+    /// KG connectivity signals keyed by entry ID (v39).
+    kg_signals: Option<std::collections::HashMap<String, f32>>,
 }
 
 impl RetrievalFusionEngine {
@@ -114,6 +123,7 @@ impl RetrievalFusionEngine {
         Self {
             weights,
             temporal_half_life_ms: 7 * 24 * 60 * 60 * 1000, // 7 days
+            kg_signals: None,
         }
     }
 
@@ -128,6 +138,10 @@ impl RetrievalFusionEngine {
 
     pub fn set_weights(&mut self, weights: FusionWeights) {
         self.weights = weights;
+    }
+
+    pub fn set_kg_signals(&mut self, signals: std::collections::HashMap<String, f32>) {
+        self.kg_signals = Some(signals);
     }
 
     /// Compute all signals for a candidate entry and fuse them into a single score.
@@ -189,6 +203,10 @@ impl RetrievalFusionEngine {
             .and_then(|scores| scores.get(&candidate.id).copied())
             .unwrap_or(0.0);
 
+        let kg_multi_hop = self.kg_signals.as_ref()
+            .and_then(|scores| scores.get(&candidate.id).copied())
+            .unwrap_or(0.0);
+
         RetrievalSignals {
             semantic_score,
             causal_proximity,
@@ -197,6 +215,7 @@ impl RetrievalFusionEngine {
             temporal_recency,
             type_match,
             bm25_keyword,
+            kg_multi_hop,
         }
     }
 
@@ -284,6 +303,7 @@ mod tests {
             temporal_recency: 0.7,
             type_match: 1.0,
             bm25_keyword: 0.6,
+            kg_multi_hop: 0.5,
         };
         let score = w.fuse(&signals);
         assert!(score > 0.0 && score <= 1.0, "fused score = {}", score);
@@ -366,9 +386,36 @@ mod tests {
             temporal: 1.0,
             type_match: 1.0,
             bm25_keyword: 1.0,
+            kg_multi_hop: 1.0,
         };
         w.normalize();
         assert!((w.total() - 1.0).abs() < 0.01);
         assert!(w.semantic > w.causal);
+    }
+
+    #[test]
+    fn test_kg_multi_hop_boost() {
+        let engine = {
+            let mut e = RetrievalFusionEngine::new(FusionWeights::default());
+            let mut kg_sigs = std::collections::HashMap::new();
+            kg_sigs.insert("b".to_string(), 1.0);
+            e.set_kg_signals(kg_sigs);
+            e
+        };
+        
+        let emb = vec![0.5; 3];
+        let e1 = make_entry("a", vec![], 0, Some(emb.clone()));
+        let e2 = make_entry("b", vec![], 0, Some(emb.clone()));
+        
+        let query = RetrievalQuery {
+            query_embedding: &emb,
+            query_tags: &[],
+            query_memory_type: None,
+            context_entry_id: None,
+            bm25_scores: None,
+        };
+        
+        let results = engine.rank(&[e1, e2], &query, None, 10);
+        assert_eq!(results[0].entry.id, "b", "KG multi-hop boost should promote entry b");
     }
 }

@@ -4,6 +4,7 @@
 //! events at key operation points. This is pure mechanism — the kernel
 //! never decides what to do with events (that's upper-layer policy).
 
+use crate::util::now_ms;
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -237,15 +238,10 @@ pub struct EventBus {
     retention_segments: usize,
 }
 
-fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64
-}
 
 const DEFAULT_ROTATION_INTERVAL_MS: u64 = 7 * 24 * 3600 * 1000; // 7 days
 const DEFAULT_RETENTION_SEGMENTS: usize = 4;
+const MAX_SEGMENT_BYTES: u64 = 100 * 1024 * 1024; // 100MB
 
 impl Default for EventBus {
     fn default() -> Self {
@@ -322,7 +318,18 @@ impl EventBus {
 
     fn should_rotate(&self) -> bool {
         let start = self.segment_start_ms.load(Ordering::Relaxed);
-        start > 0 && now_ms().saturating_sub(start) >= self.rotation_interval_ms
+        if start > 0 && now_ms().saturating_sub(start) >= self.rotation_interval_ms {
+            return true;
+        }
+        // Size-based rotation: cap segment at MAX_SEGMENT_BYTES
+        if let Some(ref path) = self.event_log_path {
+            if let Ok(meta) = std::fs::metadata(path) {
+                if meta.len() >= MAX_SEGMENT_BYTES {
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     /// Rotate the current segment to an archive file and start a fresh segment.
@@ -448,23 +455,47 @@ impl EventBus {
     /// Load events from a JSONL file on disk.
     pub fn load_event_log(path: &std::path::Path) -> Result<Vec<SequencedEvent>, std::io::Error> {
         use std::io::{BufRead, BufReader};
+        use std::collections::HashMap;
         if !path.exists() {
             return Ok(Vec::new());
         }
+        let metadata = std::fs::metadata(path)?;
+        let file_size = metadata.len();
+        if file_size > 1024 * 1024 * 1024 {
+            tracing::warn!(
+                "Event log is very large ({} MB); loading may be slow. Consider truncation.",
+                file_size / (1024 * 1024)
+            );
+        }
         let file = std::fs::OpenOptions::new().read(true).open(path)?;
         let reader = BufReader::new(file);
-        let mut events = Vec::new();
+        let mut events: HashMap<u64, SequencedEvent> = HashMap::new();
+        let mut line_count = 0u64;
+        let mut valid_count = 0u64;
         for line in reader.lines() {
             let line = line?;
+            line_count += 1;
             if line.trim().is_empty() {
                 continue;
             }
             match serde_json::from_str::<SequencedEvent>(&line) {
-                Ok(event) => events.push(event),
+                Ok(event) => {
+                    valid_count += 1;
+                    events.insert(event.seq, event);
+                }
                 Err(e) => tracing::warn!("Skipping malformed event line: {}", e),
             }
         }
-        Ok(events)
+        if line_count > valid_count.saturating_mul(2) {
+            tracing::warn!(
+                "Event log has {} total lines but only {} valid events ({}% duplicates/malformed). Consider cleaning the log.",
+                line_count, valid_count,
+                (line_count - valid_count) * 100 / line_count.max(1)
+            );
+        }
+        let mut result: Vec<SequencedEvent> = events.into_values().collect();
+        result.sort_by_key(|e| e.seq);
+        Ok(result)
     }
 
     pub fn subscribe(&self) -> String {

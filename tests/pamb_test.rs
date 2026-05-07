@@ -48,8 +48,8 @@ fn make_kernel() -> (AIKernel, tempfile::TempDir) {
 #[test]
 fn pamb_s1_agent_a_shares_facts_agent_b_retrieves() {
     let (kernel, _dir) = make_kernel();
-    let agent_a = kernel.register_agent("researcher".to_string());
-    let agent_b = kernel.register_agent("writer".to_string());
+    let agent_a = kernel.register_agent("researcher".to_string()).unwrap();
+    let agent_b = kernel.register_agent("writer".to_string()).unwrap();
 
     let facts = [
         "Rust was first released in 2015",
@@ -85,8 +85,8 @@ fn pamb_s1_agent_a_shares_facts_agent_b_retrieves() {
 #[test]
 fn pamb_s1_shared_memories_isolated_from_private() {
     let (kernel, _dir) = make_kernel();
-    let agent_a = kernel.register_agent("agent-a".to_string());
-    let agent_b = kernel.register_agent("agent-b".to_string());
+    let agent_a = kernel.register_agent("agent-a".to_string()).unwrap();
+    let agent_b = kernel.register_agent("agent-b".to_string()).unwrap();
 
     kernel.remember_long_term(
         &agent_a, "default",
@@ -119,7 +119,7 @@ fn pamb_s1_shared_memories_isolated_from_private() {
 #[test]
 fn pamb_s2_memories_persist_across_sessions() {
     let (kernel, _dir) = make_kernel();
-    let agent = kernel.register_agent("session-agent".to_string());
+    let agent = kernel.register_agent("session-agent".to_string()).unwrap();
 
     for session in 0..5 {
         for i in 0..3 {
@@ -152,7 +152,7 @@ fn pamb_s2_memories_persist_across_sessions() {
 #[test]
 fn pamb_s2_memory_access_count_tracks_usage() {
     let (kernel, _dir) = make_kernel();
-    let agent = kernel.register_agent("usage-agent".to_string());
+    let agent = kernel.register_agent("usage-agent".to_string()).unwrap();
 
     kernel.remember_long_term(
         &agent, "default",
@@ -195,7 +195,7 @@ fn pamb_s3_ttl_decay_by_memory_type() {
 #[test]
 fn pamb_s3_dedup_prevents_redundant_storage() {
     let (kernel, _dir) = make_kernel();
-    let agent = kernel.register_agent("dedup-agent".to_string());
+    let agent = kernel.register_agent("dedup-agent".to_string()).unwrap();
 
     kernel.remember_long_term(
         &agent, "default",

@@ -367,7 +367,7 @@ fn bench_b5_kernel_store_recall() {
         None => { eprintln!("{SKIP_MSG}"); return; }
     };
 
-    let agent_id = kernel.register_agent("bench-agent".into());
+    let agent_id = kernel.register_agent("bench-agent".into()).unwrap();
     kernel.permission_grant(&agent_id, plico::api::permission::PermissionAction::Write, None, None);
     kernel.permission_grant(&agent_id, plico::api::permission::PermissionAction::Read, None, None);
 
@@ -466,7 +466,7 @@ fn bench_b6_recall_routed() {
         Some(k) => k,
         None => { eprintln!("{SKIP_MSG}"); return; }
     };
-    let agent_id = kernel.register_agent("routed-agent".into());
+    let agent_id = kernel.register_agent("routed-agent".into()).unwrap();
     kernel.permission_grant(&agent_id, plico::api::permission::PermissionAction::Write, None, None);
     kernel.permission_grant(&agent_id, plico::api::permission::PermissionAction::Read, None, None);
 
@@ -602,7 +602,7 @@ fn bench_b8_full_pipeline() {
         None => { eprintln!("{SKIP_MSG}"); return; }
     };
 
-    let agent_id = kernel.register_agent("pipeline-agent".into());
+    let agent_id = kernel.register_agent("pipeline-agent".into()).unwrap();
     kernel.permission_grant(&agent_id, plico::api::permission::PermissionAction::Write, None, None);
     kernel.permission_grant(&agent_id, plico::api::permission::PermissionAction::Read, None, None);
 
@@ -674,7 +674,7 @@ fn bench_b9_scale_store_search() {
         None => { eprintln!("{SKIP_MSG}"); return; }
     };
 
-    let agent_id = kernel.register_agent("scale-agent".into());
+    let agent_id = kernel.register_agent("scale-agent".into()).unwrap();
     kernel.permission_grant(&agent_id, plico::api::permission::PermissionAction::Write, None, None);
     kernel.permission_grant(&agent_id, plico::api::permission::PermissionAction::Read, None, None);
 
@@ -862,7 +862,7 @@ fn bench_b11_multi_session_memory() {
         None => { eprintln!("{SKIP_MSG}"); return; }
     };
 
-    let agent_id = kernel.register_agent("session-agent".into());
+    let agent_id = kernel.register_agent("session-agent".into()).unwrap();
     kernel.permission_grant(&agent_id, plico::api::permission::PermissionAction::Write, None, None);
     kernel.permission_grant(&agent_id, plico::api::permission::PermissionAction::Read, None, None);
 
@@ -1091,7 +1091,7 @@ fn bench_b14_conversation_cycle() {
         None => { eprintln!("{SKIP_MSG}"); return; }
     };
 
-    let agent_id = kernel.register_agent("convo-agent".into());
+    let agent_id = kernel.register_agent("convo-agent".into()).unwrap();
     kernel.permission_grant(&agent_id, plico::api::permission::PermissionAction::Write, None, None);
     kernel.permission_grant(&agent_id, plico::api::permission::PermissionAction::Read, None, None);
 
@@ -1499,7 +1499,7 @@ fn bench_b19_real_world_context_ingestion() {
 
     println!("\n═══ B19: Real-World Context Ingestion (Cursor/Claude Dev Context) ═══\n");
 
-    let agent_id = kernel.register_agent("ctx-bench-agent".to_string());
+    let agent_id = kernel.register_agent("ctx-bench-agent".to_string()).unwrap();
 
     // 20 real knowledge fragments extracted from Plico development transcripts.
     // Source: Cursor agent-transcripts/ + ~/.claude/projects/ JSONL sessions.
@@ -1638,7 +1638,7 @@ fn bench_b20_longmemeval_suite() {
         None => { println!("{SKIP_MSG}"); return; }
     };
     println!("\n═══ B20: LongMemEval-Aligned Suite (5 categories, ingest-then-query) ═══\n");
-    let agent_id = kernel.register_agent("longmem-agent".to_string());
+    let agent_id = kernel.register_agent("longmem-agent".to_string()).unwrap();
 
     // ── Phase 1: Ingest — simulate multi-session chat history ──
     // Each "session" is a topic block with timestamps, mimicking LongMemEval_S structure.
@@ -1812,7 +1812,7 @@ fn bench_b21_locomo_suite() {
         None => { println!("{SKIP_MSG}"); return; }
     };
     println!("\n═══ B21: LoCoMo-Aligned Suite (4 QA categories, ingest-then-query) ═══\n");
-    let agent_id = kernel.register_agent("locomo-agent".to_string());
+    let agent_id = kernel.register_agent("locomo-agent".to_string()).unwrap();
 
     // ── Phase 1: Ingest multi-session dialogue ──
     // Simulates LoCoMo's two-speaker conversation structure.
@@ -1960,7 +1960,7 @@ fn bench_b22_scale_500() {
         None => { println!("{SKIP_MSG}"); return; }
     };
     println!("\n═══ B22: Scale Test — 500 entries, latency degradation curve ═══\n");
-    let agent_id = kernel.register_agent("scale-agent".to_string());
+    let agent_id = kernel.register_agent("scale-agent".to_string()).unwrap();
 
     // ── Phase 1: Ingest 500 diverse entries ──
     let domains = [
@@ -2090,7 +2090,7 @@ fn bench_b23_real_context_scale() {
         None => { println!("{SKIP_MSG}"); return; }
     };
     println!("\n═══ B23: Real Cursor/Claude Context — Scale Ingestion ═══\n");
-    let agent_id = kernel.register_agent("realctx-agent".to_string());
+    let agent_id = kernel.register_agent("realctx-agent".to_string()).unwrap();
 
     // Extract real knowledge from Cursor agent transcripts
     let transcript_dir = std::path::Path::new("/home/leo/.cursor/projects/home-leo-work-Plico/agent-transcripts");
@@ -2277,7 +2277,7 @@ fn bench_b24_rfe_7signal() {
         None => { println!("{SKIP_MSG}"); return; }
     };
     println!("\n═══ B24: RFE 7-Signal Fusion Quality (BM25 integration) ═══\n");
-    let agent_id = kernel.register_agent("rfe7-agent".to_string());
+    let agent_id = kernel.register_agent("rfe7-agent".to_string()).unwrap();
 
     // Ingest items with specific keywords that BM25 should match strongly
     let items = vec![
@@ -2418,7 +2418,7 @@ fn bench_b25_longmemeval_real() {
             Ok(k) => k,
             Err(_) => continue,
         };
-        let agent_id = kernel.register_agent("lme-agent".to_string());
+        let agent_id = kernel.register_agent("lme-agent".to_string()).unwrap();
 
         let ingest_t = Instant::now();
         let mut batch_items: Vec<(String, Vec<String>, u8)> = Vec::new();
@@ -2648,7 +2648,7 @@ fn bench_b26_locomo_real() {
             Ok(k) => k,
             Err(e) => { println!("  Kernel error: {e}"); continue; }
         };
-        let agent_id = kernel.register_agent("locomo-agent".to_string());
+        let agent_id = kernel.register_agent("locomo-agent".to_string()).unwrap();
 
         let ingest_t = Instant::now();
         let mut batch_items: Vec<(String, Vec<String>, u8)> = Vec::new();

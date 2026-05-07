@@ -11,10 +11,7 @@ fn decode_content(content: &str, encoding: &ContentEncoding) -> Result<Vec<u8>, 
 impl super::super::AIKernel {
     pub(crate) fn handle_cas(&self, req: ApiRequest) -> ApiResponse {
         match req {
-            ApiRequest::Create { content, content_encoding, tags, agent_id, agent_token, intent, .. } => {
-                if let Err(e) = self.key_store.verify_agent_token(&agent_id, agent_token.as_deref()) {
-                    return ApiResponse::error(e);
-                }
+            ApiRequest::Create { content, content_encoding, tags, agent_id, intent, .. } => {
                 let bytes = match decode_content(&content, &content_encoding) {
                     Ok(b) => b,
                     Err(e) => return ApiResponse::error(e),
@@ -27,20 +24,14 @@ impl super::super::AIKernel {
                     Err(e) => ApiResponse::error(e.to_string()),
                 }
             }
-            ApiRequest::Read { cid, agent_id, agent_token, tenant_id, .. } => {
-                if let Err(e) = self.key_store.verify_agent_token(&agent_id, agent_token.as_deref()) {
-                    return ApiResponse::error(e);
-                }
+            ApiRequest::Read { cid, agent_id, tenant_id, .. } => {
                 let tenant = tenant_id.unwrap_or_else(|| DEFAULT_TENANT.to_string());
                 match self.get_object(&cid, &agent_id, &tenant) {
                     Ok(obj) => ApiResponse::with_data(String::from_utf8_lossy(&obj.data).to_string()),
                     Err(e) => ApiResponse::error(e.to_string()),
                 }
             }
-            ApiRequest::Search { query, agent_id, agent_token, tenant_id, limit, offset, require_tags, exclude_tags, since, until, intent_context } => {
-                if let Err(e) = self.key_store.verify_agent_token(&agent_id, agent_token.as_deref()) {
-                    return ApiResponse::error(e);
-                }
+            ApiRequest::Search { query, agent_id, tenant_id, limit, offset, require_tags, exclude_tags, since, until, intent_context, .. } => {
                 let tenant = tenant_id.unwrap_or_else(|| DEFAULT_TENANT.to_string());
                 let lim = limit.unwrap_or(10);
                 let off = offset.unwrap_or(0);
@@ -81,10 +72,7 @@ impl super::super::AIKernel {
                 r.results = Some(page);
                 r
             }
-            ApiRequest::Update { cid, content, content_encoding, new_tags, agent_id, agent_token, tenant_id, .. } => {
-                if let Err(e) = self.key_store.verify_agent_token(&agent_id, agent_token.as_deref()) {
-                    return ApiResponse::error(e);
-                }
+            ApiRequest::Update { cid, content, content_encoding, new_tags, agent_id, tenant_id, .. } => {
                 let tenant = tenant_id.unwrap_or_else(|| DEFAULT_TENANT.to_string());
                 let bytes = match decode_content(&content, &content_encoding) {
                     Ok(b) => b,
@@ -98,10 +86,7 @@ impl super::super::AIKernel {
                     Err(e) => ApiResponse::error(e.to_string()),
                 }
             }
-            ApiRequest::Delete { cid, agent_id, agent_token, tenant_id, .. } => {
-                if let Err(e) = self.key_store.verify_agent_token(&agent_id, agent_token.as_deref()) {
-                    return ApiResponse::error(e);
-                }
+            ApiRequest::Delete { cid, agent_id, tenant_id, .. } => {
                 let tenant = tenant_id.unwrap_or_else(|| DEFAULT_TENANT.to_string());
                 match self.semantic_delete(&cid, &agent_id, &tenant) {
                     Ok(()) => {

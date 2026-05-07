@@ -27,6 +27,7 @@ pub mod mcp;
 pub mod client;
 pub mod config;
 pub mod prompt;
+pub mod util;
 
 /// Default tenant ID used when no tenant is specified.
 pub const DEFAULT_TENANT: &str = "default";

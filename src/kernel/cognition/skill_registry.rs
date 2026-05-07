@@ -1,14 +1,17 @@
 //! 技能注册表 —— 技能的版本管理和检索
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 use super::{CognitiveResult, Skill, SkillUsageStats, ValidationStatus};
 
 /// 技能注册表
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct SkillRegistry {
     /// Agent ID -> (Skill ID -> Skill Record)
     agent_skills: HashMap<String, HashMap<String, SkillRecord>>,
+    /// Path for persistence (skill_index.json)
+    index_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone)]
@@ -21,11 +24,86 @@ pub struct SkillRecord {
     pub validation: ValidationStatus,
 }
 
+/// Serializable wrapper for disk persistence.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct PersistedRecord {
+    skill_json: serde_json::Value,
+    created_at_ms: u64,
+    updated_at_ms: u64,
+    version: u32,
+}
+
+
+impl Default for SkillRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SkillRegistry {
     pub fn new() -> Self {
         Self {
             agent_skills: HashMap::new(),
+            index_path: None,
         }
+    }
+
+    /// Create a registry with disk persistence at `root/skill_index.json`.
+    pub fn with_persistence(root: PathBuf) -> Self {
+        let index_path = root.join("skill_index.json");
+        let mut registry = Self {
+            agent_skills: HashMap::new(),
+            index_path: Some(index_path),
+        };
+        let _ = registry.restore();
+        registry
+    }
+
+    /// Persist stats and metadata to disk if index_path is set.
+    /// Skills themselves are re-discovered from session history.
+    fn persist(&self) {
+        let Some(ref path) = self.index_path else { return };
+        let mut persisted: HashMap<String, HashMap<String, PersistedRecord>> = HashMap::new();
+        for (agent, skills) in &self.agent_skills {
+            let agent_map = persisted.entry(agent.clone()).or_default();
+            for (id, record) in skills {
+                let skill_type = match &record.skill {
+                    Skill::Knowledge(_) => "knowledge",
+                    Skill::Config(_) => "config",
+                    Skill::Code(_) => "code",
+                };
+                agent_map.insert(id.clone(), PersistedRecord {
+                    skill_json: serde_json::json!({
+                        "type": skill_type,
+                        "id": id,
+                    }),
+                    created_at_ms: record.created_at_ms,
+                    updated_at_ms: record.updated_at_ms,
+                    version: record.version,
+                });
+            }
+        }
+        let json = match serde_json::to_string_pretty(&persisted) {
+            Ok(j) => j,
+            Err(e) => { tracing::warn!("SkillRegistry persist failed: {e}"); return; }
+        };
+        let tmp = path.with_extension("json.tmp");
+        if std::fs::write(&tmp, &json).is_ok() {
+            if let Err(e) = std::fs::rename(&tmp, path) {
+                tracing::warn!("Atomic rename failed for {}: {e}", path.display());
+            }
+        }
+    }
+
+    /// Restore metadata from disk.
+    fn restore(&mut self) -> std::io::Result<()> {
+        let Some(ref path) = self.index_path else { return Ok(()) };
+        if !path.exists() { return Ok(()); }
+        let json = std::fs::read_to_string(path)?;
+        let _loaded: HashMap<String, HashMap<String, PersistedRecord>> = serde_json::from_str(&json)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        // Skills are re-discovered from session history; metadata is informational only.
+        Ok(())
     }
 
     pub async fn register(&mut self, agent_id: &str, skill: Skill) -> CognitiveResult<String> {
@@ -44,6 +122,7 @@ impl SkillRegistry {
             .or_default()
             .insert(skill_id.clone(), record);
 
+        self.persist();
         Ok(skill_id)
     }
 
@@ -71,6 +150,7 @@ impl SkillRegistry {
                 record.skill = skill;
                 record.updated_at_ms = super::now_ms();
                 record.version += 1;
+                self.persist();
                 return Ok(());
             }
         }
@@ -111,6 +191,7 @@ impl SkillRegistry {
     pub async fn remove(&mut self, skill_id: &str) -> bool {
         for agent_skills in self.agent_skills.values_mut() {
             if agent_skills.remove(skill_id).is_some() {
+                self.persist();
                 return true;
             }
         }

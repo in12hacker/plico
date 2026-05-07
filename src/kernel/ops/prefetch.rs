@@ -59,12 +59,7 @@ const PATH_LIMIT: usize = 20;
 const PATH_TIMEOUT_MS: u64 = 500;
 
 
-pub(crate) fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64
-}
+pub(crate) use crate::util::now_ms;
 
 /// State of a prefetch assembly.
 #[derive(Debug)]
@@ -308,7 +303,7 @@ impl IntentPrefetcher {
         let feedback = self.feedback_history.read().unwrap();
         let json = serde_json::to_string_pretty(&*feedback)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-        std::fs::write(prefetch_dir.join("feedback.json"), json)?;
+        crate::kernel::persistence::atomic_write_bytes(&prefetch_dir.join("feedback.json"), json.as_bytes())?;
         // Persist cost ledger
         let ledger_guard = self.cost_ledger.read().unwrap();
         if let Some(ref ledger) = *ledger_guard {

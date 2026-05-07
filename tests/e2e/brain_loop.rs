@@ -12,7 +12,7 @@ mod cognitive_loop_tests {
         let _ = std::env::set_var("LLM_BACKEND", "stub");
         let dir = tempfile::tempdir().unwrap();
         let kernel = plico::AIKernel::new(dir.path().to_path_buf()).expect("kernel init");
-        let agent_id = kernel.register_agent("cognitive-loop-agent".to_string());
+        let agent_id = kernel.register_agent("cognitive-loop-agent".to_string()).unwrap();
         kernel.permission_grant(&agent_id, plico::api::permission::PermissionAction::Write, None, None);
         kernel.permission_grant(&agent_id, plico::api::permission::PermissionAction::Read, None, None);
         (kernel, dir, agent_id)

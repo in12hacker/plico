@@ -85,7 +85,7 @@ fn security_articles() -> Vec<SecurityArticle> {
 fn test_g1_ingest_agent_10_articles_to_cas_and_kg() {
     let (kernel, _dir) = make_kernel();
 
-    let agent_id = kernel.register_agent("ingest-agent".to_string());
+    let agent_id = kernel.register_agent("ingest-agent".to_string()).unwrap();
 
     // Grant permissions
     use plico::api::permission::PermissionAction;
@@ -206,7 +206,7 @@ fn test_g1_ingest_agent_10_articles_to_cas_and_kg() {
 fn test_g2_knowledge_agent_hybrid_retrieve_with_token_estimate() {
     let (kernel, _dir) = make_kernel();
 
-    let agent_id = kernel.register_agent("knowledge-agent".to_string());
+    let agent_id = kernel.register_agent("knowledge-agent".to_string()).unwrap();
 
     use plico::api::permission::PermissionAction;
     kernel.permission_grant(&agent_id, PermissionAction::Read, None, None);
@@ -308,7 +308,7 @@ fn test_g2_knowledge_agent_hybrid_retrieve_with_token_estimate() {
 fn test_g2_hybrid_retrieve_token_budget_pruning() {
     let (kernel, _dir) = make_kernel();
 
-    let agent_id = kernel.register_agent("knowledge-agent".to_string());
+    let agent_id = kernel.register_agent("knowledge-agent".to_string()).unwrap();
 
     use plico::api::permission::PermissionAction;
     kernel.permission_grant(&agent_id, PermissionAction::Read, None, None);
@@ -368,7 +368,7 @@ fn test_g2_hybrid_retrieve_token_budget_pruning() {
 fn test_hybrid_retrieve_via_api() {
     let (kernel, _dir) = make_kernel();
 
-    let agent_id = kernel.register_agent("api-agent".to_string());
+    let agent_id = kernel.register_agent("api-agent".to_string()).unwrap();
 
     use plico::api::permission::PermissionAction;
     kernel.permission_grant(&agent_id, PermissionAction::Read, None, None);

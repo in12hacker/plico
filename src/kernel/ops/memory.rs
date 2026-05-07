@@ -8,6 +8,7 @@
 use crate::api::permission::{PermissionAction, PermissionContext};
 use crate::memory::{MemoryEntry, MemoryContent, MemoryTier, MemoryType, MemoryScope};
 use crate::scheduler::AgentId;
+use crate::util::case_insensitive_contains;
 use crate::kernel::event_bus::KernelEvent;
 use crate::fs::embedding::types::EmbeddingProvider;
 use super::observability::{OpType, OperationTimer};
@@ -529,8 +530,8 @@ impl crate::kernel::AIKernel {
         let ctx = PermissionContext::new(agent_id.to_string(), tenant_id.to_string());
         self.permissions.check(&ctx, PermissionAction::Read).map_err(|e| e.to_string())?;
 
-        // Three-channel concurrent pipeline: intent + embedding + BM25
-        let (classified, query_emb_result, bm25_hits) = std::thread::scope(|s| {
+        // Four-channel concurrent pipeline: intent + embedding + BM25 + KG Multi-hop (v39)
+        let (classified, query_emb_result, bm25_hits, kg_hits) = std::thread::scope(|s| {
             let classify_handle = s.spawn(|| {
                 let prompt = {
                     let mut vars = std::collections::HashMap::new();
@@ -558,10 +559,38 @@ impl crate::kernel::AIKernel {
 
             let bm25_handle = s.spawn(|| self.fs.bm25_search(query, 50));
 
+            // KG Multi-hop Channel (F-39): find neighboring nodes for relational queries
+            let kg_handle = s.spawn(|| {
+                if let Some(ref kg) = self.knowledge_graph {
+                    // Find nodes that match keywords in the query
+                    let seeds = kg.list_nodes(agent_id, None).unwrap_or_default();
+                    let query_words: std::collections::HashSet<_> = query.to_lowercase()
+                        .split_whitespace().map(|s| s.to_string()).collect();
+                    
+                    let mut matching_cids = Vec::new();
+                    for node in seeds {
+                        if query_words.iter().any(|w| node.id.to_lowercase().contains(w)) {
+                            // Find 2-hop neighbors for these seed nodes
+                            if let Ok(neighbors) = kg.get_neighbors(&node.id, None, 2) {
+                                for (neighbor, _) in neighbors {
+                                    if let Some(ref cid) = neighbor.content_cid {
+                                        matching_cids.push(cid.clone());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    matching_cids
+                } else {
+                    Vec::new()
+                }
+            });
+
             let classified = classify_handle.join().unwrap();
             let emb_result = embed_handle.join().unwrap();
             let bm25 = bm25_handle.join().unwrap();
-            (classified, emb_result, bm25)
+            let kg = kg_handle.join().unwrap();
+            (classified, emb_result, bm25, kg)
         });
 
         let config = RetrievalConfig::for_intent(classified.intent);
@@ -569,6 +598,10 @@ impl crate::kernel::AIKernel {
         // Build BM25 score map for RFE
         let bm25_score_map: std::collections::HashMap<String, f32> =
             bm25_hits.into_iter().collect();
+        
+        // Build KG connectivity map (v39 Multi-hop boost)
+        let kg_connectivity: std::collections::HashMap<String, f32> = 
+            kg_hits.into_iter().map(|cid| (cid, 1.0)).collect();
 
         let results: Vec<MemoryEntry> = match query_emb_result {
             Ok(query_emb) => {
@@ -588,7 +621,13 @@ impl crate::kernel::AIKernel {
 
                 // RFE 7-signal re-ranking with per-agent learned weights
                 let agent_weights = self.agent_profiles.get_weights(agent_id);
-                let rfe = RetrievalFusionEngine::new(agent_weights);
+                let mut rfe = RetrievalFusionEngine::new(agent_weights);
+                
+                // v39: Inject KG multi-hop signals into RFE
+                if !kg_connectivity.is_empty() {
+                    rfe.set_kg_signals(kg_connectivity);
+                }
+
                 let causal_graph: Option<&crate::memory::causal::CausalGraph> = None;
 
                 let rfe_query = RetrievalQuery {
@@ -889,7 +928,9 @@ impl crate::kernel::AIKernel {
         if let Some(q) = query {
             let q_lower = q.to_lowercase();
             results.retain(|entry| {
-                let content_match = entry.content.display().to_string().to_lowercase().contains(&q_lower);
+                // Case-insensitive content check without allocating a new String
+                let content_str = entry.content.display();
+                let content_match = case_insensitive_contains(&content_str, &q_lower);
                 let tag_match = entry.tags.iter().any(|t| t.to_lowercase().contains(&q_lower));
                 content_match || tag_match
             });
@@ -1022,7 +1063,13 @@ pub fn discover_knowledge(
     let query_lower = query.to_lowercase();
     let query_terms: Vec<&str> = query_lower.split_whitespace().collect();
 
-    let mut hits: Vec<DiscoveryHit> = filtered.into_iter().map(|e| {
+    // Pre-sort by importance to limit expensive preview/relevance computation
+    let mut sorted = filtered;
+    sorted.sort_by(|a, b| b.importance.partial_cmp(&a.importance).unwrap_or(std::cmp::Ordering::Equal));
+    let candidate_limit = (max_results * 5).max(50);
+    sorted.truncate(candidate_limit);
+
+    let mut hits: Vec<DiscoveryHit> = sorted.into_iter().map(|e| {
         let preview: String = match &e.content {
             MemoryContent::Text(t) => t.chars().take(200).collect::<String>(),
             MemoryContent::Procedure(p) => p.description.chars().take(200).collect::<String>(),
@@ -1063,13 +1110,12 @@ pub fn discover_knowledge(
 fn calculate_relevance(tags: &[String], content: &str, query_terms: &[&str]) -> f32 {
     use std::collections::HashSet;
 
-    let content_lower = content.to_lowercase();
     let tag_set: HashSet<&str> = tags.iter().map(|t| t.as_str()).collect();
 
     let mut score = 0.0f32;
 
     for term in query_terms {
-        if content_lower.contains(term) {
+        if case_insensitive_contains(content, term) {
             score += 0.1;
         }
         if tag_set.contains(term) {
@@ -1152,7 +1198,7 @@ mod tests {
     #[test]
     fn test_memory_count_via_agent_usage() {
         let (kernel, _dir) = crate::kernel::tests::make_kernel();
-        let agent_id = kernel.register_agent("usage-agent".to_string());
+        let agent_id = kernel.register_agent("usage-agent".to_string()).unwrap();
         kernel.remember(&agent_id, "default", "count me".to_string()).ok();
         let usage = kernel.agent_usage(&agent_id);
         assert!(usage.is_some());
@@ -1164,8 +1210,8 @@ mod tests {
     #[test]
     fn test_recall_shared_from_specific_agent() {
         let (kernel, _dir) = crate::kernel::tests::make_kernel();
-        let agent_a = kernel.register_agent("agent-a".to_string());
-        let agent_b = kernel.register_agent("agent-b".to_string());
+        let agent_a = kernel.register_agent("agent-a".to_string()).unwrap();
+        let agent_b = kernel.register_agent("agent-b".to_string()).unwrap();
 
         // Agent A stores a shared memory
         kernel.remember_long_term_scoped(
@@ -1185,9 +1231,9 @@ mod tests {
     #[test]
     fn test_recall_shared_from_all_agents() {
         let (kernel, _dir) = crate::kernel::tests::make_kernel();
-        let agent_a = kernel.register_agent("agent-a".to_string());
-        let agent_b = kernel.register_agent("agent-b".to_string());
-        let agent_c = kernel.register_agent("agent-c".to_string());
+        let agent_a = kernel.register_agent("agent-a".to_string()).unwrap();
+        let agent_b = kernel.register_agent("agent-b".to_string()).unwrap();
+        let agent_c = kernel.register_agent("agent-c".to_string()).unwrap();
 
         // Agent A stores shared memory
         kernel.remember_long_term_scoped(
@@ -1218,8 +1264,8 @@ mod tests {
     #[test]
     fn test_recall_shared_excludes_private() {
         let (kernel, _dir) = crate::kernel::tests::make_kernel();
-        let agent_a = kernel.register_agent("agent-a".to_string());
-        let agent_b = kernel.register_agent("agent-b".to_string());
+        let agent_a = kernel.register_agent("agent-a".to_string()).unwrap();
+        let agent_b = kernel.register_agent("agent-b".to_string()).unwrap();
 
         // Agent A stores private memory
         kernel.remember_long_term(
@@ -1246,8 +1292,8 @@ mod tests {
     #[test]
     fn test_recall_shared_empty_when_no_shared() {
         let (kernel, _dir) = crate::kernel::tests::make_kernel();
-        let agent_a = kernel.register_agent("agent-a".to_string());
-        let agent_b = kernel.register_agent("agent-b".to_string());
+        let agent_a = kernel.register_agent("agent-a".to_string()).unwrap();
+        let agent_b = kernel.register_agent("agent-b".to_string()).unwrap();
 
         // Both only have private memories
         kernel.remember_long_term(
@@ -1264,8 +1310,8 @@ mod tests {
     #[test]
     fn test_recall_shared_respects_limit() {
         let (kernel, _dir) = crate::kernel::tests::make_kernel();
-        let agent_a = kernel.register_agent("agent-a".to_string());
-        let agent_b = kernel.register_agent("agent-b".to_string());
+        let agent_a = kernel.register_agent("agent-a".to_string()).unwrap();
+        let agent_b = kernel.register_agent("agent-b".to_string()).unwrap();
 
         // Agent A stores multiple shared memories
         for i in 0..5 {
@@ -1286,8 +1332,8 @@ mod tests {
     #[test]
     fn test_recall_shared_query_filter() {
         let (kernel, _dir) = crate::kernel::tests::make_kernel();
-        let agent_a = kernel.register_agent("agent-a".to_string());
-        let agent_b = kernel.register_agent("agent-b".to_string());
+        let agent_a = kernel.register_agent("agent-a".to_string()).unwrap();
+        let agent_b = kernel.register_agent("agent-b".to_string()).unwrap();
 
         // Agent A stores multiple shared memories
         kernel.remember_long_term_scoped(
@@ -1317,8 +1363,8 @@ mod tests {
     #[test]
     fn test_recall_shared_with_name_not_uuid() {
         let (kernel, _dir) = crate::kernel::tests::make_kernel();
-        let _alice_uuid = kernel.register_agent("alice".to_string());
-        let _bob_uuid = kernel.register_agent("bob".to_string());
+        let _alice_uuid = kernel.register_agent("alice".to_string()).unwrap();
+        let _bob_uuid = kernel.register_agent("bob".to_string()).unwrap();
 
         kernel.remember_working_scoped(
             "alice", "default",

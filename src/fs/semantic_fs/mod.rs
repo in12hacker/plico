@@ -9,7 +9,7 @@ pub mod events;
 #[cfg(test)]
 pub mod tests;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, RwLock};
 
 use crate::cas::{AIObject, AIObjectMeta, CASStorage};
@@ -18,6 +18,7 @@ use crate::fs::embedding::EmbeddingProvider;
 use crate::fs::reranker::RerankerProvider;
 use crate::fs::search::{SemanticSearch, SearchFilter, SearchIndexMeta, Bm25Index};
 use crate::fs::summarizer::Summarizer;
+use crate::util::case_insensitive_contains;
 use crate::fs::graph::KnowledgeGraph;
 use crate::fs::graph::{KGEdge, KGEdgeType};
 
@@ -28,6 +29,13 @@ pub use crate::fs::types::{
 };
 
 // ── Adaptive RRF configuration ──────────────────────────────────────────────
+
+/// Maximum snippet length returned by search (in bytes).
+const MAX_SNIPPET_LEN: usize = 1024;
+
+/// Maximum audit log entries retained in memory.
+const MAX_AUDIT_LOG: usize = 10_000;
+const RECYCLE_BIN_TTL_MS: u64 = 30 * 24 * 60 * 60 * 1000; // 30 days
 
 /// Read RRF K constant from env or default to 60.
 fn rrf_config_k() -> f32 {
@@ -87,7 +95,7 @@ pub struct SemanticFS {
     recycle_bin_path: std::path::PathBuf,
     ctx_loader: Arc<ContextLoader>,
     recycle_bin: RwLock<HashMap<String, RecycleEntry>>,
-    audit_log: RwLock<Vec<AuditEntry>>,
+    audit_log: RwLock<VecDeque<AuditEntry>>,
     embedding: Arc<dyn EmbeddingProvider>,
     search_index: Arc<dyn SemanticSearch>,
     summarizer: Option<Arc<dyn Summarizer>>,
@@ -156,7 +164,7 @@ impl SemanticFS {
             recycle_bin_path,
             ctx_loader: Arc::new(ContextLoader::new(root_path.join("context"), summarizer.clone(), cas)?),
             recycle_bin: RwLock::new(recycle_bin),
-            audit_log: RwLock::new(Vec::new()),
+            audit_log: RwLock::new(VecDeque::new()),
             embedding,
             search_index,
             summarizer,
@@ -176,14 +184,19 @@ impl SemanticFS {
             Err(e) => { tracing::warn!("rebuild_vector_index: failed to list CIDs: {e}"); return; }
         };
         if cids.is_empty() { return; }
-        tracing::debug!("rebuild_vector_index: found {} CIDs", cids.len());
         tracing::info!("Rebuilding vector index for {} objects…", cids.len());
-        let mut indexed = 0usize;
-        let mut embed_available = true;
         let recycle_bin = self.recycle_bin.read().unwrap();
 
+        struct Entry {
+            cid: String,
+            text: String,
+            tags: Vec<String>,
+            content_type: String,
+            created_at: u64,
+        }
+        let mut entries: Vec<Entry> = Vec::new();
         for cid in &cids {
-            if recycle_bin.contains_key(cid) { continue; } // F-43: skip soft-deleted
+            if recycle_bin.contains_key(cid) { continue; }
             let obj = match self.cas.get_raw(cid) {
                 Ok(o) => o,
                 Err(_) => continue,
@@ -194,33 +207,46 @@ impl SemanticFS {
                 Err(_) => continue,
             };
             if text.is_empty() { continue; }
-
             self.bm25_index.upsert(cid, &text);
+            entries.push(Entry {
+                cid: cid.clone(),
+                text,
+                tags: obj.meta.tags.clone(),
+                content_type: obj.meta.content_type.to_string(),
+                created_at: obj.meta.created_at,
+            });
+        }
 
-            if embed_available {
-                match self.embedding.embed_document(&text) {
-                    Ok(result) => {
-                        self.search_index.upsert(cid, &result.embedding, SearchIndexMeta {
-                            cid: cid.clone(),
-                            tags: obj.meta.tags.clone(),
-                            content_type: obj.meta.content_type.to_string(),
-                            snippet: text.chars().take(256).collect(),
-                            created_at: obj.meta.created_at,
+        const BATCH_SIZE: usize = 256;
+        let mut indexed = 0usize;
+        let mut embed_available = true;
+        for chunk in entries.chunks(BATCH_SIZE) {
+            if !embed_available { break; }
+            let texts: Vec<&str> = chunk.iter().map(|e| e.text.as_str()).collect();
+            match self.embedding.embed_batch(&texts) {
+                Ok(results) => {
+                    for (entry, result) in chunk.iter().zip(results.iter()) {
+                        self.search_index.upsert(&entry.cid, &result.embedding, SearchIndexMeta {
+                            cid: entry.cid.clone(),
+                            tags: entry.tags.clone(),
+                            content_type: entry.content_type.clone(),
+                            snippet: entry.text.chars().take(256).collect(),
+                            created_at: entry.created_at,
                             memory_type: None,
                         });
                         indexed += 1;
                     }
-                    Err(e) => {
-                        tracing::warn!("rebuild_vector_index: embed failed for {}: {e}", &cid[..8]);
-                        embed_available = false;
-                    }
+                }
+                Err(e) => {
+                    tracing::warn!("rebuild_vector_index: batch embed failed: {e}");
+                    embed_available = false;
                 }
             }
         }
 
         let bm25_count = self.bm25_index.len();
         if indexed > 0 {
-            tracing::info!("Vector index rebuilt: {}/{} objects indexed", indexed, cids.len());
+            tracing::info!("Vector index rebuilt: {}/{} objects indexed", indexed, entries.len());
         }
         if bm25_count > 0 {
             tracing::info!("BM25 index rebuilt: {} documents indexed", bm25_count);
@@ -285,7 +311,7 @@ impl SemanticFS {
             }
         }
 
-        self.audit_log.write().unwrap().push(AuditEntry {
+        self.push_audit(AuditEntry {
             timestamp: now_ms(),
             action: AuditAction::Create,
             cid: cid.clone(),
@@ -346,6 +372,7 @@ impl SemanticFS {
         created_by: String,
         intent: Option<String>,
         precomputed_embedding: Vec<f32>,
+        skip_kg_edges: bool,
     ) -> std::io::Result<String> {
         let content_type = if std::str::from_utf8(&content).is_ok() {
             crate::cas::ContentType::Text
@@ -389,12 +416,12 @@ impl SemanticFS {
             if let Err(e) = kg.upsert_document(&cid, &tags, &meta.created_by) {
                 tracing::warn!("Failed to upsert document to knowledge graph: {}", e);
             }
-            if is_real {
+            if is_real && !skip_kg_edges {
                 self.add_similar_to_edges(kg, &cid, &precomputed_embedding);
             }
         }
 
-        self.audit_log.write().unwrap().push(AuditEntry {
+        self.push_audit(AuditEntry {
             timestamp: now_ms(),
             action: AuditAction::Create,
             cid: cid.clone(),
@@ -523,7 +550,7 @@ impl SemanticFS {
             let _ = kg.add_edge(edge);
         }
 
-        self.audit_log.write().unwrap().push(AuditEntry {
+        self.push_audit(AuditEntry {
             timestamp: now_ms(),
             action: AuditAction::Update { previous_cid: old_cid.to_string() },
             cid: new_cid.clone(),
@@ -548,7 +575,7 @@ impl SemanticFS {
 
         self.remove_from_tag_index(&obj.meta.tags, cid);
 
-        self.audit_log.write().unwrap().push(AuditEntry {
+        self.push_audit(AuditEntry {
             timestamp: now_ms(),
             action: AuditAction::Delete,
             cid: cid.to_string(),
@@ -592,7 +619,7 @@ impl SemanticFS {
 
         let _ = self.persist_recycle_bin();
 
-        self.audit_log.write().unwrap().push(AuditEntry {
+        self.push_audit(AuditEntry {
             timestamp: now_ms(),
             action: AuditAction::Create,
             cid: cid.to_string(),
@@ -764,7 +791,7 @@ impl SemanticFS {
                         .filter_map(|r| {
                             self.cas.get(&r.id).ok().map(|obj| {
                                 let snippet = String::from_utf8_lossy(
-                                    &obj.data[..std::cmp::min(200, obj.data.len())],
+                                    &obj.data[..std::cmp::min(MAX_SNIPPET_LEN, obj.data.len())],
                                 )
                                 .to_string();
                                 SearchResult {
@@ -793,7 +820,7 @@ impl SemanticFS {
                     SearchResult {
                         cid,
                         relevance,
-                        snippet: String::from_utf8_lossy(&obj.data[..std::cmp::min(200, obj.data.len())]).to_string(),
+                        snippet: String::from_utf8_lossy(&obj.data[..std::cmp::min(MAX_SNIPPET_LEN, obj.data.len())]).to_string(),
                         meta: obj.meta,
                     }
                 })
@@ -841,10 +868,12 @@ impl SemanticFS {
         let query_lower = query.to_lowercase();
         let index = self.tag_index.read().unwrap();
         let mut results = Vec::new();
+        let limit = 50; // Cap fallback results to prevent unbounded scan
 
         for (tag, cids) in index.iter() {
-            if tag.to_lowercase().contains(&query_lower) {
+            if case_insensitive_contains(tag, &query_lower) {
                 for cid in cids {
+                    if results.len() >= limit { return results; }
                     if let Ok(obj) = self.cas.get(cid) {
                         if filter.matches(&SearchIndexMeta {
                             cid: cid.clone(),
@@ -854,7 +883,7 @@ impl SemanticFS {
                             created_at: obj.meta.created_at,
                             memory_type: None,
                         }) {
-                            let snippet = String::from_utf8_lossy(&obj.data[..std::cmp::min(200, obj.data.len())]).to_string();
+                            let snippet = String::from_utf8_lossy(&obj.data[..std::cmp::min(MAX_SNIPPET_LEN, obj.data.len())]).to_string();
                             results.push(SearchResult { cid: cid.clone(), relevance: 0.8, meta: obj.meta, snippet });
                         }
                     }
@@ -883,7 +912,7 @@ impl SemanticFS {
                         break;
                     }
                     if let Ok(obj) = self.cas.get(cid) {
-                        let snippet = String::from_utf8_lossy(&obj.data[..std::cmp::min(200, obj.data.len())]).to_string();
+                        let snippet = String::from_utf8_lossy(&obj.data[..std::cmp::min(MAX_SNIPPET_LEN, obj.data.len())]).to_string();
                         results.push(SearchResult { cid: cid.clone(), relevance: 0.8, meta: obj.meta, snippet });
                     }
                 }
@@ -922,7 +951,7 @@ impl SemanticFS {
                     break;
                 }
                 if let Ok(obj) = self.cas.get(&cid) {
-                    let snippet = String::from_utf8_lossy(&obj.data[..std::cmp::min(200, obj.data.len())]).to_string();
+                    let snippet = String::from_utf8_lossy(&obj.data[..std::cmp::min(MAX_SNIPPET_LEN, obj.data.len())]).to_string();
                     results.push(SearchResult { cid: cid.clone(), relevance: 0.9, meta: obj.meta, snippet });
                 }
             }
@@ -936,7 +965,16 @@ impl SemanticFS {
     }
 
     pub fn audit_log(&self) -> Vec<AuditEntry> {
-        self.audit_log.read().unwrap().clone()
+        self.audit_log.read().unwrap().iter().cloned().collect()
+    }
+
+    /// Push an audit entry, evicting the oldest if the log exceeds MAX_AUDIT_LOG.
+    fn push_audit(&self, entry: AuditEntry) {
+        let mut log = self.audit_log.write().unwrap();
+        if log.len() >= MAX_AUDIT_LOG {
+            log.pop_front();
+        }
+        log.push_back(entry);
     }
 
     pub fn cas(&self) -> &CASStorage {
@@ -1040,9 +1078,14 @@ impl SemanticFS {
     }
 
     fn persist_recycle_bin(&self) -> std::io::Result<()> {
+        let now = now_ms();
+        {
+            let mut bin = self.recycle_bin.write().unwrap();
+            bin.retain(|_, entry| now.saturating_sub(entry.deleted_at) < RECYCLE_BIN_TTL_MS);
+        }
         let bin = self.recycle_bin.read().unwrap();
         let json = serde_json::to_vec(&*bin)?;
-        std::fs::write(&self.recycle_bin_path, json)
+        crate::kernel::persistence::atomic_write_bytes(&self.recycle_bin_path, &json)
     }
 
     fn load_recycle_bin(path: &std::path::Path) -> std::io::Result<HashMap<String, RecycleEntry>> {
@@ -1053,7 +1096,7 @@ impl SemanticFS {
     fn persist_tag_index(&self) -> std::io::Result<()> {
         let index = self.tag_index.read().unwrap();
         let json = serde_json::to_vec(&*index)?;
-        std::fs::write(&self.tag_index_path, json)
+        crate::kernel::persistence::atomic_write_bytes(&self.tag_index_path, &json)
     }
 
     fn load_tag_index(path: &std::path::Path) -> std::io::Result<HashMap<String, Vec<String>>> {
@@ -1187,7 +1230,7 @@ impl SemanticFS {
             .filter_map(|(i, cid)| {
                 self.cas.get(&cid).ok().map(|obj| {
                     let snippet = String::from_utf8_lossy(
-                        &obj.data[..std::cmp::min(200, obj.data.len())],
+                        &obj.data[..std::cmp::min(MAX_SNIPPET_LEN, obj.data.len())],
                     )
                     .to_string();
                     SearchResult {
@@ -1202,10 +1245,6 @@ impl SemanticFS {
     }
 }
 
-fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
-}
+use crate::util::now_ms;
+
 

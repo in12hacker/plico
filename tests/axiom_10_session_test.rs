@@ -18,7 +18,7 @@ fn make_kernel() -> (AIKernel, tempfile::TempDir) {
 #[test]
 fn axiom10_session_start_and_end() {
     let (kernel, _dir) = make_kernel();
-    let agent_id = kernel.register_agent("session-agent".into());
+    let agent_id = kernel.register_agent("session-agent".into()).unwrap();
     kernel.permission_grant(
         &agent_id,
         plico::api::permission::PermissionAction::Write,
@@ -50,7 +50,7 @@ fn axiom10_session_start_and_end() {
 #[test]
 fn axiom10_session_with_operations() {
     let (kernel, _dir) = make_kernel();
-    let agent_id = kernel.register_agent("ops-session-agent".into());
+    let agent_id = kernel.register_agent("ops-session-agent".into()).unwrap();
     kernel.permission_grant(
         &agent_id,
         plico::api::permission::PermissionAction::Write,
@@ -114,7 +114,7 @@ fn axiom10_session_with_operations() {
 #[test]
 fn axiom10_session_continuity_via_seq() {
     let (kernel, _dir) = make_kernel();
-    let agent_id = kernel.register_agent("continuity-agent".into());
+    let agent_id = kernel.register_agent("continuity-agent".into()).unwrap();
     kernel.permission_grant(
         &agent_id,
         plico::api::permission::PermissionAction::Write,
@@ -173,7 +173,7 @@ fn axiom10_session_continuity_via_seq() {
 #[test]
 fn axiom10_session_performance_within_budget() {
     let (kernel, _dir) = make_kernel();
-    let agent_id = kernel.register_agent("perf-session-agent".into());
+    let agent_id = kernel.register_agent("perf-session-agent".into()).unwrap();
     kernel.permission_grant(
         &agent_id,
         plico::api::permission::PermissionAction::Write,

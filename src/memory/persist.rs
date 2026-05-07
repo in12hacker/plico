@@ -23,6 +23,7 @@
 //! └── cas/                (serialized memory entries, stored as CAS objects)
 //! ```
 
+use crate::util::now_ms;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -153,6 +154,14 @@ impl MemoryPersister for CASPersister {
             return Ok(String::new());
         }
 
+        // Capture old CID before overwriting index entry
+        let old_cid = {
+            let index = self.index.read().unwrap();
+            index.agents.get(agent_id)
+                .and_then(|tiers| tiers.iter().find(|pt| pt.tier == Self::tier_name(tier)))
+                .map(|pt| pt.cid.clone())
+        };
+
         // Serialize entries to JSON
         let json = serde_json::to_string(entries)?;
         let meta = Self::make_meta(agent_id, tier);
@@ -179,6 +188,13 @@ impl MemoryPersister for CASPersister {
         }
 
         self.save_index().map_err(PersistError::Io)?;
+
+        // Delete old CAS object to prevent unbounded accumulation
+        if let Some(ref old) = old_cid {
+            if old != &cid {
+                let _ = self.cas.delete(old);
+            }
+        }
 
         Ok(cid)
     }
@@ -275,12 +291,6 @@ impl MemoryLoader {
     }
 }
 
-fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
-}
 
 #[cfg(test)]
 mod tests {

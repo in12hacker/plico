@@ -23,8 +23,10 @@ pub(in crate::kernel) fn handle(kernel: &AIKernel, name: &str, params: &serde_js
         }
         "agent.register" => {
             let name_param = params.get("name").and_then(|v| v.as_str()).unwrap_or("unnamed");
-            let id = kernel.register_agent(name_param.to_string());
-            ToolResult::ok(json!({"agent_id": id}))
+            match kernel.register_agent(name_param.to_string()) {
+                Ok(id) => ToolResult::ok(json!({"agent_id": id})),
+                Err(e) => ToolResult::error(e.to_string()),
+            }
         }
         "agent.status" => {
             let target = params.get("agent_id").and_then(|v| v.as_str()).unwrap_or(agent_id);

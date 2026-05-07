@@ -18,6 +18,7 @@
 //! - CID prefix sharding: prevents >10k files per directory (filesystem limit).
 //! - Atomic writes: write to temp file, then rename to prevent partial writes.
 
+use crate::util::now_ms;
 use std::collections::HashMap;
 use std::fs;
 use std::io;
@@ -39,12 +40,6 @@ pub struct AccessEntry {
     pub access_count: u64,
 }
 
-fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64
-}
 
 #[derive(Debug)]
 pub struct CASStorage {
@@ -88,6 +83,7 @@ impl From<CASError> for io::Error {
 
 const ACCESS_PERSIST_BATCH_SIZE: u64 = 100;
 const ACCESS_PERSIST_INTERVAL_MS: u64 = 60_000;
+const MAX_ACCESS_LOG_ENTRIES: usize = 100_000;
 
 fn validate_cid(cid: &str) -> Result<(), CASError> {
     if cid.len() < 2 {
@@ -266,6 +262,16 @@ impl CASStorage {
                 .and_modify(|e| { e.last_accessed_at = now; e.access_count += 1; })
                 .or_insert(AccessEntry { first_accessed_at: now, last_accessed_at: now, access_count: 1 });
 
+            // Evict oldest 10% when log exceeds limit
+            if log.len() > MAX_ACCESS_LOG_ENTRIES {
+                let mut entries: Vec<_> = log.iter().map(|(k, v)| (k.clone(), v.last_accessed_at)).collect();
+                entries.sort_unstable_by_key(|e| e.1);
+                let evict_count = entries.len() / 10;
+                for (cid, _) in entries.into_iter().take(evict_count) {
+                    log.remove(&cid);
+                }
+            }
+
             // F-42: Update counters for lazy persist trigger
             let new_total = self.access_count_total.fetch_add(1, Ordering::Relaxed) + 1;
             should_persist = new_total.is_multiple_of(ACCESS_PERSIST_BATCH_SIZE);
@@ -340,6 +346,25 @@ impl CASStorage {
         let json = fs::read(&path)?;
         serde_json::from_slice(&json)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+    }
+
+    /// Mark-sweep garbage collection. Deletes CAS objects whose CIDs are not in `active`.
+    /// Returns (swept_count, kept_count).
+    pub fn gc(&self, active: &std::collections::HashSet<String>) -> io::Result<(usize, usize)> {
+        let all_cids = self.list_cids()?;
+        let mut swept = 0;
+        let mut kept = 0;
+        for cid in all_cids {
+            if active.contains(&cid) {
+                kept += 1;
+            } else {
+                // Remove from access_log too
+                self.access_log.write().unwrap().remove(&cid);
+                self.delete(&cid)?;
+                swept += 1;
+            }
+        }
+        Ok((swept, kept))
     }
 
     /// Compute shard directory for a CID.

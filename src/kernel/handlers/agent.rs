@@ -6,13 +6,17 @@ impl super::super::AIKernel {
     pub(crate) fn handle_agent(&self, req: ApiRequest) -> ApiResponse {
         match req {
             ApiRequest::RegisterAgent { name } => {
-                let id = self.register_agent(name);
-                let token = self.key_store.generate_token(&id);
-                self.key_store.store_token(&token);
-                let mut r = ApiResponse::ok();
-                r.agent_id = Some(id);
-                r.token = Some(token.token);
-                r
+                match self.register_agent(name) {
+                    Ok(id) => {
+                        let token = self.key_store.generate_token(&id);
+                        self.key_store.store_token(&token);
+                        let mut r = ApiResponse::ok();
+                        r.agent_id = Some(id);
+                        r.token = Some(token.token);
+                        r
+                    }
+                    Err(e) => ApiResponse::error(e.to_string()),
+                }
             }
             ApiRequest::ListAgents => {
                 let agents: Vec<AgentDto> = self.list_agents().into_iter().map(|a| AgentDto {

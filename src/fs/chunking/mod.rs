@@ -10,6 +10,7 @@
 //!
 //! Controlled by `PLICO_CHUNKING` env var: `semantic` | `fixed` | `none` (default).
 
+use crate::util::cosine_similarity;
 use crate::fs::embedding::{EmbeddingProvider, EmbedError};
 
 /// A produced chunk with its text and byte offset within the parent document.
@@ -304,18 +305,6 @@ fn embed_sentences(
     Ok(all_embeddings)
 }
 
-fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
-    if a.len() != b.len() || a.is_empty() {
-        return 0.0;
-    }
-    let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
-    let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
-    let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
-    if norm_a < 1e-10 || norm_b < 1e-10 {
-        return 0.0;
-    }
-    dot / (norm_a * norm_b)
-}
 
 #[cfg(test)]
 mod tests {

@@ -7,8 +7,10 @@
 //! Edge keys use 4-part format: `"src|dst|type_debug|created_at"` to preserve
 //! full temporal history across restarts (system-v2.md axiom 8: causality).
 
+use crate::util::now_ms;
 use std::collections::{BinaryHeap, HashMap, HashSet};
-use std::sync::RwLock;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, RwLock};
 
 use redb::{Database, ReadableDatabase, TableDefinition};
 
@@ -62,7 +64,9 @@ pub struct PetgraphBackend {
     in_edges: RwLock<HashMap<String, Vec<(String, KGEdge)>>>,
     /// Reverse index: content_cid → set of node IDs that reference it.
     cid_refs: RwLock<HashMap<String, HashSet<String>>>,
-    db: Option<std::sync::Arc<Database>>,
+    db: Option<Mutex<Database>>,
+    /// Write counter for triggering periodic redb compaction.
+    write_count: AtomicU64,
 }
 
 impl PetgraphBackend {
@@ -73,59 +77,36 @@ impl PetgraphBackend {
             in_edges: RwLock::new(HashMap::new()),
             cid_refs: RwLock::new(HashMap::new()),
             db: None,
+            write_count: AtomicU64::new(0),
         }
     }
 
     pub fn open(root: std::path::PathBuf) -> Self {
         let db_path = root.join("kg.redb");
 
-        use std::collections::HashMap;
-        use std::sync::{Arc, Mutex, OnceLock};
-        static OPEN_DATABASES: OnceLock<Mutex<HashMap<std::path::PathBuf, Arc<Database>>>> = OnceLock::new();
-
-        let db_map = OPEN_DATABASES.get_or_init(|| Mutex::new(HashMap::new()));
-        let db = {
-            let mut db_guard = db_map.lock().unwrap();
-            if let Some(existing) = db_guard.get(&db_path) {
-                Some(Arc::clone(existing))
-            } else {
-                let database = if db_path.exists() {
-                    match Database::open(&db_path) {
-                        Ok(db) => db,
-                        Err(e) => {
-                            tracing::error!("Failed to open redb database: {e}. KG will run in-memory only.");
-                            return Self {
-                                nodes: RwLock::new(HashMap::new()),
-                                out_edges: RwLock::new(HashMap::new()),
-                                in_edges: RwLock::new(HashMap::new()),
-                                cid_refs: RwLock::new(HashMap::new()),
-                                db: None,
-                            };
-                        }
-                    }
-                } else {
-                    match Database::create(&db_path) {
-                        Ok(db) => db,
-                        Err(e) => {
-                            tracing::error!("Failed to create redb database: {e}. KG will run in-memory only.");
-                            return Self {
-                                nodes: RwLock::new(HashMap::new()),
-                                out_edges: RwLock::new(HashMap::new()),
-                                in_edges: RwLock::new(HashMap::new()),
-                                cid_refs: RwLock::new(HashMap::new()),
-                                db: None,
-                            };
-                        }
-                    }
-                };
-                let arc_db = Arc::new(database);
-                db_guard.insert(db_path.clone(), Arc::clone(&arc_db));
-                Some(arc_db)
+        let db = if db_path.exists() {
+            match Database::open(&db_path) {
+                Ok(db) => Some(db),
+                Err(e) => {
+                    tracing::error!("Failed to open redb database: {e}. KG will run in-memory only.");
+                    None
+                }
+            }
+        } else {
+            match Database::create(&db_path) {
+                Ok(db) => Some(db),
+                Err(e) => {
+                    tracing::error!("Failed to create redb database: {e}. KG will run in-memory only.");
+                    None
+                }
             }
         };
 
-        let (nodes, out_e, in_e) = if let Some(ref database) = db {
-            match Self::load_from_redb(database) {
+        let db_with_mutex = db.map(|d| Mutex::new(d));
+
+        let (nodes, out_e, in_e) = if let Some(ref mtx) = db_with_mutex {
+            let database = mtx.lock().unwrap();
+            match Self::load_from_redb(&database) {
                 Ok(triple) => triple,
                 Err(e) => {
                     tracing::warn!("Failed to load KG from redb, starting fresh: {}", e);
@@ -148,7 +129,8 @@ impl PetgraphBackend {
             out_edges: RwLock::new(out_e),
             in_edges: RwLock::new(in_e),
             cid_refs: RwLock::new(cid_refs_map),
-            db,
+            db: db_with_mutex,
+            write_count: AtomicU64::new(0),
         }
     }
 
@@ -159,10 +141,92 @@ impl PetgraphBackend {
         format!("{}|{}|{:?}|{}", src, dst, edge_type, created_at)
     }
 
+    // ── redb compaction ────────────────────────────────────────────────────
+
+    /// Compact the redb database to reclaim space from copy-on-write pages.
+    /// Called automatically every 1000 writes, or manually via `compact_db()`.
+    pub fn compact_db(&self) {
+        let Some(ref mtx) = self.db else { return };
+        let mut db = mtx.lock().unwrap();
+        match db.compact() {
+            Ok(true) => tracing::info!("KG redb compacted successfully"),
+            Ok(false) => {}
+            Err(e) => tracing::warn!("KG redb compact failed: {e}"),
+        }
+    }
+
+    /// Increment write counter and compact if threshold reached (1000 writes).
+    fn maybe_compact(&self) {
+        let count = self.write_count.fetch_add(1, Ordering::Relaxed) + 1;
+        if count >= 1000 {
+            self.write_count.store(0, Ordering::Relaxed);
+            self.compact_db();
+        }
+    }
+
+    /// Remove edges that were invalidated more than 7 days ago.
+    /// Returns the number of edges removed.
+    pub fn compact_edges(&self) -> usize {
+        let max_age_ms: u64 = 7 * 24 * 3600 * 1000;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+
+        let mut to_remove: Vec<KGEdge> = Vec::new();
+
+        // Collect expired edges from out_edges
+        {
+            let out = self.out_edges.read().unwrap();
+            for edges in out.values() {
+                for (_dst, edge) in edges {
+                    let expired = edge.invalid_at
+                        .or(edge.expired_at)
+                        .filter(|&t| now.saturating_sub(t) > max_age_ms);
+                    if expired.is_some() {
+                        to_remove.push(edge.clone());
+                    }
+                }
+            }
+        }
+
+        if to_remove.is_empty() {
+            return 0;
+        }
+
+        let count = to_remove.len();
+
+        // Remove from in-memory maps
+        {
+            let mut out = self.out_edges.write().unwrap();
+            for edge in &to_remove {
+                if let Some(edges) = out.get_mut(&edge.src) {
+                    edges.retain(|(dst, e)| !(dst == &edge.dst && e.edge_type == edge.edge_type && e.created_at == edge.created_at));
+                }
+            }
+        }
+        {
+            let mut inp = self.in_edges.write().unwrap();
+            for edge in &to_remove {
+                if let Some(edges) = inp.get_mut(&edge.dst) {
+                    edges.retain(|(src, e)| !(src == &edge.src && e.edge_type == edge.edge_type && e.created_at == edge.created_at));
+                }
+            }
+        }
+
+        // Remove from redb
+        self.remove_edges_from_db(&to_remove);
+        self.compact_db();
+
+        tracing::info!("KG compact_edges: removed {} expired edges", count);
+        count
+    }
+
     // ── Single-record persistence ──────────────────────────────────────────
 
     fn persist_node(&self, node_id: &str, node: &KGNode) {
-        let Some(ref db) = self.db else { return };
+        let Some(ref mtx) = self.db else { return };
+        let db = mtx.lock().unwrap();
         let res = (|| -> Result<(), Box<dyn std::error::Error>> {
             let write_txn = db.begin_write()?;
             {
@@ -182,7 +246,8 @@ impl PetgraphBackend {
 
     /// Persist a new edge + all invalidated predecessors in one ACID transaction.
     fn persist_add_edge_atomic(&self, new_edge: &KGEdge, invalidated: &[KGEdge]) {
-        let Some(ref db) = self.db else { return };
+        let Some(ref mtx) = self.db else { return };
+        let db = mtx.lock().unwrap();
         let res = (|| -> Result<(), Box<dyn std::error::Error>> {
             let write_txn = db.begin_write()?;
             {
@@ -206,7 +271,8 @@ impl PetgraphBackend {
 
     /// Batch-remove edges from redb in one transaction.
     fn remove_edges_from_db(&self, edges: &[KGEdge]) {
-        let Some(ref db) = self.db else { return };
+        let Some(ref mtx) = self.db else { return };
+        let db = mtx.lock().unwrap();
         if edges.is_empty() { return; }
         let res = (|| -> Result<(), Box<dyn std::error::Error>> {
             let write_txn = db.begin_write()?;
@@ -227,7 +293,8 @@ impl PetgraphBackend {
 
     /// Remove a node + all its edges in one ACID transaction.
     fn remove_node_and_edges_from_db(&self, node_id: &str, edges: &[KGEdge]) {
-        let Some(ref db) = self.db else { return };
+        let Some(ref mtx) = self.db else { return };
+        let db = mtx.lock().unwrap();
         let res = (|| -> Result<(), Box<dyn std::error::Error>> {
             let write_txn = db.begin_write()?;
             {
@@ -289,7 +356,7 @@ impl PetgraphBackend {
     // ── Load / Migration ───────────────────────────────────────────────────
 
     fn load_from_redb(
-        database: &std::sync::Arc<Database>,
+        database: &Database,
     ) -> Result<DiskGraph, KGError> {
         let read_txn = database.begin_read()
             .map_err(|e| KGError::DatabaseError(format!("begin_read failed: {e}")))?;
@@ -496,12 +563,6 @@ fn jaccard_weight(props: &serde_json::Value, tags: &[String]) -> f32 {
     shared / total_a.max(total_b)
 }
 
-fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
-}
 
 impl Default for PetgraphBackend {
     fn default() -> Self {
@@ -523,6 +584,7 @@ impl KnowledgeGraph for PetgraphBackend {
         nodes.insert(node_id.clone(), node);
         drop(nodes);
         self.persist_node(&node_id, &node_clone);
+        self.maybe_compact();
         Ok(())
     }
 
@@ -542,6 +604,7 @@ impl KnowledgeGraph for PetgraphBackend {
             .or_default()
             .push((edge.src.clone(), edge));
         self.persist_add_edge_atomic(&edge_clone, &invalidated);
+        self.maybe_compact();
         Ok(())
     }
 
@@ -879,7 +942,8 @@ impl KnowledgeGraph for PetgraphBackend {
         let count = invalidated.len();
         if !invalidated.is_empty() {
             // Persist the invalidated edges so `invalid_at` survives restart
-            let Some(ref db) = self.db else { return Ok(count); };
+            let Some(ref mtx) = self.db else { return Ok(count); };
+            let db = mtx.lock().unwrap();
             let res = (|| -> Result<(), Box<dyn std::error::Error>> {
                 let write_txn = db.begin_write()?;
                 {

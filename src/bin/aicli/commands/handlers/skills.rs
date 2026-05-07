@@ -142,7 +142,7 @@ mod tests {
     #[test]
     fn test_skills_list_empty() {
         let kernel = make_test_kernel();
-        kernel.register_agent("SkillsTestAgent".to_string());
+        kernel.register_agent("SkillsTestAgent".to_string()).unwrap();
         let args = vec!["skills".to_string(), "list".to_string(), "--agent".to_string(), "SkillsTestAgent".to_string()];
         let response = cmd_skills(&kernel, &args);
         assert!(response.ok, "skills list should succeed");
@@ -160,7 +160,7 @@ mod tests {
     #[test]
     fn test_skills_describe_requires_name() {
         let kernel = make_test_kernel();
-        kernel.register_agent("SkillsTestAgent".to_string());
+        kernel.register_agent("SkillsTestAgent".to_string()).unwrap();
         let args = vec!["skills".to_string(), "describe".to_string(), "--agent".to_string(), "SkillsTestAgent".to_string()];
         let response = cmd_skills(&kernel, &args);
         assert!(!response.ok, "describe without name should fail");

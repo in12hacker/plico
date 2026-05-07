@@ -26,3 +26,4 @@ bench/**/*.pyc
 
 # Model files
 *.gguf
+benchmarks/datasets/

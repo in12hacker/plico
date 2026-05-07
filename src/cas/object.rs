@@ -9,6 +9,7 @@
 //! Instead of paths and filenames, AI agents describe objects with semantic tags,
 //! content type, and origin metadata. The system infers structure from meaning.
 
+use crate::util::now_ms;
 use serde::{Deserialize, Serialize};
 use sha2::{Sha256, Digest};
 
@@ -186,12 +187,6 @@ impl std::fmt::Display for ContentType {
     }
 }
 
-fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
-}
 
 #[cfg(test)]
 mod tests {

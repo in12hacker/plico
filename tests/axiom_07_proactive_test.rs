@@ -18,7 +18,7 @@ fn make_kernel() -> (AIKernel, tempfile::TempDir) {
 #[test]
 fn axiom7_event_subscription_delivers_notifications() {
     let (kernel, _dir) = make_kernel();
-    let agent_id = kernel.register_agent("proactive-agent".into());
+    let agent_id = kernel.register_agent("proactive-agent".into()).unwrap();
     kernel.permission_grant(
         &agent_id,
         plico::api::permission::PermissionAction::Write,
@@ -55,7 +55,7 @@ fn axiom7_event_subscription_delivers_notifications() {
 #[test]
 fn axiom7_context_assembly_prewarming() {
     let (kernel, _dir) = make_kernel();
-    let agent_id = kernel.register_agent("assembly-agent".into());
+    let agent_id = kernel.register_agent("assembly-agent".into()).unwrap();
     kernel.permission_grant(
         &agent_id,
         plico::api::permission::PermissionAction::Write,
@@ -91,7 +91,7 @@ fn axiom7_context_assembly_prewarming() {
 #[test]
 fn axiom7_declare_intent_triggers_prefetch() {
     let (kernel, _dir) = make_kernel();
-    let agent_id = kernel.register_agent("declare-agent".into());
+    let agent_id = kernel.register_agent("declare-agent".into()).unwrap();
     kernel.permission_grant(
         &agent_id,
         plico::api::permission::PermissionAction::Write,
@@ -127,7 +127,7 @@ fn axiom7_declare_intent_triggers_prefetch() {
 #[test]
 fn axiom7_proactive_latency_within_budget() {
     let (kernel, _dir) = make_kernel();
-    let agent_id = kernel.register_agent("latency-agent".into());
+    let agent_id = kernel.register_agent("latency-agent".into()).unwrap();
     kernel.permission_grant(
         &agent_id,
         plico::api::permission::PermissionAction::Write,

@@ -363,7 +363,7 @@ mod tests {
     #[test]
     fn test_memory_recall_agent_name_resolution() {
         let (kernel, _dir) = make_kernel();
-        kernel.register_agent("RecallAgent".to_string());
+        kernel.register_agent("RecallAgent".to_string()).unwrap();
         dispatch(&kernel, "memory.store",
             serde_json::json!({"content": "recallable", "tier": "working"}),
             "RecallAgent");

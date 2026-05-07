@@ -18,7 +18,7 @@ fn make_kernel() -> (AIKernel, tempfile::TempDir) {
 #[test]
 fn axiom2_submit_intent_with_priority() {
     let (kernel, _dir) = make_kernel();
-    let agent_id = kernel.register_agent("intent-agent".into());
+    let agent_id = kernel.register_agent("intent-agent".into()).unwrap();
     kernel.permission_grant(
         &agent_id,
         plico::api::permission::PermissionAction::Write,
@@ -38,7 +38,7 @@ fn axiom2_submit_intent_with_priority() {
 #[test]
 fn axiom2_submit_intent_default_priority() {
     let (kernel, _dir) = make_kernel();
-    let agent_id = kernel.register_agent("default-prio-agent".into());
+    let agent_id = kernel.register_agent("default-prio-agent".into()).unwrap();
     kernel.permission_grant(
         &agent_id,
         plico::api::permission::PermissionAction::Write,
@@ -58,7 +58,7 @@ fn axiom2_submit_intent_default_priority() {
 #[test]
 fn axiom2_intent_drives_search() {
     let (kernel, _dir) = make_kernel();
-    let agent_id = kernel.register_agent("search-intent-agent".into());
+    let agent_id = kernel.register_agent("search-intent-agent".into()).unwrap();
     kernel.permission_grant(
         &agent_id,
         plico::api::permission::PermissionAction::Write,
@@ -100,7 +100,7 @@ fn axiom2_intent_drives_search() {
 #[test]
 fn axiom2_batch_submit_intents() {
     let (kernel, _dir) = make_kernel();
-    let agent_id = kernel.register_agent("batch-intent-agent".into());
+    let agent_id = kernel.register_agent("batch-intent-agent".into()).unwrap();
     kernel.permission_grant(
         &agent_id,
         plico::api::permission::PermissionAction::Write,

@@ -231,7 +231,7 @@ mod tests {
         let kernel = make_test_kernel();
         use plico::api::permission::PermissionAction;
         // Register two agents so recall_visible works
-        let alice = kernel.register_agent("alice".to_string());
+        let alice = kernel.register_agent("alice".to_string()).unwrap();
         kernel.permission_grant(&alice, PermissionAction::Write, None, None);
         kernel.permission_grant(&alice, PermissionAction::Read, None, None);
 
@@ -255,8 +255,8 @@ mod tests {
         let kernel = make_test_kernel();
         use plico::api::permission::PermissionAction;
         // Register two agents
-        let alice = kernel.register_agent("alice".to_string());
-        let bob = kernel.register_agent("bob".to_string());
+        let alice = kernel.register_agent("alice".to_string()).unwrap();
+        let bob = kernel.register_agent("bob".to_string()).unwrap();
         kernel.permission_grant(&alice, PermissionAction::Write, None, None);
         kernel.permission_grant(&alice, PermissionAction::Read, None, None);
         kernel.permission_grant(&bob, PermissionAction::Read, None, None);
@@ -284,8 +284,8 @@ mod tests {
     fn test_cmd_remember_group_scope() {
         let kernel = make_test_kernel();
         use plico::api::permission::PermissionAction;
-        let alice = kernel.register_agent("alice".to_string());
-        let bob = kernel.register_agent("bob".to_string());
+        let alice = kernel.register_agent("alice".to_string()).unwrap();
+        let bob = kernel.register_agent("bob".to_string()).unwrap();
         kernel.permission_grant(&alice, PermissionAction::Write, None, None);
         kernel.permission_grant(&alice, PermissionAction::Read, None, None);
         kernel.permission_grant(&bob, PermissionAction::Read, None, None);

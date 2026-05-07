@@ -18,7 +18,7 @@ fn make_kernel() -> (AIKernel, tempfile::TempDir) {
 #[test]
 fn axiom9_skill_registration_and_discovery() {
     let (kernel, _dir) = make_kernel();
-    let agent_id = kernel.register_agent("skill-agent".into());
+    let agent_id = kernel.register_agent("skill-agent".into()).unwrap();
     kernel.permission_grant(
         &agent_id,
         plico::api::permission::PermissionAction::Write,
@@ -46,7 +46,7 @@ fn axiom9_skill_registration_and_discovery() {
 #[test]
 fn axiom9_procedural_memory_store_and_recall() {
     let (kernel, _dir) = make_kernel();
-    let agent_id = kernel.register_agent("proc-memory-agent".into());
+    let agent_id = kernel.register_agent("proc-memory-agent".into()).unwrap();
     kernel.permission_grant(
         &agent_id,
         plico::api::permission::PermissionAction::Write,
@@ -90,7 +90,7 @@ fn axiom9_procedural_memory_store_and_recall() {
 #[test]
 fn axiom9_growth_report_after_session() {
     let (kernel, _dir) = make_kernel();
-    let agent_id = kernel.register_agent("growth-agent".into());
+    let agent_id = kernel.register_agent("growth-agent".into()).unwrap();
     kernel.permission_grant(
         &agent_id,
         plico::api::permission::PermissionAction::Write,
@@ -138,7 +138,7 @@ fn axiom9_growth_report_after_session() {
 #[test]
 fn axiom9_intent_feedback_for_learning() {
     let (kernel, _dir) = make_kernel();
-    let agent_id = kernel.register_agent("feedback-learner".into());
+    let agent_id = kernel.register_agent("feedback-learner".into()).unwrap();
     kernel.permission_grant(
         &agent_id,
         plico::api::permission::PermissionAction::Write,

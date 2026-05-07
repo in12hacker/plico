@@ -18,8 +18,8 @@ fn make_kernel() -> (AIKernel, tempfile::TempDir) {
 #[test]
 fn axiom4_cross_agent_object_visibility() {
     let (kernel, _dir) = make_kernel();
-    let agent_a = kernel.register_agent("agent-alpha".into());
-    let agent_b = kernel.register_agent("agent-beta".into());
+    let agent_a = kernel.register_agent("agent-alpha".into()).unwrap();
+    let agent_b = kernel.register_agent("agent-beta".into()).unwrap();
 
     kernel.permission_grant(&agent_a, plico::api::permission::PermissionAction::Write, None, None);
     kernel.permission_grant(&agent_b, plico::api::permission::PermissionAction::ReadAny, None, None);
@@ -49,8 +49,8 @@ fn axiom4_cross_agent_object_visibility() {
 #[test]
 fn axiom4_cross_agent_search_visibility() {
     let (kernel, _dir) = make_kernel();
-    let agent_a = kernel.register_agent("writer-agent".into());
-    let agent_b = kernel.register_agent("reader-agent".into());
+    let agent_a = kernel.register_agent("writer-agent".into()).unwrap();
+    let agent_b = kernel.register_agent("reader-agent".into()).unwrap();
 
     kernel.permission_grant(&agent_a, plico::api::permission::PermissionAction::Write, None, None);
     kernel.permission_grant(&agent_b, plico::api::permission::PermissionAction::Read, None, None);
@@ -87,8 +87,8 @@ fn axiom4_cross_agent_search_visibility() {
 #[test]
 fn axiom4_shared_memory_across_agents() {
     let (kernel, _dir) = make_kernel();
-    let agent_a = kernel.register_agent("mem-writer".into());
-    let agent_b = kernel.register_agent("mem-reader".into());
+    let agent_a = kernel.register_agent("mem-writer".into()).unwrap();
+    let agent_b = kernel.register_agent("mem-reader".into()).unwrap();
 
     kernel.permission_grant(&agent_a, plico::api::permission::PermissionAction::Write, None, None);
     kernel.permission_grant(&agent_b, plico::api::permission::PermissionAction::Read, None, None);
@@ -113,8 +113,8 @@ fn axiom4_shared_memory_across_agents() {
 #[test]
 fn axiom4_tag_based_object_sharing() {
     let (kernel, _dir) = make_kernel();
-    let agent_a = kernel.register_agent("tag-writer".into());
-    let agent_b = kernel.register_agent("tag-reader".into());
+    let agent_a = kernel.register_agent("tag-writer".into()).unwrap();
+    let agent_b = kernel.register_agent("tag-reader".into()).unwrap();
 
     kernel.permission_grant(&agent_a, plico::api::permission::PermissionAction::Write, None, None);
     kernel.permission_grant(&agent_b, plico::api::permission::PermissionAction::Read, None, None);

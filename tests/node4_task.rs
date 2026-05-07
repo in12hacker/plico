@@ -25,8 +25,8 @@ fn test_g3_task_delegation_end_to_end() {
     let (kernel, _dir) = make_kernel();
 
     // Register coordinator and worker agents
-    let coordinator = kernel.register_agent("coordinator-agent".to_string());
-    let worker = kernel.register_agent("worker-agent".to_string());
+    let coordinator = kernel.register_agent("coordinator-agent".to_string()).unwrap();
+    let worker = kernel.register_agent("worker-agent".to_string()).unwrap();
 
     use plico::api::permission::PermissionAction;
     kernel.permission_grant(&coordinator, PermissionAction::Read, None, None);
@@ -131,8 +131,8 @@ fn test_g3_task_delegation_end_to_end() {
 fn test_g3_task_delegation_state_transitions() {
     let (kernel, _dir) = make_kernel();
 
-    let coordinator = kernel.register_agent("coordinator".to_string());
-    let worker = kernel.register_agent("worker".to_string());
+    let coordinator = kernel.register_agent("coordinator".to_string()).unwrap();
+    let worker = kernel.register_agent("worker".to_string()).unwrap();
 
     use plico::api::permission::PermissionAction;
     kernel.permission_grant(&coordinator, PermissionAction::Read, None, None);
@@ -174,9 +174,9 @@ fn test_g3_task_delegation_state_transitions() {
 fn test_g3_task_delegation_wrong_agent_cannot_complete() {
     let (kernel, _dir) = make_kernel();
 
-    let coordinator = kernel.register_agent("coordinator".to_string());
-    let worker_a = kernel.register_agent("worker-a".to_string());
-    let worker_b = kernel.register_agent("worker-b".to_string());
+    let coordinator = kernel.register_agent("coordinator".to_string()).unwrap();
+    let worker_a = kernel.register_agent("worker-a".to_string()).unwrap();
+    let worker_b = kernel.register_agent("worker-b".to_string()).unwrap();
 
     use plico::api::permission::PermissionAction;
     kernel.permission_grant(&coordinator, PermissionAction::Read, None, None);
@@ -229,8 +229,8 @@ fn test_g3_task_persist_and_restore() {
 
     let kernel = AIKernel::new(root).expect("kernel init");
 
-    let coordinator = kernel.register_agent("coordinator".to_string());
-    let worker = kernel.register_agent("worker".to_string());
+    let coordinator = kernel.register_agent("coordinator".to_string()).unwrap();
+    let worker = kernel.register_agent("worker".to_string()).unwrap();
 
     use plico::api::permission::PermissionAction;
     kernel.permission_grant(&coordinator, PermissionAction::Read, None, None);
@@ -287,8 +287,8 @@ fn test_g3_task_persist_and_restore() {
 fn test_g3_knowledge_event_propagation() {
     let (kernel, _dir) = make_kernel();
 
-    let agent_a = kernel.register_agent("agent-a".to_string());
-    let agent_b = kernel.register_agent("agent-b".to_string());
+    let agent_a = kernel.register_agent("agent-a".to_string()).unwrap();
+    let agent_b = kernel.register_agent("agent-b".to_string()).unwrap();
 
     use plico::api::permission::PermissionAction;
     kernel.permission_grant(&agent_a, PermissionAction::Read, None, None);
@@ -365,8 +365,8 @@ fn test_g3_knowledge_event_propagation() {
 fn test_g3_task_delegated_event_emitted() {
     let (kernel, _dir) = make_kernel();
 
-    let coordinator = kernel.register_agent("coordinator".to_string());
-    let worker = kernel.register_agent("worker".to_string());
+    let coordinator = kernel.register_agent("coordinator".to_string()).unwrap();
+    let worker = kernel.register_agent("worker".to_string()).unwrap();
 
     use plico::api::permission::PermissionAction;
     kernel.permission_grant(&coordinator, PermissionAction::Read, None, None);

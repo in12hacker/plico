@@ -25,7 +25,7 @@ fn test_file_qa_agent_full_lifecycle() {
     let (kernel, _dir) = make_kernel();
 
     // ── Phase 1: Agent registration ─────────────────────────────
-    let agent_id = kernel.register_agent("file-qa-bot".to_string());
+    let agent_id = kernel.register_agent("file-qa-bot".to_string()).unwrap();
     // Grant full permissions for the demo agent
     use plico::api::permission::PermissionAction;
     kernel.permission_grant(&agent_id, PermissionAction::Read, None, None);
@@ -166,13 +166,13 @@ fn test_file_qa_agent_full_lifecycle() {
     assert!(has_auto_learned, "should have verified procedural memory from learn cycle");
 
     // ── Phase 11: Permission isolation ──────────────────────────
-    let other_agent = kernel.register_agent("other-agent".to_string());
+    let other_agent = kernel.register_agent("other-agent".to_string()).unwrap();
     let isolated_read = kernel.get_object(&doc2, &other_agent, "default");
     assert!(isolated_read.is_err(), "other agent should not read doc owned by file-qa-bot");
 
     // ── Phase 12: Agent lifecycle ───────────────────────────────
     // Use API to test lifecycle. Fresh agent + submit intent → Waiting → Suspend → Resume → Terminate
-    let lifecycle_agent = kernel.register_agent("lifecycle-test".to_string());
+    let lifecycle_agent = kernel.register_agent("lifecycle-test".to_string()).unwrap();
 
     // Submit intent via API to move from Created → Waiting
     let resp = kernel.handle_api_request(plico::api::semantic::ApiRequest::SubmitIntent {
@@ -204,7 +204,7 @@ fn test_file_qa_agent_full_lifecycle() {
     assert!(state.contains("Terminated"), "should be terminated, got: {}", state);
 
     // ── Phase 13: Messaging between agents ──────────────────────
-    let agent_b = kernel.register_agent("analyst-bot".to_string());
+    let agent_b = kernel.register_agent("analyst-bot".to_string()).unwrap();
     kernel.send_message(&agent_id, &agent_b, serde_json::json!("Please review Q1 report")).unwrap();
 
     let msgs = kernel.read_messages(&agent_b, true);
@@ -244,7 +244,7 @@ fn test_file_qa_agent_full_lifecycle() {
     assert!(has_shared, "analyst should see shared fiscal year memory");
     assert!(has_group, "analyst in finance-team should see group memory");
 
-    let outsider = kernel.register_agent("outsider-bot".to_string());
+    let outsider = kernel.register_agent("outsider-bot".to_string()).unwrap();
     kernel.permission_grant(&outsider, PermissionAction::Read, None, None);
     let visible_outsider = kernel.recall_visible(&outsider, "default", &[]);
     assert!(

@@ -250,3 +250,81 @@ dimension: OnceLock<usize>  // Not computed at construction
 **CLI daemon routing**: Commands in `commands/mod.rs` are embedded-mode only. Daemon mode requires routing in `build_remote_request()` in `main.rs`.
 
 See skill `plico-tokio-patterns` for full details and dogfood node "Pattern: Tokio Runtime Nesting Fix" for context.
+
+## 7. Security Red Lines
+
+**Security issues and hardcoded values are code red lines. They must be fixed immediately when discovered.**
+
+### Reserved Agent Names
+- `"kernel"`, `"system"`, `"root"`, `"admin"` are hardcoded as trusted in `PermissionGuard::new()` (`src/api/permission.rs:179-181`)
+- These names **MUST NOT** be user-registerable — they bypass all permission checks
+- Enforcement: `register_agent()` rejects these names with `PermissionDenied`
+- If you add a new trusted agent name, you **MUST** also add it to `RESERVED_AGENT_NAMES` in `src/kernel/ops/agent.rs`
+
+### Content Size Limits
+- Maximum content per object: **10 MB** (`MAX_CONTENT_BYTES` in `src/api/semantic.rs`)
+- Enforced in `decode_content()` — rejects payloads exceeding the limit
+- Prevents unbounded memory allocation from malicious or accidental large payloads
+
+### Atomic Writes
+- All persistence **MUST** use `atomic_write_json()` or `atomic_write_bytes()` from `src/kernel/persistence.rs`
+- **NEVER** use `std::fs::write()` directly for JSON/index files — partial writes corrupt state
+- Pattern: write to `.tmp` → rename to final path. Rename failure is logged, not silently ignored.
+
+### Permission Boundaries
+- Tenant isolation is the **hardest security boundary** — even trusted agents (`kernel`, `system`) cannot bypass it
+- Cross-tenant access requires explicit `CrossTenant` permission grant
+- `let _ =` on rename operations is forbidden — errors must be logged or propagated
+
+### Secrets
+- **NEVER** hardcode API keys, tokens, or passwords in source code
+- Use environment variables or `~/.plico/` config files
+- `MINIMAX_API_KEY` and similar secrets belong in env vars, not in code
+
+## 8. Development Lessons (v37 Refactoring)
+
+**Lessons from the v37 audit/refactor cycle. Read before starting any large-scale codebase change.**
+
+### Bulk Signature Changes
+
+When changing a widely-used function signature (e.g., `register_agent() -> String` to `-> Result<String>`):
+
+1. **Use `sed` or a background agent** for mechanical caller updates — manual editing 25+ files is error-prone and slow
+2. **Verify with `cargo test`** after the bulk update — catch missed callers immediately
+3. **Watch for `let _ =` on Results** — silently discarding errors is a bug pattern that sed won't catch
+4. **Background agents can stall** — if an agent runs >10 minutes with no output, stop it and do the work manually with `sed`
+
+### Utility Consolidation
+
+Duplicated utility functions (`now_ms`, `cosine_similarity`, `case_insensitive_contains`) spread across modules cause divergence bugs.
+
+- **Check `src/util.rs` first** before writing any utility function
+- **One definition, re-export everywhere** — use `pub(crate) use crate::util::func;`
+- **After removing a local copy**, update all callers to use the shared import. Verify with `cargo test`
+
+### Atomic Writes
+
+- **All JSON/index persistence** must use `atomic_write_json()` or `atomic_write_bytes()` from `src/kernel/persistence.rs`
+- **Pattern**: write to `.tmp` → `rename()` to final. Never `std::fs::write()` directly
+- **What to watch for**: files written with `serde_json::to_string` + `fs::write` that look "fine" in testing but corrupt on crash
+
+### O(n²) Detection at Scale
+
+For 300M text data scale, these patterns are performance killers:
+
+- **`content.to_lowercase()` inside a loop** — allocates a new String per iteration. Use zero-allocation `case_insensitive_contains()`
+- **Unsorted candidate iteration** — sort by relevance/importance first, then truncate to top-K before expensive operations
+- **`Vec::push` without capacity** — pre-allocate with `Vec::with_capacity()` when size is known
+
+### Benchmark Pipeline
+
+- **Search limit matters**: 5 → 15 snippets improved context hit rate significantly
+- **Intent-specific prompts**: temporal/multi-hop questions need specialized prompts, not generic ones
+- **F1 vs LLM Score**: F1 measures token overlap (low for paraphrased answers), LLM Score measures semantic correctness (better metric)
+- **Context hit rate is the ceiling**: if search doesn't find the right content, no reader prompt can fix it
+
+### CLAUDE.md Maintenance
+
+- **Security red lines are non-negotiable** — document immediately when discovered
+- **Don't store code patterns in CLAUDE.md** that can be derived from reading code — store process lessons and gotchas
+- **Convert relative dates to absolute** — "last Thursday" becomes useless after a week

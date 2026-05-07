@@ -4,6 +4,11 @@ use crate::scheduler::{Agent, AgentHandle, AgentId, AgentState, AgentResources, 
 use crate::kernel::event_bus::KernelEvent;
 use crate::api::semantic::{AgentUsageDto, AgentCardDto, SkillDto};
 
+/// Reserved agent names that cannot be registered by users.
+/// These names are hardcoded as trusted in `PermissionGuard::new()`
+/// and would bypass all permission checks if user-registerable.
+const RESERVED_AGENT_NAMES: &[&str] = &["kernel", "system", "root", "admin"];
+
 fn transition_err(e: TransitionError) -> std::io::Error {
     std::io::Error::new(std::io::ErrorKind::InvalidInput, e.to_string())
 }
@@ -27,7 +32,13 @@ impl crate::kernel::AIKernel {
         id
     }
 
-    pub fn register_agent(&self, name: String) -> String {
+    pub fn register_agent(&self, name: String) -> std::io::Result<String> {
+        if RESERVED_AGENT_NAMES.contains(&name.to_lowercase().as_str()) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                format!("'{}' is a reserved agent name", name),
+            ));
+        }
         let agent = Agent::new(name.clone());
         let id = agent.id().to_string();
         self.scheduler.register(agent);
@@ -43,7 +54,7 @@ impl crate::kernel::AIKernel {
             new_state: "Waiting".into(),
         });
         self.persist_agents();
-        id
+        Ok(id)
     }
 
     pub fn list_agents(&self) -> Vec<AgentHandle> {
@@ -549,8 +560,8 @@ mod tests {
     #[test]
     fn test_register_agent_multiple() {
         let (kernel, _dir) = crate::kernel::tests::make_kernel();
-        let id1 = kernel.register_agent("agent-alpha".to_string());
-        let id2 = kernel.register_agent("agent-beta".to_string());
+        let id1 = kernel.register_agent("agent-alpha".to_string()).unwrap();
+        let id2 = kernel.register_agent("agent-beta".to_string()).unwrap();
         assert_ne!(id1, id2);
 
         let agents = kernel.list_agents();
@@ -562,7 +573,7 @@ mod tests {
     #[test]
     fn test_resolve_agent_by_uuid() {
         let (kernel, _dir) = crate::kernel::tests::make_kernel();
-        let id = kernel.register_agent("resolver-test".to_string());
+        let id = kernel.register_agent("resolver-test".to_string()).unwrap();
 
         let resolved = kernel.resolve_agent(&id);
         assert_eq!(resolved, Some(id));
@@ -571,7 +582,7 @@ mod tests {
     #[test]
     fn test_resolve_agent_by_name() {
         let (kernel, _dir) = crate::kernel::tests::make_kernel();
-        kernel.register_agent("named-agent".to_string());
+        kernel.register_agent("named-agent".to_string()).unwrap();
 
         let resolved = kernel.resolve_agent("named-agent");
         assert!(resolved.is_some());
@@ -586,7 +597,7 @@ mod tests {
     #[test]
     fn test_submit_intent_basic() {
         let (kernel, _dir) = crate::kernel::tests::make_kernel();
-        kernel.register_agent("intent-agent".to_string());
+        kernel.register_agent("intent-agent".to_string()).unwrap();
 
         let result = kernel.submit_intent(
             IntentPriority::Medium,
@@ -600,7 +611,7 @@ mod tests {
     #[test]
     fn test_agent_status() {
         let (kernel, _dir) = crate::kernel::tests::make_kernel();
-        let id = kernel.register_agent("status-agent".to_string());
+        let id = kernel.register_agent("status-agent".to_string()).unwrap();
 
         let status = kernel.agent_status(&id);
         assert!(status.is_some());
@@ -612,8 +623,8 @@ mod tests {
     #[test]
     fn test_discover_agents() {
         let (kernel, _dir) = crate::kernel::tests::make_kernel();
-        kernel.register_agent("alice".to_string());
-        kernel.register_agent("bob".to_string());
+        kernel.register_agent("alice".to_string()).unwrap();
+        kernel.register_agent("bob".to_string()).unwrap();
 
         let agents = kernel.discover_agents(None, None);
         assert!(agents.len() >= 2);
@@ -625,5 +636,23 @@ mod tests {
         kernel.ensure_agent_registered("lazy-agent");
         let resolved = kernel.resolve_agent("lazy-agent");
         assert!(resolved.is_some());
+    }
+
+    #[test]
+    fn test_reserved_agent_names_rejected() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        for name in &["kernel", "system", "root", "admin"] {
+            let result = kernel.register_agent(name.to_string());
+            assert!(result.is_err(), "reserved name '{}' should be rejected", name);
+            assert!(
+                result.unwrap_err().to_string().contains("reserved"),
+                "error should mention 'reserved'"
+            );
+        }
+        // Case-insensitive check
+        assert!(kernel.register_agent("Kernel".to_string()).is_err());
+        assert!(kernel.register_agent("SYSTEM".to_string()).is_err());
+        // Non-reserved names should work
+        assert!(kernel.register_agent("my-agent".to_string()).is_ok());
     }
 }
