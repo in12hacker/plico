@@ -116,6 +116,28 @@ impl super::super::AIKernel {
                 r.memory = Some(memories);
                 r
             }
+            ApiRequest::RecallRouted { agent_id, query, k: _, tenant_id } => {
+                let tenant = tenant_id.unwrap_or_else(|| DEFAULT_TENANT.to_string());
+                match self.recall_routed(&agent_id, &tenant, &query) {
+                    Ok((entries, classified)) => {
+                        let memories: Vec<String> = entries.into_iter()
+                            .filter_map(|m| match m.content {
+                                crate::memory::MemoryContent::Text(t) => Some(t),
+                                crate::memory::MemoryContent::Procedure(p) => Some(format!("[procedure:{}] {}", p.name, p.description)),
+                                _ => None,
+                            }).collect();
+                        let mut r = ApiResponse::ok();
+                        r.memory = Some(memories);
+                        r.data = Some(serde_json::json!({
+                            "intent": classified.intent.name(),
+                            "confidence": classified.confidence,
+                            "method": format!("{:?}", classified.method),
+                        }).to_string());
+                        r
+                    }
+                    Err(e) => ApiResponse::error(e),
+                }
+            }
             ApiRequest::RememberProcedural { agent_id, name, description, steps, learned_from, tags, scope } => {
                 let proc_steps: Vec<crate::memory::layered::ProcedureStep> = steps.into_iter().enumerate().map(|(i, s)| {
                     crate::memory::layered::ProcedureStep {

@@ -3,6 +3,7 @@
 //! Implements the 4-tier memory hierarchy. Each tier has different
 //! characteristics for capacity, latency, and persistence.
 
+use crate::util::cosine_similarity;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
@@ -1136,6 +1137,104 @@ impl LayeredMemory {
         false
     }
 
+    /// Run memory consolidation for an agent (Soul v3.0 公理3: 记忆是认知的外骨骼).
+    ///
+    /// Performs semantic dedup, contradiction detection, and importance decay/boost
+    /// on working and long-term memories. Called at session end.
+    pub fn consolidate_agent(&self, agent_id: &str) -> crate::memory::consolidation::ConsolidationReport {
+        use crate::memory::consolidation::{MemoryConsolidationEngine, ConsolidationConfig};
+
+        // Collect working + long-term entries (skip ephemeral — it's cleared at session end)
+        let mut entries = self.get_tier(agent_id, MemoryTier::Working);
+        entries.extend(self.get_tier(agent_id, MemoryTier::LongTerm));
+
+        if entries.is_empty() {
+            return crate::memory::consolidation::ConsolidationReport::default();
+        }
+
+        let engine = MemoryConsolidationEngine::new(ConsolidationConfig::default());
+        let report = engine.consolidate(&entries);
+
+        // Apply actions in batches (Performance Red Line: reduces lock contention)
+        self.apply_batch_actions(agent_id, &report.actions);
+
+        report
+    }
+
+    fn apply_batch_actions(&self, agent_id: &str, actions: &[crate::memory::consolidation::ConsolidationAction]) {
+        use crate::memory::consolidation::ConsolidationAction;
+
+        for tier_lock in [&self.working, &self.long_term, &self.procedural] {
+            let mut map = tier_lock.write().unwrap();
+            if let Some(entries) = map.get_mut(agent_id) {
+                for action in actions {
+                    match action {
+                        ConsolidationAction::DecayConfidence { entry_id, new_importance } |
+                        ConsolidationAction::BoostConfidence { entry_id, new_importance } => {
+                            if let Some(e) = entries.iter_mut().find(|e| e.id == *entry_id) {
+                                e.importance = *new_importance;
+                            }
+                        }
+                        ConsolidationAction::Supersede { old_id, .. } => {
+                            if let Some(e) = entries.iter_mut().find(|e| e.id == *old_id) {
+                                e.importance = 1;
+                            }
+                        }
+                        ConsolidationAction::Merge { keep_id, remove_id, .. } => {
+                            // Remove the duplicate entry
+                            entries.retain(|e| e.id != *remove_id);
+                            // Boost the kept entry's importance slightly
+                            if let Some(e) = entries.iter_mut().find(|e| e.id == *keep_id) {
+                                e.importance = (e.importance + 5).min(100);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Update importance of a specific memory entry.
+    fn update_importance(&self, agent_id: &str, entry_id: &str, new_importance: u8) {
+        for tier_lock in [&self.working, &self.long_term, &self.procedural] {
+            let mut map = tier_lock.write().unwrap();
+            if let Some(entries) = map.get_mut(agent_id) {
+                if let Some(entry) = entries.iter_mut().find(|e| e.id == entry_id) {
+                    entry.importance = new_importance;
+                    return;
+                }
+            }
+        }
+    }
+
+    /// Remove a specific memory entry by ID.
+    fn remove_entry(&self, agent_id: &str, entry_id: &str) -> bool {
+        for tier_lock in [&self.working, &self.long_term] {
+            let mut map = tier_lock.write().unwrap();
+            if let Some(entries) = map.get_mut(agent_id) {
+                let before = entries.len();
+                entries.retain(|e| e.id != entry_id);
+                if entries.len() < before {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// Find a memory entry by ID.
+    fn find_entry(&self, agent_id: &str, entry_id: &str) -> Option<MemoryEntry> {
+        for tier_lock in [&self.working, &self.long_term, &self.procedural] {
+            let map = tier_lock.read().unwrap();
+            if let Some(entries) = map.get(agent_id) {
+                if let Some(entry) = entries.iter().find(|e| e.id == entry_id) {
+                    return Some(entry.clone());
+                }
+            }
+        }
+        None
+    }
+
     /// Get memory statistics for observability (F-17/F-18).
     /// Returns counts per tier and aggregate stats.
     pub fn get_stats(&self) -> MemoryStats {
@@ -1305,23 +1404,5 @@ impl Default for LayeredMemory {
     }
 }
 
-fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
-    if a.len() != b.len() { return 0.0; }
-    let mut dot = 0.0f32;
-    let mut norm_a = 0.0f32;
-    let mut norm_b = 0.0f32;
-    for i in 0..a.len() {
-        dot += a[i] * b[i];
-        norm_a += a[i] * a[i];
-        norm_b += b[i] * b[i];
-    }
-    let denom = norm_a.sqrt() * norm_b.sqrt();
-    if denom < 1e-10 { 0.0 } else { dot / denom }
-}
 
-pub(crate) fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
-}
+pub(crate) use crate::util::now_ms;

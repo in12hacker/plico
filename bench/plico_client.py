@@ -92,6 +92,16 @@ class PlicoClient:
             "agent_id": agent_id,
         })
 
+    def batch_create(self, items: list[dict], agent_id: str = "bench") -> dict:
+        """Batch create multiple objects in a single request.
+        items: list of {"content": str, "tags": list[str]} dicts.
+        """
+        return self.request({
+            "method": "batch_create",
+            "items": items,
+            "agent_id": agent_id,
+        })
+
     def read(self, cid: str, agent_id: str = "bench") -> dict:
         return self.request({"method": "read", "cid": cid, "agent_id": agent_id})
 
@@ -119,6 +129,16 @@ class PlicoClient:
     def recall_semantic(self, agent_id: str, query: str, k: int = 10) -> dict:
         return self.request({
             "method": "recall_semantic",
+            "agent_id": agent_id,
+            "query": query,
+            "k": k,
+        })
+
+    def recall_routed(self, agent_id: str, query: str, k: int = 10) -> dict:
+        """Intent-aware routed recall with 7-signal RFE, MMR diversity, and HyDE.
+        Classifies query intent and applies per-intent retrieval strategies."""
+        return self.request({
+            "method": "recall_routed",
             "agent_id": agent_id,
             "query": query,
             "k": k,

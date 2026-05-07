@@ -42,18 +42,30 @@ pub enum ContentEncoding {
     Base64,
 }
 
+/// Maximum content size per object: 10 MB.
+/// Prevents unbounded memory allocation from malicious or accidental large payloads.
+const MAX_CONTENT_BYTES: usize = 10 * 1024 * 1024;
+
 /// Decode a content string according to its encoding.
 ///
 /// Returns the raw bytes, or an error string suitable for `ApiResponse::error`.
+/// Rejects payloads exceeding `MAX_CONTENT_BYTES`.
 pub fn decode_content(content: &str, encoding: &ContentEncoding) -> Result<Vec<u8>, String> {
-    match encoding {
-        ContentEncoding::Utf8 => Ok(content.as_bytes().to_vec()),
+    let bytes = match encoding {
+        ContentEncoding::Utf8 => content.as_bytes().to_vec(),
         ContentEncoding::Base64 => {
             base64::engine::general_purpose::STANDARD
                 .decode(content)
-                .map_err(|e| format!("base64 decode error: {e}"))
+                .map_err(|e| format!("base64 decode error: {e}"))?
         }
+    };
+    if bytes.len() > MAX_CONTENT_BYTES {
+        return Err(format!(
+            "Content size {} bytes exceeds limit of {} bytes",
+            bytes.len(), MAX_CONTENT_BYTES
+        ));
     }
+    Ok(bytes)
 }
 
 /// Estimate token count for a text string (F-8).
@@ -209,6 +221,19 @@ pub enum ApiRequest {
         query: String,
         #[serde(default = "default_k")]
         k: usize,
+    },
+
+    /// Intent-aware routed recall with 7-signal RFE, MMR diversity, and HyDE.
+    /// Advanced retrieval pipeline that classifies query intent and applies
+    /// per-intent retrieval strategies for better results.
+    #[serde(rename = "recall_routed")]
+    RecallRouted {
+        agent_id: String,
+        query: String,
+        #[serde(default = "default_k")]
+        k: usize,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tenant_id: Option<String>,
     },
 
     #[serde(rename = "explore")]
@@ -1714,5 +1739,18 @@ mod tests {
         assert_eq!(iter.next().unwrap().major, 1);
         assert_eq!(iter.next().unwrap().minor, 1);
         assert_eq!(iter.next().unwrap().major, 2);
+    }
+
+    #[test]
+    fn decode_content_rejects_oversized_payload() {
+        // Create a string just over 10MB
+        let big = "x".repeat(MAX_CONTENT_BYTES + 1);
+        let result = decode_content(&big, &ContentEncoding::Utf8);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("exceeds limit"));
+
+        // Exactly at limit should succeed
+        let exact = "y".repeat(MAX_CONTENT_BYTES);
+        assert!(decode_content(&exact, &ContentEncoding::Utf8).is_ok());
     }
 }

@@ -6,10 +6,12 @@
 //! - 低相关性信息
 //! - 临时/噪声信息
 
+use crate::util::cosine_similarity;
 use std::sync::Arc;
 
+use crate::cas::CASStorage;
 use crate::fs::embedding::EmbeddingProvider;
-use crate::fs::graph::KnowledgeGraph;
+use crate::fs::graph::{KnowledgeGraph, KGEdgeType};
 use crate::fs::search::SemanticSearch;
 use crate::memory::LayeredMemory;
 
@@ -69,19 +71,24 @@ pub struct ContextQualityEngine {
     search: Arc<dyn SemanticSearch>,
     kg: Option<Arc<dyn KnowledgeGraph>>,
     memory: Arc<LayeredMemory>,
+    cas: Arc<CASStorage>,
 }
+
+const TEMPORARY_TAGS: &[&str] = &["temp", "debug", "scratch", "log", "stderr", "stdout", "tmp", "ephemeral"];
 
 impl ContextQualityEngine {
     pub fn new(
         embedding: Arc<dyn EmbeddingProvider>,
         search: Arc<dyn SemanticSearch>,
         memory: Arc<LayeredMemory>,
+        cas: Arc<CASStorage>,
     ) -> Self {
         Self {
             embedding,
             search,
             kg: None,
             memory,
+            cas,
         }
     }
 
@@ -103,36 +110,83 @@ impl ContextQualityEngine {
 
         let mut breakdown = TokenBreakdown::default();
         let mut issues = Vec::new();
+        let mut total_tokens = 0usize;
 
-        // TODO: 实际分析每个CID的元数据来计算breakdown
-        // 这里先用启发式方法估算
-        let token_count = context_cids.len() * 500; // 粗略估算
-        breakdown.core_knowledge = token_count / 3;
-        breakdown.procedural_info = token_count / 4;
-        breakdown.temporary_data = token_count / 6;
-        breakdown.redundant_info = token_count / 8;
-        breakdown.stale_info = token_count / 10;
+        // Classify each CID by tags and compute real token counts
+        for cid in context_cids {
+            let tokens = self.cid_token_count(cid);
+            total_tokens += tokens;
 
-        // 计算质量评分
-        let total = token_count as f32;
-        let noise_ratio = (breakdown.temporary_data + breakdown.redundant_info + breakdown.stale_info) as f32 / total;
-        let score = (1.0 - noise_ratio).clamp(0.0, 1.0);
+            let tags = self.cid_tags(cid);
+            let lower_tags: Vec<String> = tags.iter().map(|t| t.to_lowercase()).collect();
+            let is_temp = TEMPORARY_TAGS.iter().any(|t| lower_tags.iter().any(|lt| lt.contains(t)));
 
-        if breakdown.redundant_info as f32 / total > 0.15 {
+            if is_temp {
+                breakdown.temporary_data += tokens;
+            } else if lower_tags.iter().any(|t| t.starts_with("skill:") || t.contains("procedural")) {
+                breakdown.procedural_info += tokens;
+            } else {
+                breakdown.core_knowledge += tokens;
+            }
+        }
+
+        // Check for redundancy via embedding similarity
+        let embeddings = self.get_embeddings(context_cids).await?;
+        let mut redundant_tokens = 0usize;
+        let mut seen_redundant = std::collections::HashSet::new();
+        for (i, emb_i) in embeddings.iter().enumerate() {
+            if emb_i.is_empty() { continue; }
+            for (j, emb_j) in embeddings.iter().enumerate().skip(i + 1) {
+                if emb_j.is_empty() { continue; }
+                if cosine_similarity(emb_i, emb_j) > 0.95 && !seen_redundant.contains(&j) {
+                    redundant_tokens += self.cid_token_count(&context_cids[j]);
+                    seen_redundant.insert(j);
+                }
+            }
+        }
+        breakdown.redundant_info = redundant_tokens;
+
+        // Check for stale info via KG Supersedes edges
+        let mut stale_tokens = 0usize;
+        let mut stale_cids = Vec::new();
+        if let Some(ref kg) = self.kg {
+            for cid in context_cids {
+                if let Ok(Some(_)) = self.find_superseder(kg, cid).await {
+                    stale_tokens += self.cid_token_count(cid);
+                    stale_cids.push(cid.clone());
+                }
+            }
+        }
+        breakdown.stale_info = stale_tokens;
+
+        // Calculate quality score
+        let total = total_tokens as f32;
+        let score = if total > 0.0 {
+            let noise_ratio = (breakdown.temporary_data + breakdown.redundant_info + breakdown.stale_info) as f32 / total;
+            (1.0 - noise_ratio).clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+
+        if total > 0.0 && breakdown.redundant_info as f32 / total > 0.15 {
             issues.push(ContextIssue::HighRedundancy {
                 redundant_ratio: breakdown.redundant_info as f32 / total,
             });
         }
 
-        if breakdown.temporary_data as f32 / total > 0.2 {
+        if total > 0.0 && breakdown.temporary_data as f32 / total > 0.2 {
             issues.push(ContextIssue::HighTemporaryRatio {
                 temp_ratio: breakdown.temporary_data as f32 / total,
             });
         }
 
+        if !stale_cids.is_empty() {
+            issues.push(ContextIssue::ContainsStaleInfo { stale_cids });
+        }
+
         Ok(ContextQuality {
             score,
-            token_count,
+            token_count: total_tokens,
             breakdown,
             issues,
         })
@@ -213,7 +267,7 @@ impl ContextQualityEngine {
                     removable.push(RemovalRecord {
                         cid: context_cids[j].clone(),
                         reason: RemovalReason::DuplicateOf(context_cids[i].clone()),
-                        token_savings: 500, // TODO: actual token count
+                        token_savings: self.cid_token_count(&context_cids[j]),
                     });
                 }
             }
@@ -227,7 +281,7 @@ impl ContextQualityEngine {
                         removable.push(RemovalRecord {
                             cid: cid.clone(),
                             reason: RemovalReason::SupersededBy(superseder),
-                            token_savings: 500,
+                            token_savings: self.cid_token_count(cid),
                         });
                     }
                 }
@@ -240,7 +294,7 @@ impl ContextQualityEngine {
                 removable.push(RemovalRecord {
                     cid: cid.clone(),
                     reason: RemovalReason::TemporaryExpired,
-                    token_savings: 300,
+                    token_savings: self.cid_token_count(cid),
                 });
             }
         }
@@ -252,16 +306,58 @@ impl ContextQualityEngine {
         Ok(removable)
     }
 
-    /// 为被移除的信息生成摘要
+    /// 为被移除的信息生成 L0 摘要（浓缩版，存储到 CAS）
     async fn generate_summaries(
         &self,
-        _agent_id: &str,
+        agent_id: &str,
         _context_cids: &[String],
-        _removed_cids: &[String],
+        removed_cids: &[String],
     ) -> CognitiveResult<Vec<String>> {
-        // TODO: 实际生成摘要并存储到CAS，返回CID
-        // 目前返回空，表示不生成摘要
-        Ok(Vec::new())
+        if removed_cids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Collect text from removed CIDs
+        let mut parts = Vec::new();
+        for cid in removed_cids {
+            if let Some(text) = self.cid_to_text(cid).await {
+                if !text.is_empty() {
+                    // Truncate each entry to ~200 chars for L0 summary
+                    let truncated = if text.len() > 200 {
+                        format!("{}…", &text[..200])
+                    } else {
+                        text
+                    };
+                    parts.push(truncated);
+                }
+            }
+        }
+
+        if parts.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Concatenate into a summary document (cap at ~2000 chars total)
+        let mut summary = String::new();
+        for (i, part) in parts.iter().enumerate() {
+            if summary.len() > 2000 { break; }
+            if i > 0 { summary.push_str("\n---\n"); }
+            summary.push_str(part);
+        }
+
+        // Store summary as CAS object
+        use crate::cas::AIObject;
+        let meta = crate::cas::AIObjectMeta::text(["summary", "l0", "auto-generated"])
+            .with_agent(agent_id);
+        let obj = AIObject::new(summary.into_bytes(), meta);
+        let cid = obj.cid.clone();
+        match self.cas.put(&obj) {
+            Ok(_) => Ok(vec![cid]),
+            Err(e) => {
+                tracing::warn!("Failed to store summary: {}", e);
+                Ok(Vec::new())
+            }
+        }
     }
 
     /// 获取CID的embedding
@@ -284,39 +380,46 @@ impl ContextQualityEngine {
 
     /// 将CID转换为文本（用于embedding）
     async fn cid_to_text(&self, cid: &str) -> Option<String> {
-        // TODO: 从CAS获取对象内容并转为文本
-        // 简化实现：返回CID本身作为fallback
-        Some(cid.to_string())
+        let obj = self.cas.get(cid).ok()?;
+        String::from_utf8(obj.data).ok()
     }
 
-    /// 在因果图谱中查找覆盖者
+    /// 获取CID的实际token数量（按字符数估算，~4 chars/token）
+    fn cid_token_count(&self, cid: &str) -> usize {
+        self.cas.get_raw(cid)
+            .ok()
+            .map(|obj| (obj.data.len() / 4).max(1))
+            .unwrap_or(0)
+    }
+
+    /// 获取CID的元数据标签
+    fn cid_tags(&self, cid: &str) -> Vec<String> {
+        self.cas.get_raw(cid)
+            .ok()
+            .map(|obj| obj.meta.tags)
+            .unwrap_or_default()
+    }
+
+    /// 在因果图谱中查找覆盖者（Supersedes边）
     async fn find_superseder(
         &self,
-        _kg: &Arc<dyn KnowledgeGraph>,
-        _cid: &str,
+        kg: &Arc<dyn KnowledgeGraph>,
+        cid: &str,
     ) -> CognitiveResult<Option<String>> {
-        // TODO: 查询因果图谱，查找该CID是否被后续操作覆盖
-        Ok(None)
+        // Supersedes边方向: new_cid --Supersedes--> old_cid
+        // 所以查old_cid的incoming Supersedes边可以找到new_cid
+        let neighbors = kg.get_neighbors(cid, Some(KGEdgeType::Supersedes), 1)
+            .map_err(|e| super::CognitiveError::AnalysisFailed(e.to_string()))?;
+        // 返回最近的superseder
+        Ok(neighbors.first().map(|(node, _)| node.id.clone()))
     }
 
-    /// 判断CID是否为临时信息
-    async fn is_temporary(&self, _cid: &str) -> CognitiveResult<bool> {
-        // TODO: 基于标签/元数据判断
-        // 启发式：包含debug、temp、log等标签的视为临时
-        Ok(false)
+    /// 判断CID是否为临时信息（基于标签）
+    async fn is_temporary(&self, cid: &str) -> CognitiveResult<bool> {
+        let tags = self.cid_tags(cid);
+        Ok(tags.iter().any(|tag| {
+            let lower = tag.to_lowercase();
+            TEMPORARY_TAGS.iter().any(|t| lower.contains(t))
+        }))
     }
-}
-
-/// 计算余弦相似度
-fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
-    if a.len() != b.len() || a.is_empty() {
-        return 0.0;
-    }
-    let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
-    let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
-    let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
-    if norm_a == 0.0 || norm_b == 0.0 {
-        return 0.0;
-    }
-    dot / (norm_a * norm_b)
 }

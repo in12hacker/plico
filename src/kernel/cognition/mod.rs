@@ -79,12 +79,7 @@ pub enum CognitiveError {
 pub type CognitiveResult<T> = Result<T, CognitiveError>;
 
 /// 时间戳辅助函数
-pub(crate) fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64
-}
+pub(crate) use crate::util::now_ms;
 
 /// Token分解统计
 #[derive(Debug, Clone, Default)]

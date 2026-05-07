@@ -1,6 +1,9 @@
 //! 技能组合器 —— 组合多个技能形成新技能
 
-use super::{CognitiveResult, Skill, KnowledgeSkill, ValidationStatus, SkillUsageStats};
+use super::{
+    CognitiveResult, Skill, KnowledgeSkill,
+    ValidationStatus, SkillUsageStats,
+};
 
 /// 技能组合器
 #[derive(Debug, Default)]
@@ -11,25 +14,42 @@ impl SkillComposer {
         Self
     }
 
-    /// 组合多个技能
-    pub async fn compose(&self, skill_ids: &[String]) -> CognitiveResult<Option<Skill>> {
-        if skill_ids.len() < 2 {
+    /// 组合多个技能为一个融合技能
+    pub fn compose(&self, skills: &[Skill]) -> CognitiveResult<Option<Skill>> {
+        if skills.len() < 2 {
             return Ok(None);
         }
 
-        // TODO: 实际实现技能组合逻辑
-        // 1. 检查技能之间的兼容性
-        // 2. 合并工具链（配置型技能）
-        // 3. 合并知识项（知识型技能）
-        // 4. 生成新的组合技能
+        // Merge all Knowledge skills
+        let mut all_knowledge = Vec::new();
+        let mut all_triggers = Vec::new();
+        let mut all_sources = Vec::new();
+        let mut names = Vec::new();
+
+        for skill in skills {
+            match skill {
+                Skill::Knowledge(k) => {
+                    names.push(k.name.clone());
+                    all_knowledge.extend(k.knowledge.clone());
+                    all_triggers.extend(k.trigger_conditions.clone());
+                    all_sources.extend(k.sources.clone());
+                }
+                // Skip non-knowledge skills for now
+                _ => {}
+            }
+        }
+
+        if all_knowledge.is_empty() {
+            return Ok(None);
+        }
 
         Ok(Some(Skill::Knowledge(KnowledgeSkill {
-            id: "composed".to_string(),
-            name: "Composed Skill".to_string(),
-            description: "Auto-composed skill".to_string(),
-            trigger_conditions: vec![],
-            knowledge: vec![],
-            sources: vec![],
+            id: format!("composed_{}", names.join("_")),
+            name: format!("Composed: {}", names.join(" + ")),
+            description: format!("Auto-composed skill merging {} skills", names.len()),
+            trigger_conditions: all_triggers,
+            knowledge: all_knowledge,
+            sources: all_sources,
             validation: ValidationStatus::Pending,
             usage_stats: SkillUsageStats::default(),
         })))
@@ -39,6 +59,20 @@ impl SkillComposer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::KnowledgeItem;
+
+    fn make_skill(name: &str, knowledge: Vec<KnowledgeItem>) -> Skill {
+        Skill::Knowledge(KnowledgeSkill {
+            id: format!("id_{}", name),
+            name: name.to_string(),
+            description: format!("desc {}", name),
+            trigger_conditions: vec![],
+            knowledge,
+            sources: vec![],
+            validation: ValidationStatus::Pending,
+            usage_stats: SkillUsageStats::default(),
+        })
+    }
 
     #[test]
     fn test_new_creates_composer() {
@@ -46,18 +80,41 @@ mod tests {
         let _ = composer;
     }
 
-    #[tokio::test]
-    async fn test_compose_returns_none_for_less_than_two_skills() {
+    #[test]
+    fn test_compose_returns_none_for_less_than_two_skills() {
         let composer = SkillComposer::new();
-        let result = composer.compose(&["skill1".to_string()]).await.unwrap();
+        let skills = vec![make_skill("a", vec![])];
+        let result = composer.compose(&skills).unwrap();
         assert!(result.is_none());
     }
 
-    #[tokio::test]
-    async fn test_compose_returns_some_for_two_or_more_skills() {
+    #[test]
+    fn test_compose_merges_knowledge_items() {
         let composer = SkillComposer::new();
-        let skills = vec!["skill1".to_string(), "skill2".to_string()];
-        let result = composer.compose(&skills).await.unwrap();
+        let skills = vec![
+            make_skill("a", vec![KnowledgeItem::Rule {
+                condition: "c1".to_string(),
+                action: "a1".to_string(),
+            }]),
+            make_skill("b", vec![
+                KnowledgeItem::Rule {
+                    condition: "c2".to_string(),
+                    action: "a2".to_string(),
+                },
+                KnowledgeItem::Lesson {
+                    situation: "s".to_string(),
+                    insight: "i".to_string(),
+                },
+            ]),
+        ];
+        let result = composer.compose(&skills).unwrap();
         assert!(result.is_some());
+        match result.unwrap() {
+            Skill::Knowledge(k) => {
+                assert_eq!(k.knowledge.len(), 3);
+                assert!(k.name.contains("Composed"));
+            }
+            _ => panic!("Expected Knowledge skill"),
+        }
     }
 }

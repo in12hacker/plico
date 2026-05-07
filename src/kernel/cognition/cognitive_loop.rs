@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+use crate::kernel::event_bus::KernelEvent;
 
 use super::{
     CognitiveConfig, CognitivePattern, CognitiveResult,
@@ -80,11 +81,29 @@ impl CognitiveLoop {
         intent_network: Arc<IntentSemanticNetwork>,
         skill_forge: Arc<SkillForge>,
     ) -> Self {
+        let tracker = Arc::new(TrajectoryTracker::new());
         Self {
             context_analyzer,
             intent_network,
             skill_forge,
-            trajectory_tracker: Arc::new(TrajectoryTracker::new()),
+            trajectory_tracker: tracker,
+            config: CognitiveConfig::default(),
+            state: RwLock::new(CognitiveState::default()),
+        }
+    }
+
+    /// Construct with a shared TrajectoryTracker (so SkillForge can access trajectory data)
+    pub fn with_shared_tracker(
+        context_analyzer: Arc<ContextQualityEngine>,
+        intent_network: Arc<IntentSemanticNetwork>,
+        skill_forge: Arc<SkillForge>,
+        tracker: Arc<TrajectoryTracker>,
+    ) -> Self {
+        Self {
+            context_analyzer,
+            intent_network,
+            skill_forge,
+            trajectory_tracker: tracker,
             config: CognitiveConfig::default(),
             state: RwLock::new(CognitiveState::default()),
         }
@@ -240,7 +259,7 @@ impl CognitiveLoop {
 
     /// 定时任务：检查所有活跃会话的上下文质量
     pub async fn run_periodic_check(&self) -> CognitiveResult<Vec<CognitiveOptimizationReport>> {
-        let reports = Vec::new();
+        let mut reports = Vec::new();
         let sessions_to_check = {
             let state = self.state.read().await;
             state.active_sessions.keys().cloned().collect::<Vec<_>>()
@@ -253,9 +272,27 @@ impl CognitiveLoop {
             };
 
             if let Some(session_state) = session {
-                if session_state.context_utilization > self.config.context_compression_threshold {
-                    // Trigger compression for this session
-                    // TODO: get actual context CIDs and compress
+                // Use attention_focus as proxy for current context CIDs
+                if session_state.context_utilization > self.config.context_compression_threshold
+                    && !session_state.attention_focus.is_empty()
+                {
+                    let agent_id = &session_state.agent_id;
+                    let session_id = &session_state.session_id;
+                    let context = &session_state.attention_focus;
+
+                    match self.on_intent_declared(
+                        agent_id,
+                        session_id,
+                        "periodic_check",
+                        context,
+                    ).await {
+                        Ok(report) => reports.push(report),
+                        Err(e) => tracing::warn!(
+                            agent = agent_id,
+                            session = session_id,
+                            "Periodic context check failed: {}", e
+                        ),
+                    }
                 }
             }
         }
@@ -290,6 +327,30 @@ impl CognitiveLoop {
                     let _ = forge.extract_from_session(&session_state).await;
                 });
             }
+        }
+
+        // Soul v3.0 公理9: Learn from session trajectory (越用越好)
+        let trajectory = self.trajectory_tracker.get_recent_trajectory(agent_id, 200).await;
+        if trajectory.len() >= 2 {
+            let network = Arc::clone(&self.intent_network);
+            let aid = agent_id.to_string();
+            tokio::spawn(async move {
+                match network.learn_from_history(&aid, &trajectory).await {
+                    Ok(report) => {
+                        if report.new_nodes > 0 || report.new_edges > 0 || report.strengthened_edges > 0 {
+                            tracing::info!(
+                                agent = aid,
+                                new_nodes = report.new_nodes,
+                                new_edges = report.new_edges,
+                                strengthened = report.strengthened_edges,
+                                patterns = report.discovered_patterns.len(),
+                                "IntentNetwork learned from session trajectory",
+                            );
+                        }
+                    }
+                    Err(e) => tracing::warn!("IntentNetwork learning failed: {}", e),
+                }
+            });
         }
     }
 
@@ -351,6 +412,36 @@ impl CognitiveLoop {
             session.context_quality_score = report.context_after.quality_score;
             // Update attention focus based on context
             session.attention_focus = context.iter().take(5).cloned().collect();
+        }
+    }
+
+    /// Handle kernel events — called from the EventBus subscription.
+    /// Spawns async work for relevant events.
+    pub fn on_event(self: &Arc<Self>, event: &KernelEvent) {
+        match event {
+            KernelEvent::IntentCompleted { intent_id, success } => {
+                let this = Arc::clone(self);
+                let intent_id = intent_id.clone();
+                let success = *success;
+                tokio::spawn(async move {
+                    if success {
+                        let _ = this.trajectory_tracker.record_operation(
+                            "system", &intent_id, true
+                        ).await;
+                    }
+                });
+            }
+            KernelEvent::MemoryStored { agent_id, tier } => {
+                let agent_id = agent_id.clone();
+                let tier = tier.clone();
+                tokio::spawn(async move {
+                    tracing::debug!(
+                        agent = %agent_id, tier = %tier,
+                        "CognitiveLoop: MemoryStored event received"
+                    );
+                });
+            }
+            _ => {}
         }
     }
 }

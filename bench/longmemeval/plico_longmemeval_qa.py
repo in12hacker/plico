@@ -16,6 +16,7 @@ import re
 import sys
 import time
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from plico_client import PlicoClient
@@ -77,9 +78,10 @@ def call_llm(url: str, model: str, prompt: str, max_tokens: int = 1024) -> str:
 
 
 def ingest_sessions(client: PlicoClient, item: dict, item_idx: int) -> str:
-    """Ingest all sessions for one LongMemEval item."""
+    """Ingest all sessions for one LongMemEval item using batch_create."""
     agent_id = f"lme-{item_idx}"
     sessions = item.get("haystack_sessions", item.get("sessions", item.get("conversations", [])))
+    batch_items = []
     for si, session in enumerate(sessions):
         turns = session if isinstance(session, list) else session.get("turns", session.get("messages", []))
         for ti, turn in enumerate(turns):
@@ -93,18 +95,19 @@ def ingest_sessions(client: PlicoClient, item: dict, item_idx: int) -> str:
                 continue
             if not content.strip():
                 continue
-            for attempt in range(3):
-                try:
-                    client.create(
-                        content=content,
-                        tags=[f"lme:item{item_idx}", f"session:{si}", f"turn:{ti}"],
-                        agent_id=agent_id,
-                    )
-                    break
-                except (ConnectionError, OSError):
-                    if attempt < 2:
-                        time.sleep(0.3)
-                        client.close()
+            batch_items.append({
+                "content": content,
+                "tags": [f"lme:item{item_idx}"],
+            })
+    if batch_items:
+        for attempt in range(3):
+            try:
+                client.batch_create(batch_items, agent_id=agent_id)
+                break
+            except (ConnectionError, OSError):
+                if attempt < 2:
+                    time.sleep(0.3)
+                    client.close()
     return agent_id
 
 
@@ -137,22 +140,44 @@ def evaluate_item(
         if not question:
             continue
 
-        resp = {"results": []}
+        context = ""
+        # Try intent-aware routed recall first
         for attempt in range(3):
             try:
-                resp = client.search(
-                    query=question,
+                resp = client.recall_routed(
                     agent_id=agent_id,
-                    limit=5,
-                    require_tags=[f"lme:item{item_idx}"],
+                    query=question,
+                    k=15,
                 )
+                memories = resp.get("memory", [])
+                if memories:
+                    context = "\n".join(memories)
                 break
             except (ConnectionError, OSError):
                 if attempt < 2:
                     time.sleep(0.3)
                     client.close()
-        snippets = [r.get("snippet", "") for r in resp.get("results", []) if r.get("snippet")]
-        context = "\n".join(snippets)
+            except Exception:
+                break
+
+        # Fallback to basic search if no results
+        if not context:
+            resp = {"results": []}
+            for attempt in range(3):
+                try:
+                    resp = client.search(
+                        query=question,
+                        agent_id=agent_id,
+                        limit=15,
+                        require_tags=[f"lme:item{item_idx}"],
+                    )
+                    break
+                except (ConnectionError, OSError):
+                    if attempt < 2:
+                        time.sleep(0.3)
+                        client.close()
+            snippets = [r.get("snippet", "") for r in resp.get("results", []) if r.get("snippet")]
+            context = "\n".join(snippets)
 
         prompt = READER_PROMPT.format(context=context, question=question)
         answer = call_llm(reader_url, reader_model, prompt)
@@ -192,6 +217,7 @@ def main():
     parser.add_argument("--judge-url", default=None)
     parser.add_argument("--judge-model", default=None)
     parser.add_argument("--max-items", type=int, default=500)
+    parser.add_argument("--max-workers", type=int, default=4, help="Parallel workers for item evaluation")
     parser.add_argument("--output", default=None)
     args = parser.parse_args()
 
@@ -201,24 +227,32 @@ def main():
     items = load_longmemeval(args.data)
     items = items[:args.max_items]
     print(f"Loaded {len(items)} items from {args.data}")
+    print(f"Evaluating with {args.max_workers} parallel workers...")
 
-    client = PlicoClient(host=args.host, port=args.port)
     all_results = []
 
-    for i, item in enumerate(items):
-        print(f"[{i+1}/{len(items)}] Item {i}...", end=" ", flush=True)
+    def evaluate_one(i_item):
+        i, item = i_item
+        client = PlicoClient(host=args.host, port=args.port)
         try:
             results = evaluate_item(
                 client, item, i,
                 args.reader_url, args.reader_model,
                 judge_url, judge_model,
             )
-            all_results.extend(results)
-            print(f"{len(results)} QAs")
+            print(f"[{i+1}/{len(items)}] Item {i}... {len(results)} QAs")
+            return results
         except Exception as e:
-            print(f"ERROR: {e}")
+            print(f"[{i+1}/{len(items)}] Item {i}... ERROR: {e}")
+            return []
         finally:
             client.close()
+
+    with ThreadPoolExecutor(max_workers=args.max_workers) as executor:
+        futures = {executor.submit(evaluate_one, (i, item)): i for i, item in enumerate(items)}
+        for future in as_completed(futures):
+            results = future.result()
+            all_results.extend(results)
 
     by_category = defaultdict(list)
     for r in all_results:

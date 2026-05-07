@@ -3,6 +3,7 @@
 //! Orchestrates existing checkpoint/restore/delta/prefetch components
 //! to provide StartSession and EndSession APIs with automatic timeout cleanup.
 
+use crate::util::now_ms;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
@@ -744,6 +745,21 @@ pub fn end_session_orchestrate(
         evicted = stats.evicted_count,
         "Memory Consolidation Cycle completed",
     );
+    // Soul v3.0 公理3: Run memory consolidation (dedup, contradiction, decay/boost)
+    let consolidation_report = memory.consolidate_agent(agent_id);
+    if consolidation_report.merges > 0 || consolidation_report.contradictions_found > 0
+        || consolidation_report.decays_applied > 0 || consolidation_report.boosts_applied > 0
+    {
+        tracing::info!(
+            agent = agent_id,
+            scanned = consolidation_report.entries_scanned,
+            merges = consolidation_report.merges,
+            contradictions = consolidation_report.contradictions_found,
+            decays = consolidation_report.decays_applied,
+            boosts = consolidation_report.boosts_applied,
+            "Memory consolidation completed",
+        );
+    }
     // Clear only the ephemeral tier — preserve working and long-term memories
     let _cleared = memory.clear_ephemeral(agent_id);
 
@@ -862,12 +878,6 @@ pub fn spawn_session_timeout_scanner(
     });
 }
 
-fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64
-}
 
 #[cfg(test)]
 mod tests {

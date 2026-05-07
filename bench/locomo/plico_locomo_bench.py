@@ -18,6 +18,7 @@ import re
 import sys
 import time
 from collections import Counter, defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from plico_client import PlicoClient
@@ -31,6 +32,27 @@ Context:
 Question: {question}
 
 Answer concisely in 1-3 sentences."""
+
+TEMPORAL_PROMPT = """You are a helpful assistant answering TEMPORAL questions about when events happened.
+Pay close attention to dates, timestamps, and temporal markers in the context.
+Answer with the specific date/time if available, or relative time (e.g., "two weeks ago").
+
+Context:
+{context}
+
+Question: {question}
+
+Answer with the specific time/date mentioned in the context. Be precise."""
+
+MULTI_HOP_PROMPT = """You are a helpful assistant answering complex questions that require connecting information from multiple pieces of context.
+Read ALL context carefully. The answer requires combining facts from different parts.
+
+Context:
+{context}
+
+Question: {question}
+
+Think step by step. First identify the relevant facts, then combine them to answer. Be concise."""
 
 JUDGE_PROMPT = """You are an impartial judge. Rate the following answer on a scale of 1-5 based on its accuracy and completeness compared to the ground truth.
 
@@ -58,9 +80,10 @@ def load_locomo(path: str) -> list[dict]:
 
 
 def ingest_conversation(client: PlicoClient, conv: dict, conv_idx: int) -> str:
-    """Ingest a conversation's turns into plicod."""
+    """Ingest a conversation's turns into plicod using batch_create."""
     agent_id = f"locomo-{conv_idx}"
     conversation = conv.get("conversation", {})
+    batch_items = []
 
     if isinstance(conversation, dict):
         sessions = sorted(k for k in conversation if k.startswith("session_") and not k.endswith("date_time"))
@@ -78,18 +101,10 @@ def ingest_conversation(client: PlicoClient, conv: dict, conv_idx: int) -> str:
                     continue
                 prefix = f"[{date_str}] " if date_str else ""
                 content = f"{prefix}[{speaker}]: {text}"
-                for attempt in range(3):
-                    try:
-                        client.create(
-                            content=content,
-                            tags=[f"locomo:conv{conv_idx}", f"session:{sess_key}", f"turn:{turn_idx}", f"speaker:{speaker}"],
-                            agent_id=agent_id,
-                        )
-                        break
-                    except (ConnectionError, OSError):
-                        if attempt < 2:
-                            time.sleep(0.3)
-                            client.close()
+                batch_items.append({
+                    "content": content,
+                    "tags": [f"locomo:conv{conv_idx}"],
+                })
                 turn_idx += 1
     elif isinstance(conversation, list):
         for i, turn in enumerate(conversation):
@@ -98,17 +113,40 @@ def ingest_conversation(client: PlicoClient, conv: dict, conv_idx: int) -> str:
             if not text:
                 continue
             content = f"[{speaker}]: {text}"
-            client.create(
-                content=content,
-                tags=[f"locomo:conv{conv_idx}", f"turn:{i}", f"speaker:{speaker}"],
-                agent_id=agent_id,
-            )
+            batch_items.append({
+                "content": content,
+                "tags": [f"locomo:conv{conv_idx}"],
+            })
+
+    if batch_items:
+        for attempt in range(3):
+            try:
+                client.batch_create(batch_items, agent_id=agent_id)
+                break
+            except (ConnectionError, OSError):
+                if attempt < 2:
+                    time.sleep(0.3)
+                    client.close()
 
     return agent_id
 
 
-def search_for_context(client: PlicoClient, question: str, agent_id: str, conv_idx: int, k: int = 5) -> str:
-    """Search plicod for relevant context."""
+def search_for_context(client: PlicoClient, question: str, agent_id: str, conv_idx: int, k: int = 15,
+                       category: str = "unknown") -> str:
+    """Search plicod for relevant context using intent-aware routed recall."""
+    try:
+        resp = client.recall_routed(
+            agent_id=agent_id,
+            query=question,
+            k=k,
+        )
+        memories = resp.get("memory", [])
+        if memories:
+            return "\n".join(memories)
+    except Exception:
+        pass
+
+    # Fallback to basic search
     resp = client.search(
         query=question,
         agent_id=agent_id,
@@ -200,8 +238,14 @@ def evaluate_conversation(
         if not question or not gold_answer:
             continue
 
-        context = search_for_context(client, question, agent_id, conv_idx)
-        prompt = READER_PROMPT.format(context=context, question=question)
+        context = search_for_context(client, question, agent_id, conv_idx, category=category)
+        # Select intent-specific prompt
+        if category == "temporal":
+            prompt = TEMPORAL_PROMPT.format(context=context, question=question)
+        elif category == "multi-hop":
+            prompt = MULTI_HOP_PROMPT.format(context=context, question=question)
+        else:
+            prompt = READER_PROMPT.format(context=context, question=question)
         answer = call_llm(reader_url, reader_model, prompt)
 
         f1 = compute_f1(answer, gold_answer)
@@ -236,10 +280,11 @@ def main():
     parser.add_argument("--port", type=int, default=7878)
     parser.add_argument("--reader-url", default="http://127.0.0.1:18920/v1",
                         help="OpenAI-compatible LLM URL for reader")
-    parser.add_argument("--reader-model", default="qwen2.5-7b-instruct")
+    parser.add_argument("--reader-model", default="gemma-4-26B-A4B-it-Q4_K_M.gguf")
     parser.add_argument("--judge-url", default=None, help="Judge LLM URL (defaults to reader URL)")
     parser.add_argument("--judge-model", default=None, help="Judge model (defaults to reader model)")
     parser.add_argument("--max-conv", type=int, default=10, help="Max conversations to evaluate")
+    parser.add_argument("--max-workers", type=int, default=4, help="Parallel workers for conversation evaluation")
     parser.add_argument("--output", default=None)
     args = parser.parse_args()
 
@@ -249,25 +294,33 @@ def main():
     conversations = load_locomo(args.data)
     conversations = conversations[:args.max_conv]
     print(f"Loaded {len(conversations)} conversations from {args.data}")
+    print(f"Evaluating with {args.max_workers} parallel workers...")
 
-    client = PlicoClient(host=args.host, port=args.port)
     all_results = []
 
-    for i, conv in enumerate(conversations):
-        print(f"\n[{i+1}/{len(conversations)}] Evaluating conversation {i}...")
+    def evaluate_one(i_conv):
+        i, conv = i_conv
+        client = PlicoClient(host=args.host, port=args.port)
         try:
             results = evaluate_conversation(
                 client, conv, i,
                 args.reader_url, args.reader_model,
                 judge_url, judge_model,
             )
-            all_results.extend(results)
-            print(f"  {len(results)} QA pairs evaluated")
+            print(f"[{i+1}/{len(conversations)}] Conversation {i}... {len(results)} QAs")
+            return results
         except Exception as e:
-            print(f"  ERROR: {e}")
+            print(f"[{i+1}/{len(conversations)}] Conversation {i}... ERROR: {e}")
             import traceback; traceback.print_exc()
+            return []
         finally:
             client.close()
+
+    with ThreadPoolExecutor(max_workers=args.max_workers) as executor:
+        futures = {executor.submit(evaluate_one, (i, conv)): i for i, conv in enumerate(conversations)}
+        for future in as_completed(futures):
+            results = future.result()
+            all_results.extend(results)
 
     by_category = defaultdict(list)
     for r in all_results:

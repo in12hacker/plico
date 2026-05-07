@@ -20,6 +20,8 @@ use super::{
     Skill, SkillCandidate, SkillExecutionResult, SkillType, SkillUsageStats,
 };
 use super::SessionCognitiveState;
+use crate::fs::embedding::EmbeddingProvider;
+use crate::util::cosine_similarity;
 
 /// 技能推荐
 #[derive(Debug, Clone)]
@@ -48,6 +50,7 @@ pub struct SkillForge {
     skill_registry: Arc<RwLock<SkillRegistry>>,
     wasm_runtime: Option<Arc<WasmRuntime>>,
     dsl_interpreter: Option<Arc<DslInterpreter>>,
+    embedding: Option<Arc<dyn EmbeddingProvider>>,
 }
 
 impl Default for SkillForge {
@@ -65,6 +68,7 @@ impl SkillForge {
             skill_registry: Arc::new(RwLock::new(SkillRegistry::new())),
             wasm_runtime: None,
             dsl_interpreter: None,
+            embedding: None,
         }
     }
 
@@ -75,6 +79,18 @@ impl SkillForge {
 
     pub fn with_dsl_interpreter(mut self, interpreter: Arc<DslInterpreter>) -> Self {
         self.dsl_interpreter = Some(interpreter);
+        self
+    }
+
+    pub fn with_trajectory_tracker(self, tracker: Arc<crate::kernel::cognition::TrajectoryTracker>) -> Self {
+        Self {
+            experience_miner: Arc::new(ExperienceMiner::new().with_tracker(tracker)),
+            ..self
+        }
+    }
+
+    pub fn with_embedding(mut self, embedding: Arc<dyn EmbeddingProvider>) -> Self {
+        self.embedding = Some(embedding);
         self
     }
 
@@ -174,7 +190,14 @@ impl SkillForge {
         &self,
         skill_ids: &[String],
     ) -> CognitiveResult<Option<Skill>> {
-        self.skill_composer.compose(skill_ids).await
+        let registry = self.skill_registry.read().await;
+        let mut skills = Vec::new();
+        for id in skill_ids {
+            if let Some(skill) = registry.get(id).await {
+                skills.push(skill);
+            }
+        }
+        self.skill_composer.compose(&skills)
     }
 
     /// 获取技能使用统计
@@ -238,21 +261,44 @@ impl SkillForge {
 
     async fn compute_intent_skill_relevance(
         &self,
-        _intent: &str,
+        intent: &str,
         skill: &Skill,
     ) -> CognitiveResult<f32> {
-        // TODO: Use embedding similarity between intent and skill description
-        // Simplified: return high relevance for skills with trigger conditions matching intent
-        match skill {
+        // Get skill description text for comparison
+        let skill_text = match skill {
             Skill::Knowledge(k) => {
+                // Check trigger conditions first (exact pattern match)
                 for trigger in &k.trigger_conditions {
-                    if trigger.intent_pattern == "*" || trigger.intent_pattern.contains("fix") {
+                    if trigger.intent_pattern == "*" {
+                        return Ok(trigger.min_confidence);
+                    }
+                    if intent.to_lowercase().contains(&trigger.intent_pattern.to_lowercase()) {
                         return Ok(trigger.min_confidence);
                     }
                 }
-                Ok(0.0)
+                format!("{} {}", k.name, k.description)
             }
-            _ => Ok(0.3), // Default low relevance for config/code skills
+            Skill::Config(c) => format!("{} {}", c.name, c.description),
+            Skill::Code(code) => format!("{} {}", code.name, code.description),
+        };
+
+        // Use embedding similarity if available
+        if let Some(ref embedding) = self.embedding {
+            let intent_emb = embedding.embed(intent)
+                .map_err(|e| CognitiveError::EmbeddingFailed(e.to_string()))?;
+            let skill_emb = embedding.embed(&skill_text)
+                .map_err(|e| CognitiveError::EmbeddingFailed(e.to_string()))?;
+            let sim = cosine_similarity(&intent_emb.embedding, &skill_emb.embedding);
+            return Ok(sim.clamp(0.0, 1.0));
         }
+
+        // Fallback: keyword overlap
+        let intent_lower = intent.to_lowercase();
+        let skill_lower = skill_text.to_lowercase();
+        let intent_words: Vec<&str> = intent_lower.split_whitespace().collect();
+        let skill_words: Vec<&str> = skill_lower.split_whitespace().collect();
+        let overlap = intent_words.iter().filter(|w| skill_words.contains(w)).count();
+        let total = intent_words.len().max(skill_words.len()).max(1);
+        Ok((overlap as f32 / total as f32).clamp(0.0, 1.0))
     }
 }

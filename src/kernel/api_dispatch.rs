@@ -19,6 +19,7 @@ impl super::AIKernel {
             ApiRequest::Recall { agent_id, .. } |
             ApiRequest::RememberLongTerm { agent_id, .. } |
             ApiRequest::RecallSemantic { agent_id, .. } |
+            ApiRequest::RecallRouted { agent_id, .. } |
             ApiRequest::Explore { agent_id, .. } |
             ApiRequest::ListDeleted { agent_id, .. } |
             ApiRequest::Restore { agent_id, .. } |
@@ -145,7 +146,13 @@ impl super::AIKernel {
         let _guard = span.enter();
         let _corr_id = correlation_id;
 
-        let request_agent_id = Self::extract_agent_id(&req);
+        // --- UNIFIED SECURITY GUARDRAIL (Soul 3.0 Red Lines) ---
+        if let Err(e) = self.validate_security(&req) {
+            tracing::warn!("Security validation failed: {}", e);
+            return ApiResponse::error(e);
+        }
+
+        let (request_agent_id, _, _) = self.extract_security_info(&req);
         let skip_auto_register = matches!(&req,
             ApiRequest::AgentStatus { .. } |
             ApiRequest::AgentSuspend { .. } |
@@ -176,6 +183,7 @@ impl super::AIKernel {
             // ── Memory ──
             req @ (ApiRequest::Remember { .. } | ApiRequest::Recall { .. } |
                    ApiRequest::RememberLongTerm { .. } | ApiRequest::RecallSemantic { .. } |
+                   ApiRequest::RecallRouted { .. } |
                    ApiRequest::RememberProcedural { .. } | ApiRequest::RecallProcedural { .. } |
                    ApiRequest::RecallVisible { .. } | ApiRequest::MemoryMove { .. } |
                    ApiRequest::MemoryDeleteEntry { .. } | ApiRequest::EvictExpired { .. } |

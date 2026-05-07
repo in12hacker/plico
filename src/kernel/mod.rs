@@ -175,9 +175,14 @@ impl AIKernel {
         };
 
         let search_backend: Arc<dyn SemanticSearch> = match std::env::var("SEARCH_BACKEND")
-            .unwrap_or_else(|_| "memory".into()).as_str()
+            .unwrap_or_else(|_| "hnsw".into()).as_str()
         {
-            "hnsw" => {
+            "memory" => {
+                let backend = Arc::new(InMemoryBackend::new());
+                backend.restore_from(&root).ok();
+                backend as Arc<dyn SemanticSearch>
+            }
+            _ => {
                 let dim = embedding.dimension();
                 let model_name = embedding.model_name().to_string();
                 let meta_changed = check_embedding_meta(&root, &model_name, dim);
@@ -192,11 +197,6 @@ impl AIKernel {
                     backend.restore_from(&root).ok();
                 }
                 save_embedding_meta(&root, &model_name, dim);
-                backend as Arc<dyn SemanticSearch>
-            }
-            _ => {
-                let backend = Arc::new(InMemoryBackend::new());
-                backend.restore_from(&root).ok();
                 backend as Arc<dyn SemanticSearch>
             }
         };
@@ -299,19 +299,43 @@ impl AIKernel {
                 Arc::new(embedding.clone()) as Arc<dyn EmbeddingProvider>,
                 search_backend.clone(),
                 memory.clone(),
+                cas.clone(),
             ));
             let intent_network = Arc::new(crate::kernel::cognition::IntentSemanticNetwork::new(
                 Arc::new(embedding.clone()) as Arc<dyn EmbeddingProvider>,
             ));
-            let skill_forge = Arc::new(crate::kernel::cognition::SkillForge::new());
-            let cognitive_loop = crate::kernel::cognition::CognitiveLoop::new(
+            let tracker = Arc::new(crate::kernel::cognition::TrajectoryTracker::new());
+            let skill_forge = Arc::new(crate::kernel::cognition::SkillForge::new()
+                .with_trajectory_tracker(tracker.clone())
+                .with_embedding(Arc::new(embedding.clone()) as Arc<dyn EmbeddingProvider>));
+            let cognitive_loop = crate::kernel::cognition::CognitiveLoop::with_shared_tracker(
                 context_analyzer,
                 intent_network,
                 skill_forge,
+                tracker,
             );
             let arc = Arc::new(cognitive_loop);
             // Wire into prefetcher so declare_intent / on_intent_complete can access it
             let _ = prefetch.cognitive_loop.set(Arc::clone(&arc));
+
+            // Subscribe CognitiveLoop to EventBus for reactive cognition
+            // Only spawn if a tokio runtime is available (not in unit tests)
+            if tokio::runtime::Handle::try_current().is_ok() {
+                let loop_ref = Arc::clone(&arc);
+                let sub_id = event_bus.subscribe();
+                let bus = Arc::clone(&event_bus);
+                tokio::spawn(async move {
+                    loop {
+                        if let Some(events) = bus.poll(&sub_id) {
+                            for event in &events {
+                                loop_ref.on_event(event);
+                            }
+                        }
+                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    }
+                });
+            }
+
             Some(arc)
         };
 
@@ -674,13 +698,18 @@ mod kernel_mod_tests {
     #[test]
     fn test_handle_api_request_check_permission() {
         let (kernel, _dir) = make_kernel();
+        let agent_id = "test-agent";
+        // Explicitly register the agent first
+        kernel.ensure_agent_registered(agent_id);
+        
         let req = ApiRequest::CheckPermission {
-            agent_id: "test-agent".to_string(),
+            agent_id: agent_id.to_string(),
             action: "read".to_string(),
         };
+        
         let resp = kernel.handle_api_request(req);
-        // Should return without panic; result is either allowed or not
-        assert!(resp.error.is_none() || resp.data.is_some());
+        // Result should be a success (permission either granted or denied, but not a kernel error)
+        assert!(resp.error.is_none(), "Expected no error from handle_api_request, got: {:?}", resp.error);
     }
 }
 
