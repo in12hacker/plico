@@ -4,7 +4,7 @@
 //! - `IntentDeclaration`: structured intent with keywords, CIDs, budget, expected outcome
 //! - `IntentTracker`: tracks active intent execution progress
 //!
-//! Soul 2.0 Axiom 2: "意图先于操作" — OS accepts structured intent declaration
+//! Soul 3.0 Axiom 2: "意图先于操作" — OS accepts structured intent declaration
 //! and handles assembly, not Agent.
 
 use crate::util::now_ms;

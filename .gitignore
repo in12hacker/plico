@@ -1,29 +1,42 @@
-# Build output
+# ── Build ──
 target/
 
-# Dependencies
+# ── Dependencies ──
 Cargo.lock
 
-# Local Claude settings
-.claude/settings.local.json
+# ── Runtime data (plicod runtime, auto-generated) ──
+.runtime/
+.logs/
 
-# IDE
+# ── IDE ──
 .idea/
 .vscode/
+.cursor/
 *.swp
 *.swo
 
-# OS
+# ── OS ──
 .DS_Store
 Thumbs.db
-.claude/
-tests/e2e/__pycache__/
 
-# Benchmark data (large datasets, not tracked)
+# ── Claude Code ──
+.claude/settings.local.json
+
+# ── Benchmark ──
 bench/data/
+bench/.venv/
 bench/**/__pycache__/
 bench/**/*.pyc
-
-# Model files
-*.gguf
 benchmarks/datasets/
+bench/archive/
+
+# ── Model files ──
+*.gguf
+
+# ── Python ──
+__pycache__/
+*.pyc
+.venv/
+
+# ── Secrets (never commit) ──
+*.key

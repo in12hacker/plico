@@ -3,7 +3,7 @@
 
 **版本**: v1.0
 **日期**: 2026-04-23
-**灵魂依据**: `system-v2.md`（Soul 2.0）
+**灵魂依据**: `system-v3.md`（Soul 3.0）
 **阶段**: Hook 系统 + 全局断路器 + CLI scope 修复 + 累计 Token Budget + P0 测试覆盖 + dispatch 路由测试
 **前置**: 节点 18 ✅（100%）— JSON-First, redb KG, B50-B53 修复, 1245 测试, Soul 79.5%
 **验证方法**: 独立 Dogfood 实测（`/tmp/plico-n19-audit`）+ 全量源码 review + cargo test 1245 全通过 + 网络校准(EverMemOS/Hook 行业标准/断路器模式)
@@ -37,7 +37,7 @@ memory: []                       ← 空
 
 这是 B49/B50/B52 模式的第四个实例：**CLI 界面丢失信息**。N17 修复了 `cmd_create`（B49），N18 修复了 `parse_edge_type`（B50）和 `cmd_update`（B52），但 `cmd_remember` 的 scope 传递被遗漏。
 
-从 AI 视角看，这比普通 Bug 更危险——它制造**错误的信任**。我存储了共享知识，内核回复"成功"，但另一个 Agent 永远看不到。这违反了 Soul 2.0 公理 4（共享先于重复）的根基。
+从 AI 视角看，这比普通 Bug 更危险——它制造**错误的信任**。我存储了共享知识，内核回复"成功"，但另一个 Agent 永远看不到。这违反了 Soul 3.0 公理 4（共享先于重复）的根基。
 
 ### 层次二：我没有哨兵，只有日志
 
@@ -54,7 +54,7 @@ Plico 有 `EventBus`——1073 行，27 个测试——可以 emit/subscribe 事
 
 当前如果一个 Agent 调用 `cas.delete` 删除关键数据，EventBus 只能在**事后**通知订阅者。没有任何机制在**执行前**拦截并阻止。
 
-Soul 2.0 公理 5（机制不是策略）说 OS 提供机制，Agent 做决策。但当前连"做决策的接口"都不存在。OS 没有提供让 Agent 在 tool call 执行前表达"不允许"的机制。
+Soul 3.0 公理 5（机制不是策略）说 OS 提供机制，Agent 做决策。但当前连"做决策的接口"都不存在。OS 没有提供让 Agent 在 tool call 执行前表达"不允许"的机制。
 
 ### 层次三：我的韧性只有一个装甲
 
@@ -84,7 +84,7 @@ LLM 调用是最关键的外部依赖——如果 OpenAI API 宕机 10 分钟，
 
 ### 层次五：Token Budget 没有累加器
 
-Soul 2.0 公理 1 说 Token 最稀缺。公理 10 说会话是一等公民。
+Soul 3.0 公理 1 说 Token 最稀缺。公理 10 说会话是一等公民。
 
 `context assemble --budget 4096` 可以控制单次组装的 token 上限。但跨请求的累计 token 消耗无处追踪。`AgentUsage` 结构体追踪 `tool_call_count`，但没有 `total_tokens_consumed`。
 
@@ -260,7 +260,7 @@ pub fn dispatch_tool_call(&self, tool_name: &str, params: Value, agent_id: &str)
 }
 ```
 
-**与 Soul 2.0 的一致性**: 公理 5 "机制不是策略"——Hook 是机制（OS 提供注册和执行），拦截策略由 Agent 定义。
+**与 Soul 3.0 的一致性**: 公理 5 "机制不是策略"——Hook 是机制（OS 提供注册和执行），拦截策略由 Agent 定义。
 
 **测试**:
 - `test_hook_registry_block`: 注册 Block hook → dispatch_tool_call 返回 Block 错误
@@ -621,7 +621,7 @@ Node 19 完成后，Plico 将具备：
 
 **Node 20 展望**: **觉 (Awareness) — 主动性与越用越好**
 
-基于 Node 19 的哨兵基础设施（Hook 可观测，断路器保韧性，Token 可度量），Node 20 将攻坚 Soul 2.0 最大差距——公理 7（主动先于被动，当前 35%）和公理 9（越用越好，当前 25%）：
+基于 Node 19 的哨兵基础设施（Hook 可观测，断路器保韧性，Token 可度量），Node 20 将攻坚 Soul 3.0 最大差距——公理 7（主动先于被动，当前 35%）和公理 9（越用越好，当前 25%）：
 
 1. **意图缓存 (Intent Cache)**: 相似意图命中历史组装结果，公理 9 核心。`prefetch_cache.rs`（455行+14测试）已有基础。扩展为跨 session 持久化。
 2. **上下文主动预热 (Proactive Prefetch)**: `session-start --intent` 后后台异步组装。`prefetch.rs`（1458行+22测试）已有核心算法。需要异步执行和结果缓存。
@@ -632,5 +632,5 @@ Node 19 完成后，Plico 将具备：
 
 ---
 
-*文档基于 1245 个自动化测试 + 独立 Dogfood 实测（`/tmp/plico-n19-audit`，发现 B54） + 118 个源文件逐一审计 + 3 项网络研究(Hook Systems 2026 / Circuit Breaker Patterns / EverMemOS) + Soul 2.0 十条公理逐条验证。*
+*文档基于 1245 个自动化测试 + 独立 Dogfood 实测（`/tmp/plico-n19-audit`，发现 B54） + 118 个源文件逐一审计 + 3 项网络研究(Hook Systems 2026 / Circuit Breaker Patterns / EverMemOS) + Soul 3.0 十条公理逐条验证。*
 *B54 通过真实 CLI 执行确认（remember shared → recall shared → empty）。TD-5~TD-9 通过代码审查和行业对标确认。*

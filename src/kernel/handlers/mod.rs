@@ -16,3 +16,4 @@ mod model;
 mod storage;
 mod prompt;
 mod import;
+mod core_ops;

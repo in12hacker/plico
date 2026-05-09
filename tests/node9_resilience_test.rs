@@ -3,7 +3,7 @@
 //! Tests for F-36 (BM25 quality), F-37 (snippet), F-38 (circuit breaker),
 //! F-39 (checkpoint round-trip), and F-40 (search get_raw).
 //!
-//! All tests verify Soul 2.0 axioms: Token economy (F-37), Intent accuracy (F-36),
+//! All tests verify Soul 3.0 axioms: Token economy (F-37), Intent accuracy (F-36),
 //! Memory integrity (F-39), Operational continuity (F-38).
 
 use plico::fs::search::Bm25Index;

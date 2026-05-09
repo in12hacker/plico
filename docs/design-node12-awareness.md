@@ -3,7 +3,7 @@
 
 **版本**: v2.0（Dogfood 实测校正版）
 **日期**: 2026-04-21
-**灵魂依据**: `system-v2.md`（Soul 2.0）
+**灵魂依据**: `system-v3.md`（Soul 3.0）
 **阶段**: Agent 身份觉醒 + 记忆进化 + 系统自省
 **前置**: 节点 7 ✅ / 节点 8 ✅ / 节点 9 设计 / 节点 10 设计 / 节点 11 实施中（56%）
 **验证方法**: Dogfood 实测 + TDD + AIOS 前沿对标
@@ -248,7 +248,7 @@ session 状态只存在于进程内存中。
 这意味着：
 - 我的 session 永远无法正常结束
 - growth 永远显示 Sessions: 0（因为 0 个 completed session）
-- Soul 2.0 公理 10（会话是一等公民）从未在 CLI 模式下真正实现
+- Soul 3.0 公理 10（会话是一等公民）从未在 CLI 模式下真正实现
 
 这不是一个 bug。这是一个架构级谎言：
 系统承诺了会话生命周期，但在 CLI 模式下从未交付过。
@@ -316,7 +316,7 @@ tool call fake.tool → exit 0 空输出。
   session-start 创建 session → 进程退出 → session 消亡
   → session-end 永远 "Session not found" → B22
   → growth 永远 Sessions: 0 → B20
-  → Soul 2.0 公理 10（会话一等公民）在 CLI 模式下是空话
+  → Soul 3.0 公理 10（会话一等公民）在 CLI 模式下是空话
   → 必须: Session 状态持久化
   → A-1 Session Persistence
 
@@ -494,7 +494,7 @@ pub fn end_session(&self, agent_id: &str, session_id: &str) -> Result<...> {
 **连锁修复**: 
 - B22 直接修复（session-end 能找到 session）
 - B20 间接修复（completed sessions 被持久化 → growth 能计数）
-- Soul 2.0 公理 10（会话一等公民）真正兑现
+- Soul 3.0 公理 10（会话一等公民）真正兑现
 
 **Soul 对齐**:
 - 公理 10（会话一等公民）— session 跨进程持久化
@@ -1428,7 +1428,7 @@ aicli events history --agent <UUID>        # → 只返回该 agent 事件
 目标通过率: 37/43 (86%) — 从 66% 提升至 86%
 ```
 
-### Soul 2.0 覆盖矩阵
+### Soul 3.0 覆盖矩阵
 
 | 公理 | A-1 | A-2 | A-3 | A-4 | A-5 | A-6 | A-7 | A-8 |
 |------|-----|-----|-----|-----|-----|-----|-----|-----|

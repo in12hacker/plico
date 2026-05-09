@@ -12,7 +12,7 @@ An operating system kernel designed **entirely from an AI perspective**. No huma
 
 Core stack: CAS, semantic filesystem (vectors + BM25 + knowledge graph with redb, 17 edge types), layered memory (4-tier + MemoryScope), agent scheduler, kernel event bus (pub/sub + filtering + persistent log), permission guardrails, hook system (5 interception points), intent system (DAG decomposition + autonomous execution), context budget engine (L0/L1/L2), tool registry (37 built-in + external MCP), agent lifecycle (checkpoint/restore/discover/delegate), learning loop (execution stats + skill discovery + self-healing), retrieval fusion engine (RFE, 7-signal adaptive ranking), unified configuration (`config.json` + env vars + CLI), `plicod` (TCP+UDS daemon with `start/stop/status` lifecycle), `plico-sse` (A2A SSE adapter), `plico-mcp` (stdio JSON-RPC), and `aicli` (semantic CLI).
 
-Soul 2.0 alignment: **94.7%**. Architecture red lines: **8/8 (100%)**.
+Soul 3.0 alignment: **94.7%**. Architecture red lines: **9/9 (100%)**.
 
 ## Architecture
 
@@ -110,7 +110,7 @@ cat > ~/.plico/config.json <<EOF
 EOF
 ```
 
-## 10 Axioms (Soul 2.0)
+## 10 Axioms (Soul 3.0)
 
 | # | Axiom | Implication |
 |---|-------|-------------|
@@ -162,6 +162,6 @@ docs/
 
 ## Design documents
 
-- `system-v2.md` — Soul 2.0: 10 axioms from AI's first-person perspective (Chinese)
+- `system-v3.md` — Soul 3.0: 10 axioms from AI's first-person perspective (Chinese)
 - `docs/genesis-reference.md` — Complete Genesis reference (Chinese)
 - `AGENTS.md` — Detailed directory map + navigation for AI agents

@@ -102,8 +102,10 @@ pub struct SemanticFS {
     knowledge_graph: Option<Arc<dyn KnowledgeGraph>>,
     bm25_index: Arc<Bm25Index>,
     reranker: Option<Arc<dyn RerankerProvider>>,
-    // F-5: Soul alignment — env var disables auto-summarize to prevent OS policy leakage
-    disable_auto_summarize: bool,
+    /// F-37: Pass-through chunking mode from unified config
+    config_chunking_mode: String,
+    // F-5: Soul alignment — unified config controls auto-summarize
+    config_auto_summarize: bool,
 }
 
 impl SemanticFS {
@@ -171,11 +173,20 @@ impl SemanticFS {
             knowledge_graph,
             bm25_index: Arc::new(Bm25Index::new()),
             reranker,
-            disable_auto_summarize: std::env::var("PLICO_AUTO_SUMMARIZE").as_deref() != Ok("1"),
+            config_chunking_mode: "none".into(), // Default, will be updated by AIKernel
+            config_auto_summarize: false,        // Default, will be updated by AIKernel
         };
 
         fs.rebuild_vector_index();
         Ok(fs)
+    }
+
+    pub fn set_chunking_mode(&mut self, mode: String) {
+        self.config_chunking_mode = mode;
+    }
+
+    pub fn set_auto_summarize(&mut self, enabled: bool) {
+        self.config_auto_summarize = enabled;
     }
 
     fn rebuild_vector_index(&self) {
@@ -290,9 +301,8 @@ impl SemanticFS {
             }
         }
 
-        // F-5: Only summarize when PLICO_AUTO_SUMMARIZE=1 is set (V-06 soul alignment)
-        // By default disabled — OS should not silently invoke LLM summarization
-        if !self.disable_auto_summarize {
+        // F-5: Only summarize when auto_summarize is enabled in config
+        if self.config_auto_summarize {
             if let Some(ref summarizer) = self.summarizer {
                 let text = match std::str::from_utf8(&content) {
                     Ok(s) if !s.trim().is_empty() => s.to_string(),
@@ -302,10 +312,10 @@ impl SemanticFS {
                     match summarizer.summarize(&text, crate::fs::summarizer::SummaryLayer::L0) {
                         Ok(summary) => {
                             if let Err(e) = self.ctx_loader.store_l0(&cid, summary) {
-                                tracing::warn!("Failed to store L0 summary for {}: {}", &cid[..8], e);
+                                tracing::warn!("Failed to store L0 summary for {}: {}", crate::util::safe_truncate(&cid, 8), e);
                             }
                         }
-                        Err(e) => { tracing::warn!("L0 summarization failed for {}: {}", &cid[..8], e); }
+                        Err(e) => { tracing::warn!("L0 summarization failed for {}: {}", crate::util::safe_truncate(&cid, 8), e); }
                     }
                 }
             }
@@ -319,7 +329,7 @@ impl SemanticFS {
         });
 
         // Hierarchical chunking: split large documents into child chunks
-        let chunking_mode = crate::fs::chunking::ChunkingMode::from_env();
+        let chunking_mode = crate::fs::chunking::ChunkingMode::from_str(&self.config_chunking_mode);
         if chunking_mode != crate::fs::chunking::ChunkingMode::None {
             if let Ok(text) = std::str::from_utf8(&content) {
                 let emb_ref: Option<&dyn EmbeddingProvider> = if chunking_mode == crate::fs::chunking::ChunkingMode::Semantic {
@@ -329,7 +339,7 @@ impl SemanticFS {
                 };
                 let chunks = crate::fs::chunking::chunk_document(text, chunking_mode, emb_ref);
                 if !chunks.is_empty() {
-                    tracing::debug!("Chunked document {} into {} child chunks", &cid[..8], chunks.len());
+                    tracing::info!("Hierarchical chunking: document {} split into {} child chunks", crate::util::safe_truncate(&cid, 8), chunks.len());
                     for (ci, chunk) in chunks.iter().enumerate() {
                         let mut child_tags = tags.clone();
                         child_tags.push(format!("parent_cid:{}", cid));
@@ -356,6 +366,8 @@ impl SemanticFS {
                             });
                         }
                     }
+                } else {
+                    tracing::debug!("Document {} too small for chunking mode {:?}", crate::util::safe_truncate(&cid, 8), chunking_mode);
                 }
             }
         }
@@ -1024,8 +1036,8 @@ impl SemanticFS {
         let text = String::from_utf8_lossy(content);
         let snippet = if text.trim().is_empty() {
             String::new()
-        } else if text.len() > 200 {
-            format!("{}...", &text[..200])
+        } else if text.chars().count() > 200 {
+            format!("{}...", crate::util::safe_truncate(&text, 200))
         } else {
             text.to_string()
         };

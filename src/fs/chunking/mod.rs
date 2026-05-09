@@ -32,13 +32,19 @@ pub enum ChunkingMode {
 }
 
 impl ChunkingMode {
-    pub fn from_env() -> Self {
-        match std::env::var("PLICO_CHUNKING").as_deref() {
-            Ok("semantic") => Self::Semantic,
-            Ok("fixed") => Self::Fixed,
-            Ok("markdown") | Ok("md") => Self::Markdown,
+    pub fn from_str(mode: &str) -> Self {
+        match mode.to_lowercase().as_str() {
+            "semantic" => Self::Semantic,
+            "fixed" => Self::Fixed,
+            "markdown" | "md" => Self::Markdown,
             _ => Self::None,
         }
+    }
+
+    pub fn from_env() -> Self {
+        let mode = std::env::var("PLICO_CHUNKING")
+            .unwrap_or_else(|_| "none".to_string());
+        Self::from_str(&mode)
     }
 }
 

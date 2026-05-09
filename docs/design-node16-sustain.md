@@ -3,7 +3,7 @@
 
 **版本**: v1.0
 **日期**: 2026-04-22
-**灵魂依据**: `system-v2.md`（Soul 2.0）
+**灵魂依据**: `system-v3.md`（Soul 3.0）
 **阶段**: 持久运营 + 幽灵操作防御 + 名称解析补全 + 幂等引导 + 规格即程序
 **前置**: 节点 15 ✅（38%） — Bug 修复 100%, 测试承诺 0%
 **验证方法**: 独立 Dogfood 实测（`/tmp/plico-n16-audit`，干净环境）+ 全量源码逐文件 review（真实读取 50+ 源文件）+ 单元测试覆盖率盲区分析 + AIOS 2026 前沿对标
@@ -61,7 +61,7 @@ arXiv:2603.17399 (Mar 2026) 证明了一个惊人的结论：
 
 > **"The specification, not the implementation, is the stable artifact of record. Improving an agent means improving its specification; the implementation is, in principle, regenerable at any time."**
 
-Plico 有自己的规格 — `system.md` (Soul 2.0)。它定义了：
+Plico 有自己的规格 — `system.md` (Soul 3.0)。它定义了：
 - 内容寻址存储
 - 语义标签替代路径
 - 分层记忆（4 层）
@@ -200,7 +200,7 @@ NEW-2    ⚠️ ARCH  Dogfood 持久化用 /tmp                        plico-boo
 | 来源 | 日期 | 核心概念 | Plico 适用性 |
 |------|------|---------|------------|
 | **NLAH** (arXiv:2603.25723) | 2026-03 | 自然语言 Agent Harness — harness 逻辑外化为可执行制品 | 🔴 直接适用 — AGENTS.md 即 proto-NLAH |
-| **Bootstrapping Agents** (arXiv:2603.17399) | 2026-03 | 规格即程序 — spec 是稳定制品，实现可再生 | 🔴 直接适用 — Soul 2.0 即 Plico spec |
+| **Bootstrapping Agents** (arXiv:2603.17399) | 2026-03 | 规格即程序 — spec 是稳定制品，实现可再生 | 🔴 直接适用 — Soul 3.0 即 Plico spec |
 | **Harness Engineering** (OpenAI, Feb 2026) | 2026-02 | 环境 > 模型：机械化不变量、agent 可读性钩子 | 🔴 直接适用 — Plico 是 harness 基础设施 |
 | **VIGIL** (arXiv:2512.07094) | 2025-12 | 反射式运行时 — 观察→评估→修复闭环 | 🟡 参考 — 自省循环模式 |
 | **AIOS v0.3.0 Mode 3** | 2026-01 | 个人持久内核 — 长期持久数据 + 跨设备同步 | 🔴 直接适用 — Plico 需要持久存储 |
@@ -211,7 +211,7 @@ NEW-2    ⚠️ ARCH  Dogfood 持久化用 /tmp                        plico-boo
 **Bootstrapping 论断**: "规格是记录的稳定制品。改进 Agent 意味着改进它的规格；实现原则上可以随时再生。"
 
 Plico 的自举悖论：
-- Plico 有 Soul 2.0 作为 spec
+- Plico 有 Soul 3.0 作为 spec
 - Plico 有 CAS + KG + 分层记忆作为基础设施
 - 但 Plico 用 /tmp 存自己的数据
 - 55 个核心源文件没有单元测试
@@ -571,7 +571,7 @@ record_adr() {
 
 ---
 
-## 9. Soul 2.0 对齐
+## 9. Soul 3.0 对齐
 
 | 公理 | Node 16 对齐 |
 |------|-------------|
@@ -623,9 +623,9 @@ Node 16 是 Plico 从"能运行"到"能持续运行"的转折点。它对应 AIO
 
 Bootstrapping Agents (arXiv:2603.17399) 证明：spec → agent → agent' (meta-circular)。
 
-如果 Plico 的 Soul 2.0 spec 是真正的"程序"，那么：
-1. Plico 应该能从 Soul 2.0 重建自己（当前不能）
-2. 任何违反 Soul 2.0 的代码变更应该被检测到（当前不能）
+如果 Plico 的 Soul 3.0 spec 是真正的"程序"，那么：
+1. Plico 应该能从 Soul 3.0 重建自己（当前不能）
+2. 任何违反 Soul 3.0 的代码变更应该被检测到（当前不能）
 3. 设计决策应该可以从 KG 中查询回溯（当前 8% 覆盖率）
 
 Node 16 的 F-6 是第一步 — 让设计决策进入 Plico 自己的知识图谱。Node 17+ 可以在此基础上实现自动合规检查。

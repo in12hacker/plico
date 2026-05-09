@@ -113,6 +113,18 @@ pub struct InferenceConfig {
     /// API key for authenticated endpoints.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_key: Option<String>,
+
+    /// Optional prefix for embedding queries.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub query_prefix: Option<String>,
+
+    /// Optional prefix for embedding documents.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub document_prefix: Option<String>,
+
+    /// Optional target dimension for Matryoshka truncation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_dim: Option<usize>,
 }
 
 // ── Tuning ─────────────────────────────────────────────────────────────
@@ -120,6 +132,10 @@ pub struct InferenceConfig {
 /// Runtime tuning knobs.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TuningConfig {
+    /// Chunking mode: `"none"` | `"fixed"` | `"semantic"` | `"markdown"`.
+    #[serde(default = "default_chunking_mode")]
+    pub chunking_mode: String,
+
     /// Periodic persist interval in seconds (default: 300).
     #[serde(default = "default_persist_interval")]
     pub persist_interval_secs: u64,
@@ -148,6 +164,10 @@ pub struct TuningConfig {
     #[serde(default = "default_kg_extract_timeout")]
     pub kg_extract_timeout_ms: u64,
 
+    /// Auto-summarize large objects into L0 memory.
+    #[serde(default)]
+    pub auto_summarize: bool,
+
     /// Log level filter (default: `"info"`). Overridden by `RUST_LOG`.
     #[serde(default = "default_log_level")]
     pub log_level: String,
@@ -171,6 +191,7 @@ fn default_rrf_k() -> u64 { 60 }
 fn default_kg_batch_size() -> usize { 5 }
 fn default_kg_extract_timeout() -> u64 { 3000 }
 fn default_log_level() -> String { "info".into() }
+fn default_chunking_mode() -> String { "none".into() }
 
 // ── Default trait impls ────────────────────────────────────────────────
 
@@ -184,7 +205,6 @@ impl Default for PlicoConfig {
         }
     }
 }
-
 impl Default for NetworkConfig {
     fn default() -> Self {
         Self {
@@ -195,7 +215,6 @@ impl Default for NetworkConfig {
         }
     }
 }
-
 impl Default for InferenceConfig {
     fn default() -> Self {
         Self {
@@ -210,13 +229,16 @@ impl Default for InferenceConfig {
             ollama_url: None,
             openai_api_base: None,
             api_key: None,
+            query_prefix: None,
+            document_prefix: None,
+            target_dim: None,
         }
     }
 }
-
 impl Default for TuningConfig {
     fn default() -> Self {
         Self {
+            chunking_mode: default_chunking_mode(),
             persist_interval_secs: default_persist_interval(),
             rrf_k: default_rrf_k(),
             rrf_bm25_weight: None,
@@ -224,10 +246,12 @@ impl Default for TuningConfig {
             kg_auto_extract: false,
             kg_extract_batch_size: default_kg_batch_size(),
             kg_extract_timeout_ms: default_kg_extract_timeout(),
+            auto_summarize: false,
             log_level: default_log_level(),
         }
     }
 }
+
 
 // ── Loading ────────────────────────────────────────────────────────────
 
@@ -304,8 +328,14 @@ impl PlicoConfig {
         merge_opt!(ollama_url);
         merge_opt!(openai_api_base);
         merge_opt!(api_key);
+        merge_opt!(query_prefix);
+        merge_opt!(document_prefix);
+        merge_opt!(target_dim);
 
         // Tuning
+        if other.tuning.chunking_mode != default_chunking_mode() {
+            self.tuning.chunking_mode = other.tuning.chunking_mode;
+        }
         if other.tuning.persist_interval_secs != default_persist_interval() {
             self.tuning.persist_interval_secs = other.tuning.persist_interval_secs;
         }
@@ -326,6 +356,9 @@ impl PlicoConfig {
         }
         if other.tuning.kg_extract_timeout_ms != default_kg_extract_timeout() {
             self.tuning.kg_extract_timeout_ms = other.tuning.kg_extract_timeout_ms;
+        }
+        if other.tuning.auto_summarize {
+            self.tuning.auto_summarize = true;
         }
         if other.tuning.log_level != default_log_level() {
             self.tuning.log_level = other.tuning.log_level;
@@ -375,8 +408,12 @@ impl PlicoConfig {
         env_opt!("OLLAMA_URL", self.inference.ollama_url);
         env_opt!("OPENAI_API_BASE", self.inference.openai_api_base);
         env_opt!("OPENAI_API_KEY", self.inference.api_key);
+        env_opt!("EMBEDDING_QUERY_PREFIX", self.inference.query_prefix);
+        env_opt!("EMBEDDING_DOCUMENT_PREFIX", self.inference.document_prefix);
+        if let Ok(val) = std::env::var("EMBEDDING_DIM") { if let Ok(parsed) = val.parse() { self.inference.target_dim = Some(parsed); } }
 
         // Tuning
+        env_str!("PLICO_CHUNKING", self.tuning.chunking_mode);
         env_parse!("PLICO_PERSIST_INTERVAL_SECS", self.tuning.persist_interval_secs);
         env_parse!("PLICO_RRF_K", self.tuning.rrf_k);
         if let Ok(val) = std::env::var("PLICO_RRF_BM25_WEIGHT") {
@@ -387,6 +424,9 @@ impl PlicoConfig {
         }
         if let Ok(val) = std::env::var("PLICO_KG_AUTO_EXTRACT") {
             self.tuning.kg_auto_extract = matches!(val.as_str(), "1" | "true");
+        }
+        if let Ok(val) = std::env::var("PLICO_AUTO_SUMMARIZE") {
+            self.tuning.auto_summarize = matches!(val.as_str(), "1" | "true");
         }
         env_parse!("PLICO_KG_EXTRACT_BATCH_SIZE", self.tuning.kg_extract_batch_size);
         env_parse!("PLICO_KG_EXTRACT_TIMEOUT_MS", self.tuning.kg_extract_timeout_ms);
@@ -456,7 +496,7 @@ pub fn ensure_v1_suffix(url: &str) -> String {
 ///
 /// Works on Linux, macOS, and any POSIX system with `ps`.
 /// Returns `None` on Windows or when no llama-server is found.
-fn detect_llama_server_port() -> Option<u16> {
+pub fn detect_llama_server_port() -> Option<u16> {
     let output = std::process::Command::new("ps")
         .args(["aux"])
         .output()

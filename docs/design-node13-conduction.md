@@ -3,7 +3,7 @@
 
 **版本**: v1.0（Dogfood 实测校正版）
 **日期**: 2026-04-22
-**灵魂依据**: `system-v2.md`（Soul 2.0）
+**灵魂依据**: `system-v3.md`（Soul 3.0）
 **阶段**: 参数忠实 + 权限通路 + 记忆进化 + 系统健全
 **前置**: 节点 12 ✅（50%） / 节点 11 ✅ / 节点 10 设计 / 节点 9 设计
 **验证方法**: Dogfood 实测（零管道干扰） + TDD + AIOS 2026 前沿对标
@@ -216,7 +216,7 @@ Node 12 让我有了身份（A-2 name registry）和记忆持久化（A-1 sessio
 B28 (tier 忽略)
   → parse_memory_tier 缺少 "long-term" 匹配
   → 长期记忆全部降为工作记忆
-  → Soul 2.0 公理 3（记忆跨越边界）在层级维度失效
+  → Soul 3.0 公理 3（记忆跨越边界）在层级维度失效
 
 B29 (权限不可用)
   → CLI 无 permission 子命令路由
@@ -235,13 +235,13 @@ A-4 (记忆链接无效)
   → remember 完成后不触发 KG 操作
   → KG 子系统与记忆子系统完全解耦
   → 知识图谱永远只有手动 edge 命令创建的节点
-  → Soul 2.0 公理 8（因果先于关联）无法兑现
+  → Soul 3.0 公理 8（因果先于关联）无法兑现
 
 B33 (整合无效)
   → session-end 可能调用 consolidation 代码
   → 但 consolidation 结果无 CLI 输出
   → recall 前后无变化
-  → Soul 2.0 公理 9（越用越好）无法验证
+  → Soul 3.0 公理 9（越用越好）无法验证
 
 B14 (事件未过滤)
   → events history 分支单独提取 --agent-filter
@@ -261,7 +261,7 @@ B26 (limit 忽略)
 |----------|---------|---------|
 | **Daemon 架构迁移** | AIOS v0.3 使用 daemon 模式; 解决冷启动延迟 | A-1 session persistence 已解决关键问题; plicod 已存在但非当务之急; process-per-command 模型在 CLI/CI 场景更简单 |
 | **完整 AIP 协议实现** | AIP 提供密码学可验证委托链; Rust 实现已有 | 当前连基本 permission grant 都不可用; 先修复基础, AIP 是 Node 14+ |
-| **LLM 驱动记忆整合** | SleepGate/Sleeping LLM 用 LLM 做记忆进化 | Soul 2.0 红线 2: 内核零模型（embedding/summarize 除外）; consolidation 应用结构化方法 |
+| **LLM 驱动记忆整合** | SleepGate/Sleeping LLM 用 LLM 做记忆进化 | Soul 3.0 红线 2: 内核零模型（embedding/summarize 除外）; consolidation 应用结构化方法 |
 | **NornicDB 式衰减** | 三层衰减半衰期 (7d/69d/693d) | 先让 tier 赋值正确 (B28); 衰减是 Node 14+ 在 tier 基础上叠加 |
 | **OpenTelemetry 集成** | 2026 agent 可观测性标准 | 基础设施级改动, 与内核无关; health report 先满足最小需求 |
 | **单独修复 B24 send** | send 失败影响 agent 通信 | 根因是 B29 (无法授权 SendMessage); 修复 B29 后 send 自然可用 |
@@ -329,7 +329,7 @@ pub fn parse_memory_tier(s: &str) -> MemoryTier {
 
 **估算**: ~5 行修改, 3 个新测试
 **验收**: `remember --tier long-term` + `recall` 显示 `[LongTerm]`
-**Soul 2.0**: 公理 3（记忆跨越边界）— tier 是边界的编码，必须被忠实传递
+**Soul 3.0**: 公理 3（记忆跨越边界）— tier 是边界的编码，必须被忠实传递
 
 ---
 
@@ -365,7 +365,7 @@ fn handle_cas_search(kernel: &AIKernel, args: &serde_json::Value) -> ToolResult 
 
 **估算**: ~15 行修改, 3 个新测试
 **验收**: `tool call cas.search '{"query":"arch","limit":1}'` 返回恰好 1 条, 无重复 CID
-**Soul 2.0**: 公理 6（结构先于语言）— JSON 参数即契约，limit 必须被执行
+**Soul 3.0**: 公理 6（结构先于语言）— JSON 参数即契约，limit 必须被执行
 
 ---
 
@@ -466,7 +466,7 @@ delete --cid <CID> --agent n13-tester → 成功, exit 0
 permission revoke --agent n13-tester --action delete → "Permission revoked"
 delete --cid <CID> --agent n13-tester → "lacks permission", exit 1
 ```
-**Soul 2.0**: 公理 5（机制不是策略）— permission 是机制，CLI 是机制的入口
+**Soul 3.0**: 公理 5（机制不是策略）— permission 是机制，CLI 是机制的入口
 
 **连锁效果**: B29 修复 → B24 (send) 自然可用（Agent 可授权 SendMessage 后执行 send）
 
@@ -488,7 +488,7 @@ let to_id = kernel.resolve_agent(&to_str).unwrap_or(to_str);
 
 **估算**: ~10 行修改, 2 个新测试
 **验收**: `delegate --from n13-tester --to n13-helper --desc "task"` → 成功返回 intent_id
-**Soul 2.0**: 公理 2（意图先于操作）— "委托给 helper" 是意图，UUID 是操作细节
+**Soul 3.0**: 公理 2（意图先于操作）— "委托给 helper" 是意图，UUID 是操作细节
 
 **AIOS 对标**: AIP 论文中 delegation 需要身份验证。当前 Plico 实现的是最小版本（名字解析），AIP 级别（capability tokens）是 Node 14+ 方向。
 
@@ -503,9 +503,9 @@ let to_id = kernel.resolve_agent(&to_str).unwrap_or(to_str);
 **根因定位**: Node 12 设计了 Memory Link Engine (A-4), commit 2d0882a 声称实现。但 dogfood 显示 remember 后 KG 无任何变化。要么代码路径未触发，要么链接逻辑不可达。
 
 **设计原则**:
-- Soul 2.0 公理 8: 因果先于关联 — 不是"A 和 B 相关"，而是"A 因为 B 被创建"
+- Soul 3.0 公理 8: 因果先于关联 — 不是"A 和 B 相关"，而是"A 因为 B 被创建"
 - A-MEM (AIOS): Zettelkasten 式动态网络 — 新记忆自动链接旧记忆
-- 但 Soul 2.0 红线 2: 内核零模型 — 链接不能用 LLM 推理，必须用结构化方法
+- 但 Soul 3.0 红线 2: 内核零模型 — 链接不能用 LLM 推理，必须用结构化方法
 
 **修复方向**: remember 完成后，用 BM25 搜索相关已有记忆，对相似度超过阈值的建立 KG 边。
 
@@ -536,7 +536,7 @@ remember --agent tester --content "circuit breaker pattern" --tags arch
 remember --agent tester --content "embedding fallback uses circuit breaker" --tags arch
 explore --scope full → 至少 2 个 Memory 节点 + 1 条 RelatedTo 边
 ```
-**Soul 2.0**: 公理 8（因果先于关联）— 记忆链接基于内容相似度，权重是可量化的证据
+**Soul 3.0**: 公理 8（因果先于关联）— 记忆链接基于内容相似度，权重是可量化的证据
 
 **AIOS 对标**: A-MEM 使用 LLM 做链接分析。Plico 使用 BM25/embedding 做结构化链接，符合"内核零模型"红线。
 
@@ -549,10 +549,10 @@ explore --scope full → 至少 2 个 Memory 节点 + 1 条 RelatedTo 边
 **根因定位**: Node 12 设计了 Memory Consolidation Cycle (A-5), commit 1319743 声称实现。但 session-end 的输出只有 "Session ended, Last seq: N"，无整合报告。consolidation 可能在内部执行但无 CLI 反馈。
 
 **设计原则**:
-- Soul 2.0 公理 9: 越用越好 — consolidation 是学习循环
+- Soul 3.0 公理 9: 越用越好 — consolidation 是学习循环
 - SleepGate: 生物学睡眠整合 = synaptic downscaling + selective replay + forgetting
 - Four-Layer Decomposition: DreamCycle 从 Memory 提升到 Wisdom
-- 但 Soul 2.0 公理 5: 机制不是策略 — OS 提供整合原语，不自动决定什么该整合
+- 但 Soul 3.0 公理 5: 机制不是策略 — OS 提供整合原语，不自动决定什么该整合
 
 **修复方向**: session-end 时执行 consolidation 并在 `SessionEnded` 响应中报告结果。
 
@@ -625,7 +625,7 @@ recall --agent tester  (第 2 次访问 → access_count=2)
 session-end --agent tester → "Consolidation: reviewed 1, promoted 1 to LongTerm, linked N to KG"
 recall --agent tester → [LongTerm] A
 ```
-**Soul 2.0**: 公理 9（越用越好）— 多次访问的记忆自动升级; 公理 5（机制不是策略）— 提升阈值是机制参数，Agent 可以通过多次 recall 影响结果
+**Soul 3.0**: 公理 9（越用越好）— 多次访问的记忆自动升级; 公理 5（机制不是策略）— 提升阈值是机制参数，Agent 可以通过多次 recall 影响结果
 
 ---
 
@@ -727,7 +727,7 @@ health → 显示 HEALTHY/DEGRADED/UNHEALTHY + 详细组件状态
 health (EMBEDDING_BACKEND=stub) → 显示 embedding 降级
 health (full) → 显示 HEALTHY, 无降级
 ```
-**Soul 2.0**: 公理 10（会话一等公民）— 健康是会话上下文的一部分; 系统诚实报告自身状态
+**Soul 3.0**: 公理 10（会话一等公民）— 健康是会话上下文的一部分; 系统诚实报告自身状态
 
 **AIOS 对标**: Zylos 2026 的层级健康端点模型。当前实现是 Level 1 (结构化自诊)。Level 2 (自动修复) 是 Node 14+ 方向。
 
@@ -788,7 +788,7 @@ Some("history") => {
 验收: `cargo test dispatch_plico_recall_semantic_works` → 通过
 
 **估算**: ~40 行总修改, 4 个新测试
-**Soul 2.0**: 公理 1（token 稀缺）— 事件过滤节省 token; 公理 6（结构先于语言）— 每个输出必须结构完整
+**Soul 3.0**: 公理 1（token 稀缺）— 事件过滤节省 token; 公理 6（结构先于语言）— 每个输出必须结构完整
 
 ---
 
@@ -897,7 +897,7 @@ Day 4:   文档更新 + 下一个审计报告
 
 ---
 
-## 8. Soul 2.0 公理对齐矩阵
+## 8. Soul 3.0 公理对齐矩阵
 
 | 公理 | Node 13 对应 | 对齐方式 |
 |------|-------------|---------|

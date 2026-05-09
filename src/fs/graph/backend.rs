@@ -5,7 +5,7 @@
 //! - Export:  JSON via `save_to_disk`/`load_from_disk` — portable, human-readable
 //!
 //! Edge keys use 4-part format: `"src|dst|type_debug|created_at"` to preserve
-//! full temporal history across restarts (system-v2.md axiom 8: causality).
+//! full temporal history across restarts (system-v3.md axiom 8: causality).
 
 use crate::util::now_ms;
 use std::collections::{BinaryHeap, HashMap, HashSet};

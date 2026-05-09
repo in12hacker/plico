@@ -3,7 +3,7 @@
 
 **版本**: v1.0
 **日期**: 2026-04-24
-**灵魂依据**: `system-v2.md`（Soul 2.0）
+**灵魂依据**: `system-v3.md`（Soul 3.0）
 **阶段**: Cross-Domain Skill Composition + Self-Generated Goals + Temporal Memory Projection
 **前置**: 节点 23 ✅（100%）— 成(4维) + 737 tests + Soul 93%
 **验证方法**: E2E skill composition + goal generation + temporal prediction
@@ -21,7 +21,7 @@ Node 23 建立了**成**能力：
 - IntentDecomposer：基于历史分解意图
 - Learning Loop Extension：完整进化闭环
 
-**但这些仍是"单一领域"的学习**。Soul 2.0 的终极目标是：
+**但这些仍是"单一领域"的学习**。Soul 3.0 的终极目标是：
 - 公理9: 越用越好 → 需要**跨领域**知识组合
 - 公理7: 主动先于被动 → 需要**自生成目标**
 - 公理2: 意图先于操作 → 需要**时间序列预测**

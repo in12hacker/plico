@@ -3,7 +3,7 @@
 
 **版本**: v1.0
 **日期**: 2026-04-24
-**灵魂依据**: `system-v2.md`（Soul 2.0）
+**灵魂依据**: `system-v3.md`（Soul 3.0）
 **阶段**: Execution as Learning + Self-Optimization + Predictive Execution
 **前置**: 节点 21 ✅（100%）— 意(4维) + 1361 tests + Soul 92%
 **验证方法**: E2E learning loop + profile growth + prediction accuracy
@@ -21,7 +21,7 @@ Node 21 建立了**意**能力：
 - 自主执行循环（AutonomousExecutor）
 - 多 Agent 协作（IntentTree）
 
-**但这些只是"知道要做什么"**。Soul 2.0 的核心差距是：
+**但这些只是"知道要做什么"**。Soul 3.0 的核心差距是：
 
 | 公理 | Node 21 实现 | 对齐度 |
 |------|-------------|--------|

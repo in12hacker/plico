@@ -50,6 +50,15 @@ impl AdaptiveEmbeddingProvider {
             .ok()
             .and_then(|s| s.parse::<usize>().ok());
 
+        Self::new(inner, query_prefix, document_prefix, target_dim)
+    }
+
+    /// Build from config, wrapping a base provider.
+    pub fn from_config(inner: Arc<dyn EmbeddingProvider>, config: &crate::config::InferenceConfig) -> Self {
+        let mut query_prefix = config.query_prefix.clone().unwrap_or_default();
+        let mut document_prefix = config.document_prefix.clone().unwrap_or_default();
+        let target_dim = config.target_dim;
+
         // Auto-detect model-specific prefixes when not explicitly set
         if query_prefix.is_empty() {
             let model = inner.model_name().to_lowercase();
@@ -59,21 +68,13 @@ impl AdaptiveEmbeddingProvider {
             }
         }
 
-        // Support escaped newlines in env var values
-        if query_prefix.contains("\\n") {
-            query_prefix = query_prefix.replace("\\n", "\n");
-        }
-        if document_prefix.contains("\\n") {
-            document_prefix = document_prefix.replace("\\n", "\n");
-        }
+        // Support escaped newlines
+        if query_prefix.contains("\\n") { query_prefix = query_prefix.replace("\\n", "\n"); }
+        if document_prefix.contains("\\n") { document_prefix = document_prefix.replace("\\n", "\n"); }
 
-        let has_config = !query_prefix.is_empty()
-            || !document_prefix.is_empty()
-            || target_dim.is_some();
-
-        if has_config {
+        if !query_prefix.is_empty() || !document_prefix.is_empty() || target_dim.is_some() {
             tracing::info!(
-                "Adaptive embedding: query_prefix={:?}, doc_prefix={:?}, target_dim={:?}",
+                "Adaptive embedding active: query_prefix={:?}, doc_prefix={:?}, target_dim={:?}",
                 if query_prefix.is_empty() { "(none)" } else { &query_prefix },
                 if document_prefix.is_empty() { "(none)" } else { &document_prefix },
                 target_dim,

@@ -2,7 +2,7 @@
 # Node 18 (界) — 2026-04-23
 
 **扫描时刻**: 2026-04-23T19:51:13+08:00
-**审计方法**: `find src -name '*.rs'` 118 文件逐一 `wc -l` + `grep -c '#[test]'` | 31 个 integration test 文件 | `cargo test` 1259 全通过 | `/tmp/plico-quality-audit` 干净环境 11 项 CLI 实测 | XDG/Rust 持久化对标 | Harness Engineering 2026 行业对标 | EverMemOS/AIOS/Mem0 记忆架构对标 | Soul 2.0 十条公理逐条
+**审计方法**: `find src -name '*.rs'` 118 文件逐一 `wc -l` + `grep -c '#[test]'` | 31 个 integration test 文件 | `cargo test` 1259 全通过 | `/tmp/plico-quality-audit` 干净环境 11 项 CLI 实测 | XDG/Rust 持久化对标 | Harness Engineering 2026 行业对标 | EverMemOS/AIOS/Mem0 记忆架构对标 | Soul 3.0 十条公理逐条
 **禁止项**: 未读 git log，未使用 subagent，未复用上轮缓存数据
 
 ---
@@ -260,7 +260,7 @@ $PLICO_ROOT → dirs::home_dir()/.plico → /tmp (仅 $HOME 不可用)
 
 ---
 
-## 6. Soul 2.0 逐条公理
+## 6. Soul 3.0 逐条公理
 
 | # | 公理 | 评分 | 证据 |
 |---|------|------|------|

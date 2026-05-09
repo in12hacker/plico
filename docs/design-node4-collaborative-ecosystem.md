@@ -3,7 +3,7 @@
 
 **版本**: v2.0
 **日期**: 2026-04-19
-**灵魂依据**: `system-v2.md`（Soul 2.0）
+**灵魂依据**: `system-v3.md`（Soul 3.0）
 **阶段**: EXP → MVP 交付
 **前置**: 节点 3（认知连续性）全部完成
 **驱动场景**: 2000 篇网络安全技术文章的 AI 知识库
@@ -170,7 +170,7 @@ Err(broadcast::error::TryRecvError::Lagged(n)) => {
 
 ### D-4: Soul 红线架构决策文档化
 
-**问题**：Soul 2.0 红线 "内核零模型"，但 `AIKernel` 中直接调用 `self.embedding.embed()` 和 `self.summarizer.summarize()`。
+**问题**：Soul 3.0 红线 "内核零模型"，但 `AIKernel` 中直接调用 `self.embedding.embed()` 和 `self.summarizer.summarize()`。
 
 **事实**：
 - `src/kernel/ops/memory.rs` — `remember_long_term()` 调用 `self.embedding.embed()`
@@ -186,7 +186,7 @@ Err(broadcast::error::TryRecvError::Lagged(n)) => {
 | 边界在哪里 | 仅限存储路径（索引构建、摘要生成）。内核永远不调用 LLM 做推理、决策、文本生成 |
 | 演进路径 | 当 Plico 进入生产阶段且延迟预算允许时，可将 embedding/summarizer 分离为 sidecar。trait 抽象已为此预留 |
 
-**修复**：在 `system-v2.md` 红线 2 增加附注：
+**修复**：在 `system-v3.md` 红线 2 增加附注：
 
 > **红线 2 附注**：`EmbeddingProvider::embed()` 和 `Summarizer::summarize()` 是内核调用的唯二模型接口。
 > 它们通过 trait 抽象实现模型无关，仅用于存储路径（索引构建、摘要生成），不用于推理决策。
@@ -199,7 +199,7 @@ Err(broadcast::error::TryRecvError::Lagged(n)) => {
 
 ### F-11: Hybrid Retrieval（Graph-RAG 原语）
 
-> **Soul 2.0 对齐**：公理 2（意图先于操作）+ 公理 8（因果先于关联）
+> **Soul 3.0 对齐**：公理 2（意图先于操作）+ 公理 8（因果先于关联）
 > **MVP 必要性**：知识库场景的核心检索能力。没有它，Agent 只能分别做向量搜索和图谱遍历再自行合并——浪费 token、增加延迟、结果质量不可控。
 
 **为什么需要**：
@@ -298,7 +298,7 @@ HybridRetrieve 处理流程:
 
 ### F-12: Knowledge Event（知识事件增强）
 
-> **Soul 2.0 对齐**：公理 4（共享先于重复）+ 公理 7（主动先于被动）
+> **Soul 3.0 对齐**：公理 4（共享先于重复）+ 公理 7（主动先于被动）
 > **MVP 必要性**：知识库场景中，Ingest Agent 摄入新文章后，Knowledge Agent 必须能感知到。没有事件通知，只能轮询——违反灵魂公理 7。
 
 当前 `KernelEvent` 有 6 个变体，没有关于"知识变化"的事件。
@@ -342,7 +342,7 @@ TaskCompleted {           // F-14 支撑
 
 ### F-13: Growth Report（成长报告）
 
-> **Soul 2.0 对齐**：公理 9（越用越好）
+> **Soul 3.0 对齐**：公理 9（越用越好）
 > **MVP 必要性**：用户需要看到 AIOS 的价值。GrowthReport 是 Agent 向用户证明"越用越好"的数据依据。
 
 **API 设计**：
@@ -380,7 +380,7 @@ GrowthReport {
 
 ### F-14: Multi-Agent Task Delegation（多 Agent 任务委托）
 
-> **Soul 2.0 对齐**：公理 4（共享先于重复）+ 公理 5（机制不是策略）
+> **Soul 3.0 对齐**：公理 4（共享先于重复）+ 公理 5（机制不是策略）
 > **MVP 范围限定**：单节点内的 Agent 间委托。跨节点委托和 A2A 适配为 post-MVP。
 
 **场景驱动**：
@@ -620,7 +620,7 @@ F-11, F-12, F-13      F-14
 | D-1 EventLog RingBuffer | `src/kernel/event_bus.rs` | 10 万次 emit 后内存稳定，events_since 越界返回 EventLogGap |
 | D-2 Broadcast 容量 + Lag 回补 | `src/kernel/event_bus.rs` | 模拟慢消费者，事件不丢失 |
 | D-3 token_estimate P0 项 | `src/api/semantic.rs` + 响应构建点 | FetchAssembledContext / SearchResult / MemoryRecalled 均填充 |
-| D-4 Soul 红线附注 | `system-v2.md` | 文档化完成 |
+| D-4 Soul 红线附注 | `system-v3.md` | 文档化完成 |
 | F-11a HybridRetrieve API | `src/api/semantic.rs` | API 定义 + 请求/响应类型 |
 | F-11b HybridRetrieve 实现 | `src/kernel/ops/hybrid.rs` | 10 篇文章 + 15 KG 节点场景下返回正确结果 |
 
@@ -741,9 +741,9 @@ F-13 (GrowthReport) ────────────────────
 
 ---
 
-## 8. Soul 2.0 对齐
+## 8. Soul 3.0 对齐
 
-| Soul 2.0 公理 | 功能 | 对齐方式 |
+| Soul 3.0 公理 | 功能 | 对齐方式 |
 |--------------|------|---------|
 | 公理 1: Token 最稀缺 | D-3, F-11 | token_estimate 全覆盖 + HybridRetrieve 的 token_budget |
 | 公理 2: 意图先于操作 | F-11 | Agent 描述意图，OS 组装最优结果集 |

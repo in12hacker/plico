@@ -3,7 +3,7 @@
 
 **版本**: v1.0
 **日期**: 2026-04-23
-**灵魂依据**: `system-v2.md`（Soul 2.0）
+**灵魂依据**: `system-v3.md`（Soul 3.0）
 **阶段**: Prefetch持久化 + 因果Hook + Async预取 + Feedback学习 + Context-Dependent Gravity
 **前置**: 节点 19 ✅（100%）— Hook哨兵(5点) + 断路器(3路径) + Token Budget + 1022 tests + Soul 82%
 **验证方法**: Dogfood E2E + 全量回归 + prefetch_hit_rate 指标 + 意图缓存命中率 + session重起后profile保留
@@ -20,7 +20,7 @@ Node 19 建立了**哨兵层**：
 - 断路哨兵：Embedding + LLM + MCP 全路径 fail-fast
 - 度量哨兵：Token Budget 追踪每个 Agent 的累计消耗
 
-**但这些只是"看得见"**。Soul 2.0 的核心差距是：
+**但这些只是"看得见"**。Soul 3.0 的核心差距是：
 
 | 公理 | 当前实现 | 对齐度 |
 |------|---------|--------|
@@ -387,7 +387,7 @@ Node 20 完成后，Plico 将具备：
 
 **Node 21 展望**: **意 (Will) — 意图驱动的自主执行**
 
-基于 Node 20 的"觉"基础设施，Node 21 将攻坚 Soul 2.0 最高差距——公理2（意图先于操作）：
+基于 Node 20 的"觉"基础设施，Node 21 将攻坚 Soul 3.0 最高差距——公理2（意图先于操作）：
 
 1. **Intent Declaration API**: 结构化声明意图（关键词 + CID + token预算），OS 负责组装
 2. **Intent Plan Execution**: 将 intent 分解为可执行步骤序列

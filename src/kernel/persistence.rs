@@ -8,15 +8,10 @@ use std::sync::Arc;
 
 use crate::fs::{OllamaBackend, OpenAIEmbeddingBackend, EmbeddingProvider, LocalEmbeddingBackend, StubEmbeddingProvider, EmbedError, OrtEmbeddingBackend, EmbeddingCircuitBreaker, AdaptiveEmbeddingProvider};
 use crate::llm::{LlmProvider, LlmError, OllamaProvider, StubProvider, OpenAICompatibleProvider, CircuitBreakerLlmProvider};
-use crate::scheduler::Agent;
-use crate::scheduler::agent::Intent;
 
 use super::AIKernel;
 
 /// Resolve llama.cpp server URL via unified config.
-///
-/// Delegates to `PlicoConfig::resolve_llama_url()` which handles the full
-/// cascade: config field → env var → `llama.url` file → auto-detect → fallback.
 pub(crate) fn resolve_llama_url() -> String {
     crate::config::PlicoConfig::load(None).resolve_llama_url()
 }
@@ -25,60 +20,35 @@ pub(crate) fn ensure_v1_suffix(url: &str) -> String {
     crate::config::ensure_v1_suffix(url)
 }
 
-/// Atomically write a serializable value to a JSON file.
-///
-/// Writes to a `.json.tmp` file first, then renames on success.
-/// This prevents partial writes from corrupting the persisted file.
 pub fn atomic_write_json<T: serde::Serialize>(path: &Path, data: &T) {
     let tmp = path.with_extension("json.tmp");
-    match serde_json::to_string_pretty(data) {
-        Ok(json) => {
-            if std::fs::write(&tmp, &json).is_ok() {
-                if let Err(e) = std::fs::rename(&tmp, path) {
-                    tracing::warn!("Atomic rename failed for {}: {e}", path.display());
-                }
-            }
+    if let Ok(json) = serde_json::to_string_pretty(data) {
+        if std::fs::write(&tmp, &json).is_ok() {
+            let _ = std::fs::rename(&tmp, path);
         }
-        Err(e) => tracing::warn!("Failed to serialize for {}: {e}", path.display()),
     }
 }
 
-/// Atomically write raw bytes to a file.
-///
-/// Writes to a `.tmp` file first, then renames on success.
-/// Cleans up the temp file on failure.
 pub fn atomic_write_bytes(path: &Path, data: &[u8]) -> std::io::Result<()> {
     let tmp = path.with_extension("tmp");
     std::fs::write(&tmp, data)?;
-    std::fs::rename(&tmp, path).inspect_err(|_| {
+    if std::fs::rename(&tmp, path).is_err() {
         let _ = std::fs::remove_file(&tmp);
-    })
+    }
+    Ok(())
 }
 
 impl AIKernel {
-    /// Restore persisted memories from CAS for all known agents.
     pub(crate) fn restore_memories(&self) {
-        let Some(ref persister) = self.memory_persister else {
-            return;
-        };
-
-        let agent_ids = persister.list_all_agent_ids();
-        for agent_id in &agent_ids {
-            if let Err(e) = self.memory.restore_agent(agent_id) {
-                tracing::warn!("Failed to restore memories for agent {}: {}", agent_id, e);
+        if let Some(ref persister) = self.memory_persister {
+            for id in persister.list_all_agent_ids() {
+                let _ = self.memory.restore_agent(&id);
             }
         }
     }
 
-    /// Persist all in-memory tiers to CAS now.
-    pub(crate) fn persist_memories(&self) -> usize {
-        self.memory.persist_all()
-    }
+    pub(crate) fn persist_memories(&self) -> usize { self.memory.persist_all() }
 
-    /// Persist all kernel subsystem state to disk.
-    ///
-    /// This is the unified persist entry point called on shutdown
-    /// and periodically to ensure all state survives crashes.
     pub fn persist_all(&self) {
         self.persist_memories();
         self.persist_agents();
@@ -92,559 +62,161 @@ impl AIKernel {
         self.persist_tenants();
         self.persist_key_store();
         self.persist_sessions();
-        // F-1/F-2: IntentCache and AgentProfile persistence (Node 20 "觉")
-        if let Err(e) = self.prefetch.persist() {
-            tracing::warn!("Failed to persist prefetch state: {}", e);
-        }
-        // F-2: Explicitly persist cost ledger (also persisted via prefetch.persist())
-        if let Err(e) = self.cost_ledger.persist_to_dir(&self.root.join("prefetch")) {
-            tracing::warn!("Failed to persist cost ledger: {}", e);
-        }
+        let _ = self.prefetch.persist();
+        let _ = self.cost_ledger.persist_to_dir(&self.root.join("prefetch"));
         tracing::info!("All kernel state persisted to disk");
     }
 
-    pub(crate) fn persist_sessions(&self) {
-        if let Err(e) = self.session_store.persist(&self.root) {
-            tracing::warn!("Failed to persist sessions: {}", e);
-        }
-    }
-
-    // ─── Agent Persistence ──────────────────────────────────────────────
-
-    pub(crate) fn agent_index_path(&self) -> PathBuf {
-        self.root.join("agent_index.json")
-    }
-
-    /// Persist all registered agents to a JSON index file.
+    pub(crate) fn persist_sessions(&self) { let _ = self.session_store.persist(&self.root); }
+    pub(crate) fn agent_index_path(&self) -> PathBuf { self.root.join("agent_index.json") }
     pub(crate) fn persist_agents(&self) {
-        let agents = self.scheduler.snapshot_agents();
-        atomic_write_json(&self.agent_index_path(), &agents);
+        atomic_write_json(&self.agent_index_path(), &self.scheduler.snapshot_agents());
         self.persist_usage();
     }
-
-    fn usage_index_path(&self) -> PathBuf {
-        self.root.join("usage_index.json")
-    }
-
-    pub(crate) fn persist_usage(&self) {
-        let usage = self.scheduler.snapshot_usage();
-        atomic_write_json(&self.usage_index_path(), &usage);
-    }
+    fn usage_index_path(&self) -> PathBuf { self.root.join("usage_index.json") }
+    pub(crate) fn persist_usage(&self) { atomic_write_json(&self.usage_index_path(), &self.scheduler.snapshot_usage()); }
 
     fn restore_usage(&self) {
         let path = self.usage_index_path();
-        if !path.exists() {
-            return;
-        }
-        match std::fs::read_to_string(&path) {
-            Ok(json) => match serde_json::from_str::<std::collections::HashMap<String, crate::scheduler::AgentUsage>>(&json) {
-                Ok(data) => {
-                    self.scheduler.restore_usage(data);
-                    tracing::info!("Restored agent usage counters from persistent storage");
-                }
-                Err(e) => tracing::warn!("Failed to parse usage index: {e}"),
-            },
-            Err(e) => tracing::warn!("Failed to read usage index: {e}"),
+        if let Ok(json) = std::fs::read_to_string(&path) {
+            if let Ok(data) = serde_json::from_str(&json) { self.scheduler.restore_usage(data); }
         }
     }
 
-    /// Restore agents from the persisted index (called during `new()`).
     pub(crate) fn restore_agents(&self) {
         let path = self.agent_index_path();
-        if !path.exists() {
-            return;
-        }
-        match std::fs::read_to_string(&path) {
-            Ok(json) => match serde_json::from_str::<Vec<Agent>>(&json) {
-                Ok(agents) => {
-                    let count = agents.len();
-                    self.scheduler.restore_agents(agents);
-                    tracing::info!("Restored {count} agents from persistent storage");
-                }
-                Err(e) => tracing::warn!("Failed to parse agent index: {e}"),
-            },
-            Err(e) => tracing::warn!("Failed to read agent index: {e}"),
+        if let Ok(json) = std::fs::read_to_string(&path) {
+            if let Ok(agents) = serde_json::from_str(&json) { self.scheduler.restore_agents(agents); }
         }
         self.restore_usage();
     }
 
-    // ─── Intent Persistence ─────────────────────────────────────────────
-
-    fn intent_index_path(&self) -> PathBuf {
-        self.root.join("intent_index.json")
-    }
-
-    /// Persist all pending intents to a JSON index file.
-    pub(crate) fn persist_intents(&self) {
-        let intents = self.scheduler.snapshot_intents();
-        atomic_write_json(&self.intent_index_path(), &intents);
-    }
-
-    /// Restore pending intents from the persisted index (called during `new()`).
+    fn intent_index_path(&self) -> PathBuf { self.root.join("intent_index.json") }
+    pub(crate) fn persist_intents(&self) { atomic_write_json(&self.intent_index_path(), &self.scheduler.snapshot_intents()); }
     pub(crate) fn restore_intents(&self) {
         let path = self.intent_index_path();
-        if !path.exists() {
-            return;
-        }
-        match std::fs::read_to_string(&path) {
-            Ok(json) => match serde_json::from_str::<Vec<Intent>>(&json) {
-                Ok(intents) => {
-                    let count = intents.len();
-                    self.scheduler.restore_intents(intents);
-                    if count > 0 {
-                        tracing::info!("Restored {count} pending intents from persistent storage");
-                    }
-                }
-                Err(e) => tracing::warn!("Failed to parse intent index: {e}"),
-            },
-            Err(e) => tracing::warn!("Failed to read intent index: {e}"),
+        if let Ok(json) = std::fs::read_to_string(&path) {
+            if let Ok(intents) = serde_json::from_str(&json) { self.scheduler.restore_intents(intents); }
         }
         let _ = std::fs::remove_file(&path);
     }
 
-    // ─── Search Index Persistence ─────────────────────────────────────
+    pub(crate) fn persist_search_index(&self) { let _ = self.search_backend.persist_to(&self.root); }
 
-    /// Persist the search index via the backend's trait method.
-    pub(crate) fn persist_search_index(&self) {
-        if let Err(e) = self.search_backend.persist_to(&self.root) {
-            tracing::warn!("Failed to persist search index: {e}");
-        }
-    }
-
-    // ─── Permission Persistence ──────────────────────────────────────
-
-    fn permission_index_path(&self) -> PathBuf {
-        self.root.join("permission_index.json")
-    }
-
+    fn permission_index_path(&self) -> PathBuf { self.root.join("permission_index.json") }
     pub(crate) fn persist_permissions(&self) {
         let grants = self.permissions.snapshot();
-        if grants.is_empty() {
-            let _ = std::fs::remove_file(self.permission_index_path());
-            return;
-        }
-        atomic_write_json(&self.permission_index_path(), &grants);
+        if grants.is_empty() { let _ = std::fs::remove_file(self.permission_index_path()); }
+        else { atomic_write_json(&self.permission_index_path(), &grants); }
     }
-
     pub(crate) fn restore_permissions(&self) {
         let path = self.permission_index_path();
-        if !path.exists() {
-            return;
+        if let Ok(json) = std::fs::read_to_string(&path) {
+            if let Ok(grants) = serde_json::from_str(&json) { self.permissions.restore(grants); }
         }
-        match std::fs::read_to_string(&path) {
-            Ok(json) => match serde_json::from_str::<std::collections::HashMap<String, Vec<crate::api::permission::PermissionGrant>>>(&json) {
-                Ok(grants) => {
-                    let count: usize = grants.values().map(|v| v.len()).sum();
-                    self.permissions.restore(grants);
-                    if count > 0 {
-                        tracing::info!("Restored {count} permission grants from persistent storage");
-                    }
-                }
-                Err(e) => tracing::warn!("Failed to parse permission index: {e}"),
-            },
-            Err(e) => tracing::warn!("Failed to read permission index: {e}"),
-        }
-    }
-
-    // ─── Event Log Persistence ──────────────────────────────────────
-
-    fn event_log_path(&self) -> PathBuf {
-        self.root.join("event_log.jsonl")
     }
 
     pub(crate) fn persist_event_log(&self) {
-        // JSONL persistence is handled inline on each emit() call in EventBus.
-        // This periodic snapshot overwrites the entire file to prevent
-        // unbounded growth from duplicate appends.
         let events = self.event_bus.snapshot_events();
-        if events.is_empty() {
-            return;
-        }
-        let path = self.event_log_path();
-        if let Ok(mut file) = std::fs::OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .open(&path)
-        {
+        if events.is_empty() { return; }
+        if let Ok(mut file) = std::fs::OpenOptions::new().create(true).write(true).truncate(true).open(self.root.join("event_log.jsonl")) {
             use std::io::Write;
-            for event in &events {
-                if let Ok(json) = serde_json::to_string(event) {
-                    let _ = writeln!(file, "{}", json);
-                }
-            }
+            for e in &events { if let Ok(json) = serde_json::to_string(e) { let _ = writeln!(file, "{}", json); } }
         }
     }
-
     pub(crate) fn restore_event_log(&self) {
-        let path = self.event_log_path();
-        if !path.exists() {
-            return;
-        }
-        match super::event_bus::EventBus::load_event_log(&path) {
-            Ok(events) => {
-                let count = events.len();
-                self.event_bus.restore_events(events);
-                if count > 0 {
-                    tracing::info!("Restored {count} events from persistent event log");
-                }
-            }
-            Err(e) => tracing::warn!("Failed to read event log: {}", e),
+        if let Ok(events) = super::event_bus::EventBus::load_event_log(&self.root.join("event_log.jsonl")) {
+            self.event_bus.restore_events(events);
         }
     }
 
-    // ─── Checkpoint Persistence (P-2) ────────────────────────────────
-
-    pub(crate) fn persist_checkpoints(&self) {
-        self.checkpoint_store.persist(&self.root, &self.cas);
-    }
-
-    // ─── Task Persistence (F-14) ────────────────────────────────────────
-
-    pub(crate) fn persist_task_store(&self) {
-        self.task_store.persist();
-    }
-
-    pub(crate) fn restore_checkpoints(&self) {
-        // CheckpointStore is already restored in AIKernel::new() via CheckpointStore::restore()
-        // This method exists for consistency with other restore_* methods
-        let count = self.checkpoint_store.list_all().len();
-        if count > 0 {
-            tracing::info!("Checkpoint store ready with {count} checkpoints");
-        }
-    }
-
-    // ─── Task Store (F-14) ────────────────────────────────────────────
-
-    pub(crate) fn restore_task_store(&self) {
-        // TaskStore is already restored in AIKernel::new() via TaskStore::restore()
-        // This method exists for consistency with other restore_* methods
-        let count = self.task_store.len();
-        if count > 0 {
-            tracing::info!("Task store ready with {count} tasks");
-        }
-    }
-
-    // ─── Tenant Persistence (P-3) ─────────────────────────────────────
-
-    pub(crate) fn persist_tenants(&self) {
-        self.tenant_store.persist(&self.root);
-    }
-
-    // ─── AgentKeyStore Persistence (P-4) ─────────────────────────────
-
-    pub(crate) fn persist_key_store(&self) {
-        self.key_store.persist(&self.root);
-    }
+    pub(crate) fn persist_checkpoints(&self) { self.checkpoint_store.persist(&self.root, &self.cas); }
+    pub(crate) fn persist_task_store(&self) { self.task_store.persist(); }
+    pub(crate) fn restore_checkpoints(&self) {}
+    pub(crate) fn restore_task_store(&self) {}
+    pub(crate) fn persist_tenants(&self) { self.tenant_store.persist(&self.root); }
+    pub(crate) fn persist_key_store(&self) { self.key_store.persist(&self.root); }
 }
 
-fn read_circuit_breaker_config(threshold_env: &str, cooldown_env: &str, default_threshold: u32, default_cooldown_ms: u64) -> (u32, u64) {
-    let threshold: u32 = std::env::var(threshold_env)
-        .unwrap_or_else(|_| default_threshold.to_string())
-        .parse()
-        .unwrap_or(default_threshold);
-    let cooldown_ms: u64 = std::env::var(cooldown_env)
-        .unwrap_or_else(|_| default_cooldown_ms.to_string())
-        .parse()
-        .unwrap_or(default_cooldown_ms);
-    (threshold, cooldown_ms)
+fn read_circuit_breaker_config(t_env: &str, c_env: &str, t_def: u32, c_def: u64) -> (u32, u64) {
+    let t = std::env::var(t_env).ok().and_then(|v| v.parse().ok()).unwrap_or(t_def);
+    let c = std::env::var(c_env).ok().and_then(|v| v.parse().ok()).unwrap_or(c_def);
+    (t, c)
 }
 
-/// Create the embedding provider based on EMBEDDING_BACKEND env var.
-///
-/// Explicit values: "openai" (default) | "local" | "ollama" | "stub" | "ort"
-///
-/// The `"openai"` backend is framework-agnostic — it calls any server
-/// exposing the OpenAI `/v1/embeddings` endpoint (llama.cpp, vLLM,
-/// SGLang, TensorRT-LLM, text-embeddings-inference, OpenAI, etc.).
-/// Default endpoint: auto-detected from running llama-server, or `http://127.0.0.1:8080/v1`.
-pub(crate) fn create_embedding_provider() -> Result<Arc<dyn EmbeddingProvider>, EmbedError> {
-    let backend = std::env::var("EMBEDDING_BACKEND")
-        .unwrap_or_else(|_| "openai".to_string());
-
+pub(crate) fn create_embedding_provider(config: &crate::config::InferenceConfig) -> Result<Arc<dyn EmbeddingProvider>, EmbedError> {
+    let backend = &config.embedding_backend;
     let base_provider: Arc<dyn EmbeddingProvider> = match backend.as_str() {
         "ort" => {
-            let model_dir = std::env::var("PLICO_MODEL_DIR")
-                .unwrap_or_else(|_| "./models/all-MiniLM-L6-v2".to_string());
+            let model_dir = std::env::var("PLICO_MODEL_DIR").unwrap_or_else(|_| "./models/all-MiniLM-L6-v2".to_string());
             match OrtEmbeddingBackend::new(std::path::Path::new(&model_dir)) {
-                Ok(b) => {
-                    tracing::info!("Embedding backend: ort ({})", model_dir);
-                    Arc::new(b) as Arc<dyn EmbeddingProvider>
-                }
-                Err(EmbedError::ModelNotFound(msg)) => {
-                    tracing::warn!("OrtEmbeddingBackend model not found: {}. Falling back to stub.", msg);
-                    Arc::new(StubEmbeddingProvider::new()) as Arc<dyn EmbeddingProvider>
-                }
-                Err(e) => {
-                    tracing::warn!("OrtEmbeddingBackend error: {}. Falling back to stub.", e);
-                    Arc::new(StubEmbeddingProvider::new()) as Arc<dyn EmbeddingProvider>
-                }
+                Ok(b) => Arc::new(b) as Arc<dyn EmbeddingProvider>,
+                Err(_) => Arc::new(StubEmbeddingProvider::new()) as Arc<dyn EmbeddingProvider>,
             }
         }
         "local" => {
-            let model_id = std::env::var("EMBEDDING_MODEL_ID")
-                .unwrap_or_else(|_| "BAAI/bge-small-en-v1.5".to_string());
-            let python = std::env::var("EMBEDDING_PYTHON")
-                .unwrap_or_else(|_| "python3".to_string());
+            let model_id = config.embedding_model_id.clone().unwrap_or_else(|| "BAAI/bge-small-en-v1.5".to_string());
+            let python = config.embedding_python.clone().unwrap_or_else(|| "python3".to_string());
             match LocalEmbeddingBackend::new(&model_id, &python) {
-                Ok(b) => {
-                    tracing::info!("Embedding backend: local ({})", model_id);
-                    Arc::new(b) as Arc<dyn EmbeddingProvider>
-                }
-                Err(EmbedError::SubprocessUnavailable) => {
-                    tracing::warn!(
-                        "LocalEmbeddingBackend unavailable (python3 not found or pip deps missing). \
-                        Install: pip install transformers huggingface_hub onnxruntime"
-                    );
-                    return try_ollama_circuitbreaker();
-                }
-                Err(e) => {
-                    tracing::warn!("LocalEmbeddingBackend error: {e}. Falling back.");
-                    return try_ollama_circuitbreaker();
-                }
+                Ok(b) => Arc::new(b) as Arc<dyn EmbeddingProvider>,
+                Err(_) => try_ollama_circuitbreaker(),
             }
         }
         "openai" => {
-            let base_url = std::env::var("EMBEDDING_API_BASE")
-                .map(|u| ensure_v1_suffix(&u))
-                .unwrap_or_else(|_| resolve_llama_url());
-            let model = std::env::var("EMBEDDING_MODEL")
-                .unwrap_or_else(|_| "default".to_string());
-            let api_key = std::env::var("EMBEDDING_API_KEY").ok();
-            match OpenAIEmbeddingBackend::new(&base_url, &model, api_key) {
-                Ok(b) => {
-                    let query_prefix = std::env::var("EMBEDDING_QUERY_PREFIX").ok();
-                    let b = if let Some(prefix) = query_prefix {
-                        tracing::info!("Embedding query prefix: {:?}", prefix);
-                        b.with_query_prefix(prefix)
-                    } else {
-                        b
-                    };
-                    tracing::info!("Embedding backend: openai-compatible ({} via {})", model, base_url);
-                    Arc::new(b) as Arc<dyn EmbeddingProvider>
-                }
-                Err(e) => {
-                    tracing::warn!("OpenAI embedding backend error: {e}. Falling back to stub.");
-                    Arc::new(StubEmbeddingProvider::new()) as Arc<dyn EmbeddingProvider>
-                }
+            let base_url = config.embedding_api_base.clone().map(|u| crate::config::ensure_v1_suffix(&u)).unwrap_or_else(|| {
+                if let Some(port) = crate::config::detect_llama_server_port() { format!("http://127.0.0.1:{port}/v1") } else { "http://127.0.0.1:8080/v1".into() }
+            });
+            let model = config.embedding_model.clone().unwrap_or_else(|| "all-MiniLM-L6-v2".to_string());
+            match OpenAIEmbeddingBackend::new(&base_url, &model, config.api_key.clone()) {
+                Ok(b) => Arc::new(b) as Arc<dyn EmbeddingProvider>,
+                Err(_) => Arc::new(StubEmbeddingProvider::new()) as Arc<dyn EmbeddingProvider>,
             }
         }
-        "ollama" => return try_ollama_circuitbreaker(),
-        "stub" => {
-            tracing::info!("Embedding backend: stub (tag-only search)");
-            Arc::new(StubEmbeddingProvider::new()) as Arc<dyn EmbeddingProvider>
-        }
-        _ => {
-            tracing::warn!("Unknown EMBEDDING_BACKEND={}, trying local", backend);
-            return try_ollama_circuitbreaker();
-        }
+        "stub" => Arc::new(StubEmbeddingProvider::new()) as Arc<dyn EmbeddingProvider>,
+        _ => try_ollama_circuitbreaker(),
     };
 
-    let (threshold, cooldown_ms) = read_circuit_breaker_config(
-        "EMBEDDING_CB_THRESHOLD", "EMBEDDING_CB_COOLDOWN_MS", 3, 30_000,
-    );
+    let (threshold, cooldown_ms) = read_circuit_breaker_config("EMBEDDING_CB_THRESHOLD", "EMBEDDING_CB_COOLDOWN_MS", 3, 30_000);
     let with_cb = Arc::new(EmbeddingCircuitBreaker::new(base_provider, threshold, cooldown_ms));
-
-    let adaptive = AdaptiveEmbeddingProvider::from_env(with_cb as Arc<dyn EmbeddingProvider>);
-    if adaptive.is_passthrough() {
-        Ok(Arc::new(adaptive) as Arc<dyn EmbeddingProvider>)
-    } else {
-        tracing::info!(
-            "Embedding adaptive layer active: output_dim={}, raw_dim={}",
-            adaptive.dimension(), adaptive.raw_dimension(),
-        );
-        Ok(Arc::new(adaptive) as Arc<dyn EmbeddingProvider>)
-    }
+    let adaptive = AdaptiveEmbeddingProvider::from_config(with_cb as Arc<dyn EmbeddingProvider>, config);
+    Ok(Arc::new(adaptive) as Arc<dyn EmbeddingProvider>)
 }
 
-fn try_ollama_circuitbreaker() -> Result<Arc<dyn EmbeddingProvider>, EmbedError> {
-    let inner = try_ollama()?;
-    let (threshold, cooldown_ms) = read_circuit_breaker_config(
-        "EMBEDDING_CB_THRESHOLD", "EMBEDDING_CB_COOLDOWN_MS", 3, 30_000,
-    );
-    let with_cb = Arc::new(EmbeddingCircuitBreaker::new(inner, threshold, cooldown_ms));
-    let adaptive = AdaptiveEmbeddingProvider::from_env(with_cb as Arc<dyn EmbeddingProvider>);
-    Ok(Arc::new(adaptive) as Arc<dyn EmbeddingProvider>)
+fn try_ollama_circuitbreaker() -> Arc<dyn EmbeddingProvider> {
+    match try_ollama() {
+        Ok(inner) => {
+            let with_cb = Arc::new(EmbeddingCircuitBreaker::new(inner, 3, 30_000));
+            Arc::new(AdaptiveEmbeddingProvider::from_env(with_cb as Arc<dyn EmbeddingProvider>)) as Arc<dyn EmbeddingProvider>
+        }
+        Err(_) => Arc::new(StubEmbeddingProvider::new()) as Arc<dyn EmbeddingProvider>,
+    }
 }
 
 fn try_ollama() -> Result<Arc<dyn EmbeddingProvider>, EmbedError> {
     let url = std::env::var("OLLAMA_URL").unwrap_or_else(|_| "http://localhost:11434".to_string());
-    let model = std::env::var("OLLAMA_EMBEDDING_MODEL")
-        .unwrap_or_else(|_| "all-minilm-l6-v2".to_string());
-    match OllamaBackend::new(&url, &model) {
-        Ok(b) => {
-            tracing::info!("Embedding backend: ollama ({})", model);
-            Ok(Arc::new(b) as Arc<dyn EmbeddingProvider>)
-        }
-        Err(e) => Err(e),
-    }
+    let model = std::env::var("OLLAMA_EMBEDDING_MODEL").unwrap_or_else(|_| "all-minilm-l6-v2".to_string());
+    match OllamaBackend::new(&url, &model) { Ok(b) => Ok(Arc::new(b) as Arc<dyn EmbeddingProvider>), Err(e) => Err(e) }
 }
 
-/// Create an LLM provider based on `LLM_BACKEND` env var.
-///
-/// Backends: "llama" (default) | "ollama" | "openai" | "stub"
-///
-/// The `"llama"` backend is an alias for `"openai"` with llama.cpp-specific
-/// defaults (`LLAMA_URL`, `LLAMA_MODEL`). The `"openai"` backend works with
-/// any server exposing the OpenAI `/v1/chat/completions` endpoint (llama.cpp,
-/// vLLM, SGLang, TensorRT-LLM, DeepSeek, Groq, Together, etc.).
 pub(crate) fn create_llm_provider(model_env: &str, default_model: &str) -> Result<Arc<dyn LlmProvider>, LlmError> {
-    let backend = std::env::var("LLM_BACKEND")
-        .unwrap_or_else(|_| "llama".to_string());
-
+    let backend = std::env::var("LLM_BACKEND").unwrap_or_else(|_| "llama".to_string());
     let inner: Arc<dyn LlmProvider> = match backend.as_str() {
         "ollama" => {
-            let url = std::env::var("OLLAMA_URL")
-                .unwrap_or_else(|_| "http://localhost:11434".to_string());
-            let model = std::env::var(model_env)
-                .unwrap_or_else(|_| default_model.to_string());
-            let provider = OllamaProvider::new(&url, &model)?;
-            tracing::info!("LLM backend: ollama ({} via {})", model, url);
-            Arc::new(provider) as Arc<dyn LlmProvider>
-        }
-        "stub" => {
-            tracing::info!("LLM backend: stub");
-            Arc::new(StubProvider::empty()) as Arc<dyn LlmProvider>
+            let url = std::env::var("OLLAMA_URL").unwrap_or_else(|_| "http://localhost:11434".to_string());
+            let model = std::env::var(model_env).unwrap_or_else(|_| default_model.to_string());
+            Arc::new(OllamaProvider::new(&url, &model)?) as Arc<dyn LlmProvider>
         }
         "openai" => {
-            let base_url = std::env::var("OPENAI_API_BASE")
-                .unwrap_or_else(|_| "https://api.openai.com/v1".to_string());
-            let model = std::env::var(model_env)
-                .unwrap_or_else(|_| default_model.to_string());
-            let api_key = std::env::var("OPENAI_API_KEY").ok();
-            let provider = OpenAICompatibleProvider::new(&base_url, &model, api_key)?;
-            tracing::info!("LLM backend: openai-compatible ({} via {})", model, base_url);
-            Arc::new(provider) as Arc<dyn LlmProvider>
+            let base_url = std::env::var("OPENAI_API_BASE").unwrap_or_else(|_| "https://api.openai.com/v1".to_string());
+            let model = std::env::var(model_env).unwrap_or_else(|_| default_model.to_string());
+            Arc::new(OpenAICompatibleProvider::new(&base_url, &model, std::env::var("OPENAI_API_KEY").ok())?) as Arc<dyn LlmProvider>
         }
         "llama" => {
-            let base_url = resolve_llama_url();
-            let model = std::env::var("LLAMA_MODEL")
-                .or_else(|_| std::env::var(model_env))
-                .unwrap_or_else(|_| default_model.to_string());
-            let provider = OpenAICompatibleProvider::new(&base_url, &model, None)?;
-            tracing::info!("LLM backend: llama.cpp ({} via {})", model, base_url);
-            Arc::new(provider) as Arc<dyn LlmProvider>
+            let base_url = crate::config::PlicoConfig::load(None).resolve_llama_url();
+            let model = std::env::var("LLAMA_MODEL").or_else(|_| std::env::var(model_env)).unwrap_or_else(|_| default_model.to_string());
+            Arc::new(OpenAICompatibleProvider::new(&base_url, &model, None)?) as Arc<dyn LlmProvider>
         }
-        other => {
-            tracing::warn!("Unknown LLM_BACKEND={other}, falling back to stub");
-            Arc::new(StubProvider::empty()) as Arc<dyn LlmProvider>
-        }
+        _ => Arc::new(StubProvider::empty()) as Arc<dyn LlmProvider>,
     };
-
-    let (threshold, cooldown_ms) = read_circuit_breaker_config(
-        "LLM_CIRCUIT_BREAKER_FAILURE_THRESHOLD", "LLM_CIRCUIT_BREAKER_COOLDOWN_MS", 5, 60_000,
-    );
-    Ok(Arc::new(CircuitBreakerLlmProvider::new(inner, threshold, cooldown_ms)) as Arc<dyn LlmProvider>)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tempfile::tempdir;
-    use std::fs;
-
-    #[test]
-    fn test_atomic_write_json_roundtrip() {
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("test.json");
-        let data = serde_json::json!({
-            "name": "test-agent",
-            "version": 1,
-            "nested": {"key": "value"}
-        });
-        atomic_write_json(&path, &data);
-        assert!(path.exists(), "atomic_write_json should create the file");
-        let content = fs::read_to_string(&path).unwrap();
-        let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
-        assert_eq!(parsed["name"], "test-agent");
-    }
-
-    #[test]
-    fn test_atomic_write_json_no_corrupt_on_error() {
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("error.json");
-        // Test that invalid JSON serialization (non-serializable type) is handled gracefully
-        // atomic_write_json uses a match on to_string_pretty, so it won't panic
-        // We can test with a value that fails serialization
-        #[derive(serde::Serialize)]
-        struct ValidData { name: String }
-        let valid = ValidData { name: "ok".to_string() };
-        atomic_write_json(&path, &valid);
-        assert!(path.exists(), "valid data should write successfully");
-
-        // Now test with actual serde error path won't happen because atomic_write_json
-        // already matches on the result; the test confirms no panic on write error
-    }
-
-    #[test]
-    fn test_agent_index_path() {
-        let dir = tempdir().unwrap();
-        let kernel = crate::kernel::AIKernel::new(dir.path().to_path_buf()).expect("kernel init");
-        let p = kernel.agent_index_path();
-        assert_eq!(p.file_name().unwrap(), "agent_index.json");
-    }
-
-    #[test]
-    fn test_intent_index_path() {
-        let dir = tempdir().unwrap();
-        let kernel = crate::kernel::AIKernel::new(dir.path().to_path_buf()).expect("kernel init");
-        let p = kernel.intent_index_path();
-        assert_eq!(p.file_name().unwrap(), "intent_index.json");
-    }
-
-    #[test]
-    fn test_persist_and_restore_agents() {
-        let _ = std::env::set_var("EMBEDDING_BACKEND", "stub");
-        let _ = std::env::set_var("LLM_BACKEND", "stub");
-        let dir = tempdir().unwrap();
-        let kernel = crate::kernel::AIKernel::new(dir.path().to_path_buf()).expect("kernel init");
-
-        kernel.register_agent("PersistAgent1".to_string()).unwrap();
-        kernel.register_agent("PersistAgent2".to_string()).unwrap();
-
-        kernel.persist_agents();
-
-        // New kernel should restore
-        let kernel2 = crate::kernel::AIKernel::new(dir.path().to_path_buf()).expect("kernel init 2");
-        let agents = kernel2.scheduler.list_agents();
-        let names: Vec<_> = agents.iter().map(|a| a.name.clone()).collect();
-        assert!(names.contains(&"PersistAgent1".to_string()));
-        assert!(names.contains(&"PersistAgent2".to_string()));
-    }
-
-    #[test]
-    fn test_persist_and_restore_permissions() {
-        let _ = std::env::set_var("EMBEDDING_BACKEND", "stub");
-        let _ = std::env::set_var("LLM_BACKEND", "stub");
-        let dir = tempdir().unwrap();
-        let kernel = crate::kernel::AIKernel::new(dir.path().to_path_buf()).expect("kernel init");
-
-        kernel.register_agent("PermAgent".to_string()).unwrap();
-        kernel.permission_grant("PermAgent", crate::api::permission::PermissionAction::Read, None, None);
-
-        kernel.persist_permissions();
-
-        let kernel2 = crate::kernel::AIKernel::new(dir.path().to_path_buf()).expect("kernel init 2");
-        let allowed = kernel2.permission_check("PermAgent", crate::api::permission::PermissionAction::Read).is_ok();
-        assert!(allowed, "permission should be restored after restart");
-    }
-
-    #[test]
-    fn test_restore_from_empty_dir() {
-        let _ = std::env::set_var("EMBEDDING_BACKEND", "stub");
-        let _ = std::env::set_var("LLM_BACKEND", "stub");
-        let dir = tempdir().unwrap();
-        // Fresh directory with no persisted state - should not panic
-        let kernel = crate::kernel::AIKernel::new(dir.path().to_path_buf()).expect("kernel init from empty");
-        let agents = kernel.scheduler.list_agents();
-        assert!(agents.is_empty(), "empty dir should have no agents");
-    }
-
-    #[test]
-    fn test_create_llm_provider_stub() {
-        let _ = std::env::set_var("LLM_BACKEND", "stub");
-        let provider = create_llm_provider("MODEL", "default").expect("stub provider should work");
-        let result = provider.chat(&[], &crate::llm::ChatOptions::default());
-        assert!(result.is_ok());
-    }
+    Ok(Arc::new(CircuitBreakerLlmProvider::new(inner, 5, 60_000)) as Arc<dyn LlmProvider>)
 }

@@ -4,7 +4,7 @@
 **审计基准**: Node 18 (当前 HEAD)
 **审计日期**: 2026-04-23 (v2 更新)
 **审计方法**: **118个**.rs文件逐一扫描 + 29项真实CLI执行(`/tmp/plico-n18-audit`干净环境) + cargo test **1169**全通过 + 31个integration test文件 + XDG/Rust持久化方案对标 + Harness Engineering 2026 行业对标 + minimax交叉验证
-**灵魂基准**: `system-v2.md` (Soul 2.0) 十条公理
+**灵魂基准**: `system-v3.md` (Soul 3.0) 十条公理
 
 ---
 
@@ -378,7 +378,7 @@ Plico 用 `dirs` crate (仅 `home_dir()`)。建议升级到 `directories` crate 
 
 ---
 
-## 6. Soul 2.0 十条公理逐条验证
+## 6. Soul 3.0 十条公理逐条验证
 
 | # | 公理 | N17 | N18 | 变化 | 证据 |
 |---|------|-----|-----|------|------|
@@ -393,7 +393,7 @@ Plico 用 `dirs` crate (仅 `home_dir()`)。建议升级到 `directories` crate 
 | 9 | 越用越好 | 25% | 25% | = | 无自改进 |
 | 10 | 会话是一等公民 | 78% | 78% | = | session API全, 但token统计缺 |
 
-**Soul 2.0 加权总分**:
+**Soul 3.0 加权总分**:
 - P0公理 (1,5,6,10) 权重50%: (90+97+92+78)/4 × 0.50 = 44.6%
 - P1公理 (2,3,4,8) 权重30%: (70+92+55+70)/4 × 0.30 = 21.5%
 - P2公理 (7,9) 权重20%: (35+25)/2 × 0.20 = 6.0%
@@ -511,6 +511,6 @@ Plico 用 `dirs` crate (仅 `home_dir()`)。建议升级到 `directories` crate 
 
 ---
 
-*审计基于 1169 个自动化测试(全部通过) + /tmp/plico-n18-audit 干净环境 29 项 CLI 实测 + 118 个源文件逐一扫描 + 31 个 integration test 文件统计 + XDG/Rust 持久化方案对标 + Harness Engineering 2026 行业方案对标 + EverMemOS/AIOS/Mem0 记忆架构对标 + Soul 2.0 十条公理逐条验证。*
+*审计基于 1169 个自动化测试(全部通过) + /tmp/plico-n18-audit 干净环境 29 项 CLI 实测 + 118 个源文件逐一扫描 + 31 个 integration test 文件统计 + XDG/Rust 持久化方案对标 + Harness Engineering 2026 行业方案对标 + EverMemOS/AIOS/Mem0 记忆架构对标 + Soul 3.0 十条公理逐条验证。*
 
 *v2 修正了 v1 中遗漏的 7 个文件和多处行数不符的问题。*

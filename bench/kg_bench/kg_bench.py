@@ -198,8 +198,8 @@ def run_benchmark(max_questions: int = 50):
             if len(rel) >= 3:
                 subj, pred, obj = rel[0], rel[1], rel[2]
                 if subj in node_map and obj in node_map:
-                    # The Plico API expects generic string edge types, not enum variants
-                    edge_type = pred.lower().replace(" ", "_")
+                    # Map to known KGEdgeType variants, fallback to RelatedTo
+                    edge_type = EDGE_MAP.get(pred.lower(), "RelatedTo")
                     resp = client.add_edge(node_map[subj], node_map[obj], edge_type=edge_type, agent_id=agent)
                     if resp.get("ok"):
                         edges_stored += 1

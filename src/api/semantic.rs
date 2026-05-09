@@ -496,6 +496,106 @@ pub enum ApiRequest {
         message_id: String,
     },
 
+    // ── Core Polymorphic Verbs (v1.0) ────────────────────────────────
+
+    #[serde(rename = "get")]
+    CoreGet {
+        id: String,
+        #[serde(default)]
+        variant: Option<String>, // "object", "node", "event", "task", "session"
+        agent_id: String,
+    },
+
+    #[serde(rename = "list")]
+    CoreList {
+        #[serde(default)]
+        variant: Option<String>,
+        #[serde(default)]
+        filter: Option<serde_json::Value>,
+        limit: Option<usize>,
+        offset: Option<usize>,
+        agent_id: String,
+    },
+
+    #[serde(rename = "search_unified")]
+    CoreSearch {
+        query: String,
+        #[serde(default)]
+        variant: Option<String>, // "semantic", "keyword", "graph", "event"
+        #[serde(default)]
+        filter: Option<serde_json::Value>,
+        limit: Option<usize>,
+        agent_id: String,
+    },
+
+    #[serde(rename = "store")]
+    CoreCreate {
+        #[serde(default)]
+        variant: Option<String>,
+        data: serde_json::Value,
+        #[serde(default)]
+        tags: Vec<String>,
+        agent_id: String,
+    },
+
+    #[serde(rename = "patch")]
+    CoreUpdate {
+        id: String,
+        #[serde(default)]
+        variant: Option<String>,
+        data: serde_json::Value,
+        agent_id: String,
+    },
+
+    #[serde(rename = "remove")]
+    CoreDelete {
+        id: String,
+        #[serde(default)]
+        variant: Option<String>,
+        agent_id: String,
+    },
+
+    #[serde(rename = "invoke")]
+    CoreExec {
+        action: String,
+        #[serde(default)]
+        params: serde_json::Value,
+        agent_id: String,
+    },
+
+    #[serde(rename = "inspect")]
+    CoreObserve {
+        #[serde(default)]
+        variant: Option<String>, // "metrics", "audit", "events"
+        agent_id: String,
+    },
+
+    #[serde(rename = "link")]
+    CoreLink {
+        src: String,
+        dst: String,
+        #[serde(default)]
+        relation: Option<String>,
+        #[serde(default)]
+        weight: Option<f32>,
+        agent_id: String,
+    },
+
+    #[serde(rename = "ask")]
+    CoreAsk {
+        query: String,
+        #[serde(default)]
+        context_ids: Vec<String>,
+        agent_id: String,
+    },
+
+    #[serde(rename = "control")]
+    CoreState {
+        #[serde(default)]
+        action: Option<String>, // "suspend", "resume", "checkpoint"
+        agent_id: String,
+    },
+
     // ── Graph CRUD extensions (v0.7) ─────────────────────────────────
 
     #[serde(rename = "get_node")]

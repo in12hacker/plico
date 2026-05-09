@@ -161,9 +161,16 @@ impl LlmProvider for OpenAICompatibleProvider {
                     handle.block_on(self.chat_async(messages, options))
                 })
             }
-            Err(_) => self.rt.as_ref()
-                .expect("rt must exist when no Tokio runtime is active")
-                .block_on(self.chat_async(messages, options)),
+            Err(_) => {
+                if let Some(ref rt) = self.rt {
+                    rt.block_on(self.chat_async(messages, options))
+                } else {
+                    // Fallback to a temporary runtime to avoid panic during cross-thread handoffs
+                    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build()
+                        .map_err(|e| LlmError::Parse(format!("Runtime fallback failed: {e}")))?;
+                    rt.block_on(self.chat_async(messages, options))
+                }
+            }
         }
     }
 

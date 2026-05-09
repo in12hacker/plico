@@ -79,6 +79,17 @@ impl super::AIKernel {
             ApiRequest::QueryGrowthReport { agent_id, .. } |
             ApiRequest::MemoryStats { agent_id, .. } |
             ApiRequest::RememberLongTermBatch { agent_id, .. } |
+            ApiRequest::CoreGet { agent_id, .. } |
+            ApiRequest::CoreList { agent_id, .. } |
+            ApiRequest::CoreSearch { agent_id, .. } |
+            ApiRequest::CoreCreate { agent_id, .. } |
+            ApiRequest::CoreUpdate { agent_id, .. } |
+            ApiRequest::CoreDelete { agent_id, .. } |
+            ApiRequest::CoreExec { agent_id, .. } |
+            ApiRequest::CoreObserve { agent_id, .. } |
+            ApiRequest::CoreLink { agent_id, .. } |
+            ApiRequest::CoreAsk { agent_id, .. } |
+            ApiRequest::CoreState { agent_id, .. } |
             ApiRequest::ImportFiles { agent_id, .. } => Some(agent_id.clone()),
 
             ApiRequest::RegisterAgent { name } => Some(name.clone()),
@@ -268,8 +279,22 @@ impl super::AIKernel {
                    ApiRequest::SetPromptOverride { .. } | ApiRequest::RemovePromptOverride { .. }) => self.handle_prompt(req),
 
             // ── File Import (v33) ──
-            req @ ApiRequest::ImportFiles { .. } => self.handle_import(req),
-        };
+            ApiRequest::ImportFiles { .. } => self.handle_import(req),
+
+            // ── Plico Core Verbs (v1.0) ──
+            ApiRequest::CoreGet { .. } |
+            ApiRequest::CoreList { .. } |
+            ApiRequest::CoreSearch { .. } |
+            ApiRequest::CoreCreate { .. } |
+            ApiRequest::CoreUpdate { .. } |
+            ApiRequest::CoreDelete { .. } |
+            ApiRequest::CoreExec { .. } |
+            ApiRequest::CoreObserve { .. } |
+            ApiRequest::CoreLink { .. } |
+            ApiRequest::CoreAsk { .. } |
+            ApiRequest::CoreState { .. } => self.handle_core_ops(req),
+            };
+
 
         self.maybe_persist_event_log();
         let json = serde_json::to_string(&response).unwrap_or_default();

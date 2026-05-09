@@ -158,10 +158,21 @@ impl RetrievalFusionEngine {
         };
 
         let causal_proximity = if let (Some(ctx_id), Some(g)) = (query.context_entry_id, graph) {
-            match g.shortest_path_len(ctx_id, &candidate.id) {
-                Some(0) => 1.0,
-                Some(d) => 1.0 / (1.0 + d as f32),
-                None => 0.0,
+            // F-39: Differentiate between direct ancestry (stronger) and generic path (weaker)
+            if let Some(d) = g.shortest_path_len(ctx_id, &candidate.id) {
+                let base = 1.0 / (1.0 + d as f32);
+                
+                // Boost direct ancestors or supersession chain
+                let is_ancestor = g.ancestors(ctx_id).contains(&candidate.id.to_string());
+                let is_version = g.supersession_chain(ctx_id).contains(&candidate.id.to_string());
+                
+                if is_ancestor || is_version {
+                    (base * 1.5).min(1.0)
+                } else {
+                    base
+                }
+            } else {
+                0.0
             }
         } else {
             0.0

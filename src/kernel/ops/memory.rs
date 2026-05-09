@@ -8,7 +8,9 @@
 use crate::api::permission::{PermissionAction, PermissionContext};
 use crate::memory::{MemoryEntry, MemoryContent, MemoryTier, MemoryType, MemoryScope};
 use crate::scheduler::AgentId;
+use crate::fs::retrieval_router::ClassifiedIntent;
 use crate::util::case_insensitive_contains;
+
 use crate::kernel::event_bus::KernelEvent;
 use crate::fs::embedding::types::EmbeddingProvider;
 use super::observability::{OpType, OperationTimer};
@@ -586,22 +588,49 @@ impl crate::kernel::AIKernel {
                 }
             });
 
-            let classified = classify_handle.join().unwrap();
-            let emb_result = embed_handle.join().unwrap();
-            let bm25 = bm25_handle.join().unwrap();
-            let kg = kg_handle.join().unwrap();
-            (classified, emb_result, bm25, kg)
+            let classified = match classify_handle.join() {
+                Ok(res) => res,
+                Err(e) => {
+                    tracing::error!("Intent classification task panicked: {:?}", e);
+                    ClassifiedIntent { 
+                        intent: crate::fs::retrieval_router::QueryIntent::Factual, 
+                        confidence: 0.0, 
+                        method: crate::fs::retrieval_router::ClassificationMethod::RuleBased 
+                    }
+                }
+            };
+            let emb_result = match embed_handle.join() {
+                Ok(res) => res,
+                Err(e) => {
+                    tracing::error!("Embedding task panicked: {:?}", e);
+                    Err(crate::fs::embedding::EmbedError::Api("panic".into()))
+                }
+            };
+            let bm25_hits: Vec<(String, f32)> = match bm25_handle.join() {
+                Ok(res) => res,
+                Err(e) => {
+                    tracing::error!("BM25 search task panicked: {:?}", e);
+                    Vec::new()
+                }
+            };
+            let kg_hits: Vec<String> = match kg_handle.join() {
+                Ok(res) => res,
+                Err(e) => {
+                    tracing::error!("KG retrieval task panicked: {:?}", e);
+                    Vec::new()
+                }
+            };
+            (classified, emb_result, bm25_hits, kg_hits)
         });
 
         let config = RetrievalConfig::for_intent(classified.intent);
 
         // Build BM25 score map for RFE
-        let bm25_score_map: std::collections::HashMap<String, f32> =
-            bm25_hits.into_iter().collect();
-        
-        // Build KG connectivity map (v39 Multi-hop boost)
-        let kg_connectivity: std::collections::HashMap<String, f32> = 
-            kg_hits.into_iter().map(|cid| (cid, 1.0)).collect();
+        let bm25_score_map: std::collections::HashMap<String, f32> = bm25_hits.iter().cloned().collect();
+
+        // Build KG score map (v39)
+        let kg_score_map: std::collections::HashMap<String, f32> = kg_hits.into_iter().map(|cid| (cid, 1.0)).collect();
+
 
         let results: Vec<MemoryEntry> = match query_emb_result {
             Ok(query_emb) => {
@@ -624,8 +653,8 @@ impl crate::kernel::AIKernel {
                 let mut rfe = RetrievalFusionEngine::new(agent_weights);
                 
                 // v39: Inject KG multi-hop signals into RFE
-                if !kg_connectivity.is_empty() {
-                    rfe.set_kg_signals(kg_connectivity);
+                if !kg_score_map.is_empty() {
+                    rfe.set_kg_signals(kg_score_map.clone());
                 }
 
                 let causal_graph: Option<&crate::memory::causal::CausalGraph> = None;

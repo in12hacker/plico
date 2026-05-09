@@ -1,7 +1,7 @@
 //! Hook Registry — lifecycle interception for tool calls.
 //!
 //! Provides PreToolCall/PostToolCall interception points so agents can
-//! block or audit tool execution. This is a mechanism (Soul 2.0 Axiom 5:
+//! block or audit tool execution. This is a mechanism (Soul 3.0 Axiom 5:
 //! mechanism, not policy) — the interception strategy is defined by agents.
 
 use serde_json::Value;

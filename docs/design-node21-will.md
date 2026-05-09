@@ -3,7 +3,7 @@
 
 **版本**: v1.0
 **日期**: 2026-04-24
-**灵魂依据**: `system-v2.md`（Soul 2.0）
+**灵魂依据**: `system-v3.md`（Soul 3.0）
 **阶段**: Intent Plan + Autonomous Execution + Multi-Agent Coordination
 **前置**: 节点 20 ✅（100%）— 觉(5维) + 1329 tests + Soul 87%
 **验证方法**: E2E autonomous loop + intent plan execution + multi-agent coordination test
@@ -22,7 +22,7 @@ Node 20 建立了**觉**能力：
 - Async 可取消预取
 - Context-Dependent Gravity
 
-**但这些只是"看得见+学得会"**。Soul 2.0 的核心差距是：
+**但这些只是"看得见+学得会"**。Soul 3.0 的核心差距是：
 
 | 公理 | Node 20 实现 | 对齐度 |
 |------|-------------|--------|

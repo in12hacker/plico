@@ -3,7 +3,7 @@
 
 **版本**: v1.0
 **日期**: 2026-04-24
-**灵魂依据**: `system-v2.md`（Soul 2.0）
+**灵魂依据**: `system-v3.md`（Soul 3.0）
 **阶段**: Autonomous Skill Acquisition + Self-Healing + Goal Decomposition
 **前置**: 节点 22 ✅（100%）— 行(5维) + 1361 tests + Soul 92%
 **验证方法**: E2E autonomous loop + skill discovery + self-healing + goal decomposition
@@ -22,7 +22,7 @@ Node 22 建立了**行**能力：
 - Predictive Execution：执行完成后触发新的 prefetch
 - Learning Loop Closure：形成完整闭环
 
-**但这些只是"越用越好"的基础**。Soul 2.0 的核心差距是：
+**但这些只是"越用越好"的基础**。Soul 3.0 的核心差距是：
 
 | 公理 | Node 22 实现 | 对齐度 |
 |------|-------------|--------|

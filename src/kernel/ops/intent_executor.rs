@@ -2,7 +2,7 @@
 //!
 //! OS drives execution of IntentPlan steps, Agent only intervenes at exceptions.
 //!
-//! Soul 2.0 Axiom 2: "意图先于操作" — OS executes on behalf of Agent.
+//! Soul 3.0 Axiom 2: "意图先于操作" — OS executes on behalf of Agent.
 
 use std::collections::HashMap;
 use std::sync::Arc;

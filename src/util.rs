@@ -43,6 +43,21 @@ pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     dot / (norm_a * norm_b)
 }
 
+/// Truncate a string safely to at most `max_len` characters, ensuring no char boundary panics.
+pub fn safe_truncate(s: &str, max_len: usize) -> &str {
+    match s.char_indices().nth(max_len) {
+        Some((idx, _)) => &s[..idx],
+        None => s,
+    }
+}
+
+/// Slices a string safely around a given range, ensuring no char boundary panics.
+pub fn safe_range(s: &str, start: usize, end: usize) -> &str {
+    let start_idx = s.char_indices().map(|(i, _)| i).filter(|&i| i <= start).last().unwrap_or(0);
+    let end_idx = s.char_indices().map(|(i, _)| i).filter(|&i| i >= end).next().unwrap_or(s.len());
+    &s[start_idx..end_idx]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

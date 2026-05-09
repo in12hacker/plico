@@ -1,7 +1,7 @@
 # Plico Node 25 太初审计报告 v2 — 重构后独立验证
 
 **审计时间**: 2026-04-24T11:40+08:00
-**审计方法**: release 二进制全量测试 + 架构变更审查 + Soul 2.0 公理验证
+**审计方法**: release 二进制全量测试 + 架构变更审查 + Soul 3.0 公理验证
 **代码基准**: 131 src files | 49,489 lines | 1388 tests (0 failed, 7 ignored)
 **环境**: `/tmp/plico-n25-v2` (全新，`--embedded` 模式)
 **与 v1 差异**: 用户在新会话中完成大规模重构，本报告为独立验证
@@ -36,7 +36,7 @@ v2:  aicli → 连接 plicod daemon (UDS/TCP) → 执行
 }
 ```
 
-Agent 注册时返回 `token` 字段。对应 Soul 2.0 架构红线："身份不可伪造 — 密码学验证，非字符串声明"。
+Agent 注册时返回 `token` 字段。对应 Soul 3.0 架构红线："身份不可伪造 — 密码学验证，非字符串声明"。
 
 ### 0.3 Hook CLI Handler (NEW)
 
@@ -105,7 +105,7 @@ EMBEDDING_BACKEND=stub RUST_LOG=off AICLI_OUTPUT=json \
 
 ---
 
-## 2. Soul 2.0 十公理验证
+## 2. Soul 3.0 十公理验证
 
 ### 公理 1: Token 是最稀缺资源 — 95%
 
@@ -205,7 +205,7 @@ EMBEDDING_BACKEND=stub RUST_LOG=off AICLI_OUTPUT=json \
 
 ---
 
-## 3. Soul 2.0 对齐度总评
+## 3. Soul 3.0 对齐度总评
 
 | 公理 | 权重 | 得分 | 加权 |
 |------|------|------|------|
@@ -220,7 +220,7 @@ EMBEDDING_BACKEND=stub RUST_LOG=off AICLI_OUTPUT=json \
 | 9. 越用越好 | 8% | 92% | 7.4 |
 | 10. 会话一等 | 8% | 92% | 7.4 |
 
-**Soul 2.0 对齐度: 94.7%**
+**Soul 3.0 对齐度: 94.7%**
 
 历史对比: N18(72.1%) → N25-v1(85.3%) → N25-修复(93.4%) → **N25-v2(94.7%)**
 
@@ -239,7 +239,7 @@ EMBEDDING_BACKEND=stub RUST_LOG=off AICLI_OUTPUT=json \
 | 事件日志不可变 | ✅ | append-only，events history 有序 |
 | 协议适配器无状态 | ✅ | KernelClient trait + RemoteClient 纯转译 |
 
-**红线通过率: 8/8 (100%)**
+**红线通过率: 9/9 (100%)**
 
 ---
 
@@ -286,11 +286,11 @@ Genesis 完整参考文档需要单独创建（本审计报告的配套文档）
 
 1. **Daemon-First**: 从 embedded-only 到 daemon-first，解决了跨调用状态一致性问题
 2. **KernelClient trait**: 传输层抽象，支持 UDS + TCP + embedded
-3. **Agent Token**: 密码学身份验证，Soul 2.0 红线"身份不可伪造"完全实现
+3. **Agent Token**: 密码学身份验证，Soul 3.0 红线"身份不可伪造"完全实现
 
 ### 最终判定
 
-**Plico Genesis 版本已达到 94.7% Soul 2.0 对齐度，所有架构红线 100% 通过。**
+**Plico Genesis 版本已达到 94.7% Soul 3.0 对齐度，所有架构红线 100% 通过。**
 
 131 个源文件, 49,489 行 Rust 代码, 1388 个测试, 0 失败。从"概念验证"到"可工作的 AI-OS 内核"，太初已成。
 

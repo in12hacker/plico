@@ -3,7 +3,7 @@
 
 **版本**: v2.0（✅ 全部完成 — 16 测试通过，含 AI thinking 对照补全）
 **日期**: 2026-04-20
-**灵魂依据**: `system-v2.md`（Soul 2.0）+ Harness Engineering 对齐
+**灵魂依据**: `system-v3.md`（Soul 3.0）+ Harness Engineering 对齐
 **阶段**: ✅ COMPLETED — 16 集成测试 + 32 MCP 单元测试全部通过
 **前置**: 节点 6（闭合回路）✅ 完成 / 节点 7（代谢）设计完成
 **验证方法**: 集成测试驱动开发（TDD）
@@ -93,7 +93,7 @@ F-32 (safety: readonly+rate limit) ✅
 F-34 (Lost in the Middle) ✅ + F-35 (MCP Prompts) ✅
 ```
 
-## 4. Soul 2.0 对齐
+## 4. Soul 3.0 对齐
 
 | 公理 | 影响 | 说明 |
 |------|------|------|

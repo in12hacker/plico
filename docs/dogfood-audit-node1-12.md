@@ -259,7 +259,7 @@
 连锁效果：
   ✅ B22 (session not found) 直接修复
   ✅ B20 (growth Sessions=0) 连锁修复
-  ✅ Soul 2.0 公理 10 (会话一等公民) 在 CLI 模式下兑现
+  ✅ Soul 3.0 公理 10 (会话一等公民) 在 CLI 模式下兑现
 ```
 
 ### B21 Agent Name Registry 修复

@@ -1,6 +1,6 @@
 //! Plico Agentic Memory Benchmark (PAMB v2) — 8 multi-agent OS-level scenarios.
 //!
-//! Tests Plico's core Soul 2.0 axioms in realistic agentic workflows:
+//! Tests Plico's core Soul 3.0 axioms in realistic agentic workflows:
 //! - Scenario 1: Multi-agent knowledge sharing (Axiom #4)
 //! - Scenario 2: Cross-session memory persistence (Axiom #3 + #10)
 //! - Scenario 3: Memory distillation and forgetting (Axiom #9)

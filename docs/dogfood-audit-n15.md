@@ -99,7 +99,7 @@ IntentRouter 已在 v3.0-M1 提取到接口层。源码证据:
 内核只处理结构化 `ApiRequest` 变体（`handle_api_request`），不做 NL→API 翻译。
 IntentRouter 在接口层（CLI `handlers/intent.rs`）创建和调用。
 
-**架构符合 Soul 2.0 公理 5 (Mechanism not Policy)**:
+**架构符合 Soul 3.0 公理 5 (Mechanism not Policy)**:
 - 内核 = 纯机制提供者（API dispatch, memory primitives, CAS ops）
 - 接口层 = 策略执行者（NL parsing, router selection, confidence thresholds）
 

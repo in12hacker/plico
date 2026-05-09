@@ -1,54 +1,54 @@
 {
   "benchmark": "Plico Performance Micro-benchmarks",
-  "timestamp": "2026-05-07T14:01:56",
+  "timestamp": "2026-05-09T10:25:11",
   "host": "127.0.0.1",
   "port": 7878,
   "results": [
     {
       "operation": "cas_write",
       "count": 1000,
-      "qps": 15,
-      "latency_p50_ms": 7.99,
-      "latency_p95_ms": 17.14,
-      "latency_p99_ms": 2158.87,
-      "total_time_s": 68.64
+      "qps": 101,
+      "latency_p50_ms": 9.38,
+      "latency_p95_ms": 12.1,
+      "latency_p99_ms": 19.74,
+      "total_time_s": 9.88
     },
     {
       "operation": "cas_read",
       "count": 1000,
-      "qps": 2548,
-      "latency_p50_ms": 0.36,
-      "latency_p95_ms": 0.68,
-      "latency_p99_ms": 2.18,
-      "total_time_s": 0.39
+      "qps": 577,
+      "latency_p50_ms": 1.59,
+      "latency_p95_ms": 2.66,
+      "latency_p99_ms": 3.25,
+      "total_time_s": 1.73
     },
     {
       "operation": "search",
       "count": 200,
-      "qps": 9,
-      "latency_p50_ms": 102.42,
-      "latency_p95_ms": 159.05,
-      "latency_p99_ms": 200.42,
-      "total_time_s": 21.63
+      "qps": 87,
+      "latency_p50_ms": 11.16,
+      "latency_p95_ms": 14.22,
+      "latency_p99_ms": 15.42,
+      "total_time_s": 2.29
     },
     {
       "operation": "memory_store_recall",
       "store_count": 500,
       "recall_count": 200,
-      "store_qps": 2123,
-      "store_p50_ms": 0.43,
-      "store_p95_ms": 0.91,
-      "recall_qps": 1010,
-      "recall_p50_ms": 0.81,
-      "recall_p95_ms": 2.8
+      "store_qps": 559,
+      "store_p50_ms": 1.56,
+      "store_p95_ms": 2.94,
+      "recall_qps": 564,
+      "recall_p50_ms": 1.74,
+      "recall_p95_ms": 1.9
     },
     {
       "operation": "kg_operations",
       "add_node_count": 200,
       "add_edge_count": 0,
       "find_paths_count": 0,
-      "add_node_qps": 4621,
-      "add_node_p50_ms": 0.21,
+      "add_node_qps": 4990,
+      "add_node_p50_ms": 0.16,
       "add_edge_qps": 0,
       "add_edge_p50_ms": 0,
       "find_paths_p50_ms": 0,

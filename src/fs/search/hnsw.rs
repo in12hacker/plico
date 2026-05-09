@@ -41,8 +41,8 @@ impl HnswBackend {
             metric: MetricKind::Cos,
             quantization: ScalarKind::F16,
             connectivity: 16,
-            expansion_add: 128,
-            expansion_search: 64,
+            expansion_add: 256,
+            expansion_search: 128,
             multi: false,
         };
         let index = new_index(&options).expect("Failed to create usearch index");
