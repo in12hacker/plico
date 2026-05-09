@@ -73,6 +73,7 @@ pub struct AIKernel {
     pub(crate) cognitive_loop: Option<Arc<crate::kernel::cognition::CognitiveLoop>>,
     pub(crate) cognitive_pipeline: Option<ops::cognitive_pipeline::CognitivePipelineHandle>,
     pub(crate) diagnostic_store: Arc<ops::diagnostic::DiagnosticStore>,
+    pub(crate) intelligent_skill_forge: Arc<ops::skill_forge::IntelligentSkillForge>,
 }
 
 fn check_embedding_meta(root: &std::path::Path, model_name: &str, dim: usize) -> bool {
@@ -274,6 +275,7 @@ impl AIKernel {
             cognitive_loop,
             cognitive_pipeline: None,
             diagnostic_store: Arc::new(ops::diagnostic::DiagnosticStore::new()),
+            intelligent_skill_forge: Arc::new(ops::skill_forge::IntelligentSkillForge::new()),
         };
 
         kernel.register_builtin_tools();

@@ -4,6 +4,7 @@
 //! into a consistent, Plico-native interface.
 
 use crate::api::semantic::{ApiRequest, ApiResponse};
+use crate::fs::embedding::types::EmbeddingProvider;
 use super::super::AIKernel;
 
 impl AIKernel {
@@ -102,11 +103,27 @@ impl AIKernel {
 
     fn core_exec(&self, action: String, params: serde_json::Value, agent_id: String) -> ApiResponse {
         match action.as_str() {
-            "tool_call" => self.handle_tools(ApiRequest::ToolCall { 
-                tool: params["tool"].as_str().unwrap_or("").to_string(), 
-                params: params["params"].clone(), 
-                agent_id 
-            }),
+            "tool_call" => {
+                let tool_name = params["tool"].as_str().unwrap_or("").to_string();
+                let tool_params = params["params"].clone();
+                
+                // v41 SF-03: Intelligent Skill Evolution
+                let param_str = serde_json::to_string(&tool_params).unwrap_or_default();
+                if let Ok(emb) = self.embedding.embed_query(&param_str) {
+                    if let Some(_candidate) = self.intelligent_skill_forge.record_and_evaluate(
+                        &agent_id, &tool_name, &tool_params, emb.embedding
+                    ) {
+                        // Published as an event for Agent to discover via event bus
+                        self.event_bus.emit(crate::kernel::event_bus::KernelEvent::EventCreated {
+                            event_id: uuid::Uuid::new_v4().to_string(),
+                            label: format!("skill_candidate:{}", tool_name),
+                            agent_id: agent_id.clone(),
+                        });
+                    }
+                }
+
+                self.handle_tools(ApiRequest::ToolCall { tool: tool_name, params: tool_params, agent_id })
+            }
             "retry_diagnostic" => {
                 let task_id = params["task_id"].as_str().unwrap_or("");
                 self.diagnostic_store.mark_fixed(task_id);
