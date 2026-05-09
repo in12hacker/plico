@@ -33,7 +33,7 @@ def generate():
     perf = load_json(RESULTS_DIR / "perf_micro.json")
 
     lines = []
-    lines.append("# Plico 基线性能评测报告 (v38)")
+    lines.append("# Plico 基线性能评测报告 (v40)")
     lines.append("")
     lines.append(f"> 生成时间: {time.strftime('%Y-%m-%d %H:%M:%S')}")
     lines.append("> 评测系统: Plico (usearch HNSW cos f16 + all-MiniLM-L6-v2)")

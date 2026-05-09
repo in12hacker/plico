@@ -227,9 +227,15 @@ impl EmbeddingProvider for OpenAIEmbeddingBackend {
             Ok(handle) => {
                 tokio::task::block_in_place(|| handle.block_on(self.embed_async(text)))
             }
-            Err(_) => self.rt.as_ref()
-                .expect("rt must exist when no Tokio runtime is active")
-                .block_on(self.embed_async(text)),
+            Err(_) => {
+                if let Some(ref rt) = self.rt {
+                    rt.block_on(self.embed_async(text))
+                } else {
+                    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build()
+                        .map_err(|e| EmbedError::Runtime(e))?;
+                    rt.block_on(self.embed_async(text))
+                }
+            }
         }
     }
 
@@ -249,9 +255,15 @@ impl EmbeddingProvider for OpenAIEmbeddingBackend {
             Ok(handle) => {
                 tokio::task::block_in_place(|| handle.block_on(self.embed_batch_async(&owned)))
             }
-            Err(_) => self.rt.as_ref()
-                .expect("rt must exist when no Tokio runtime is active")
-                .block_on(self.embed_batch_async(&owned)),
+            Err(_) => {
+                if let Some(ref rt) = self.rt {
+                    rt.block_on(self.embed_batch_async(&owned))
+                } else {
+                    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build()
+                        .map_err(|e| EmbedError::Runtime(e))?;
+                    rt.block_on(self.embed_batch_async(&owned))
+                }
+            }
         }
     }
 
