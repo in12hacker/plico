@@ -71,6 +71,8 @@ pub struct AIKernel {
     pub(crate) agent_profiles: Arc<ops::agent_profile::AgentProfileStore>,
     pub(crate) reranker: Option<Arc<dyn crate::fs::reranker::RerankerProvider>>,
     pub(crate) cognitive_loop: Option<Arc<crate::kernel::cognition::CognitiveLoop>>,
+    pub(crate) cognitive_pipeline: Option<ops::cognitive_pipeline::CognitivePipelineHandle>,
+    pub(crate) diagnostic_store: Arc<ops::diagnostic::DiagnosticStore>,
 }
 
 fn check_embedding_meta(root: &std::path::Path, model_name: &str, dim: usize) -> bool {
@@ -270,6 +272,8 @@ impl AIKernel {
             agent_profiles: Arc::new(ops::agent_profile::AgentProfileStore::new()),
             reranker,
             cognitive_loop,
+            cognitive_pipeline: None,
+            diagnostic_store: Arc::new(ops::diagnostic::DiagnosticStore::new()),
         };
 
         kernel.register_builtin_tools();
@@ -280,8 +284,14 @@ impl AIKernel {
         kernel.restore_event_log();
         kernel.restore_checkpoints();
         kernel.restore_task_store();
-
+        
         Ok(kernel)
+    }
+
+    /// Starts background cognitive workers. Must be called once after kernel is wrapped in Arc.
+    pub fn start_workers(self: &Arc<Self>) {
+        let cp_handle = ops::cognitive_pipeline::start_cognitive_pipeline(Arc::clone(self), 1024);
+        self.fs.set_cognitive_pipeline(cp_handle);
     }
 
     const SEARCH_PERSIST_EVERY_N: u64 = 50;

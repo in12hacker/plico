@@ -107,6 +107,13 @@ impl AIKernel {
                 params: params["params"].clone(), 
                 agent_id 
             }),
+            "retry_diagnostic" => {
+                let task_id = params["task_id"].as_str().unwrap_or("");
+                self.diagnostic_store.mark_fixed(task_id);
+                let mut resp = ApiResponse::ok();
+                resp.message = Some(format!("Recovery initiated for task {}", task_id));
+                resp
+            }
             _ => ApiResponse::error(format!("Unsupported core_exec action: {}", action)),
         }
     }
@@ -116,6 +123,13 @@ impl AIKernel {
         match variant {
             "audit" => self.handle_system(ApiRequest::QueryGrowthReport { agent_id, period: crate::api::dto::GrowthPeriod::Last7Days }),
             "metrics" => self.handle_system(ApiRequest::AgentUsage { agent_id }),
+            "diagnostic" => {
+                let reports = self.diagnostic_store.list_for_agent(&agent_id);
+                let mut resp = ApiResponse::ok();
+                resp.message = Some(format!("Found {} pending diagnostic reports", reports.len()));
+                resp.data = Some(serde_json::to_string(&reports).unwrap_or_default());
+                resp
+            }
             _ => ApiResponse::error(format!("Unsupported core_observe variant: {}", variant)),
         }
     }

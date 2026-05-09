@@ -211,7 +211,11 @@ async fn cmd_start(args: Vec<String>, root: PathBuf) {
     println!("Storage root: {:?}", root);
 
     let kernel = match AIKernel::new(root.clone()) {
-        Ok(k) => Arc::new(k),
+        Ok(k) => {
+            let ka = Arc::new(k);
+            ka.start_workers();
+            ka
+        }
         Err(e) => {
             eprintln!("Failed to initialize kernel: {}", e);
             std::process::exit(1);

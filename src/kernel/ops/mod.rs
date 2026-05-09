@@ -37,3 +37,5 @@ pub mod intent_executor;
 pub mod kg_builder;
 pub mod agent_profile;
 pub mod ingest;
+pub mod cognitive_pipeline;
+pub mod diagnostic;
