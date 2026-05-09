@@ -21,6 +21,7 @@ use crate::fs::summarizer::Summarizer;
 use crate::util::case_insensitive_contains;
 use crate::fs::graph::KnowledgeGraph;
 use crate::fs::graph::{KGEdge, KGEdgeType};
+use crate::kernel::ops::cognitive_pipeline::CognitiveTask;
 
 // Re-export types from fs/types (single source of truth)
 pub use crate::fs::types::{
@@ -106,6 +107,8 @@ pub struct SemanticFS {
     config_chunking_mode: String,
     // F-5: Soul alignment — unified config controls auto-summarize
     config_auto_summarize: bool,
+    /// ACP handle for background cognitive processing (Milestone 1)
+    pub(crate) cognitive_pipeline: RwLock<Option<crate::kernel::ops::cognitive_pipeline::CognitivePipelineHandle>>,
 }
 
 impl SemanticFS {
@@ -114,6 +117,10 @@ impl SemanticFS {
     pub fn ctx_loader(&self) -> &ContextLoader { &self.ctx_loader }
 
     /// Returns a clone of the internal Arc<ContextLoader>.
+    pub fn summarizer(&self) -> Option<Arc<dyn Summarizer>> {
+        self.summarizer.clone()
+    }
+
     pub fn ctx_loader_arc(&self) -> Arc<ContextLoader> {
         Arc::clone(&self.ctx_loader)
     }
@@ -175,6 +182,7 @@ impl SemanticFS {
             reranker,
             config_chunking_mode: "none".into(), // Default, will be updated by AIKernel
             config_auto_summarize: false,        // Default, will be updated by AIKernel
+            cognitive_pipeline: RwLock::new(None),
         };
 
         fs.rebuild_vector_index();
@@ -187,6 +195,10 @@ impl SemanticFS {
 
     pub fn set_auto_summarize(&mut self, enabled: bool) {
         self.config_auto_summarize = enabled;
+    }
+
+    pub fn set_cognitive_pipeline(&self, handle: crate::kernel::ops::cognitive_pipeline::CognitivePipelineHandle) {
+        *self.cognitive_pipeline.write().unwrap() = Some(handle);
     }
 
     fn rebuild_vector_index(&self) {
@@ -280,7 +292,7 @@ impl SemanticFS {
         let meta = AIObjectMeta {
             content_type,
             tags: tags.clone(),
-            created_by,
+            created_by: created_by.clone(),
             created_at: now_ms(),
             intent,
             tenant_id: crate::DEFAULT_TENANT.to_string(),
@@ -290,42 +302,33 @@ impl SemanticFS {
         let cid = self.cas.put(&obj)?;
 
         self.update_tag_index(&tags, &cid);
-        let embedding = self.upsert_semantic_index(&cid, &content, &meta);
+        let _embedding = self.upsert_semantic_index(&cid, &content, &meta);
 
-        if let Some(ref kg) = self.knowledge_graph {
-            if let Err(e) = kg.upsert_document(&cid, &tags, &meta.created_by) {
-                tracing::warn!("Failed to upsert document to knowledge graph: {}", e);
-            }
-            if let Some(ref emb) = embedding {
-                self.add_similar_to_edges(kg, &cid, emb);
-            }
-        }
+        let text = match std::str::from_utf8(&content) {
+            Ok(s) if !s.trim().is_empty() => Some(s.to_string()),
+            _ => None,
+        };
 
-        // F-5: Only summarize when auto_summarize is enabled in config
-        if self.config_auto_summarize {
-            if let Some(ref summarizer) = self.summarizer {
-                let text = match std::str::from_utf8(&content) {
-                    Ok(s) if !s.trim().is_empty() => s.to_string(),
-                    _ => String::new(),
-                };
-                if !text.is_empty() {
-                    match summarizer.summarize(&text, crate::fs::summarizer::SummaryLayer::L0) {
-                        Ok(summary) => {
-                            if let Err(e) = self.ctx_loader.store_l0(&cid, summary) {
-                                tracing::warn!("Failed to store L0 summary for {}: {}", crate::util::safe_truncate(&cid, 8), e);
-                            }
-                        }
-                        Err(e) => { tracing::warn!("L0 summarization failed for {}: {}", crate::util::safe_truncate(&cid, 8), e); }
-                    }
-                }
+        // F-5: Asynchronous cognitive processing (Milestone 1)
+        if let Some(ref cp) = *self.cognitive_pipeline.read().unwrap() {
+            if self.config_auto_summarize && text.is_some() {
+                let _ = cp.enqueue_sync(CognitiveTask::Summarize {
+                    cid: cid.clone(),
+                    layer: crate::fs::summarizer::SummaryLayer::L0,
+                    agent_id: created_by.clone(),
+                });
             }
+            
+            // KG Extraction & Similarity Links
+            let _ = cp.enqueue_sync(CognitiveTask::KgExtract { cid: cid.clone(), agent_id: created_by.clone() });
+            let _ = cp.enqueue_sync(CognitiveTask::LinkSimilarity { cid: cid.clone(), agent_id: created_by.clone() });
         }
 
         self.push_audit(AuditEntry {
             timestamp: now_ms(),
             action: AuditAction::Create,
             cid: cid.clone(),
-            agent_id: String::new(),
+            agent_id: created_by,
         });
 
         // Hierarchical chunking: split large documents into child chunks

@@ -38,7 +38,7 @@ pub enum SummarError {
 }
 
 /// Target summary layer — determines target length and compression ratio.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub enum SummaryLayer {
     /// L0: ~100 tokens → ~20 token summary (2-3 sentences)
     L0,

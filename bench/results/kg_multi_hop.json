@@ -1,91 +1,91 @@
 {
   "benchmark": "KG Multi-hop (LongMemEval subset)",
   "system": "Plico KG (redb)",
-  "timestamp": "2026-05-09T10:24:56",
+  "timestamp": "2026-05-09T18:16:08",
   "overall": {
     "n_questions": 50,
-    "total_entities_stored": 953,
-    "total_edges_stored": 568,
-    "paths_found": 78,
+    "total_entities_stored": 951,
+    "total_edges_stored": 580,
+    "paths_found": 77,
     "paths_attempted": 300,
-    "path_hit_rate": 26.0,
+    "path_hit_rate": 25.7,
     "llm_extraction": true
   },
   "per_question": [
     {
       "question_id": "0a995998",
       "question_type": "multi-session",
-      "entities_extracted": 14,
-      "relations_extracted": 17,
-      "entities_stored": 14,
+      "entities_extracted": 15,
+      "relations_extracted": 18,
+      "entities_stored": 15,
       "path_tests": [
         {
-          "source": "winter clothes",
-          "target": "gloves",
-          "found": true
-        },
-        {
-          "source": "winter clothes",
+          "source": "dry cleaning",
           "target": "Levi's",
           "found": false
         },
         {
-          "source": "gloves",
-          "target": "Levi's",
-          "found": false
-        },
-        {
-          "source": "gloves",
-          "target": "closet",
-          "found": false
-        },
-        {
-          "source": "Levi's",
-          "target": "closet",
+          "source": "dry cleaning",
+          "target": "holidays",
           "found": false
         },
         {
           "source": "Levi's",
           "target": "holidays",
           "found": false
+        },
+        {
+          "source": "Levi's",
+          "target": "black jeans",
+          "found": true
+        },
+        {
+          "source": "holidays",
+          "target": "black jeans",
+          "found": false
+        },
+        {
+          "source": "holidays",
+          "target": "grey scarf",
+          "found": true
         }
       ]
     },
     {
       "question_id": "6d550036",
       "question_type": "multi-session",
-      "entities_extracted": 24,
-      "relations_extracted": 22,
+      "entities_extracted": 40,
+      "relations_extracted": 39,
       "entities_stored": 20,
       "path_tests": [
         {
-          "source": "Microsoft",
-          "target": "Google Analytics",
+          "source": "Marketing Research class project",
+          "target": "social media",
           "found": false
         },
         {
-          "source": "Microsoft",
-          "target": "hierarchical clustering",
+          "source": "Marketing Research class project",
+          "target": "assistant",
           "found": false
         },
         {
-          "source": "Google Analytics",
-          "target": "hierarchical clustering",
+          "source": "social media",
+          "target": "assistant",
           "found": false
         },
         {
-          "source": "Google Analytics",
-          "target": "user",
+          "source": "social media",
+          "target": "Kapoor, K. K.",
           "found": false
         },
         {
-          "source": "hierarchical clustering",
-          "target": "user",
-          "found": true
+          "source": "assistant",
+          "target": "Kapoor, K. K.",
+          "found": false
         },
         {
-          "source": "hierarchical clustering",
-          "target": "Seaborn",
+          "source": "assistant",
+          "target": "Plotly",
           "found": false
         }
       ]
@@ -94,37 +94,37 @@
       "question_id": "gpt4_59c863d7",
       "question_type": "multi-session",
       "entities_extracted": 25,
-      "relations_extracted": 27,
+      "relations_extracted": 25,
       "entities_stored": 20,
       "path_tests": [
         {
-          "source": "Forge World",
-          "target": "Vallejo acrylics",
-          "found": false
-        },
-        {
-          "source": "Forge World",
-          "target": "user",
-          "found": false
-        },
-        {
-          "source": "Vallejo acrylics",
-          "target": "user",
+          "source": "69 Camaro",
+          "target": "model show",
           "found": true
         },
         {
-          "source": "Vallejo acrylics",
-          "target": "Vallejo",
+          "source": "69 Camaro",
+          "target": "Citadel",
           "found": false
         },
         {
-          "source": "user",
-          "target": "Vallejo",
+          "source": "model show",
+          "target": "Citadel",
           "found": false
         },
         {
-          "source": "user",
-          "target": "Mig Productions",
+          "source": "model show",
+          "target": "model building",
+          "found": true
+        },
+        {
+          "source": "Citadel",
+          "target": "model building",
+          "found": false
+        },
+        {
+          "source": "Citadel",
+          "target": "diorama",
           "found": false
         }
       ]
@@ -132,39 +132,39 @@
     {
       "question_id": "b5ef892d",
       "question_type": "multi-session",
-      "entities_extracted": 51,
-      "relations_extracted": 41,
+      "entities_extracted": 31,
+      "relations_extracted": 23,
       "entities_stored": 20,
       "path_tests": [
         {
-          "source": "Gore-Tex",
+          "source": "La Sportiva Raptor GTX",
           "target": "Glenwood Canyon Campground",
           "found": false
         },
         {
-          "source": "Gore-Tex",
-          "target": "Moab",
+          "source": "La Sportiva Raptor GTX",
+          "target": "Salomon Quest 4D 3 GTX",
+          "found": true
+        },
+        {
+          "source": "Glenwood Canyon Campground",
+          "target": "Salomon Quest 4D 3 GTX",
           "found": false
         },
         {
           "source": "Glenwood Canyon Campground",
-          "target": "Moab",
+          "target": "Moraine Park Campground",
           "found": false
         },
         {
-          "source": "Glenwood Canyon Campground",
-          "target": "Maroon Bells Scenic Trail",
+          "source": "Salomon Quest 4D 3 GTX",
+          "target": "Moraine Park Campground",
           "found": false
         },
         {
-          "source": "Moab",
-          "target": "Maroon Bells Scenic Trail",
-          "found": false
-        },
-        {
-          "source": "Moab",
-          "target": "Colorado Springs",
-          "found": false
+          "source": "Salomon Quest 4D 3 GTX",
+          "target": "Hoka One One Speedgoat Mid 2 GTX",
+          "found": true
         }
       ]
     },
@@ -176,34 +176,34 @@
       "entities_stored": 20,
       "path_tests": [
         {
-          "source": "Rogue One",
-          "target": "Episode VII: The Force Awakens",
-          "found": true
-        },
-        {
-          "source": "Rogue One",
-          "target": "Mark Ruffalo",
-          "found": false
-        },
-        {
-          "source": "Episode VII: The Force Awakens",
-          "target": "Mark Ruffalo",
-          "found": false
-        },
-        {
-          "source": "Episode VII: The Force Awakens",
-          "target": "user",
-          "found": true
-        },
-        {
           "source": "Mark Ruffalo",
-          "target": "user",
+          "target": "Marvel",
           "found": false
         },
         {
           "source": "Mark Ruffalo",
-          "target": "Marvel Cinematic Universe",
-          "found": true
+          "target": "assistant",
+          "found": false
+        },
+        {
+          "source": "Marvel",
+          "target": "assistant",
+          "found": false
+        },
+        {
+          "source": "Marvel",
+          "target": "Chris Evans",
+          "found": false
+        },
+        {
+          "source": "assistant",
+          "target": "Chris Evans",
+          "found": false
+        },
+        {
+          "source": "assistant",
+          "target": "X-Men",
+          "found": false
         }
       ]
     },
@@ -211,115 +211,115 @@
       "question_id": "3a704032",
       "question_type": "multi-session",
       "entities_extracted": 21,
-      "relations_extracted": 29,
+      "relations_extracted": 32,
       "entities_stored": 20,
       "path_tests": [
         {
-          "source": "snake plant",
-          "target": "succulent",
+          "source": "fertilization",
+          "target": "repotting",
+          "found": true
+        },
+        {
+          "source": "fertilization",
+          "target": "spider mites",
+          "found": true
+        },
+        {
+          "source": "repotting",
+          "target": "spider mites",
+          "found": true
+        },
+        {
+          "source": "repotting",
+          "target": "basil plant",
           "found": false
         },
         {
-          "source": "snake plant",
-          "target": "nursery",
+          "source": "spider mites",
+          "target": "basil plant",
           "found": false
         },
         {
-          "source": "succulent",
-          "target": "nursery",
-          "found": false
-        },
-        {
-          "source": "succulent",
-          "target": "humidity",
-          "found": false
-        },
-        {
-          "source": "nursery",
-          "target": "humidity",
-          "found": false
-        },
-        {
-          "source": "nursery",
+          "source": "spider mites",
           "target": "neem oil",
-          "found": false
+          "found": true
         }
       ]
     },
     {
       "question_id": "gpt4_d84a3211",
       "question_type": "multi-session",
-      "entities_extracted": 15,
-      "relations_extracted": 25,
-      "entities_stored": 15,
+      "entities_extracted": 17,
+      "relations_extracted": 23,
+      "entities_stored": 17,
       "path_tests": [
         {
-          "source": "bike lights",
-          "target": "Saris Bones 2-Bike Trunk Rack",
-          "found": true
-        },
-        {
-          "source": "bike lights",
+          "source": "summer",
           "target": "chain",
-          "found": true
+          "found": false
         },
         {
-          "source": "Saris Bones 2-Bike Trunk Rack",
-          "target": "chain",
-          "found": true
-        },
-        {
-          "source": "Saris Bones 2-Bike Trunk Rack",
+          "source": "summer",
           "target": "assistant",
           "found": false
         },
         {
           "source": "chain",
           "target": "assistant",
-          "found": true
+          "found": false
         },
         {
           "source": "chain",
-          "target": "car",
+          "target": "bike maintenance schedule",
+          "found": false
+        },
+        {
+          "source": "assistant",
+          "target": "bike maintenance schedule",
           "found": true
+        },
+        {
+          "source": "assistant",
+          "target": "road trip",
+          "found": false
         }
       ]
     },
     {
       "question_id": "aae3761f",
       "question_type": "multi-session",
-      "entities_extracted": 42,
-      "relations_extracted": 31,
+      "entities_extracted": 39,
+      "relations_extracted": 30,
       "entities_stored": 20,
       "path_tests": [
         {
-          "source": "Tybee Island",
-          "target": "Outer Banks",
+          "source": "Chincoteague Island",
+          "target": "Old Faithful",
           "found": false
         },
         {
-          "source": "Tybee Island",
-          "target": "Moab, Utah",
+          "source": "Chincoteague Island",
+          "target": "Savannah",
           "found": false
         },
         {
-          "source": "Outer Banks",
-          "target": "Moab, Utah",
+          "source": "Old Faithful",
+          "target": "Savannah",
           "found": false
         },
         {
-          "source": "Outer Banks",
-          "target": "mountains",
+          "source": "Old Faithful",
+          "target": "Gulf Shores",
           "found": false
         },
         {
-          "source": "Moab, Utah",
-          "target": "mountains",
+          "source": "Savannah",
+          "target": "Gulf Shores",
           "found": false
         },
         {
-          "source": "Moab, Utah",
-          "target": "Half Moon Bay",
+          "source": "Savannah",
+          "target": "assistant",
           "found": false
         }
       ]
@@ -328,37 +328,37 @@
       "question_id": "gpt4_f2262a51",
       "question_type": "multi-session",
       "entities_extracted": 31,
-      "relations_extracted": 27,
+      "relations_extracted": 26,
       "entities_stored": 20,
       "path_tests": [
         {
-          "source": "energy levels",
-          "target": "pseudoephedrine",
+          "source": "sinus surgery",
+          "target": "nasal spray prescription",
           "found": false
         },
         {
-          "source": "energy levels",
+          "source": "sinus surgery",
+          "target": "immunotherapy",
+          "found": false
+        },
+        {
+          "source": "nasal spray prescription",
+          "target": "immunotherapy",
+          "found": false
+        },
+        {
+          "source": "nasal spray prescription",
+          "target": "assistant",
+          "found": false
+        },
+        {
+          "source": "immunotherapy",
+          "target": "assistant",
+          "found": false
+        },
+        {
+          "source": "immunotherapy",
           "target": "steroid nasal sprays",
-          "found": false
-        },
-        {
-          "source": "pseudoephedrine",
-          "target": "steroid nasal sprays",
-          "found": false
-        },
-        {
-          "source": "pseudoephedrine",
-          "target": "user",
-          "found": false
-        },
-        {
-          "source": "steroid nasal sprays",
-          "target": "user",
-          "found": false
-        },
-        {
-          "source": "steroid nasal sprays",
-          "target": "acetaminophen",
           "found": false
         }
       ]
@@ -371,33 +371,33 @@
       "entities_stored": 20,
       "path_tests": [
         {
-          "source": "Avocado Toast with Poached Eggs",
-          "target": "user",
+          "source": "Spinach and Feta Omelette",
+          "target": "Greek Yogurt Parfait with Berries and Granola",
           "found": true
         },
         {
-          "source": "Avocado Toast with Poached Eggs",
-          "target": "Lose It!",
+          "source": "Spinach and Feta Omelette",
+          "target": "doctor",
           "found": false
         },
         {
-          "source": "user",
-          "target": "Lose It!",
+          "source": "Greek Yogurt Parfait with Berries and Granola",
+          "target": "doctor",
           "found": false
         },
         {
-          "source": "user",
-          "target": "MyFitnessPal",
-          "found": false
-        },
-        {
-          "source": "Lose It!",
-          "target": "MyFitnessPal",
-          "found": false
-        },
-        {
-          "source": "Lose It!",
+          "source": "Greek Yogurt Parfait with Berries and Granola",
           "target": "Quinoa Salad Jars",
+          "found": true
+        },
+        {
+          "source": "doctor",
+          "target": "Quinoa Salad Jars",
+          "found": false
+        },
+        {
+          "source": "doctor",
+          "target": "assistant",
           "found": false
         }
       ]
@@ -405,38 +405,38 @@
     {
       "question_id": "c4a1ceb8",
       "question_type": "multi-session",
-      "entities_extracted": 39,
-      "relations_extracted": 39,
+      "entities_extracted": 35,
+      "relations_extracted": 35,
       "entities_stored": 20,
       "path_tests": [
         {
-          "source": "water",
-          "target": "Croquetas",
+          "source": "orange peels",
+          "target": "Mejillones al la Parrilla",
           "found": false
         },
         {
-          "source": "water",
-          "target": "Lime-Basil Martini",
+          "source": "orange peels",
+          "target": "Pomegranate Lime Sparkler",
           "found": false
         },
         {
-          "source": "Croquetas",
-          "target": "Lime-Basil Martini",
+          "source": "Mejillones al la Parrilla",
+          "target": "Pomegranate Lime Sparkler",
           "found": false
         },
         {
-          "source": "Croquetas",
-          "target": "Rioja wine",
+          "source": "Mejillones al la Parrilla",
+          "target": "Daiquiri",
           "found": false
         },
         {
-          "source": "Lime-Basil Martini",
-          "target": "Rioja wine",
+          "source": "Pomegranate Lime Sparkler",
+          "target": "Daiquiri",
           "found": false
         },
         {
-          "source": "Lime-Basil Martini",
-          "target": "user",
+          "source": "Pomegranate Lime Sparkler",
+          "target": "Manchego cheese",
           "found": false
         }
       ]
@@ -449,33 +449,33 @@
       "entities_stored": 20,
       "path_tests": [
         {
-          "source": "Singapore",
-          "target": "Portland Film Festival",
-          "found": false
-        },
-        {
-          "source": "Singapore",
+          "source": "Parasite",
           "target": "Minari",
-          "found": false
+          "found": true
         },
         {
-          "source": "Portland Film Festival",
-          "target": "Minari",
-          "found": false
-        },
-        {
-          "source": "Portland Film Festival",
-          "target": "identity",
-          "found": false
-        },
-        {
-          "source": "Minari",
-          "target": "identity",
+          "source": "Parasite",
+          "target": "Crazy Rich Asians",
           "found": true
         },
         {
           "source": "Minari",
-          "target": "Moonlight",
+          "target": "Crazy Rich Asians",
+          "found": true
+        },
+        {
+          "source": "Minari",
+          "target": "Portland Film Festival",
+          "found": false
+        },
+        {
+          "source": "Crazy Rich Asians",
+          "target": "Portland Film Festival",
+          "found": false
+        },
+        {
+          "source": "Crazy Rich Asians",
+          "target": "Fences",
           "found": true
         }
       ]
@@ -483,38 +483,38 @@
     {
       "question_id": "6cb6f249",
       "question_type": "multi-session",
-      "entities_extracted": 48,
-      "relations_extracted": 34,
+      "entities_extracted": 25,
+      "relations_extracted": 14,
       "entities_stored": 20,
       "path_tests": [
         {
-          "source": "StayFocused",
-          "target": "News Feed Eradicator",
+          "source": "Morning Pages",
+          "target": "social media",
           "found": false
         },
         {
-          "source": "StayFocused",
-          "target": "Wherever You Go, There You Are",
+          "source": "Morning Pages",
+          "target": "Eckhart Tolle",
           "found": false
         },
         {
-          "source": "News Feed Eradicator",
-          "target": "Wherever You Go, There You Are",
+          "source": "social media",
+          "target": "Eckhart Tolle",
           "found": false
         },
         {
-          "source": "News Feed Eradicator",
-          "target": "Jon Kabat-Zinn",
+          "source": "social media",
+          "target": "Intelligent Change",
           "found": false
         },
         {
-          "source": "Wherever You Go, There You Are",
-          "target": "Jon Kabat-Zinn",
-          "found": true
+          "source": "Eckhart Tolle",
+          "target": "Intelligent Change",
+          "found": false
         },
         {
-          "source": "Wherever You Go, There You Are",
-          "target": "uBlock Origin",
+          "source": "Eckhart Tolle",
+          "target": "journaling",
           "found": false
         }
       ]
@@ -527,33 +527,33 @@
       "entities_stored": 20,
       "path_tests": [
         {
-          "source": "Hornwort",
-          "target": "Amazonia",
+          "source": "nitrite levels",
+          "target": "freshwater tank",
           "found": false
         },
         {
-          "source": "Hornwort",
-          "target": "Cabomba",
+          "source": "nitrite levels",
+          "target": "Water Wisteria",
           "found": false
         },
         {
-          "source": "Amazonia",
-          "target": "Cabomba",
+          "source": "freshwater tank",
+          "target": "Water Wisteria",
           "found": false
         },
         {
-          "source": "Amazonia",
-          "target": "user",
+          "source": "freshwater tank",
+          "target": "community tank",
           "found": false
         },
         {
-          "source": "Cabomba",
-          "target": "user",
+          "source": "Water Wisteria",
+          "target": "community tank",
           "found": false
         },
         {
-          "source": "Cabomba",
-          "target": "aquarium",
+          "source": "Water Wisteria",
+          "target": "assistant",
           "found": false
         }
       ]
@@ -566,33 +566,33 @@
       "entities_stored": 18,
       "path_tests": [
         {
-          "source": "designer handbag",
+          "source": "H&M",
+          "target": "Mint",
+          "found": false
+        },
+        {
+          "source": "H&M",
           "target": "Personal Capital",
           "found": false
         },
         {
-          "source": "designer handbag",
-          "target": "spending habits",
+          "source": "Mint",
+          "target": "Personal Capital",
+          "found": true
+        },
+        {
+          "source": "Mint",
+          "target": "assistant",
           "found": true
         },
         {
           "source": "Personal Capital",
-          "target": "spending habits",
+          "target": "assistant",
           "found": true
         },
         {
           "source": "Personal Capital",
-          "target": "graphic tees",
-          "found": false
-        },
-        {
-          "source": "spending habits",
-          "target": "graphic tees",
-          "found": true
-        },
-        {
-          "source": "spending habits",
-          "target": "Microsoft Excel",
+          "target": "Google Sheets",
           "found": true
         }
       ]
@@ -600,38 +600,38 @@
     {
       "question_id": "28dc39ac",
       "question_type": "multi-session",
-      "entities_extracted": 39,
-      "relations_extracted": 29,
+      "entities_extracted": 40,
+      "relations_extracted": 28,
       "entities_stored": 20,
       "path_tests": [
         {
-          "source": "Rime",
-          "target": "The Witcher 3: Wild Hunt",
+          "source": "Ghost of Tsushima",
+          "target": "Inside",
           "found": false
         },
         {
-          "source": "Rime",
-          "target": "Guerrilla Games",
+          "source": "Ghost of Tsushima",
+          "target": "Japan",
+          "found": true
+        },
+        {
+          "source": "Inside",
+          "target": "Japan",
           "found": false
         },
         {
-          "source": "The Witcher 3: Wild Hunt",
-          "target": "Guerrilla Games",
+          "source": "Inside",
+          "target": "Contrast",
           "found": false
         },
         {
-          "source": "The Witcher 3: Wild Hunt",
-          "target": "Arthur Morgan",
+          "source": "Japan",
+          "target": "Contrast",
           "found": false
         },
         {
-          "source": "Guerrilla Games",
-          "target": "Arthur Morgan",
-          "found": false
-        },
-        {
-          "source": "Guerrilla Games",
-          "target": "Middle-earth: Shadow of Mordor",
+          "source": "Japan",
+          "target": "Aloy",
           "found": false
         }
       ]
@@ -640,9 +640,19 @@
       "question_id": "gpt4_2f8be40d",
       "question_type": "multi-session",
       "entities_extracted": 42,
-      "relations_extracted": 33,
+      "relations_extracted": 37,
       "entities_stored": 20,
       "path_tests": [
+        {
+          "source": "Emily",
+          "target": "Starved Rock State Park",
+          "found": false
+        },
+        {
+          "source": "Emily",
+          "target": "The Knot",
+          "found": false
+        },
         {
           "source": "Starved Rock State Park",
           "target": "The Knot",
@@ -650,27 +660,17 @@
         },
         {
           "source": "Starved Rock State Park",
-          "target": "Jen",
+          "target": "beachside estates",
           "found": false
         },
         {
           "source": "The Knot",
-          "target": "Jen",
+          "target": "beachside estates",
           "found": false
         },
         {
           "source": "The Knot",
-          "target": "user",
-          "found": false
-        },
-        {
-          "source": "Jen",
-          "target": "user",
-          "found": true
-        },
-        {
-          "source": "Jen",
-          "target": "Half Moon Bay",
+          "target": "Zion",
           "found": false
         }
       ]
@@ -678,39 +678,39 @@
     {
       "question_id": "2e6d26dc",
       "question_type": "multi-session",
-      "entities_extracted": 23,
+      "entities_extracted": 22,
       "relations_extracted": 24,
       "entities_stored": 20,
       "path_tests": [
         {
-          "source": "Lily",
-          "target": "user",
-          "found": true
-        },
-        {
-          "source": "Lily",
-          "target": "baby shower",
-          "found": true
-        },
-        {
-          "source": "user",
-          "target": "baby shower",
-          "found": true
-        },
-        {
-          "source": "user",
-          "target": "Personalization Mall",
-          "found": true
-        },
-        {
-          "source": "baby shower",
-          "target": "Personalization Mall",
+          "source": "Amazon",
+          "target": "Ava",
           "found": false
         },
         {
-          "source": "baby shower",
-          "target": "twin baby carriers",
+          "source": "Amazon",
+          "target": "aunt",
+          "found": false
+        },
+        {
+          "source": "Ava",
+          "target": "aunt",
           "found": true
+        },
+        {
+          "source": "Ava",
+          "target": "Google Keep",
+          "found": false
+        },
+        {
+          "source": "aunt",
+          "target": "Google Keep",
+          "found": false
+        },
+        {
+          "source": "aunt",
+          "target": "Rachel",
+          "found": false
         }
       ]
     },
@@ -718,37 +718,37 @@
       "question_id": "gpt4_15e38248",
       "question_type": "multi-session",
       "entities_extracted": 26,
-      "relations_extracted": 34,
+      "relations_extracted": 32,
       "entities_stored": 20,
       "path_tests": [
         {
-          "source": "kitchen table",
-          "target": "Society6",
+          "source": "Amazon",
+          "target": "Jonathan Adler",
           "found": false
         },
         {
-          "source": "kitchen table",
-          "target": "coffee table",
+          "source": "Amazon",
+          "target": "Casper",
+          "found": false
+        },
+        {
+          "source": "Jonathan Adler",
+          "target": "Casper",
+          "found": false
+        },
+        {
+          "source": "Jonathan Adler",
+          "target": "assistant",
           "found": true
         },
         {
-          "source": "Society6",
-          "target": "coffee table",
+          "source": "Casper",
+          "target": "assistant",
           "found": false
         },
         {
-          "source": "Society6",
-          "target": "HomeGoods",
-          "found": false
-        },
-        {
-          "source": "coffee table",
-          "target": "HomeGoods",
-          "found": false
-        },
-        {
-          "source": "coffee table",
-          "target": "Jonathan Adler",
+          "source": "Casper",
+          "target": "IKEA",
           "found": false
         }
       ]
@@ -756,39 +756,39 @@
     {
       "question_id": "88432d0a",
       "question_type": "multi-session",
-      "entities_extracted": 18,
-      "relations_extracted": 25,
-      "entities_stored": 18,
+      "entities_extracted": 19,
+      "relations_extracted": 24,
+      "entities_stored": 19,
       "path_tests": [
         {
-          "source": "convection setting",
-          "target": "all-purpose flour",
+          "source": "assistant",
+          "target": "dry brine method",
+          "found": true
+        },
+        {
+          "source": "assistant",
+          "target": "convection setting",
+          "found": false
+        },
+        {
+          "source": "dry brine method",
+          "target": "convection setting",
+          "found": false
+        },
+        {
+          "source": "dry brine method",
+          "target": "bread flour",
           "found": false
         },
         {
           "source": "convection setting",
-          "target": "water",
+          "target": "bread flour",
           "found": false
         },
         {
-          "source": "all-purpose flour",
-          "target": "water",
-          "found": true
-        },
-        {
-          "source": "all-purpose flour",
-          "target": "bread recipe",
-          "found": true
-        },
-        {
-          "source": "water",
-          "target": "bread recipe",
-          "found": true
-        },
-        {
-          "source": "water",
-          "target": "assistant",
-          "found": true
+          "source": "convection setting",
+          "target": "whole wheat baguette",
+          "found": false
         }
       ]
     },
@@ -796,37 +796,37 @@
       "question_id": "80ec1f4f",
       "question_type": "multi-session",
       "entities_extracted": 39,
-      "relations_extracted": 35,
+      "relations_extracted": 34,
       "entities_stored": 20,
       "path_tests": [
         {
-          "source": "Drawabox",
-          "target": "Modern Art Museum",
+          "source": "James Parker",
+          "target": "dinosaur exhibit",
           "found": false
         },
         {
-          "source": "Drawabox",
-          "target": "user",
+          "source": "James Parker",
+          "target": "Dick Blick",
           "found": false
         },
         {
-          "source": "Modern Art Museum",
-          "target": "user",
-          "found": true
-        },
-        {
-          "source": "Modern Art Museum",
-          "target": "Yelp",
+          "source": "dinosaur exhibit",
+          "target": "Dick Blick",
           "found": false
         },
         {
-          "source": "user",
-          "target": "Yelp",
+          "source": "dinosaur exhibit",
+          "target": "Amazon",
           "found": false
         },
         {
-          "source": "user",
-          "target": "Google Maps",
+          "source": "Dick Blick",
+          "target": "Amazon",
+          "found": false
+        },
+        {
+          "source": "Dick Blick",
+          "target": "National Endowment for the Arts",
           "found": false
         }
       ]
@@ -834,38 +834,38 @@
     {
       "question_id": "d23cf73b",
       "question_type": "multi-session",
-      "entities_extracted": 41,
-      "relations_extracted": 39,
+      "entities_extracted": 40,
+      "relations_extracted": 37,
       "entities_stored": 20,
       "path_tests": [
         {
-          "source": "Indian cuisine",
-          "target": "Korean bibimbap",
+          "source": "niter kibbeh",
+          "target": "Papri Chaat",
           "found": false
         },
         {
-          "source": "Indian cuisine",
-          "target": "meal prep",
+          "source": "niter kibbeh",
+          "target": "cooking class's online recipe library",
           "found": false
         },
         {
-          "source": "Korean bibimbap",
-          "target": "meal prep",
+          "source": "Papri Chaat",
+          "target": "cooking class's online recipe library",
           "found": false
         },
         {
-          "source": "Korean bibimbap",
-          "target": "Glad",
+          "source": "Papri Chaat",
+          "target": "Stasher",
           "found": false
         },
         {
-          "source": "meal prep",
-          "target": "Glad",
+          "source": "cooking class's online recipe library",
+          "target": "Stasher",
           "found": false
         },
         {
-          "source": "meal prep",
-          "target": "Japanese teriyaki chicken",
+          "source": "cooking class's online recipe library",
+          "target": "dinner party",
           "found": false
         }
       ]
@@ -873,38 +873,38 @@
     {
       "question_id": "gpt4_7fce9456",
       "question_type": "multi-session",
-      "entities_extracted": 38,
-      "relations_extracted": 38,
+      "entities_extracted": 26,
+      "relations_extracted": 27,
       "entities_stored": 20,
       "path_tests": [
         {
-          "source": "Home Inspection Report",
-          "target": "Cedar Creek",
+          "source": "2-bedroom condo",
+          "target": "American Home Shield",
           "found": false
         },
         {
-          "source": "Home Inspection Report",
-          "target": "2-bedroom condo",
+          "source": "2-bedroom condo",
+          "target": "Deed",
           "found": true
         },
         {
-          "source": "Cedar Creek",
-          "target": "2-bedroom condo",
+          "source": "American Home Shield",
+          "target": "Deed",
           "found": false
         },
         {
-          "source": "Cedar Creek",
-          "target": "home warranty",
+          "source": "American Home Shield",
+          "target": "assistant",
           "found": false
         },
         {
-          "source": "2-bedroom condo",
-          "target": "home warranty",
-          "found": false
+          "source": "Deed",
+          "target": "assistant",
+          "found": true
         },
         {
-          "source": "2-bedroom condo",
-          "target": "user",
+          "source": "Deed",
+          "target": "mortgage",
           "found": true
         }
       ]
@@ -912,39 +912,39 @@
     {
       "question_id": "d682f1a2",
       "question_type": "multi-session",
-      "entities_extracted": 12,
-      "relations_extracted": 18,
-      "entities_stored": 12,
+      "entities_extracted": 11,
+      "relations_extracted": 14,
+      "entities_stored": 11,
       "path_tests": [
         {
-          "source": "Quinoa and Black Bean Salad",
-          "target": "overnight oats",
-          "found": true
-        },
-        {
-          "source": "Quinoa and Black Bean Salad",
-          "target": "Uber Eats",
-          "found": true
-        },
-        {
-          "source": "overnight oats",
-          "target": "Uber Eats",
-          "found": true
-        },
-        {
-          "source": "overnight oats",
-          "target": "healthy recipe ideas",
-          "found": true
-        },
-        {
-          "source": "Uber Eats",
-          "target": "healthy recipe ideas",
-          "found": true
-        },
-        {
-          "source": "Uber Eats",
+          "source": "Fresh Fusion",
           "target": "assistant",
           "found": false
+        },
+        {
+          "source": "Fresh Fusion",
+          "target": "healthy recipe ideas",
+          "found": true
+        },
+        {
+          "source": "assistant",
+          "target": "healthy recipe ideas",
+          "found": true
+        },
+        {
+          "source": "assistant",
+          "target": "Domino's Pizza",
+          "found": false
+        },
+        {
+          "source": "healthy recipe ideas",
+          "target": "Domino's Pizza",
+          "found": true
+        },
+        {
+          "source": "healthy recipe ideas",
+          "target": "Uber Eats",
+          "found": true
         }
       ]
     },
@@ -952,37 +952,37 @@
       "question_id": "7024f17c",
       "question_type": "multi-session",
       "entities_extracted": 32,
-      "relations_extracted": 33,
+      "relations_extracted": 35,
       "entities_stored": 20,
       "path_tests": [
         {
-          "source": "Yoga International",
-          "target": "user",
+          "source": "assistant",
+          "target": "Habitica",
           "found": false
         },
         {
-          "source": "Yoga International",
-          "target": "Yelp",
-          "found": false
-        },
-        {
-          "source": "user",
-          "target": "Yelp",
-          "found": false
-        },
-        {
-          "source": "user",
-          "target": "workout log",
-          "found": false
-        },
-        {
-          "source": "Yelp",
-          "target": "workout log",
-          "found": false
-        },
-        {
-          "source": "Yelp",
+          "source": "assistant",
           "target": "Fantastical",
+          "found": false
+        },
+        {
+          "source": "Habitica",
+          "target": "Fantastical",
+          "found": false
+        },
+        {
+          "source": "Habitica",
+          "target": "Google Search",
+          "found": false
+        },
+        {
+          "source": "Fantastical",
+          "target": "Google Search",
+          "found": false
+        },
+        {
+          "source": "Fantastical",
+          "target": "Yelp",
           "found": false
         }
       ]
@@ -991,76 +991,76 @@
       "question_id": "gpt4_5501fe77",
       "question_type": "multi-session",
       "entities_extracted": 19,
-      "relations_extracted": 24,
+      "relations_extracted": 23,
       "entities_stored": 19,
       "path_tests": [
         {
-          "source": "social media strategy",
-          "target": "Twitter",
+          "source": "Instagram",
+          "target": "website",
           "found": true
         },
         {
-          "source": "social media strategy",
-          "target": "user",
+          "source": "Instagram",
+          "target": "assistant",
           "found": true
         },
         {
-          "source": "Twitter",
-          "target": "user",
+          "source": "website",
+          "target": "assistant",
           "found": true
         },
         {
-          "source": "Twitter",
-          "target": "Hootsuite",
-          "found": false
-        },
-        {
-          "source": "user",
-          "target": "Hootsuite",
-          "found": false
-        },
-        {
-          "source": "user",
+          "source": "website",
           "target": "Buffer",
           "found": false
+        },
+        {
+          "source": "assistant",
+          "target": "Buffer",
+          "found": false
+        },
+        {
+          "source": "assistant",
+          "target": "social media strategy",
+          "found": true
         }
       ]
     },
     {
       "question_id": "gpt4_2ba83207",
       "question_type": "multi-session",
-      "entities_extracted": 15,
+      "entities_extracted": 14,
       "relations_extracted": 22,
-      "entities_stored": 15,
+      "entities_stored": 14,
       "path_tests": [
         {
-          "source": "Trader Joe's",
-          "target": "chicken breast",
+          "source": "sustainable shopping",
+          "target": "meal planning",
           "found": true
         },
         {
-          "source": "Trader Joe's",
-          "target": "ground beef",
+          "source": "sustainable shopping",
+          "target": "Walmart",
           "found": true
         },
         {
-          "source": "chicken breast",
-          "target": "ground beef",
+          "source": "meal planning",
+          "target": "Walmart",
           "found": true
         },
         {
-          "source": "chicken breast",
-          "target": "Chicken Fajitas",
+          "source": "meal planning",
+          "target": "Spaghetti Bolognese",
           "found": true
         },
         {
-          "source": "ground beef",
-          "target": "Chicken Fajitas",
+          "source": "Walmart",
+          "target": "Spaghetti Bolognese",
           "found": true
         },
         {
-          "source": "ground beef",
-          "target": "American-style meals",
+          "source": "Walmart",
+          "target": "assistant",
           "found": true
         }
       ]
@@ -1073,33 +1073,33 @@
       "entities_stored": 20,
       "path_tests": [
         {
-          "source": "Honolua Bay",
+          "source": "Japan",
+          "target": "Booking.com",
+          "found": true
+        },
+        {
+          "source": "Japan",
+          "target": "Private rooms",
+          "found": true
+        },
+        {
+          "source": "Booking.com",
+          "target": "Private rooms",
+          "found": true
+        },
+        {
+          "source": "Booking.com",
+          "target": "Maui",
+          "found": false
+        },
+        {
+          "source": "Private rooms",
+          "target": "Maui",
+          "found": false
+        },
+        {
+          "source": "Private rooms",
           "target": "Haleakala National Park",
-          "found": false
-        },
-        {
-          "source": "Honolua Bay",
-          "target": "Iao Valley Trail",
-          "found": false
-        },
-        {
-          "source": "Haleakala National Park",
-          "target": "Iao Valley Trail",
-          "found": false
-        },
-        {
-          "source": "Haleakala National Park",
-          "target": "Maui Gold Card",
-          "found": false
-        },
-        {
-          "source": "Iao Valley Trail",
-          "target": "Maui Gold Card",
-          "found": false
-        },
-        {
-          "source": "Iao Valley Trail",
-          "target": "Japan-Guide.com",
           "found": false
         }
       ]
@@ -1107,38 +1107,38 @@
     {
       "question_id": "2ce6a0f2",
       "question_type": "multi-session",
-      "entities_extracted": 33,
-      "relations_extracted": 31,
+      "entities_extracted": 31,
+      "relations_extracted": 33,
       "entities_stored": 20,
       "path_tests": [
         {
-          "source": "Schmincke",
-          "target": "Grumbacher",
+          "source": "Amazon",
+          "target": "Instagram",
           "found": false
         },
         {
-          "source": "Schmincke",
-          "target": "Art Afternoon",
+          "source": "Amazon",
+          "target": "Daniel Smith",
           "found": false
         },
         {
-          "source": "Grumbacher",
-          "target": "Art Afternoon",
+          "source": "Instagram",
+          "target": "Daniel Smith",
           "found": false
         },
         {
-          "source": "Grumbacher",
-          "target": "Twitter",
+          "source": "Instagram",
+          "target": "Princeton",
           "found": false
         },
         {
-          "source": "Art Afternoon",
-          "target": "Twitter",
+          "source": "Daniel Smith",
+          "target": "Princeton",
           "found": false
         },
         {
-          "source": "Art Afternoon",
-          "target": "Dick Blick Art Materials",
+          "source": "Daniel Smith",
+          "target": "Golden",
           "found": false
         }
       ]
@@ -1147,37 +1147,37 @@
       "question_id": "gpt4_d12ceb0e",
       "question_type": "multi-session",
       "entities_extracted": 35,
-      "relations_extracted": 44,
+      "relations_extracted": 43,
       "entities_stored": 20,
       "path_tests": [
         {
-          "source": "Project Management",
-          "target": "grandma",
+          "source": "Resistance Band Exercises",
+          "target": "assistant",
           "found": true
         },
         {
-          "source": "Project Management",
-          "target": "user",
-          "found": true
+          "source": "Resistance Band Exercises",
+          "target": "Cardio",
+          "found": false
         },
         {
-          "source": "grandma",
-          "target": "user",
-          "found": true
+          "source": "assistant",
+          "target": "Cardio",
+          "found": false
         },
         {
-          "source": "grandma",
-          "target": "Healthcare Administration",
-          "found": true
+          "source": "assistant",
+          "target": "Information Technology",
+          "found": false
         },
         {
-          "source": "user",
-          "target": "Healthcare Administration",
-          "found": true
+          "source": "Cardio",
+          "target": "Information Technology",
+          "found": false
         },
         {
-          "source": "user",
-          "target": "Light Weightlifting",
+          "source": "Cardio",
+          "target": "Digital Marketing",
           "found": false
         }
       ]
@@ -1185,38 +1185,38 @@
     {
       "question_id": "00ca467f",
       "question_type": "multi-session",
-      "entities_extracted": 22,
+      "entities_extracted": 21,
       "relations_extracted": 25,
       "entities_stored": 20,
       "path_tests": [
         {
-          "source": "throat coat tea",
-          "target": "EMG test",
-          "found": false
-        },
-        {
-          "source": "throat coat tea",
+          "source": "steam inhalation",
           "target": "primary care physician",
           "found": false
         },
         {
-          "source": "EMG test",
-          "target": "primary care physician",
-          "found": true
+          "source": "steam inhalation",
+          "target": "antibiotic",
+          "found": false
         },
         {
-          "source": "EMG test",
-          "target": "Dr. Thompson",
+          "source": "primary care physician",
+          "target": "antibiotic",
           "found": true
         },
         {
           "source": "primary care physician",
-          "target": "Dr. Thompson",
-          "found": true
+          "target": "eucalyptus oil",
+          "found": false
         },
         {
-          "source": "primary care physician",
-          "target": "user",
+          "source": "antibiotic",
+          "target": "eucalyptus oil",
+          "found": false
+        },
+        {
+          "source": "antibiotic",
+          "target": "Dr. Thompson",
           "found": true
         }
       ]
@@ -1224,38 +1224,38 @@
     {
       "question_id": "b3c15d39",
       "question_type": "multi-session",
-      "entities_extracted": 18,
-      "relations_extracted": 17,
-      "entities_stored": 18,
+      "entities_extracted": 17,
+      "relations_extracted": 16,
+      "entities_stored": 17,
       "path_tests": [
         {
-          "source": "landscape photography",
-          "target": "Seagate",
+          "source": "camera bag",
+          "target": "landscape photography",
+          "found": false
+        },
+        {
+          "source": "camera bag",
+          "target": "photography",
           "found": false
         },
         {
           "source": "landscape photography",
-          "target": "hike",
-          "found": false
+          "target": "photography",
+          "found": true
         },
         {
-          "source": "Seagate",
-          "target": "hike",
-          "found": false
-        },
-        {
-          "source": "Seagate",
-          "target": "G-Technology",
-          "found": false
-        },
-        {
-          "source": "hike",
-          "target": "G-Technology",
-          "found": false
-        },
-        {
-          "source": "hike",
+          "source": "landscape photography",
           "target": "tripod",
+          "found": false
+        },
+        {
+          "source": "photography",
+          "target": "tripod",
+          "found": false
+        },
+        {
+          "source": "photography",
+          "target": "assistant",
           "found": false
         }
       ]
@@ -1264,37 +1264,37 @@
       "question_id": "gpt4_31ff4165",
       "question_type": "multi-session",
       "entities_extracted": 20,
-      "relations_extracted": 24,
+      "relations_extracted": 22,
       "entities_stored": 20,
       "path_tests": [
         {
-          "source": "HearingDirect",
-          "target": "Phonak",
+          "source": "Amazon",
+          "target": "Fitbit Versa 3",
           "found": false
         },
         {
-          "source": "HearingDirect",
-          "target": "user",
+          "source": "Amazon",
+          "target": "assistant",
           "found": false
         },
         {
-          "source": "Phonak",
-          "target": "user",
-          "found": true
+          "source": "Fitbit Versa 3",
+          "target": "assistant",
+          "found": false
         },
         {
-          "source": "Phonak",
-          "target": "size 13 batteries",
-          "found": true
+          "source": "Fitbit Versa 3",
+          "target": "BatteryClub",
+          "found": false
         },
         {
-          "source": "user",
-          "target": "size 13 batteries",
-          "found": true
+          "source": "assistant",
+          "target": "BatteryClub",
+          "found": false
         },
         {
-          "source": "user",
-          "target": "guided breathing sessions",
+          "source": "assistant",
+          "target": "fitness goals",
           "found": true
         }
       ]
@@ -1302,39 +1302,39 @@
     {
       "question_id": "eeda8a6d",
       "question_type": "multi-session",
-      "entities_extracted": 18,
-      "relations_extracted": 23,
-      "entities_stored": 18,
+      "entities_extracted": 16,
+      "relations_extracted": 22,
+      "entities_stored": 16,
       "path_tests": [
         {
-          "source": "20-gallon tank",
-          "target": "golden honey gouramis",
-          "found": true
-        },
-        {
-          "source": "20-gallon tank",
-          "target": "Dwarf Hairgrass",
-          "found": true
-        },
-        {
-          "source": "golden honey gouramis",
-          "target": "Dwarf Hairgrass",
-          "found": true
-        },
-        {
-          "source": "golden honey gouramis",
+          "source": "dwarf shrimp",
           "target": "Java Moss",
-          "found": true
-        },
-        {
-          "source": "Dwarf Hairgrass",
-          "target": "Java Moss",
-          "found": true
-        },
-        {
-          "source": "Dwarf Hairgrass",
-          "target": "harlequin rasboras",
           "found": false
+        },
+        {
+          "source": "dwarf shrimp",
+          "target": "10-gallon tank",
+          "found": false
+        },
+        {
+          "source": "Java Moss",
+          "target": "10-gallon tank",
+          "found": false
+        },
+        {
+          "source": "Java Moss",
+          "target": "pleco catfish",
+          "found": true
+        },
+        {
+          "source": "10-gallon tank",
+          "target": "pleco catfish",
+          "found": false
+        },
+        {
+          "source": "10-gallon tank",
+          "target": "betta fish",
+          "found": true
         }
       ]
     },
@@ -1346,33 +1346,33 @@
       "entities_stored": 20,
       "path_tests": [
         {
-          "source": "push-ups",
-          "target": "Sweat Session",
+          "source": "Linkin Park",
+          "target": "Imagine Dragons",
           "found": false
         },
         {
-          "source": "push-ups",
-          "target": "Kanye West",
+          "source": "Linkin Park",
+          "target": "Fitness Frenzy",
           "found": false
         },
         {
-          "source": "Sweat Session",
-          "target": "Kanye West",
+          "source": "Imagine Dragons",
+          "target": "Fitness Frenzy",
+          "found": true
+        },
+        {
+          "source": "Imagine Dragons",
+          "target": "dumbbell exercises",
           "found": false
         },
         {
-          "source": "Sweat Session",
-          "target": "Cardio Crush",
+          "source": "Fitness Frenzy",
+          "target": "dumbbell exercises",
           "found": false
         },
         {
-          "source": "Kanye West",
-          "target": "Cardio Crush",
-          "found": false
-        },
-        {
-          "source": "Kanye West",
-          "target": "user",
+          "source": "Fitness Frenzy",
+          "target": "assistant",
           "found": false
         }
       ]
@@ -1380,39 +1380,39 @@
     {
       "question_id": "60bf93ed",
       "question_type": "multi-session",
-      "entities_extracted": 20,
-      "relations_extracted": 21,
-      "entities_stored": 20,
+      "entities_extracted": 18,
+      "relations_extracted": 18,
+      "entities_stored": 18,
       "path_tests": [
         {
-          "source": "Microsoft",
-          "target": "laptop backpack",
+          "source": "Amazon",
+          "target": "Razer Viper Mini",
           "found": false
         },
         {
-          "source": "Microsoft",
-          "target": "Logitech M185",
+          "source": "Amazon",
+          "target": "rechargeable battery",
           "found": false
         },
         {
-          "source": "laptop backpack",
-          "target": "Logitech M185",
+          "source": "Razer Viper Mini",
+          "target": "rechargeable battery",
           "found": false
         },
         {
-          "source": "laptop backpack",
-          "target": "Arc Mouse",
+          "source": "Razer Viper Mini",
+          "target": "Logitech G502 Lightspeed",
+          "found": true
+        },
+        {
+          "source": "rechargeable battery",
+          "target": "Logitech G502 Lightspeed",
           "found": false
         },
         {
-          "source": "Logitech M185",
-          "target": "Arc Mouse",
-          "found": false
-        },
-        {
-          "source": "Logitech M185",
-          "target": "Razer DeathAdder Elite",
-          "found": false
+          "source": "rechargeable battery",
+          "target": "MX Master 3",
+          "found": true
         }
       ]
     },
@@ -1420,37 +1420,37 @@
       "question_id": "9d25d4e0",
       "question_type": "multi-session",
       "entities_extracted": 23,
-      "relations_extracted": 25,
+      "relations_extracted": 24,
       "entities_stored": 20,
       "path_tests": [
         {
-          "source": "Weiman Jewelry Cleaner",
+          "source": "diamonds",
+          "target": "Hagerty Silver Dip",
+          "found": true
+        },
+        {
+          "source": "diamonds",
+          "target": "assistant",
+          "found": true
+        },
+        {
+          "source": "Hagerty Silver Dip",
+          "target": "assistant",
+          "found": true
+        },
+        {
+          "source": "Hagerty Silver Dip",
+          "target": "gemstones",
+          "found": true
+        },
+        {
+          "source": "assistant",
+          "target": "gemstones",
+          "found": true
+        },
+        {
+          "source": "assistant",
           "target": "jeweler",
-          "found": false
-        },
-        {
-          "source": "Weiman Jewelry Cleaner",
-          "target": "user",
-          "found": false
-        },
-        {
-          "source": "jeweler",
-          "target": "user",
-          "found": true
-        },
-        {
-          "source": "jeweler",
-          "target": "engagement ring",
-          "found": true
-        },
-        {
-          "source": "user",
-          "target": "engagement ring",
-          "found": true
-        },
-        {
-          "source": "user",
-          "target": "ultrasonic cleaners",
           "found": false
         }
       ]
@@ -1459,37 +1459,37 @@
       "question_id": "129d1232",
       "question_type": "multi-session",
       "entities_extracted": 15,
-      "relations_extracted": 18,
+      "relations_extracted": 16,
       "entities_stored": 15,
       "path_tests": [
         {
-          "source": "The True Cost",
-          "target": "Amy Korst",
-          "found": false
-        },
-        {
-          "source": "The True Cost",
-          "target": "Racing Extinction",
-          "found": false
-        },
-        {
           "source": "Amy Korst",
           "target": "Racing Extinction",
           "found": false
         },
         {
           "source": "Amy Korst",
-          "target": "zero-waste living",
+          "target": "assistant",
           "found": false
         },
         {
           "source": "Racing Extinction",
-          "target": "zero-waste living",
+          "target": "assistant",
           "found": false
         },
         {
           "source": "Racing Extinction",
           "target": "The Zero Waste Collective",
+          "found": false
+        },
+        {
+          "source": "assistant",
+          "target": "The Zero Waste Collective",
+          "found": false
+        },
+        {
+          "source": "assistant",
+          "target": "The Zero Waste Lifestyle",
           "found": false
         }
       ]
@@ -1498,37 +1498,37 @@
       "question_id": "60472f9c",
       "question_type": "multi-session",
       "entities_extracted": 49,
-      "relations_extracted": 39,
+      "relations_extracted": 46,
       "entities_stored": 20,
       "path_tests": [
         {
-          "source": "Microsoft",
-          "target": "Scopus",
+          "source": "MIMIC-III Critical Care Database",
+          "target": "breast cancer",
           "found": false
         },
         {
-          "source": "Microsoft",
-          "target": "Cornell University Library",
+          "source": "MIMIC-III Critical Care Database",
+          "target": "assistant",
           "found": false
         },
         {
-          "source": "Scopus",
-          "target": "Cornell University Library",
+          "source": "breast cancer",
+          "target": "assistant",
           "found": false
         },
         {
-          "source": "Scopus",
-          "target": "AI in medical diagnosis",
+          "source": "breast cancer",
+          "target": "Kaggle",
           "found": false
         },
         {
-          "source": "Cornell University Library",
-          "target": "AI in medical diagnosis",
+          "source": "assistant",
+          "target": "Kaggle",
           "found": false
         },
         {
-          "source": "Cornell University Library",
-          "target": "IEEE Xplore",
+          "source": "assistant",
+          "target": "Centers for Medicare and Medicaid Services",
           "found": false
         }
       ]
@@ -1541,72 +1541,72 @@
       "entities_stored": 20,
       "path_tests": [
         {
-          "source": "B.B. King",
-          "target": "blues",
-          "found": false
-        },
-        {
-          "source": "B.B. King",
-          "target": "Pearl Export",
-          "found": false
-        },
-        {
-          "source": "blues",
-          "target": "Pearl Export",
-          "found": false
-        },
-        {
-          "source": "blues",
-          "target": "user",
-          "found": false
-        },
-        {
-          "source": "Pearl Export",
-          "target": "user",
-          "found": false
-        },
-        {
-          "source": "Pearl Export",
-          "target": "Pearl Drums",
+          "source": "Pasadena",
+          "target": "violin",
           "found": true
+        },
+        {
+          "source": "Pasadena",
+          "target": "Derek and the Dominos",
+          "found": false
+        },
+        {
+          "source": "violin",
+          "target": "Derek and the Dominos",
+          "found": false
+        },
+        {
+          "source": "violin",
+          "target": "Craigslist",
+          "found": false
+        },
+        {
+          "source": "Derek and the Dominos",
+          "target": "Craigslist",
+          "found": false
+        },
+        {
+          "source": "Derek and the Dominos",
+          "target": "B.B. King",
+          "found": false
         }
       ]
     },
     {
       "question_id": "a9f6b44c",
       "question_type": "multi-session",
-      "entities_extracted": 42,
-      "relations_extracted": 37,
+      "entities_extracted": 40,
+      "relations_extracted": 35,
       "entities_stored": 20,
       "path_tests": [
         {
-          "source": "bike paths",
-          "target": "South Bay Coastal Ride",
-          "found": false
+          "source": "Highway 1",
+          "target": "Olema",
+          "found": true
         },
         {
-          "source": "bike paths",
-          "target": "April",
-          "found": false
-        },
-        {
-          "source": "South Bay Coastal Ride",
-          "target": "April",
-          "found": false
-        },
-        {
-          "source": "South Bay Coastal Ride",
+          "source": "Highway 1",
           "target": "February 20th",
           "found": false
         },
         {
-          "source": "April",
+          "source": "Olema",
           "target": "February 20th",
           "found": false
         },
         {
-          "source": "April",
-          "target": "bumpy trails",
+          "source": "Olema",
+          "target": "assistant",
+          "found": false
+        },
+        {
+          "source": "February 20th",
+          "target": "assistant",
+          "found": false
+        },
+        {
+          "source": "February 20th",
+          "target": "Mountain View",
           "found": false
         }
       ]
@@ -1619,34 +1619,34 @@
       "entities_stored": 20,
       "path_tests": [
         {
-          "source": "Twitter",
-          "target": "exercise",
+          "source": "Instagram",
+          "target": "assistant",
           "found": false
         },
         {
-          "source": "Twitter",
-          "target": "user",
+          "source": "Instagram",
+          "target": "American Red Cross",
           "found": false
         },
         {
-          "source": "exercise",
-          "target": "user",
-          "found": true
+          "source": "assistant",
+          "target": "American Red Cross",
+          "found": false
         },
         {
-          "source": "exercise",
-          "target": "Run for Hunger",
-          "found": true
+          "source": "assistant",
+          "target": "Sierra Club",
+          "found": false
         },
         {
-          "source": "user",
-          "target": "Run for Hunger",
-          "found": true
+          "source": "American Red Cross",
+          "target": "Sierra Club",
+          "found": false
         },
         {
-          "source": "user",
-          "target": "local children's hospital",
-          "found": true
+          "source": "American Red Cross",
+          "target": "LinkedIn Volunteer Marketplace",
+          "found": false
         }
       ]
     },
@@ -1654,76 +1654,76 @@
       "question_id": "5a7937c8",
       "question_type": "multi-session",
       "entities_extracted": 18,
-      "relations_extracted": 19,
+      "relations_extracted": 18,
       "entities_stored": 18,
       "path_tests": [
+        {
+          "source": "holiday food drive",
+          "target": "Christmas Eve",
+          "found": false
+        },
+        {
+          "source": "holiday food drive",
+          "target": "faith",
+          "found": false
+        },
+        {
+          "source": "Christmas Eve",
+          "target": "faith",
+          "found": false
+        },
         {
           "source": "Christmas Eve",
           "target": "pantries",
           "found": false
         },
         {
-          "source": "Christmas Eve",
-          "target": "holiday season",
+          "source": "faith",
+          "target": "pantries",
           "found": false
         },
         {
-          "source": "pantries",
-          "target": "holiday season",
-          "found": false
-        },
-        {
-          "source": "pantries",
-          "target": "book of Matthew",
-          "found": false
-        },
-        {
-          "source": "holiday season",
-          "target": "book of Matthew",
-          "found": false
-        },
-        {
-          "source": "holiday season",
-          "target": "God",
-          "found": false
+          "source": "faith",
+          "target": "assistant",
+          "found": true
         }
       ]
     },
     {
       "question_id": "gpt4_ab202e7f",
       "question_type": "multi-session",
-      "entities_extracted": 33,
-      "relations_extracted": 35,
+      "entities_extracted": 32,
+      "relations_extracted": 34,
       "entities_stored": 20,
       "path_tests": [
         {
-          "source": "Korean-Style Beef and Kimchi Stir-Fry",
-          "target": "faucet",
+          "source": "Stuffed Bell Peppers",
+          "target": "Grilled Veggie Wrap",
           "found": true
         },
         {
-          "source": "Korean-Style Beef and Kimchi Stir-Fry",
-          "target": "Lemongrass and Chili Stir-Fry with Tofu and Vegetables",
+          "source": "Stuffed Bell Peppers",
+          "target": "faucet",
+          "found": false
+        },
+        {
+          "source": "Grilled Veggie Wrap",
+          "target": "faucet",
+          "found": false
+        },
+        {
+          "source": "Grilled Veggie Wrap",
+          "target": "Breakfast Quesadilla",
+          "found": true
+        },
+        {
+          "source": "faucet",
+          "target": "Breakfast Quesadilla",
           "found": false
         },
         {
           "source": "faucet",
-          "target": "Lemongrass and Chili Stir-Fry with Tofu and Vegetables",
-          "found": false
-        },
-        {
-          "source": "faucet",
-          "target": "Baechu Kimchi",
-          "found": false
-        },
-        {
-          "source": "Lemongrass and Chili Stir-Fry with Tofu and Vegetables",
-          "target": "Baechu Kimchi",
-          "found": false
-        },
-        {
-          "source": "Lemongrass and Chili Stir-Fry with Tofu and Vegetables",
-          "target": "Lentil and Veggie Curry",
+          "target": "assistant",
           "found": false
         }
       ]
@@ -1736,33 +1736,33 @@
       "entities_stored": 20,
       "path_tests": [
         {
-          "source": "Halloween Horror Nights",
-          "target": "Universal Studios Hollywood",
+          "source": "The Great Pumpkin Patch",
+          "target": "Monster Mash Bash",
           "found": true
         },
         {
-          "source": "Halloween Horror Nights",
-          "target": "Mickey's Halloween Party",
-          "found": false
+          "source": "The Great Pumpkin Patch",
+          "target": "Pumpkin Patch",
+          "found": true
         },
         {
-          "source": "Universal Studios Hollywood",
-          "target": "Mickey's Halloween Party",
-          "found": false
+          "source": "Monster Mash Bash",
+          "target": "Pumpkin Patch",
+          "found": true
         },
         {
-          "source": "Universal Studios Hollywood",
-          "target": "Cobweb Cake Pops",
-          "found": false
+          "source": "Monster Mash Bash",
+          "target": "Peanuts Costume Contest",
+          "found": true
         },
         {
-          "source": "Mickey's Halloween Party",
-          "target": "Cobweb Cake Pops",
-          "found": false
+          "source": "Pumpkin Patch",
+          "target": "Peanuts Costume Contest",
+          "found": true
         },
         {
-          "source": "Mickey's Halloween Party",
-          "target": "Ghostly Marshmallow Treats",
+          "source": "Pumpkin Patch",
+          "target": "California",
           "found": false
         }
       ]
@@ -1771,37 +1771,37 @@
       "question_id": "gpt4_731e37d7",
       "question_type": "multi-session",
       "entities_extracted": 48,
-      "relations_extracted": 42,
+      "relations_extracted": 34,
       "entities_stored": 20,
       "path_tests": [
         {
-          "source": "Lightroom",
-          "target": "Writing.com",
+          "source": "assistant",
+          "target": "SEO",
           "found": false
         },
         {
-          "source": "Lightroom",
-          "target": "The Creative Penn",
+          "source": "assistant",
+          "target": "Digital Camera World",
           "found": false
         },
         {
-          "source": "Writing.com",
-          "target": "The Creative Penn",
+          "source": "SEO",
+          "target": "Digital Camera World",
           "found": false
         },
         {
-          "source": "Writing.com",
-          "target": "The Portfolio Life",
+          "source": "SEO",
+          "target": "industry expert",
           "found": false
         },
         {
-          "source": "The Creative Penn",
-          "target": "The Portfolio Life",
+          "source": "Digital Camera World",
+          "target": "industry expert",
           "found": false
         },
         {
-          "source": "The Creative Penn",
-          "target": "Christopher Vogler",
+          "source": "Digital Camera World",
+          "target": "Fstoppers",
           "found": false
         }
       ]
@@ -1809,39 +1809,39 @@
     {
       "question_id": "edced276",
       "question_type": "multi-session",
-      "entities_extracted": 13,
-      "relations_extracted": 14,
-      "entities_stored": 13,
+      "entities_extracted": 14,
+      "relations_extracted": 16,
+      "entities_stored": 14,
       "path_tests": [
         {
-          "source": "Trail Wallet",
-          "target": "Europe",
+          "source": "family travel",
+          "target": "Budget Your Trip",
           "found": false
         },
         {
-          "source": "Trail Wallet",
-          "target": "New York City",
+          "source": "family travel",
+          "target": "Mint",
           "found": false
         },
         {
-          "source": "Europe",
-          "target": "New York City",
+          "source": "Budget Your Trip",
+          "target": "Mint",
           "found": true
         },
         {
-          "source": "Europe",
-          "target": "Budget Your Trip",
-          "found": false
+          "source": "Budget Your Trip",
+          "target": "Trail Wallet",
+          "found": true
         },
         {
-          "source": "New York City",
-          "target": "Budget Your Trip",
-          "found": false
+          "source": "Mint",
+          "target": "Trail Wallet",
+          "found": true
         },
         {
-          "source": "New York City",
+          "source": "Mint",
           "target": "assistant",
-          "found": false
+          "found": true
         }
       ]
     },
@@ -1849,37 +1849,37 @@
       "question_id": "10d9b85a",
       "question_type": "multi-session",
       "entities_extracted": 33,
-      "relations_extracted": 25,
+      "relations_extracted": 26,
       "entities_stored": 20,
       "path_tests": [
         {
-          "source": "normalization",
-          "target": "The Urban Planning and Development subreddit",
+          "source": "FutureLearn",
+          "target": "United Nations",
           "found": false
         },
         {
-          "source": "normalization",
-          "target": "University of Michigan",
+          "source": "FutureLearn",
+          "target": "Sustainable Development Goals (SDGs)",
           "found": false
         },
         {
-          "source": "The Urban Planning and Development subreddit",
-          "target": "University of Michigan",
+          "source": "United Nations",
+          "target": "Sustainable Development Goals (SDGs)",
+          "found": true
+        },
+        {
+          "source": "United Nations",
+          "target": "Dr. Richard W. Judd",
           "found": false
         },
         {
-          "source": "The Urban Planning and Development subreddit",
-          "target": "unit length normalization",
+          "source": "Sustainable Development Goals (SDGs)",
+          "target": "Dr. Richard W. Judd",
           "found": false
         },
         {
-          "source": "University of Michigan",
-          "target": "unit length normalization",
-          "found": false
-        },
-        {
-          "source": "University of Michigan",
-          "target": "Udemy",
+          "source": "Sustainable Development Goals (SDGs)",
+          "target": "k-NN",
           "found": false
         }
       ]
@@ -1887,38 +1887,38 @@
     {
       "question_id": "e3038f8c",
       "question_type": "multi-session",
-      "entities_extracted": 31,
+      "entities_extracted": 30,
       "relations_extracted": 24,
       "entities_stored": 20,
       "path_tests": [
         {
-          "source": "International Society of Appraisers",
+          "source": "To Kill a Mockingbird",
+          "target": "assistant",
+          "found": false
+        },
+        {
+          "source": "To Kill a Mockingbird",
           "target": "Vinyl Collector",
           "found": false
         },
         {
-          "source": "International Society of Appraisers",
-          "target": "ISA-appraisers.org",
+          "source": "assistant",
+          "target": "Vinyl Collector",
           "found": true
         },
         {
-          "source": "Vinyl Collector",
-          "target": "ISA-appraisers.org",
+          "source": "assistant",
+          "target": "rare figurines",
           "found": false
         },
         {
           "source": "Vinyl Collector",
-          "target": "The Conservation Center",
+          "target": "rare figurines",
           "found": false
         },
         {
-          "source": "ISA-appraisers.org",
-          "target": "The Conservation Center",
-          "found": false
-        },
-        {
-          "source": "ISA-appraisers.org",
-          "target": "American Society of Appraisers",
+          "source": "Vinyl Collector",
+          "target": "International Institute for Conservation of Historic and Artistic Works",
           "found": false
         }
       ]
@@ -1931,34 +1931,34 @@
       "entities_stored": 20,
       "path_tests": [
         {
-          "source": "Indian cuisine",
+          "source": "Homemade and Handmade Market",
+          "target": "assistant",
+          "found": false
+        },
+        {
+          "source": "Homemade and Handmade Market",
+          "target": "Herbal Teas",
+          "found": false
+        },
+        {
+          "source": "assistant",
+          "target": "Herbal Teas",
+          "found": true
+        },
+        {
+          "source": "assistant",
+          "target": "turmeric",
+          "found": false
+        },
+        {
+          "source": "Herbal Teas",
+          "target": "turmeric",
+          "found": false
+        },
+        {
+          "source": "Herbal Teas",
           "target": "Herbal Gift Baskets",
           "found": false
-        },
-        {
-          "source": "Indian cuisine",
-          "target": "sustainable living",
-          "found": false
-        },
-        {
-          "source": "Herbal Gift Baskets",
-          "target": "sustainable living",
-          "found": false
-        },
-        {
-          "source": "Herbal Gift Baskets",
-          "target": "ashwagandha",
-          "found": false
-        },
-        {
-          "source": "sustainable living",
-          "target": "ashwagandha",
-          "found": false
-        },
-        {
-          "source": "sustainable living",
-          "target": "user",
-          "found": true
         }
       ]
     }

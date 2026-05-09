@@ -1,54 +1,54 @@
 {
   "benchmark": "Plico Performance Micro-benchmarks",
-  "timestamp": "2026-05-09T10:25:11",
+  "timestamp": "2026-05-09T18:16:54",
   "host": "127.0.0.1",
   "port": 7878,
   "results": [
     {
       "operation": "cas_write",
       "count": 1000,
-      "qps": 101,
-      "latency_p50_ms": 9.38,
-      "latency_p95_ms": 12.1,
-      "latency_p99_ms": 19.74,
-      "total_time_s": 9.88
+      "qps": 36,
+      "latency_p50_ms": 28.73,
+      "latency_p95_ms": 36.21,
+      "latency_p99_ms": 41.4,
+      "total_time_s": 27.87
     },
     {
       "operation": "cas_read",
       "count": 1000,
-      "qps": 577,
-      "latency_p50_ms": 1.59,
-      "latency_p95_ms": 2.66,
-      "latency_p99_ms": 3.25,
-      "total_time_s": 1.73
+      "qps": 590,
+      "latency_p50_ms": 1.56,
+      "latency_p95_ms": 2.54,
+      "latency_p99_ms": 2.88,
+      "total_time_s": 1.7
     },
     {
       "operation": "search",
       "count": 200,
-      "qps": 87,
-      "latency_p50_ms": 11.16,
-      "latency_p95_ms": 14.22,
-      "latency_p99_ms": 15.42,
-      "total_time_s": 2.29
+      "qps": 37,
+      "latency_p50_ms": 26.88,
+      "latency_p95_ms": 37.16,
+      "latency_p99_ms": 40.1,
+      "total_time_s": 5.43
     },
     {
       "operation": "memory_store_recall",
       "store_count": 500,
       "recall_count": 200,
-      "store_qps": 559,
-      "store_p50_ms": 1.56,
-      "store_p95_ms": 2.94,
-      "recall_qps": 564,
-      "recall_p50_ms": 1.74,
-      "recall_p95_ms": 1.9
+      "store_qps": 631,
+      "store_p50_ms": 1.54,
+      "store_p95_ms": 2.24,
+      "recall_qps": 566,
+      "recall_p50_ms": 1.66,
+      "recall_p95_ms": 2.68
     },
     {
       "operation": "kg_operations",
       "add_node_count": 200,
       "add_edge_count": 0,
       "find_paths_count": 0,
-      "add_node_qps": 4990,
-      "add_node_p50_ms": 0.16,
+      "add_node_qps": 5195,
+      "add_node_p50_ms": 0.19,
       "add_edge_qps": 0,
       "add_edge_p50_ms": 0,
       "find_paths_p50_ms": 0,
