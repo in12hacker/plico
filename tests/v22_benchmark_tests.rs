@@ -23,6 +23,7 @@
 //! - F-8 (Token透明): Section 5 - token_estimate field, 100% visibility
 //! - Session (F-6): Section 3 - StartSession/EndSession lifecycle
 
+use std::sync::Arc;
 use plico::api::semantic::{ApiRequest, ApiResponse};
 use plico::kernel::AIKernel;
 use plico::memory::MemoryTier;
@@ -32,13 +33,14 @@ use tempfile::tempdir;
 // ── Test Infrastructure ────────────────────────────────────────────────────────
 
 /// Helper to create a kernel with stub embedding backend.
-fn make_kernel() -> (AIKernel, tempfile::TempDir) {
+fn make_kernel() -> (Arc<AIKernel>, tempfile::TempDir) {
     let _ = std::env::set_var("EMBEDDING_BACKEND", "stub");
     let _ = std::env::set_var("LLM_BACKEND", "stub");
-    let dir = tempdir().unwrap();
+    let dir = tempfile::tempdir().unwrap();
     let kernel = AIKernel::new(dir.path().to_path_buf()).expect("kernel init");
     (kernel, dir)
 }
+
 
 /// Helper to call API request and return response.
 fn call_api(kernel: &AIKernel, req: ApiRequest) -> ApiResponse {

@@ -20,12 +20,49 @@ use super::{SearchFilter, SearchHit, SearchIndexEntry, SearchIndexMeta, Semantic
 
 const INITIAL_CAPACITY: usize = 10_000;
 
+/// Pack f32 embedding into binary vector (sign-bit packing).
+/// Each f32 → 1 bit: positive → 1, negative/zero → 0.
+/// 768D f32 → 96 bytes binary.
+fn f32_to_binary(emb: &[f32]) -> Vec<u8> {
+    let nbytes = (emb.len() + 7) / 8;
+    let mut binary = vec![0u8; nbytes];
+    for (i, &v) in emb.iter().enumerate() {
+        if v > 0.0 {
+            binary[i / 8] |= 1 << (i % 8);
+        }
+    }
+    binary
+}
+
+/// Hamming distance between two binary vectors (count of differing bits).
+fn hamming_distance(a: &[u8], b: &[u8]) -> u32 {
+    a.iter()
+        .zip(b.iter())
+        .map(|(x, y)| (x ^ y).count_ones())
+        .sum()
+}
+
+/// Cosine similarity between two f32 vectors.
+fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
+    let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
+    let na: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
+    let nb: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
+    if na == 0.0 || nb == 0.0 {
+        0.0
+    } else {
+        dot / (na * nb)
+    }
+}
+
 pub struct HnswBackend {
     dim: usize,
     index: Index,
     entries: RwLock<HashMap<String, HnswEntry>>,
     key_to_cid: RwLock<HashMap<u64, String>>,
     next_id: AtomicU64,
+    /// Binary quantized vectors for fast Hamming coarse recall.
+    /// Rebuilt from f32 on restore — not persisted separately.
+    binary_index: RwLock<HashMap<String, Vec<u8>>>,
 }
 
 struct HnswEntry {
@@ -39,7 +76,7 @@ impl HnswBackend {
         let options = IndexOptions {
             dimensions: dim,
             metric: MetricKind::Cos,
-            quantization: ScalarKind::F16,
+            quantization: ScalarKind::I8,
             connectivity: 16,
             expansion_add: 256,
             expansion_search: 128,
@@ -56,6 +93,7 @@ impl HnswBackend {
             entries: RwLock::new(HashMap::new()),
             key_to_cid: RwLock::new(HashMap::new()),
             next_id: AtomicU64::new(1),
+            binary_index: RwLock::new(HashMap::new()),
         }
     }
 
@@ -104,8 +142,11 @@ impl SemanticSearch for HnswBackend {
             return;
         }
 
+        let binary = f32_to_binary(embedding);
+
         let mut entries = self.entries.write().unwrap();
         let mut key_to_cid = self.key_to_cid.write().unwrap();
+        let mut binary_index = self.binary_index.write().unwrap();
 
         if let Some(entry) = entries.get_mut(cid) {
             let _ = self.index.remove(entry.key);
@@ -129,15 +170,18 @@ impl SemanticSearch for HnswBackend {
                 },
             );
         }
+        binary_index.insert(cid.to_string(), binary);
     }
 
     fn delete(&self, cid: &str) {
         let mut entries = self.entries.write().unwrap();
         let mut key_to_cid = self.key_to_cid.write().unwrap();
+        let mut binary_index = self.binary_index.write().unwrap();
 
         if let Some(entry) = entries.remove(cid) {
             let _ = self.index.remove(entry.key);
             key_to_cid.remove(&entry.key);
+            binary_index.remove(cid);
             tracing::debug!("Deleted vector {} (key={})", cid, entry.key);
         }
     }
@@ -157,13 +201,65 @@ impl SemanticSearch for HnswBackend {
             return Vec::new();
         }
 
-        let key_to_cid = self.key_to_cid.read().unwrap();
+        let binary_index = self.binary_index.read().unwrap();
 
         let has_filter = !filter.require_tags.is_empty()
             || !filter.exclude_tags.is_empty()
             || filter.content_type.is_some()
             || filter.since.is_some()
             || filter.until.is_some();
+
+        // Two-stage search when binary index is available and dataset is large enough.
+        // Stage 1: Hamming distance on binary vectors for coarse top-K*10 recall.
+        // Stage 2: Exact cosine re-rank on f32 embeddings for final top-K.
+        // For small datasets (<100), skip binary stage — linear cosine is fast enough.
+        if !binary_index.is_empty() && entries.len() >= 100 {
+            let query_binary = f32_to_binary(query);
+            let recall_k = k * 10;
+
+            // Stage 1: Hamming coarse recall
+            let mut candidates: Vec<(&str, u32)> = binary_index
+                .iter()
+                .filter(|(cid, _)| {
+                    if has_filter {
+                        entries
+                            .get(*cid)
+                            .is_some_and(|e| filter.matches(&e.meta))
+                    } else {
+                        true
+                    }
+                })
+                .map(|(cid, bin)| (cid.as_str(), hamming_distance(&query_binary, bin)))
+                .collect();
+
+            candidates.sort_unstable_by_key(|(_, dist)| *dist);
+            candidates.truncate(recall_k);
+
+            // Stage 2: Exact cosine re-rank
+            let mut results: Vec<SearchHit> = candidates
+                .iter()
+                .filter_map(|(cid, _)| {
+                    let entry = entries.get(*cid)?;
+                    let score = cosine_similarity(query, &entry.embedding);
+                    Some(SearchHit {
+                        cid: cid.to_string(),
+                        score,
+                        meta: entry.meta.clone(),
+                    })
+                })
+                .collect();
+
+            results.sort_unstable_by(|a, b| {
+                b.score
+                    .partial_cmp(&a.score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+            results.truncate(k);
+            return results;
+        }
+
+        // Fallback: usearch HNSW for small datasets or when binary index is empty
+        let key_to_cid = self.key_to_cid.read().unwrap();
 
         let results = if has_filter {
             self.index.filtered_search(query, k, |key| {
@@ -275,6 +371,7 @@ impl SemanticSearch for HnswBackend {
 
         let mut entries = self.entries.write().unwrap();
         let mut key_to_cid = self.key_to_cid.write().unwrap();
+        let mut binary_index = self.binary_index.write().unwrap();
 
         for e in loaded {
             let key = self.next_id.fetch_add(1, Ordering::Relaxed);
@@ -283,7 +380,9 @@ impl SemanticSearch for HnswBackend {
                 continue;
             }
 
+            let binary = f32_to_binary(&e.embedding);
             key_to_cid.insert(key, e.cid.clone());
+            binary_index.insert(e.cid.clone(), binary);
             entries.insert(
                 e.cid.clone(),
                 HnswEntry {
@@ -301,7 +400,7 @@ impl SemanticSearch for HnswBackend {
             );
         }
 
-        tracing::info!("Restored {} HNSW index entries", count);
+        tracing::info!("Restored {} HNSW index entries (binary index rebuilt)", count);
         Ok(())
     }
 }
@@ -336,7 +435,7 @@ mod tests {
 
     fn sample_embedding(dim: usize, seed: f32) -> Vec<f32> {
         (0..dim)
-            .map(|i| (seed * (i + 1) as f32).sin().abs())
+            .map(|i| (seed * (i + 1) as f32).sin())
             .collect()
     }
 
@@ -557,5 +656,111 @@ mod tests {
         backend.persist_to(dir.path()).unwrap();
         let elapsed = t0.elapsed();
         assert!(elapsed.as_millis() < 500, "persist 1K vectors should take <500ms, got {}ms", elapsed.as_millis());
+    }
+
+    #[test]
+    fn test_binary_quantization_basic() {
+        // Positive values → 1 bit, negative/zero → 0 bit
+        let emb = vec![1.0, -1.0, 0.0, 0.5, -0.3, 2.0, -0.1, 0.0, 1.0];
+        let binary = f32_to_binary(&emb);
+        // Byte 0: bits 0-7 → [1,0,0,1,0,1,0,0] = 0b00101001 = 0x29
+        assert_eq!(binary[0], 0x29);
+        // Byte 1: bit 8 → [1] = 0x01
+        assert_eq!(binary[1], 0x01);
+
+        // Hamming distance: identical → 0
+        assert_eq!(hamming_distance(&binary, &binary), 0);
+
+        // All positive vs all negative
+        let all_pos = vec![1.0f32; 8];
+        let all_neg = vec![-1.0f32; 8];
+        let bp = f32_to_binary(&all_pos);
+        let bn = f32_to_binary(&all_neg);
+        assert_eq!(hamming_distance(&bp, &bn), 8);
+    }
+
+    #[test]
+    fn test_two_stage_search_recall() {
+        // Insert >100 vectors to trigger binary coarse recall path
+        let dim = 32;
+        let backend = HnswBackend::with_dim(dim);
+        let n = 200;
+        for i in 0..n {
+            let cid = format!("cid_{:04}", i);
+            backend.upsert(
+                &cid,
+                &sample_embedding(dim, i as f32 * 0.01 + 0.01),
+                make_meta(&cid, vec![]),
+            );
+        }
+        assert_eq!(backend.len(), n);
+
+        // Query with the same embedding as cid_0000
+        let query = sample_embedding(dim, 0.01);
+        let results = backend.search(&query, 5, &SearchFilter::default());
+        assert_eq!(results.len(), 5);
+        // First result should be cid_0000 (exact match)
+        assert_eq!(results[0].cid, "cid_0000");
+        assert!(results[0].score > 0.99, "exact match score should be ~1.0, got {}", results[0].score);
+        // Results should be sorted by score descending
+        for i in 1..results.len() {
+            assert!(results[i].score <= results[i - 1].score);
+        }
+    }
+
+    #[test]
+    fn test_binary_index_persistence_roundtrip() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let dim = 32;
+
+        {
+            let backend = HnswBackend::with_dim(dim);
+            for i in 0..150 {
+                let cid = format!("cid_{:04}", i);
+                backend.upsert(
+                    &cid,
+                    &sample_embedding(dim, i as f32 * 0.01 + 0.01),
+                    make_meta(&cid, vec![]),
+                );
+            }
+            backend.persist_to(dir.path()).unwrap();
+        }
+
+        {
+            let backend = HnswBackend::with_dim(dim);
+            backend.restore_from(dir.path()).unwrap();
+            assert_eq!(backend.len(), 150);
+
+            // Binary index should be rebuilt — verify two-stage search works
+            let query = sample_embedding(dim, 0.01);
+            let results = backend.search(&query, 5, &SearchFilter::default());
+            assert_eq!(results.len(), 5);
+            assert_eq!(results[0].cid, "cid_0000");
+        }
+    }
+
+    #[test]
+    fn test_binary_search_with_filter() {
+        let dim = 32;
+        let backend = HnswBackend::with_dim(dim);
+        for i in 0..150 {
+            let cid = format!("cid_{:04}", i);
+            let tags = if i % 2 == 0 { vec!["even"] } else { vec!["odd"] };
+            backend.upsert(
+                &cid,
+                &sample_embedding(dim, i as f32 * 0.01 + 0.01),
+                make_meta(&cid, tags),
+            );
+        }
+
+        let filter = SearchFilter {
+            require_tags: vec!["even".to_string()],
+            ..Default::default()
+        };
+        let results = backend.search(&sample_embedding(dim, 0.01), 5, &filter);
+        assert_eq!(results.len(), 5);
+        for r in &results {
+            assert!(r.meta.tags.contains(&"even".to_string()));
+        }
     }
 }

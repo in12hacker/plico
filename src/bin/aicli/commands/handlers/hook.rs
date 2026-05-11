@@ -28,7 +28,7 @@ pub fn cmd_hook(kernel: &AIKernel, args: &[String]) -> ApiResponse {
 mod tests {
     use super::*;
 
-    fn make_test_kernel() -> plico::kernel::AIKernel {
+    fn make_test_kernel() -> std::sync::Arc<plico::kernel::AIKernel> {
         let dir = tempfile::tempdir().unwrap();
         std::env::set_var("EMBEDDING_BACKEND", "stub");
         plico::kernel::AIKernel::new(dir.path().to_path_buf()).expect("kernel")

@@ -441,6 +441,31 @@ impl CognitiveLoop {
                     );
                 });
             }
+            KernelEvent::CognitiveConflictDetected {
+                conflict_id,
+                conflict_type,
+                description,
+                severity,
+                agent_id,
+                ..
+            } => {
+                tracing::warn!(
+                    conflict_id = %conflict_id,
+                    conflict_type = %conflict_type,
+                    severity = %severity,
+                    agent = %agent_id,
+                    description = %description,
+                    "CognitiveLoop: Cognitive conflict detected"
+                );
+                // Record in trajectory for future learning
+                let this = Arc::clone(self);
+                let desc = description.clone();
+                tokio::spawn(async move {
+                    let _ = this.trajectory_tracker.record_operation(
+                        "system", &format!("conflict:{}", desc), false
+                    ).await;
+                });
+            }
             _ => {}
         }
     }

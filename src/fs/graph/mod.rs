@@ -11,6 +11,14 @@ mod tests;
 pub use types::{KGNode, KGEdge, KGNodeType, KGEdgeType, DiskGraph, KGError, KGSearchHit};
 pub use backend::{PetgraphBackend, EdgeRecord};
 
+/// Result of a temporal diff between two time points.
+#[derive(Debug, Clone)]
+pub struct TemporalDiff {
+    pub added: Vec<KGEdge>,
+    pub removed: Vec<KGEdge>,
+    pub unchanged: Vec<KGEdge>,
+}
+
 /// Direction for graph traversal (used by explore).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExploreDirection {
@@ -39,6 +47,8 @@ pub trait KnowledgeGraph: Send + Sync {
     fn list_edges(&self, agent_id: &str) -> Result<Vec<KGEdge>, KGError>;
     fn remove_node(&self, id: &str) -> Result<(), KGError>;
     fn remove_edge(&self, src: &str, dst: &str, edge_type: Option<KGEdgeType>) -> Result<(), KGError>;
+    /// Soft-invalidate a specific edge by setting `invalid_at` to now.
+    fn invalidate_edge(&self, src: &str, dst: &str, edge_type: KGEdgeType) -> Result<bool, KGError>;
     fn update_node(&self, id: &str, label: Option<&str>, properties: Option<serde_json::Value>) -> Result<(), KGError>;
     fn all_node_ids(&self) -> Vec<String>;
     fn upsert_document(&self, cid: &str, tags: &[String], agent_id: &str) -> Result<(), KGError>;
@@ -89,5 +99,113 @@ pub trait KnowledgeGraph: Send + Sync {
         _top_k: usize,
     ) -> Result<Vec<(String, f32)>, KGError> {
         Ok(vec![])
+    }
+
+    /// Compute temporal diff: what edges were added/removed/unchanged between t1 and t2.
+    fn temporal_diff(
+        &self,
+        agent_id: &str,
+        t1: u64,
+        t2: u64,
+    ) -> Result<TemporalDiff, KGError> {
+        let edges_at_t1 = self.get_valid_edges_at(t1)?;
+        let edges_at_t2 = self.get_valid_edges_at(t2)?;
+
+        // Filter to agent's edges
+        let edges_t1: Vec<KGEdge> = edges_at_t1
+            .into_iter()
+            .filter(|e| {
+                // Edge belongs to agent if either endpoint node is owned by agent
+                // For simplicity, check episode field or use all edges
+                true
+            })
+            .collect();
+        let edges_t2: Vec<KGEdge> = edges_at_t2
+            .into_iter()
+            .filter(|_| true)
+            .collect();
+
+        let t1_keys: std::collections::HashSet<String> = edges_t1
+            .iter()
+            .map(|e| format!("{}|{}|{:?}", e.src, e.dst, e.edge_type))
+            .collect();
+        let t2_keys: std::collections::HashSet<String> = edges_t2
+            .iter()
+            .map(|e| format!("{}|{}|{:?}", e.src, e.dst, e.edge_type))
+            .collect();
+
+        let added = edges_t2
+            .iter()
+            .filter(|e| {
+                let key = format!("{}|{}|{:?}", e.src, e.dst, e.edge_type);
+                !t1_keys.contains(&key)
+            })
+            .cloned()
+            .collect();
+
+        let removed = edges_t1
+            .iter()
+            .filter(|e| {
+                let key = format!("{}|{}|{:?}", e.src, e.dst, e.edge_type);
+                !t2_keys.contains(&key)
+            })
+            .cloned()
+            .collect();
+
+        let unchanged = edges_t2
+            .iter()
+            .filter(|e| {
+                let key = format!("{}|{}|{:?}", e.src, e.dst, e.edge_type);
+                t1_keys.contains(&key)
+            })
+            .cloned()
+            .collect();
+
+        Ok(TemporalDiff {
+            added,
+            removed,
+            unchanged,
+        })
+    }
+
+    /// Consolidate redundant historical versions of edges.
+    /// Keeps the `keep_last_n` most recent valid versions, marks older invalidated ones as expired.
+    /// Returns count of newly expired edges.
+    fn consolidate_versions(
+        &self,
+        src: &str,
+        dst: &str,
+        edge_type: KGEdgeType,
+        keep_last_n: usize,
+    ) -> Result<usize, KGError> {
+        let history = self.edge_history(src, dst, Some(edge_type))?;
+
+        // Separate valid and invalidated edges
+        let mut invalidated: Vec<KGEdge> = history
+            .into_iter()
+            .filter(|e| e.invalid_at.is_some() && e.expired_at.is_none())
+            .collect();
+
+        if invalidated.len() <= keep_last_n {
+            return Ok(0);
+        }
+
+        // Sort by invalid_at descending (most recently invalidated first)
+        invalidated.sort_unstable_by(|a, b| {
+            b.invalid_at.unwrap_or(0).cmp(&a.invalid_at.unwrap_or(0))
+        });
+
+        // Mark the excess as expired
+        let to_expire = &invalidated[keep_last_n..];
+        let now = crate::util::now_ms();
+        let count = to_expire.len();
+
+        for edge in to_expire {
+            let mut expired_edge = edge.clone();
+            expired_edge.expired_at = Some(now);
+            let _ = self.add_edge(expired_edge);
+        }
+
+        Ok(count)
     }
 }

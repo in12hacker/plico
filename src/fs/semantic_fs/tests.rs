@@ -3,6 +3,7 @@
 use std::sync::Arc;
 use tempfile::TempDir;
 
+use crate::cas::storage::CASStorage;
 use crate::fs::embedding::StubEmbeddingProvider;
 use crate::fs::graph::{PetgraphBackend, KnowledgeGraph};
 use crate::fs::search::InMemoryBackend;
@@ -12,8 +13,10 @@ use crate::fs::context_loader::ContextLayer;
 
 fn make_fs() -> (SemanticFS, tempfile::TempDir) {
     let dir = TempDir::new().unwrap();
+    let cas = Arc::new(CASStorage::new(dir.path().join("cas")).unwrap());
     let fs = SemanticFS::new(
         dir.path().to_path_buf(),
+        cas,
         Arc::new(StubEmbeddingProvider::new()),
         Arc::new(InMemoryBackend::new()),
         None,
@@ -23,8 +26,10 @@ fn make_fs() -> (SemanticFS, tempfile::TempDir) {
 }
 
 fn make_fs_with_kg(dir: &TempDir) -> SemanticFS {
+    let cas = Arc::new(CASStorage::new(dir.path().join("cas")).unwrap());
     SemanticFS::new(
         dir.path().to_path_buf(),
+        cas,
         Arc::new(StubEmbeddingProvider::new()),
         Arc::new(InMemoryBackend::new()),
         None,
@@ -126,15 +131,16 @@ fn test_context_layer_tokens() {
 #[test]
 fn test_recycle_bin_persists_across_restart() {
     let dir = TempDir::new().unwrap();
+    let cas = Arc::new(CASStorage::new(dir.path().join("cas")).unwrap());
     let cid = {
-        let fs = SemanticFS::new(dir.path().to_path_buf(), Arc::new(StubEmbeddingProvider::new()), Arc::new(InMemoryBackend::new()), None, None).unwrap();
+        let fs = SemanticFS::new(dir.path().to_path_buf(), Arc::clone(&cas), Arc::new(StubEmbeddingProvider::new()), Arc::new(InMemoryBackend::new()), None, None).unwrap();
         fs.create(b"persistent-delete".to_vec(), vec!["persist".to_string()], "a".to_string(), None).unwrap()
     };
     {
-        let fs = SemanticFS::new(dir.path().to_path_buf(), Arc::new(StubEmbeddingProvider::new()), Arc::new(InMemoryBackend::new()), None, None).unwrap();
+        let fs = SemanticFS::new(dir.path().to_path_buf(), Arc::clone(&cas), Arc::new(StubEmbeddingProvider::new()), Arc::new(InMemoryBackend::new()), None, None).unwrap();
         fs.delete(&cid, "a".to_string()).unwrap();
     }
-    let fs = SemanticFS::new(dir.path().to_path_buf(), Arc::new(StubEmbeddingProvider::new()), Arc::new(InMemoryBackend::new()), None, None).unwrap();
+    let fs = SemanticFS::new(dir.path().to_path_buf(), cas, Arc::new(StubEmbeddingProvider::new()), Arc::new(InMemoryBackend::new()), None, None).unwrap();
     assert_eq!(fs.list_deleted().len(), 1);
 }
 
@@ -432,8 +438,10 @@ impl crate::fs::embedding::EmbeddingProvider for DeterministicEmbedding {
 }
 
 fn make_fs_with_real_embeddings(dir: &tempfile::TempDir) -> SemanticFS {
+    let cas = Arc::new(CASStorage::new(dir.path().join("cas")).unwrap());
     SemanticFS::new(
         dir.path().to_path_buf(),
+        cas,
         Arc::new(DeterministicEmbedding),
         Arc::new(InMemoryBackend::new()),
         None,

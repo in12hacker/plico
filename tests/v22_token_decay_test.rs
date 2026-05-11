@@ -18,10 +18,11 @@
 use plico::api::semantic::{ApiRequest, ApiResponse};
 use plico::kernel::AIKernel;
 use plico::memory::MemoryTier;
+use std::sync::Arc;
 use tempfile::tempdir;
 
 /// Helper to create a kernel for testing.
-fn make_kernel() -> (AIKernel, tempfile::TempDir) {
+fn make_kernel() -> (Arc<AIKernel>, tempfile::TempDir) {
     let _ = std::env::set_var("EMBEDDING_BACKEND", "stub");
     let _ = std::env::set_var("LLM_BACKEND", "stub");
     let dir = tempdir().unwrap();

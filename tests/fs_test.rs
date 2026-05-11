@@ -25,8 +25,10 @@ impl EmbeddingProvider for StubProvider {
 }
 
 fn make_fs_at(path: &std::path::Path) -> (SemanticFS, ()) {
+    let cas = Arc::new(CASStorage::new(path.join("cas")).unwrap());
     let fs = SemanticFS::new(
         path.to_path_buf(),
+        cas,
         std::sync::Arc::new(StubProvider),
         std::sync::Arc::new(InMemoryBackend::new()),
         None,

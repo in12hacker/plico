@@ -11,7 +11,7 @@ use plico::memory::MemoryTier;
 use std::sync::Arc;
 use tempfile::tempdir;
 
-fn make_kernel() -> (AIKernel, tempfile::TempDir) {
+fn make_kernel() -> (Arc<AIKernel>, tempfile::TempDir) {
     let _ = std::env::set_var("EMBEDDING_BACKEND", "stub");
     let _ = std::env::set_var("LLM_BACKEND", "stub");
     let dir = tempdir().unwrap();
@@ -23,7 +23,7 @@ fn make_kernel_arc() -> (Arc<AIKernel>, tempfile::TempDir) {
     let _ = std::env::set_var("EMBEDDING_BACKEND", "stub");
     let _ = std::env::set_var("LLM_BACKEND", "stub");
     let dir = tempdir().unwrap();
-    let kernel = Arc::new(AIKernel::new(dir.path().to_path_buf()).expect("kernel init"));
+    let kernel = AIKernel::new(dir.path().to_path_buf()).expect("kernel init");
     (kernel, dir)
 }
 

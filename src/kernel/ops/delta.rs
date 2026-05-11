@@ -95,6 +95,14 @@ pub fn change_entry_from_event(event: &SequencedEvent) -> ChangeEntry {
                 agent_id.clone(),
             )
         }
+        KernelEvent::CognitiveConflictDetected { conflict_id, conflict_type, description, agent_id, .. } => {
+            (
+                format!("conflict:{}", conflict_id),
+                format!("conflict_detected:{}", conflict_type),
+                vec![description.clone()],
+                agent_id.clone(),
+            )
+        }
     };
 
     let summary = if tags.is_empty() {

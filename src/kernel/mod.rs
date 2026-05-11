@@ -35,7 +35,7 @@ use crate::fs::{SemanticFS, InMemoryBackend, HnswBackend, EmbeddingProvider, Sem
 use crate::llm::LlmProvider;
 use crate::api::permission::PermissionGuard;
 use crate::tool::ToolRegistry;
-use crate::kernel::event_bus::EventBus;
+use crate::kernel::event_bus::{EventBus, KernelEvent};
 
 /// The AI Kernel — all subsystems wired together.
 pub struct AIKernel {
@@ -70,8 +70,8 @@ pub struct AIKernel {
     pub(crate) prompt_registry: Arc<crate::prompt::PromptRegistry>,
     pub(crate) agent_profiles: Arc<ops::agent_profile::AgentProfileStore>,
     pub(crate) reranker: Option<Arc<dyn crate::fs::reranker::RerankerProvider>>,
-    pub(crate) cognitive_loop: Option<Arc<crate::kernel::cognition::CognitiveLoop>>,
-    pub(crate) cognitive_pipeline: Option<ops::cognitive_pipeline::CognitivePipelineHandle>,
+    pub(crate) cognitive_loop: Arc<RwLock<Option<Arc<crate::kernel::cognition::CognitiveLoop>>>>,
+    pub(crate) cognitive_pipeline: Arc<RwLock<Option<ops::cognitive_pipeline::CognitivePipelineHandle>>>,
     pub(crate) diagnostic_store: Arc<ops::diagnostic::DiagnosticStore>,
     pub(crate) intelligent_skill_forge: Arc<ops::skill_forge::IntelligentSkillForge>,
 }
@@ -103,7 +103,117 @@ fn save_embedding_meta(root: &std::path::Path, model_name: &str, dim: usize) {
 }
 
 impl AIKernel {
-    pub fn new(root: PathBuf) -> std::io::Result<Self> {
+    pub fn with_providers(
+        root: PathBuf,
+        embedding: Arc<dyn EmbeddingProvider>,
+        llm: Arc<dyn LlmProvider>,
+    ) -> std::io::Result<Arc<Self>> {
+        let config = PlicoConfig::load(Some(root.clone()));
+        let cas = Arc::new(CASStorage::new(root.join("cas"))?);
+
+        let embedding_inner: Arc<RwLock<Arc<dyn EmbeddingProvider>>> = Arc::new(RwLock::new(embedding.clone()));
+        let embedding_hswap = HotSwapEmbeddingProvider::new(embedding_inner.clone());
+
+        let llm_inner: Arc<RwLock<Arc<dyn LlmProvider>>> = Arc::new(RwLock::new(llm.clone()));
+        let llm_hswap = HotSwapLlmProvider::new(llm_inner.clone());
+
+        let summarizer: Option<Arc<dyn Summarizer>> = Some(Arc::new(LlmSummarizer::new(llm.clone())) as Arc<dyn Summarizer>);
+
+        let search_backend: Arc<dyn SemanticSearch> = {
+            let b = Arc::new(HnswBackend::with_dim(embedding.dimension()));
+            b.restore_from(&root).ok();
+            b as Arc<dyn SemanticSearch>
+        };
+        let search_index = search_backend.clone();
+        let knowledge_graph: Option<Arc<dyn KnowledgeGraph>> = Some(Arc::new(PetgraphBackend::open(root.clone())));
+        let memory = Arc::new(LayeredMemory::new());
+        let scheduler = Arc::new(AgentScheduler::new());
+        let reranker = crate::fs::reranker::create_reranker_provider();
+
+        let mut fs = SemanticFS::with_reranker(
+            root.clone(),
+            cas.clone(),
+            Arc::new(embedding_hswap.clone()) as Arc<dyn EmbeddingProvider>,
+            search_index.clone(),
+            summarizer.clone(),
+            knowledge_graph.clone(),
+            reranker.clone(),
+        )?;
+        fs.set_chunking_mode(config.tuning.chunking_mode.clone());
+        fs.set_auto_summarize(config.tuning.auto_summarize);
+        let fs_arc = Arc::new(fs);
+
+        let ev_bus = Arc::new(crate::kernel::event_bus::EventBus::new());
+
+        let kg_builder = if config.tuning.kg_auto_extract {
+            let builder_cfg = crate::kernel::ops::kg_builder::KgBuilderConfig {
+                enabled: true,
+                batch_size: 1, // Fast for tests
+                timeout_ms: 100,
+            };
+            Some(crate::kernel::ops::kg_builder::start_kg_builder(
+                knowledge_graph.clone().unwrap(),
+                llm.clone(),
+                ev_bus.clone(),
+                builder_cfg,
+                Some(embedding.clone()),
+            ))
+        } else { None };
+
+        let diagnostic_store = Arc::new(crate::kernel::ops::diagnostic::DiagnosticStore::new());
+
+        let kernel = Self {
+            root: root.clone(),
+            config,
+            cas,
+            embedding: embedding_hswap.clone(),
+            llm_provider: llm_hswap,
+            fs: fs_arc.clone(),
+            search_backend,
+            knowledge_graph: knowledge_graph.clone(),
+            memory: memory.clone(),
+            scheduler,
+            permissions: Arc::new(PermissionGuard::new()),
+            memory_persister: None,
+            search_op_count: Arc::new(AtomicU64::new(0)),
+            tool_registry: Arc::new(ToolRegistry::new()),
+            message_bus: Arc::new(crate::kernel::MessageBus::new()),
+            event_bus: ev_bus.clone(),
+            hook_registry: Arc::new(crate::kernel::hook::HookRegistry::new()),
+            prefetch: Arc::new(ops::prefetch::IntentPrefetcher::new(
+                search_index,
+                knowledge_graph,
+                memory,
+                ev_bus.clone(),
+                Arc::new(embedding_hswap.clone()) as Arc<dyn EmbeddingProvider>,
+                fs_arc.ctx_loader_arc(),
+                root.clone(),
+            )),
+            key_store: Arc::new(AgentKeyStore::new()),
+            tenant_store: Arc::new(ops::tenant::TenantStore::new()),
+            metrics: Arc::new(KernelMetrics::new()),
+            edge_cache: Arc::new(EdgeCache::default()),
+            cluster: Arc::new(ClusterManager::new(NodeId::new(), "test".into(), true, "127.0.0.1".into(), 0)),
+            session_store: Arc::new(ops::session::SessionStore::new()),
+            checkpoint_store: Arc::new(CheckpointStore::new(10)), // max 10
+            task_store: Arc::new(ops::task::TaskStore::new(root.join("tasks.json"), ev_bus.clone())),
+            cost_ledger: Arc::new(TokenCostLedger::new()),
+            kg_builder,
+            prompt_registry: Arc::new(crate::prompt::PromptRegistry::new()),
+            agent_profiles: Arc::new(ops::agent_profile::AgentProfileStore::new()),
+            reranker,
+            cognitive_loop: Arc::new(RwLock::new(None)),
+            cognitive_pipeline: Arc::new(RwLock::new(None)),
+            diagnostic_store,
+            intelligent_skill_forge: Arc::new(ops::skill_forge::IntelligentSkillForge::new()),
+        };
+
+        let kernel_arc = Arc::new(kernel);
+
+        Ok(kernel_arc)
+    }
+
+    pub fn new(root: PathBuf) -> std::io::Result<Arc<Self>> {
         let config = PlicoConfig::load(Some(root.clone()));
         let cas = Arc::new(CASStorage::new(root.join("cas"))?);
 
@@ -150,6 +260,7 @@ impl AIKernel {
 
         let mut fs = SemanticFS::with_reranker(
             root.clone(),
+            cas.clone(),
             Arc::new(embedding.clone()) as Arc<dyn EmbeddingProvider>,
             search_index,
             summarizer.clone(),
@@ -158,7 +269,7 @@ impl AIKernel {
         )?;
         fs.set_chunking_mode(config.tuning.chunking_mode.clone());
         fs.set_auto_summarize(config.tuning.auto_summarize);
-        let fs = Arc::new(fs);
+        let fs_arc = Arc::new(fs);
         
         let permissions = Arc::new(PermissionGuard::new());
         let persister = match CASPersister::new(cas.clone(), root.clone()) {
@@ -177,7 +288,7 @@ impl AIKernel {
             hook_registry.register(hook::HookPoint::PostToolCall, 100, causal_handler);
         }
 
-        let verification_handler = Arc::new(ops::verification::VerificationHookHandler::new(Arc::clone(&fs), Arc::clone(&event_bus)));
+        let verification_handler = Arc::new(ops::verification::VerificationHookHandler::new(Arc::clone(&fs_arc), Arc::clone(&event_bus)));
         hook_registry.register(hook::HookPoint::PostToolCall, 90, verification_handler);
 
         let cost_ledger = Arc::new(TokenCostLedger::new());
@@ -185,7 +296,7 @@ impl AIKernel {
 
         let prefetch = Arc::new(IntentPrefetcher::new(
             search_backend.clone(), knowledge_graph.clone(), memory.clone(), event_bus.clone(),
-            Arc::new(embedding.clone()) as Arc<dyn EmbeddingProvider>, fs.ctx_loader_arc(), root.clone(),
+            Arc::new(embedding.clone()) as Arc<dyn EmbeddingProvider>, fs_arc.ctx_loader_arc(), root.clone(),
         ));
         prefetch.set_cost_ledger(Arc::clone(&cost_ledger));
 
@@ -210,7 +321,7 @@ impl AIKernel {
         let kg_builder_config = ops::kg_builder::KgBuilderConfig::from_env();
         let kg_builder = if kg_builder_config.enabled {
             if let Some(ref kg) = knowledge_graph {
-                let handle = ops::kg_builder::start_kg_builder(Arc::clone(kg), Arc::new(llm_provider.clone()), kg_builder_config);
+                let handle = ops::kg_builder::start_kg_builder(Arc::clone(kg), Arc::new(llm_provider.clone()), event_bus.clone(), kg_builder_config, Some(Arc::new(embedding.clone()) as Arc<dyn crate::fs::embedding::EmbeddingProvider>));
                 tracing::info!("KG auto-extraction worker started");
                 Some(handle)
             } else { None }
@@ -265,35 +376,106 @@ impl AIKernel {
             Some(arc)
         };
 
-        let mut kernel = Self {
-            config, root, cas, memory, scheduler, fs, permissions, memory_persister: persister,
+        let kernel = Self {
+            config, root, cas, memory, scheduler, fs: fs_arc, permissions, memory_persister: persister,
             embedding, llm_provider, knowledge_graph, search_backend, search_op_count: Arc::new(AtomicU64::new(0)),
-            tool_registry, message_bus, event_bus, hook_registry, prefetch, key_store, tenant_store, metrics,
-            edge_cache, cluster, session_store, checkpoint_store, task_store, cost_ledger, kg_builder, prompt_registry,
+            tool_registry: Arc::new(ToolRegistry::new()), message_bus, event_bus, hook_registry, prefetch, key_store, tenant_store, metrics,
+            edge_cache, cluster, session_store, checkpoint_store, task_store, cost_ledger: Arc::new(TokenCostLedger::new()), kg_builder, prompt_registry,
             agent_profiles: Arc::new(ops::agent_profile::AgentProfileStore::new()),
             reranker,
-            cognitive_loop,
-            cognitive_pipeline: None,
+            cognitive_loop: Arc::new(RwLock::new(cognitive_loop)),
+            cognitive_pipeline: Arc::new(RwLock::new(None)),
             diagnostic_store: Arc::new(ops::diagnostic::DiagnosticStore::new()),
             intelligent_skill_forge: Arc::new(ops::skill_forge::IntelligentSkillForge::new()),
         };
 
-        kernel.register_builtin_tools();
-        kernel.restore_agents();
-        kernel.restore_intents();
-        kernel.restore_memories();
-        kernel.restore_permissions();
-        kernel.restore_event_log();
-        kernel.restore_checkpoints();
-        kernel.restore_task_store();
-        
-        Ok(kernel)
+        let kernel_arc = Arc::new(kernel);
+        kernel_arc.register_builtin_tools();
+        kernel_arc.restore_agents();
+        kernel_arc.restore_intents();
+        kernel_arc.restore_memories();
+        kernel_arc.restore_permissions();
+        kernel_arc.restore_event_log();
+        kernel_arc.restore_checkpoints();
+        kernel_arc.restore_task_store();
+
+        Ok(kernel_arc)
+    }
+
+    /// Returns a reference to the event bus (for test subscriptions).
+    pub fn event_bus(&self) -> &Arc<EventBus> {
+        &self.event_bus
+    }
+
+    /// Returns a reference to the LLM provider (for test hot-swap).
+    pub fn llm_provider(&self) -> &HotSwapLlmProvider {
+        &self.llm_provider
     }
 
     /// Starts background cognitive workers. Must be called once after kernel is wrapped in Arc.
     pub fn start_workers(self: &Arc<Self>) {
         let cp_handle = ops::cognitive_pipeline::start_cognitive_pipeline(Arc::clone(self), 1024);
+        *self.cognitive_pipeline.write().unwrap() = Some(cp_handle.clone());
         self.fs.set_cognitive_pipeline(cp_handle);
+
+        // Start background conflict detection
+        if let Some(ref kg) = self.knowledge_graph {
+            let kg = Arc::clone(kg);
+            let embedder = Some(Arc::new(self.embedding.clone()) as Arc<dyn crate::fs::embedding::EmbeddingProvider>);
+            let event_bus = Arc::clone(&self.event_bus);
+            let agent_profiles = Arc::clone(&self.agent_profiles);
+            tokio::spawn(async move {
+                let detector = ops::conflict_detector::ConflictDetector::new(kg, embedder);
+                loop {
+                    tokio::time::sleep(std::time::Duration::from_secs(300)).await;
+                    let agents = agent_profiles.list_agents();
+                    for agent_id in agents {
+                        let (conflicts, repairs) = detector.detect_and_repair(&agent_id);
+                        if repairs > 0 {
+                            tracing::info!(agent = %agent_id, repairs = repairs, "Conflict auto-repair completed");
+                        }
+                        for conflict in conflicts {
+                            event_bus.emit(KernelEvent::CognitiveConflictDetected {
+                                conflict_id: conflict.conflict_id,
+                                conflict_type: conflict.conflict_type,
+                                description: conflict.description,
+                                involved_cids: conflict.involved_cids,
+                                agent_id: conflict.agent_id,
+                                severity: conflict.severity.to_string(),
+                            });
+                        }
+                    }
+                }
+            });
+        }
+    }
+
+    /// Export agent memories to a portable passport format.
+    pub fn memory_export(
+        &self,
+        agent_id: &str,
+        tenant_id: &str,
+        passphrase: Option<&str>,
+    ) -> Result<Vec<u8>, String> {
+        let passport = ops::passport::MemoryPassport::new(
+            self.memory.clone(),
+            self.knowledge_graph.clone(),
+        );
+        passport.export_memories(agent_id, tenant_id, passphrase)
+    }
+
+    /// Import memories from a passport.
+    pub fn memory_import(
+        &self,
+        data: &[u8],
+        passphrase: Option<&str>,
+        tenant_id: &str,
+    ) -> Result<ops::passport::ImportReport, String> {
+        let passport = ops::passport::MemoryPassport::new(
+            self.memory.clone(),
+            self.knowledge_graph.clone(),
+        );
+        passport.import_memories(data, passphrase, tenant_id)
     }
 
     const SEARCH_PERSIST_EVERY_N: u64 = 50;

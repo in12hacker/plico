@@ -193,8 +193,9 @@ pub fn cmd_edge_history(kernel: &AIKernel, args: &[String]) -> ApiResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
 
-    fn make_test_kernel() -> plico::kernel::AIKernel {
+    fn make_test_kernel() -> Arc<plico::kernel::AIKernel> {
         let dir = tempfile::tempdir().unwrap();
         std::env::set_var("EMBEDDING_BACKEND", "stub");
         plico::kernel::AIKernel::new(dir.path().to_path_buf()).expect("kernel")

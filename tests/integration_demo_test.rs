@@ -7,18 +7,20 @@
 //!   register → store docs → NL query → execute → learn → reuse →
 //!   KG explore → version/rollback — all through the Plico kernel.
 
+use std::sync::Arc;
 use plico::kernel::AIKernel;
 use plico::intent::ChainRouter;
 use plico::intent::execution;
 use tempfile::tempdir;
 
-fn make_kernel() -> (AIKernel, tempfile::TempDir) {
+fn make_kernel() -> (Arc<AIKernel>, tempfile::TempDir) {
     let _ = std::env::set_var("EMBEDDING_BACKEND", "stub");
     let _ = std::env::set_var("LLM_BACKEND", "stub");
-    let dir = tempdir().unwrap();
+    let dir = tempfile::tempdir().unwrap();
     let kernel = AIKernel::new(dir.path().to_path_buf()).expect("kernel init");
     (kernel, dir)
 }
+
 
 #[test]
 fn test_file_qa_agent_full_lifecycle() {

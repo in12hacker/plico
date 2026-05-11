@@ -137,7 +137,7 @@ mod tests {
     fn make_kernel() -> (Arc<AIKernel>, tempfile::TempDir) {
         let _ = std::env::set_var("EMBEDDING_BACKEND", "stub");
         let dir = tempfile::tempdir().unwrap();
-        let kernel = Arc::new(AIKernel::new(dir.path().to_path_buf()).expect("kernel init"));
+        let kernel = AIKernel::new(dir.path().to_path_buf()).expect("kernel init");
         (kernel, dir)
     }
 

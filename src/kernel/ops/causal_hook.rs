@@ -186,6 +186,9 @@ mod tests {
         fn remove_edge(&self, _src: &str, _dst: &str, _edge_type: Option<KGEdgeType>) -> Result<(), crate::fs::graph::KGError> {
             Ok(())
         }
+        fn invalidate_edge(&self, _src: &str, _dst: &str, _edge_type: KGEdgeType) -> Result<bool, crate::fs::graph::KGError> {
+            Ok(false)
+        }
         fn update_node(&self, _id: &str, _label: Option<&str>, _properties: Option<serde_json::Value>) -> Result<(), crate::fs::graph::KGError> {
             Ok(())
         }

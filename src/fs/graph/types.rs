@@ -75,6 +75,8 @@ pub enum KGEdgeType {
     // ── Version tracking ─────────────────────────────────────────────────
     /// New CID → Old CID (version chain for rollback).
     Supersedes,
+    /// Entity A is an alias of Entity B (Entity Linking).
+    IsAliasOf,
 }
 
 impl std::fmt::Display for KGEdgeType {
@@ -97,6 +99,7 @@ impl std::fmt::Display for KGEdgeType {
             KGEdgeType::DependsOn => write!(f, "depends_on"),
             KGEdgeType::Produces => write!(f, "produces"),
             KGEdgeType::Supersedes => write!(f, "supersedes"),
+            KGEdgeType::IsAliasOf => write!(f, "is_alias_of"),
         }
     }
 }

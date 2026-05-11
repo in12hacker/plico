@@ -7,7 +7,7 @@
 mod cognitive_loop_tests {
     use std::time::Instant;
 
-    fn setup_kernel() -> (plico::AIKernel, tempfile::TempDir, String) {
+    fn setup_kernel() -> (std::sync::Arc<plico::AIKernel>, tempfile::TempDir, String) {
         let _ = std::env::set_var("EMBEDDING_BACKEND", "stub");
         let _ = std::env::set_var("LLM_BACKEND", "stub");
         let dir = tempfile::tempdir().unwrap();

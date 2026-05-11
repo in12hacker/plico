@@ -8,10 +8,11 @@
 use plico::kernel::AIKernel;
 use plico::api::semantic::GrowthPeriod;
 use plico::memory::MemoryScope;
+use std::sync::Arc;
 use tempfile::tempdir;
 
 /// Create a kernel with stub embedding for testing.
-fn make_kernel() -> (AIKernel, tempfile::TempDir) {
+fn make_kernel() -> (Arc<AIKernel>, tempfile::TempDir) {
     let _ = std::env::set_var("EMBEDDING_BACKEND", "stub");
     let _ = std::env::set_var("LLM_BACKEND", "stub");
     let dir = tempdir().unwrap();

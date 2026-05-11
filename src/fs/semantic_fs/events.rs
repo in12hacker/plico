@@ -234,14 +234,17 @@ mod tests {
     use super::*;
     use std::sync::Arc;
     use tempfile::tempdir;
+    use crate::cas::storage::CASStorage;
     use crate::fs::embedding::StubEmbeddingProvider;
     use crate::fs::search::InMemoryBackend;
     use crate::fs::graph::PetgraphBackend;
 
     fn make_fs() -> (SemanticFS, tempfile::TempDir) {
         let dir = tempdir().unwrap();
+        let cas = Arc::new(CASStorage::new(dir.path().join("cas")).unwrap());
         let fs = SemanticFS::new(
             dir.path().to_path_buf(),
+            cas,
             Arc::new(StubEmbeddingProvider::new()),
             Arc::new(InMemoryBackend::new()),
             None,
@@ -252,8 +255,10 @@ mod tests {
 
     fn make_fs_with_kg() -> (SemanticFS, tempfile::TempDir) {
         let dir = tempdir().unwrap();
+        let cas = Arc::new(CASStorage::new(dir.path().join("cas")).unwrap());
         let fs = SemanticFS::new(
             dir.path().to_path_buf(),
+            cas,
             Arc::new(StubEmbeddingProvider::new()),
             Arc::new(InMemoryBackend::new()),
             None,

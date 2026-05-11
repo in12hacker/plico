@@ -19,7 +19,7 @@ pub trait KernelClient: Send + Sync + std::any::Any {
 
 /// Embedded client — wraps `AIKernel` directly. Used for tests and `--embedded` mode.
 pub struct EmbeddedClient {
-    pub kernel: crate::kernel::AIKernel,
+    pub kernel: std::sync::Arc<crate::kernel::AIKernel>,
 }
 
 impl KernelClient for EmbeddedClient {

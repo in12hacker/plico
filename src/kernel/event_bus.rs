@@ -71,6 +71,15 @@ pub enum KernelEvent {
         reason: String,
         agent_id: String,
     },
+    /// v42: Cognitive conflict detected — contradiction in knowledge graph.
+    CognitiveConflictDetected {
+        conflict_id: String,
+        conflict_type: String, // "temporal_inconsistency" | "duplicate_entity" | "conflicting_fact"
+        description: String,
+        involved_cids: Vec<String>,
+        agent_id: String,
+        severity: String, // "low" | "medium" | "high"
+    },
 }
 
 /// A durable event record with sequence number and timestamp.
@@ -95,6 +104,7 @@ impl KernelEvent {
             KernelEvent::TaskDelegated { .. } => "TaskDelegated",
             KernelEvent::TaskCompleted { .. } => "TaskCompleted",
             KernelEvent::VerificationFailed { .. } => "VerificationFailed",
+            KernelEvent::CognitiveConflictDetected { .. } => "CognitiveConflictDetected",
         }
     }
 
@@ -111,6 +121,7 @@ impl KernelEvent {
             KernelEvent::TaskDelegated { from_agent, .. } => Some(from_agent),
             KernelEvent::TaskCompleted { agent_id, .. } => Some(agent_id),
             KernelEvent::VerificationFailed { agent_id, .. } => Some(agent_id),
+            KernelEvent::CognitiveConflictDetected { agent_id, .. } => Some(agent_id),
         }
     }
 }

@@ -379,8 +379,10 @@ fn test_bm25_integration_with_search_result() {
     let stub_emb = Arc::new(StubEmbeddingProvider::new()) as Arc<dyn EmbeddingProvider>;
     let search_idx = Arc::new(InMemoryBackend::new()) as Arc<dyn plico::fs::search::SemanticSearch>;
 
+    let cas = Arc::new(plico::cas::storage::CASStorage::new(dir.path().join("cas")).unwrap());
     let fs = SemanticFS::new(
         dir.path().to_path_buf(),
+        cas,
         stub_emb,
         search_idx,
         None,

@@ -125,18 +125,24 @@ impl SemanticFS {
         Arc::clone(&self.ctx_loader)
     }
 
+    pub fn bm25_len(&self) -> usize {
+        self.bm25_index.len()
+    }
+
     pub fn new(
         root_path: std::path::PathBuf,
+        cas: Arc<CASStorage>,
         embedding: Arc<dyn EmbeddingProvider>,
         search_index: Arc<dyn SemanticSearch>,
         summarizer: Option<Arc<dyn Summarizer>>,
         knowledge_graph: Option<Arc<dyn KnowledgeGraph>>,
     ) -> std::io::Result<Self> {
-        Self::with_reranker(root_path, embedding, search_index, summarizer, knowledge_graph, None)
+        Self::with_reranker(root_path, cas, embedding, search_index, summarizer, knowledge_graph, None)
     }
 
     pub fn with_reranker(
         root_path: std::path::PathBuf,
+        cas: Arc<CASStorage>,
         embedding: Arc<dyn EmbeddingProvider>,
         search_index: Arc<dyn SemanticSearch>,
         summarizer: Option<Arc<dyn Summarizer>>,
@@ -145,7 +151,6 @@ impl SemanticFS {
     ) -> std::io::Result<Self> {
         let tag_index_path = root_path.join("tag_index.json");
         let recycle_bin_path = root_path.join("recycle_bin.json");
-        let cas = Arc::new(CASStorage::new(root_path.join("objects"))?);
 
         let recycle_bin = if recycle_bin_path.exists() {
             Self::load_recycle_bin(&recycle_bin_path).unwrap_or_else(|e| {
@@ -199,6 +204,69 @@ impl SemanticFS {
 
     pub fn set_cognitive_pipeline(&self, handle: crate::kernel::ops::cognitive_pipeline::CognitivePipelineHandle) {
         *self.cognitive_pipeline.write().unwrap() = Some(handle);
+    }
+
+    /// Background processing for a document: embedding, BM25, and hierarchical chunking.
+    pub async fn process_document_background(
+        &self,
+        cid: &str,
+        obj: &crate::cas::AIObject,
+        agent_id: &str,
+        force_chunking: bool,
+    ) -> std::io::Result<()> {
+        let mut embedding_result = self.upsert_semantic_index(cid, &obj.data, &obj.meta);
+        let mut actual_force_chunking = force_chunking;
+
+        if let Err(crate::fs::embedding::EmbedError::InputTooLarge(_)) = embedding_result {
+            tracing::info!(cid = %crate::util::safe_truncate(cid, 8), "Document too large for single embedding, triggering self-healing chunking");
+            actual_force_chunking = true;
+            embedding_result = Ok(None);
+        }
+
+        let _ = embedding_result.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+
+        // Hierarchical chunking
+        let mut chunking_mode = crate::fs::chunking::ChunkingMode::from_str(&self.config_chunking_mode);
+        if actual_force_chunking && chunking_mode == crate::fs::chunking::ChunkingMode::None {
+            chunking_mode = crate::fs::chunking::ChunkingMode::Fixed;
+        }
+
+        if chunking_mode != crate::fs::chunking::ChunkingMode::None {
+            if let Ok(text) = std::str::from_utf8(&obj.data) {
+                let emb_ref: Option<&dyn EmbeddingProvider> = if chunking_mode == crate::fs::chunking::ChunkingMode::Semantic {
+                    Some(self.embedding.as_ref())
+                } else {
+                    None
+                };
+                let chunks = crate::fs::chunking::chunk_document(text, chunking_mode, emb_ref);
+                if !chunks.is_empty() {
+                    tracing::info!(cid = %crate::util::safe_truncate(cid, 8), count = chunks.len(), "Hierarchical chunking complete");
+                    for (ci, chunk) in chunks.iter().enumerate() {
+                        let mut child_tags = obj.meta.tags.clone();
+                        child_tags.push(format!("parent_cid:{}", cid));
+                        child_tags.push(format!("chunk_idx:{}", ci));
+                        child_tags.push("is_chunk:true".to_string());
+                        let child_meta = AIObjectMeta {
+                            content_type: crate::cas::ContentType::Text,
+                            tags: child_tags.clone(),
+                            created_by: agent_id.to_string(),
+                            created_at: obj.meta.created_at,
+                            intent: None,
+                            tenant_id: obj.meta.tenant_id.clone(),
+                        };
+                        let child_obj = AIObject::new(chunk.text.as_bytes().to_vec(), child_meta);
+                        if let Ok(child_cid) = self.cas.put(&child_obj) {
+                            self.update_tag_index(&child_tags, &child_cid);
+                            let _ = self.upsert_semantic_index(&child_cid, chunk.text.as_bytes(), &child_obj.meta);
+                            if (ci + 1) % 100 == 0 {
+                                tracing::info!(parent = %crate::util::safe_truncate(cid, 8), current = ci + 1, total = chunks.len(), "Chunk indexing progress");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     fn rebuild_vector_index(&self) {
@@ -302,26 +370,34 @@ impl SemanticFS {
         let cid = self.cas.put(&obj)?;
 
         self.update_tag_index(&tags, &cid);
-        let _embedding = self.upsert_semantic_index(&cid, &content, &meta);
 
-        let text = match std::str::from_utf8(&content) {
-            Ok(s) if !s.trim().is_empty() => Some(s.to_string()),
-            _ => None,
-        };
-
-        // F-5: Asynchronous cognitive processing (Milestone 1)
-        if let Some(ref cp) = *self.cognitive_pipeline.read().unwrap() {
-            if self.config_auto_summarize && text.is_some() {
-                let _ = cp.enqueue_sync(CognitiveTask::Summarize {
-                    cid: cid.clone(),
-                    layer: crate::fs::summarizer::SummaryLayer::L0,
-                    agent_id: created_by.clone(),
-                });
+        if let Some(ref kg) = self.knowledge_graph {
+            if let Err(e) = kg.upsert_document(&cid, &tags, &created_by) {
+                tracing::warn!("Failed to upsert document to knowledge graph: {}", e);
             }
-            
-            // KG Extraction & Similarity Links
-            let _ = cp.enqueue_sync(CognitiveTask::KgExtract { cid: cid.clone(), agent_id: created_by.clone() });
-            let _ = cp.enqueue_sync(CognitiveTask::LinkSimilarity { cid: cid.clone(), agent_id: created_by.clone() });
+        }
+
+        let mut force_chunking = false;
+        if content.len() > 200_000 {
+            tracing::info!(cid = %crate::util::safe_truncate(&cid, 8), len = content.len(), "Document massive, forcing hierarchical chunking");
+            force_chunking = true;
+        }
+
+        // F-5: Delegate full processing to background pipeline (Milestone 1)
+        if let Some(ref cp) = *self.cognitive_pipeline.read().unwrap() {
+            let _ = cp.enqueue_sync(CognitiveTask::ProcessDocument {
+                cid: cid.clone(),
+                agent_id: created_by.clone(),
+                force_chunking,
+            });
+        } else {
+            // Fallback: inline processing when no cognitive pipeline is running (tests, embedded mode)
+            let embedding = self.upsert_semantic_index(&cid, &content, &meta).unwrap_or(None);
+            if let Some(ref kg) = self.knowledge_graph {
+                if let Some(ref emb) = embedding {
+                    self.add_similar_to_edges(kg, &cid, emb);
+                }
+            }
         }
 
         self.push_audit(AuditEntry {
@@ -330,50 +406,6 @@ impl SemanticFS {
             cid: cid.clone(),
             agent_id: created_by,
         });
-
-        // Hierarchical chunking: split large documents into child chunks
-        let chunking_mode = crate::fs::chunking::ChunkingMode::from_str(&self.config_chunking_mode);
-        if chunking_mode != crate::fs::chunking::ChunkingMode::None {
-            if let Ok(text) = std::str::from_utf8(&content) {
-                let emb_ref: Option<&dyn EmbeddingProvider> = if chunking_mode == crate::fs::chunking::ChunkingMode::Semantic {
-                    Some(self.embedding.as_ref())
-                } else {
-                    None
-                };
-                let chunks = crate::fs::chunking::chunk_document(text, chunking_mode, emb_ref);
-                if !chunks.is_empty() {
-                    tracing::info!("Hierarchical chunking: document {} split into {} child chunks", crate::util::safe_truncate(&cid, 8), chunks.len());
-                    for (ci, chunk) in chunks.iter().enumerate() {
-                        let mut child_tags = tags.clone();
-                        child_tags.push(format!("parent_cid:{}", cid));
-                        child_tags.push(format!("chunk_idx:{}", ci));
-                        child_tags.push("is_chunk:true".to_string());
-                        let child_meta = AIObjectMeta {
-                            content_type: crate::cas::ContentType::Text,
-                            tags: child_tags.clone(),
-                            created_by: meta.created_by.clone(),
-                            created_at: meta.created_at,
-                            intent: None,
-                            tenant_id: meta.tenant_id.clone(),
-                        };
-                        let child_obj = AIObject::new(chunk.text.as_bytes().to_vec(), child_meta);
-                        if let Ok(child_cid) = self.cas.put(&child_obj) {
-                            self.update_tag_index(&child_tags, &child_cid);
-                            self.upsert_semantic_index(&child_cid, chunk.text.as_bytes(), &AIObjectMeta {
-                                content_type: crate::cas::ContentType::Text,
-                                tags: child_tags,
-                                created_by: meta.created_by.clone(),
-                                created_at: meta.created_at,
-                                intent: None,
-                                tenant_id: meta.tenant_id.clone(),
-                            });
-                        }
-                    }
-                } else {
-                    tracing::debug!("Document {} too small for chunking mode {:?}", crate::util::safe_truncate(&cid, 8), chunking_mode);
-                }
-            }
-        }
 
         Ok(cid)
     }
@@ -553,7 +585,7 @@ impl SemanticFS {
         self.update_tag_index(&final_tags, &new_cid);
 
         self.search_index.delete(old_cid);
-        let embedding = self.upsert_semantic_index(&new_cid, &new_content, &new_meta);
+        let embedding = self.upsert_semantic_index(&new_cid, &new_content, &new_meta).unwrap_or(None);
 
         if let Some(ref kg) = self.knowledge_graph {
             let _ = kg.upsert_document(&new_cid, &final_tags, &old_obj.meta.created_by);
@@ -619,7 +651,7 @@ impl SemanticFS {
         self.update_tag_index(&entry.original_meta.tags, cid);
 
         if let Ok(obj) = self.cas.get(cid) {
-            let embedding = self.upsert_semantic_index(cid, &obj.data, &obj.meta);
+            let embedding = self.upsert_semantic_index(cid, &obj.data, &obj.meta).unwrap_or(None);
 
             if let Some(ref kg) = self.knowledge_graph {
                 if let Some(ref emb) = embedding {
@@ -714,12 +746,12 @@ impl SemanticFS {
 
         let vector_hits: HashMap<String, f32> = match &query_emb {
             Some(emb) => self
-                .search_index.search(emb, limit * 2, &filter)
+                .search_index.search(emb, limit * 10, &filter)
                 .into_iter().map(|hit| (hit.cid.clone(), hit.score)).collect(),
             None => HashMap::new(),
         };
 
-        let bm25_hits: Vec<(String, f32)> = self.bm25_index.search(query, limit * 2);
+        let bm25_hits: Vec<(String, f32)> = self.bm25_index.search(query, 1000);
 
         if vector_hits.is_empty() && bm25_hits.is_empty() {
             return self.search_by_tags_with_filter(query, &filter);
@@ -733,12 +765,24 @@ impl SemanticFS {
         let mut sorted_vector: Vec<_> = vector_hits.iter().collect();
         sorted_vector.sort_by(|a, b| b.1.partial_cmp(a.1).unwrap_or(std::cmp::Ordering::Equal));
         for (rank, (cid, _score)) in sorted_vector.iter().enumerate() {
-            let rrf = vector_weight / (rrf_k + rank as f32);
+            let mut rrf = vector_weight / (rrf_k + rank as f32);
+            // F-37: Huge boost for chunks
+            if let Ok(obj) = self.cas.get_raw(cid) {
+                if obj.meta.tags.iter().any(|t| t == "is_chunk:true") {
+                    rrf += 0.2;
+                }
+            }
             rrf_scores.insert((*cid).clone(), (rrf, 1usize));
         }
 
         for (rank, (cid, _score)) in bm25_hits.iter().enumerate() {
-            let rrf = bm25_weight / (rrf_k + rank as f32);
+            let mut rrf = bm25_weight / (rrf_k + rank as f32);
+            // F-37: Huge boost for chunks
+            if let Ok(obj) = self.cas.get_raw(cid) {
+                if obj.meta.tags.iter().any(|t| t == "is_chunk:true") {
+                    rrf += 0.2;
+                }
+            }
             if let Some((existing_rrf, count)) = rrf_scores.get_mut(cid) {
                 *existing_rrf += rrf;
                 *count += 1;
@@ -761,9 +805,17 @@ impl SemanticFS {
             }
         }
 
-        // Inject PPR boost into RRF scores
+        // Inject PPR boost and Chunk boost into RRF scores
         for (cid, ppr_score) in &ppr_boost {
-            let boost = ppr_score * 0.5;
+            let mut boost = ppr_score * 0.5;
+            
+            // F-37: Chunk boost
+            if let Ok(obj) = self.cas.get_raw(cid) {
+                if obj.meta.tags.iter().any(|t| t == "is_chunk:true") {
+                    boost += 0.05; // Significant boost for chunks to overcome zero-vectored parents
+                }
+            }
+
             if let Some((existing_rrf, _)) = rrf_scores.get_mut(cid) {
                 *existing_rrf += boost;
             } else {
@@ -1035,7 +1087,8 @@ impl SemanticFS {
         }
     }
 
-    fn upsert_semantic_index(&self, cid: &str, content: &[u8], meta: &AIObjectMeta) -> Option<Vec<f32>> {
+    fn upsert_semantic_index(&self, cid: &str, content: &[u8], meta: &AIObjectMeta) -> Result<Option<Vec<f32>>, crate::fs::embedding::EmbedError> {
+        tracing::debug!(cid = %crate::util::safe_truncate(cid, 8), "Indexing semantic object");
         let text = String::from_utf8_lossy(content);
         let snippet = if text.trim().is_empty() {
             String::new()
@@ -1059,7 +1112,10 @@ impl SemanticFS {
                     result.embedding
                 }
                 Err(e) => {
-                    tracing::warn!("Failed to embed CID={}: {e}. Indexing with zero vector.", cid);
+                    if matches!(e, crate::fs::embedding::EmbedError::InputTooLarge(_)) {
+                        return Err(e);
+                    }
+                    tracing::warn!(cid = %crate::util::safe_truncate(cid, 8), "Failed to embed object: {e}. Indexing with zero vector (not searchable by similarity).");
                     is_real_embedding = false;
                     vec![0.0f32; self.embedding.dimension()]
                 }
@@ -1079,7 +1135,7 @@ impl SemanticFS {
             self.bm25_index.upsert(cid, &text);
         }
 
-        if is_real_embedding { Some(embedding) } else { None }
+        if is_real_embedding { Ok(Some(embedding)) } else { Ok(None) }
     }
 
     fn update_tag_index(&self, tags: &[String], cid: &str) {

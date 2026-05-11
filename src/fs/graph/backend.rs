@@ -865,6 +865,45 @@ impl KnowledgeGraph for PetgraphBackend {
         Ok(())
     }
 
+    fn invalidate_edge(&self, src: &str, dst: &str, edge_type: KGEdgeType) -> Result<bool, KGError> {
+        let now = crate::util::now_ms();
+        let mut invalidated = Vec::new();
+        let mut out = self.out_edges.write().unwrap();
+        if let Some(list) = out.get_mut(src) {
+            for (_, edge) in list.iter_mut() {
+                if edge.dst == dst && edge.edge_type == edge_type && edge.invalid_at.is_none() {
+                    edge.invalid_at = Some(now);
+                    invalidated.push(edge.clone());
+                }
+            }
+        }
+        drop(out);
+        if !invalidated.is_empty() {
+            // Persist invalidated edges using the same pattern as invalidate_conflicts
+            let Some(ref mtx) = self.db else { return Ok(true) };
+            let db = mtx.lock().unwrap();
+            let res = (|| -> Result<(), Box<dyn std::error::Error>> {
+                let write_txn = db.begin_write()?;
+                {
+                    let mut table = write_txn.open_table(KG_EDGES)?;
+                    for edge in &invalidated {
+                        let key = Self::edge_key(&edge.src, &edge.dst, &edge.edge_type, edge.created_at);
+                        let data = serde_json::to_vec(edge)?;
+                        table.insert(key.as_str(), data.as_slice())?;
+                    }
+                }
+                write_txn.commit()?;
+                Ok(())
+            })();
+            if let Err(e) = res {
+                tracing::error!("KG invalidate_edge persist failed: {e}");
+            }
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
     fn update_node(&self, id: &str, label: Option<&str>, properties: Option<serde_json::Value>) -> Result<(), KGError> {
         let mut nodes = self.nodes.write().unwrap();
         let node = nodes.get_mut(id).ok_or_else(|| KGError::NodeNotFound(id.to_string()))?;

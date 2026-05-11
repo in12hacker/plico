@@ -116,9 +116,10 @@ impl super::super::AIKernel {
                 r.memory = Some(memories);
                 r
             }
-            ApiRequest::RecallRouted { agent_id, query, k: _, tenant_id } => {
+            ApiRequest::RecallRouted { agent_id, query, k, tenant_id } => {
                 let tenant = tenant_id.unwrap_or_else(|| DEFAULT_TENANT.to_string());
-                match self.recall_routed(&agent_id, &tenant, &query) {
+                let k_override = if k > 0 { Some(k) } else { None };
+                match self.recall_routed_with_k(&agent_id, &tenant, &query, k_override) {
                     Ok((entries, classified)) => {
                         let memories: Vec<String> = entries.into_iter()
                             .filter_map(|m| match m.content {

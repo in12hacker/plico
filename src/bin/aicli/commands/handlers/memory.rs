@@ -135,11 +135,60 @@ pub fn parse_memory_scope(s: &str) -> MemoryScope {
     }
 }
 
+pub fn cmd_memory_export(kernel: &AIKernel, args: &[String]) -> ApiResponse {
+    let agent_id = extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
+    let out_path = match extract_arg(args, "--out") {
+        Some(p) => p,
+        None => return ApiResponse::error("memory export requires --out <file>"),
+    };
+    let passphrase = extract_arg(args, "--passphrase");
+
+    match kernel.memory_export(&agent_id, "default", passphrase.as_deref()) {
+        Ok(data) => {
+            if let Err(e) = std::fs::write(&out_path, &data) {
+                return ApiResponse::error(format!("Failed to write file: {}", e));
+            }
+            let mut r = ApiResponse::ok();
+            r.data = Some(format!("Exported {} bytes to {}", data.len(), out_path));
+            r
+        }
+        Err(e) => ApiResponse::error(e),
+    }
+}
+
+pub fn cmd_memory_import(kernel: &AIKernel, args: &[String]) -> ApiResponse {
+    let file_path = match extract_arg(args, "--file") {
+        Some(p) => p,
+        None => return ApiResponse::error("memory import requires --file <path>"),
+    };
+    let passphrase = extract_arg(args, "--passphrase");
+
+    let data = match std::fs::read(&file_path) {
+        Ok(d) => d,
+        Err(e) => return ApiResponse::error(format!("Failed to read file: {}", e)),
+    };
+
+    match kernel.memory_import(&data, passphrase.as_deref(), "default") {
+        Ok(report) => {
+            let mut r = ApiResponse::ok();
+            r.data = Some(serde_json::json!({
+                "memories_imported": report.memories_imported,
+                "memories_skipped": report.memories_skipped,
+                "kg_edges_imported": report.kg_edges_imported,
+                "kg_edges_skipped": report.kg_edges_skipped,
+            }).to_string());
+            r
+        }
+        Err(e) => ApiResponse::error(e),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
 
-    fn make_test_kernel() -> plico::kernel::AIKernel {
+    fn make_test_kernel() -> Arc<plico::kernel::AIKernel> {
         let dir = tempfile::tempdir().unwrap();
         std::env::set_var("EMBEDDING_BACKEND", "stub");
         plico::kernel::AIKernel::new(dir.path().to_path_buf()).expect("kernel")

@@ -159,11 +159,13 @@ mod tests {
     fn test_verify_write_not_found() {
         use std::sync::Arc;
         let dir = tempfile::tempdir().unwrap();
+        let cas = Arc::new(crate::cas::CASStorage::new(dir.path().join("cas")).unwrap());
         std::env::set_var("EMBEDDING_BACKEND", "stub");
         let embedding = Arc::new(crate::fs::StubEmbeddingProvider::new());
         let search = Arc::new(crate::fs::search::memory::InMemoryBackend::new());
         let fs = Arc::new(crate::fs::SemanticFS::new(
             dir.path().to_path_buf(),
+            cas,
             embedding.clone(),
             search.clone(),
             None,

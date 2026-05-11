@@ -3,17 +3,19 @@
 //! Validates the learning loop: skill discovery works, procedural memory stores
 //! reusable operations, and growth tracking captures agent evolution.
 
+use std::sync::Arc;
 use plico::api::semantic::ApiRequest;
 use plico::kernel::AIKernel;
 use tempfile::tempdir;
 
-fn make_kernel() -> (AIKernel, tempfile::TempDir) {
+fn make_kernel() -> (Arc<AIKernel>, tempfile::TempDir) {
     let _ = std::env::set_var("EMBEDDING_BACKEND", "stub");
     let _ = std::env::set_var("LLM_BACKEND", "stub");
-    let dir = tempdir().unwrap();
+    let dir = tempfile::tempdir().unwrap();
     let kernel = AIKernel::new(dir.path().to_path_buf()).expect("kernel init");
     (kernel, dir)
 }
+
 
 #[test]
 fn axiom9_skill_registration_and_discovery() {

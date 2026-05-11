@@ -119,8 +119,9 @@ pub fn cmd_delegate(kernel: &AIKernel, args: &[String]) -> ApiResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
 
-    fn make_test_kernel() -> AIKernel {
+    fn make_test_kernel() -> Arc<AIKernel> {
         let dir = tempfile::tempdir().unwrap();
         std::env::set_var("EMBEDDING_BACKEND", "stub");
         AIKernel::new(dir.path().to_path_buf()).expect("kernel")

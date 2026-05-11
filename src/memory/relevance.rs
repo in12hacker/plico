@@ -16,8 +16,14 @@ const W_RECENCY: f32 = 0.4;
 const W_FREQUENCY: f32 = 0.3;
 const W_IMPORTANCE: f32 = 0.3;
 
-/// Time decay constant: halves relevance every 24 hours.
+/// Time decay constant: halves relevance every 24 hours (for ephemeral memories).
 const DECAY_LAMBDA: f64 = 0.693 / (24.0 * 3600.0 * 1000.0); // ln(2) / 24h_ms
+
+/// Decay constant for long-term memories: 30-day half-life.
+const DECAY_LAMBDA_LONG_TERM: f64 = 0.693 / (30.0 * 24.0 * 3600.0 * 1000.0); // ln(2) / 30d_ms
+
+/// Decay constant for working memories: 7-day half-life.
+const DECAY_LAMBDA_WORKING: f64 = 0.693 / (7.0 * 24.0 * 3600.0 * 1000.0); // ln(2) / 7d_ms
 
 /// Relevance score breakdown for a single memory entry.
 #[derive(Debug, Clone)]
@@ -28,6 +34,16 @@ pub struct RelevanceScore {
     pub combined: f32,
 }
 
+/// Get the decay constant for a memory tier.
+fn decay_lambda_for_tier(tier: &MemoryTier) -> f64 {
+    match tier {
+        MemoryTier::Ephemeral => DECAY_LAMBDA,
+        MemoryTier::Working => DECAY_LAMBDA_WORKING,
+        MemoryTier::LongTerm => DECAY_LAMBDA_LONG_TERM,
+        MemoryTier::Procedural => 0.0, // Procedural memories never decay
+    }
+}
+
 /// Compute relevance score for a single entry.
 ///
 /// `now_ms` — current time in milliseconds since epoch.
@@ -35,7 +51,8 @@ pub struct RelevanceScore {
 ///                (for normalization). Must be >= 1.
 pub fn score_entry(entry: &MemoryEntry, now_ms: u64, max_access: u32) -> RelevanceScore {
     let age_ms = now_ms.saturating_sub(entry.last_accessed) as f64;
-    let recency = (-DECAY_LAMBDA * age_ms).exp() as f32;
+    let lambda = decay_lambda_for_tier(&entry.tier);
+    let recency = if lambda == 0.0 { 1.0 } else { (-lambda * age_ms).exp() as f32 };
 
     let max_a = max_access.max(1) as f32;
     let frequency = entry.access_count as f32 / max_a;

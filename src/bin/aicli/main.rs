@@ -195,6 +195,7 @@ fn wait_for_socket(sock_path: &std::path::Path, timeout: std::time::Duration) ->
 fn run_embedded(args: &[String], root: &std::path::Path) -> bool {
     let filtered = filter_args(args);
     let kernel = AIKernel::new(root.to_path_buf()).expect("Failed to initialize kernel");
+    kernel.start_workers();
     let result = commands::execute_local(&kernel, &filtered);
     commands::print_result(&result)
 }
@@ -233,6 +234,81 @@ fn execute_remote(client: &dyn KernelClient, args: &[String]) -> ApiResponse {
 fn build_remote_request(args: &[String]) -> Option<ApiRequest> {
     let agent_id = || commands::extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
     match args.first().map(|s| s.as_str()) {
+        // ── Core Polymorphic Verbs (v1.0) ──
+        Some("get") => {
+            let id = args.get(1).cloned().unwrap_or_default();
+            let variant = commands::extract_arg(args, "--variant");
+            Some(ApiRequest::CoreGet { id, variant, agent_id: agent_id() })
+        }
+        Some("list") => {
+            let variant = commands::extract_arg(args, "--variant");
+            let limit = commands::extract_arg(args, "--limit").and_then(|s| s.parse().ok());
+            let offset = commands::extract_arg(args, "--offset").and_then(|s| s.parse().ok());
+            let filter = commands::extract_arg(args, "--filter").and_then(|s| serde_json::from_str(&s).ok());
+            Some(ApiRequest::CoreList { variant, filter, limit, offset, agent_id: agent_id() })
+        }
+        Some("search_unified") | Some("search-all") => {
+            let query = commands::extract_arg(args, "--query")
+                .or_else(|| args.get(1).cloned().filter(|a| !a.starts_with("--")))
+                .unwrap_or_default();
+            let variant = commands::extract_arg(args, "--variant");
+            let limit = commands::extract_arg(args, "--limit").and_then(|s| s.parse().ok());
+            let filter = commands::extract_arg(args, "--filter").and_then(|s| serde_json::from_str(&s).ok());
+            Some(ApiRequest::CoreSearch { query, variant, filter, limit, agent_id: agent_id() })
+        }
+        Some("store") => {
+            let data_str = commands::extract_arg(args, "--data")
+                .or_else(|| args.get(1).cloned().filter(|a| !a.starts_with("--")))
+                .unwrap_or_default();
+            let data = serde_json::from_str(&data_str).unwrap_or(serde_json::Value::String(data_str));
+            let variant = commands::extract_arg(args, "--variant");
+            let tags = commands::extract_tags(args, "--tags");
+            Some(ApiRequest::CoreCreate { variant, data, tags, agent_id: agent_id() })
+        }
+        Some("patch") => {
+            let id = commands::extract_arg(args, "--id")
+                .or_else(|| args.get(1).cloned().filter(|a| !a.starts_with("--")))
+                .unwrap_or_default();
+            let data_str = commands::extract_arg(args, "--data").unwrap_or_default();
+            let data = serde_json::from_str(&data_str).unwrap_or(serde_json::Value::String(data_str));
+            let variant = commands::extract_arg(args, "--variant");
+            Some(ApiRequest::CoreUpdate { id, variant, data, agent_id: agent_id() })
+        }
+        Some("remove") => {
+            let id = args.get(1).cloned().unwrap_or_default();
+            let variant = commands::extract_arg(args, "--variant");
+            Some(ApiRequest::CoreDelete { id, variant, agent_id: agent_id() })
+        }
+        Some("invoke") => {
+            let action = args.get(1).cloned().unwrap_or_default();
+            let params_str = commands::extract_arg(args, "--params").unwrap_or_else(|| "{}".to_string());
+            let params = serde_json::from_str(&params_str).unwrap_or(serde_json::Value::Object(Default::default()));
+            Some(ApiRequest::CoreExec { action, params, agent_id: agent_id() })
+        }
+        Some("inspect") => {
+            let variant = commands::extract_arg(args, "--variant");
+            Some(ApiRequest::CoreObserve { variant, agent_id: agent_id() })
+        }
+        Some("link") => {
+            let src = commands::extract_arg(args, "--src").unwrap_or_default();
+            let dst = commands::extract_arg(args, "--dst").unwrap_or_default();
+            let relation = commands::extract_arg(args, "--relation");
+            let weight = commands::extract_arg(args, "--weight").and_then(|s| s.parse().ok());
+            Some(ApiRequest::CoreLink { src, dst, relation, weight, agent_id: agent_id() })
+        }
+        Some("ask") => {
+            let query = commands::extract_arg(args, "--query")
+                .or_else(|| args.get(1).cloned().filter(|a| !a.starts_with("--")))
+                .unwrap_or_default();
+            let context_ids = commands::extract_tags(args, "--context"); // Reuse tags parser for context IDs
+            Some(ApiRequest::CoreAsk { query, context_ids, agent_id: agent_id() })
+        }
+        Some("control") => {
+            let action = commands::extract_arg(args, "--action");
+            Some(ApiRequest::CoreState { action, agent_id: agent_id() })
+        }
+
+        // ── Specific Verbs (Legacy/Specialized) ──
         Some("put") | Some("create") => {
             let file_path = commands::extract_arg(args, "--file");
             let dir_path = commands::extract_arg(args, "--dir");
@@ -263,7 +339,7 @@ fn build_remote_request(args: &[String]) -> Option<ApiRequest> {
                 Some(ApiRequest::Create { api_version: None, content, content_encoding: Default::default(), tags, agent_id: agent_id(), tenant_id: None, agent_token: None, intent: commands::extract_arg(args, "--intent") })
             }
         }
-        Some("get") | Some("read") => {
+        Some("read") => {
             let cid = args.get(1).cloned().unwrap_or_default();
             Some(ApiRequest::Read { cid, agent_id: agent_id(), tenant_id: None, agent_token: None })
         }
@@ -682,15 +758,27 @@ MODE (default: daemon via UDS):
   --tcp [addr]       Connect to remote daemon via TCP (default: 127.0.0.1:7878)
   --root PATH        Storage root directory (default: ~/.plico)
 
-COMMANDS:
+COMMANDS (Core Polymorphic Verbs v1.0):
+  get          Retrieve object, node, event, task, or session
+  list         List agents, nodes, events, or objects
+  search       Search everything (semantic, keyword, graph, etc.)
+  store        Create a new object or KG node
+  patch        Update an existing object or KG node
+  remove       Delete an object, node, or event
+  invoke       Execute a tool call or kernel action
+  inspect      Observe metrics, audit logs, or diagnostics
+  link         Create a semantic, causal, or version link
+  ask          RAG-style query over context
+  control      Manage agent/session state (suspend, checkpoint)
+
+COMMANDS (Legacy & Specialized):
   put/create   Store content with semantic tags
-  get/read     Retrieve object by CID
-  search       Semantic search with optional tag/time filtering
+  read         Retrieve object by CID
   update       Update object content
   delete       Logical delete (soft, requires Delete permission)
   agent        Register a new agent / set-resources
   agents       List active agents
-  remember     Store memory (--tier ephemeral|working|long-term|procedural)
+  remember     Store memory (--tier ephemeral|working|long-term)
   recall       Retrieve agent memories
   tags         List all tags (embedded mode only)
   explore      Graph neighbors of a CID
@@ -702,7 +790,6 @@ COMMANDS:
   rm-node      Remove a KG node
   rm-edge      Remove a KG edge
   update-node  Update a KG node
-  edge-history Edge version history
   paths        Find paths between two KG nodes
   intent       Submit an intent for agent execution
   status       Query agent state
@@ -712,7 +799,6 @@ COMMANDS:
   complete     Mark agent task as completed
   fail         Mark agent task as failed
   checkpoint   Create agent checkpoint
-  restore-checkpoint  Restore agent from checkpoint
   tool         List/describe/call tools
   send         Send inter-agent message
   messages     Read agent messages

@@ -48,6 +48,9 @@ pub enum EmbedError {
 
     #[error("Python subprocess not available. Install dependencies:\n  pip install transformers huggingface_hub onnxruntime")]
     SubprocessUnavailable,
+
+    #[error("Input too large: {0}")]
+    InputTooLarge(String),
 }
 
 impl EmbedError {

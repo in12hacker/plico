@@ -11,6 +11,7 @@
 //!
 //! Each test prints latency and quality metrics for real-world evaluation.
 
+use std::sync::Arc;
 use plico::kernel::AIKernel;
 use plico::memory::{MemoryScope, MemoryType, MemoryTier, MemoryContent, MemoryEntry};
 use plico::fs::retrieval_router::{
@@ -38,7 +39,7 @@ fn is_real_backend() -> bool {
     std::env::var("LLAMA_URL").is_ok() || std::env::var("EMBEDDING_API_BASE").is_ok()
 }
 
-fn make_real_kernel() -> Option<(AIKernel, tempfile::TempDir)> {
+fn make_real_kernel() -> Option<(Arc<AIKernel>, tempfile::TempDir)> {
     if !is_real_backend() {
         return None;
     }

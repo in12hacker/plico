@@ -1239,6 +1239,50 @@ impl LayeredMemory {
         None
     }
 
+    /// Touch a memory entry: increment access_count and update last_accessed.
+    /// Returns true if the entry was found and updated.
+    pub fn touch_entry(&self, agent_id: &str, entry_id: &str) -> bool {
+        let now = now_ms();
+        for tier_lock in [&self.ephemeral, &self.working, &self.long_term, &self.procedural] {
+            let mut map = tier_lock.write().unwrap();
+            if let Some(entries) = map.get_mut(agent_id) {
+                if let Some(entry) = entries.iter_mut().find(|e| e.id == entry_id) {
+                    entry.access_count += 1;
+                    entry.last_accessed = now;
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// Find a long-term memory entry with high cosine similarity to the given embedding.
+    /// Returns the entry ID if similarity > threshold.
+    pub fn find_similar_long_term(
+        &self,
+        agent_id: &str,
+        embedding: &[f32],
+        threshold: f32,
+    ) -> Option<String> {
+        let map = self.long_term.read().unwrap();
+        if let Some(entries) = map.get(agent_id) {
+            let mut best_id = None;
+            let mut best_sim = threshold;
+            for entry in entries {
+                if let Some(ref emb) = entry.embedding {
+                    let sim = crate::util::cosine_similarity(embedding, emb);
+                    if sim > best_sim {
+                        best_sim = sim;
+                        best_id = Some(entry.id.clone());
+                    }
+                }
+            }
+            best_id
+        } else {
+            None
+        }
+    }
+
     /// Get memory statistics for observability (F-17/F-18).
     /// Returns counts per tier and aggregate stats.
     pub fn get_stats(&self) -> MemoryStats {

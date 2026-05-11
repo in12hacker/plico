@@ -108,6 +108,7 @@ fn main() {
     } else {
         match AIKernel::new(root.clone()) {
             Ok(k) => {
+                k.start_workers();
                 let embedded = EmbeddedClient { kernel: k };
                 Arc::new(embedded)
             }
@@ -614,7 +615,7 @@ mod tests {
         assert!(result.unwrap_err().contains("since_seq"));
     }
 
-    fn make_test_kernel() -> AIKernel {
+    fn make_test_kernel() -> Arc<AIKernel> {
         let dir = tempfile::TempDir::new().unwrap();
         AIKernel::new(dir.path().to_path_buf()).unwrap()
     }

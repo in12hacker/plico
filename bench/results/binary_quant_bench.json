@@ -1,0 +1,42 @@
+{
+  "benchmark": "Binary Quantization Search Benchmark",
+  "timestamp": "2026-05-10T15:39:56",
+  "results": [
+    {
+      "dataset_size": 100,
+      "write_qps": 255.0,
+      "search_avg_ms": 84.84,
+      "search_p50_ms": 90.23,
+      "search_p95_ms": 107.07,
+      "search_p99_ms": 108.65,
+      "results_returned": 6
+    },
+    {
+      "dataset_size": 500,
+      "write_qps": 211.6,
+      "search_avg_ms": 146.12,
+      "search_p50_ms": 159.84,
+      "search_p95_ms": 206.38,
+      "search_p99_ms": 235.46,
+      "results_returned": 6
+    },
+    {
+      "dataset_size": 1000,
+      "write_qps": 188.4,
+      "search_avg_ms": 179.02,
+      "search_p50_ms": 177.54,
+      "search_p95_ms": 220.2,
+      "search_p99_ms": 224.52,
+      "results_returned": 6
+    },
+    {
+      "dataset_size": 2000,
+      "write_qps": 181.0,
+      "search_avg_ms": 174.65,
+      "search_p50_ms": 175.19,
+      "search_p95_ms": 223.51,
+      "search_p99_ms": 228.46,
+      "results_returned": 6
+    }
+  ]
+}

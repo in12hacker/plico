@@ -125,6 +125,10 @@ impl OpenAIEmbeddingBackend {
 
         if !status.is_success() {
             let body_str = String::from_utf8_lossy(&body_bytes);
+            if body_str.contains("too large") || body_str.contains("batch size") || body_str.contains("too many tokens") || body_str.contains("context_length_exceeded") {
+                tracing::info!("Detected 'Input too large' error from embedding server, triggering self-healing.");
+                return Err(EmbedError::InputTooLarge(body_str.to_string()));
+            }
             return Err(EmbedError::Api(format!("status={status} body={body_str}")));
         }
 
@@ -160,6 +164,10 @@ impl OpenAIEmbeddingBackend {
 
         if !status.is_success() {
             let body_str = String::from_utf8_lossy(&body_bytes);
+            if body_str.contains("too large") || body_str.contains("batch size") || body_str.contains("too many tokens") || body_str.contains("context_length_exceeded") {
+                tracing::info!("Detected 'Input too large' error from embedding server, triggering self-healing.");
+                return Err(EmbedError::InputTooLarge(body_str.to_string()));
+            }
             return Err(EmbedError::Api(format!("status={status} body={body_str}")));
         }
 

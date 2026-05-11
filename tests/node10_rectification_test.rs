@@ -7,17 +7,20 @@ use plico::fs::semantic_fs::SemanticFS;
 use plico::fs::embedding::StubEmbeddingProvider;
 use plico::fs::search::InMemoryBackend;
 use plico::api::semantic::ApiResponse;
+use plico::cas::CASStorage;
 use std::sync::Arc;
 
 /// F-43: Soft-deleted objects are excluded from search after rebuild.
 #[test]
 fn test_soft_delete_excluded_from_search_after_rebuild() {
     let dir = tempfile::tempdir().unwrap();
+    let cas = Arc::new(CASStorage::new(dir.path().join("cas")).unwrap());
     let stub_emb = Arc::new(StubEmbeddingProvider::new()) as Arc<dyn plico::fs::embedding::EmbeddingProvider>;
     let search_idx = Arc::new(InMemoryBackend::new()) as Arc<dyn plico::fs::search::SemanticSearch>;
 
     let fs = SemanticFS::new(
         dir.path().to_path_buf(),
+        cas.clone(),
         stub_emb,
         search_idx,
         None,
@@ -30,7 +33,7 @@ fn test_soft_delete_excluded_from_search_after_rebuild() {
     // Simulate restart with new SemanticFS
     let stub_emb2 = Arc::new(StubEmbeddingProvider::new()) as Arc<dyn plico::fs::embedding::EmbeddingProvider>;
     let search_idx2 = Arc::new(InMemoryBackend::new()) as Arc<dyn plico::fs::search::SemanticSearch>;
-    let fs2 = SemanticFS::new(dir.path().to_path_buf(), stub_emb2, search_idx2, None, None).unwrap();
+    let fs2 = SemanticFS::new(dir.path().to_path_buf(), cas, stub_emb2, search_idx2, None, None).unwrap();
 
     let results = fs2.search("secret", 10);
     let found_deleted = results.iter().any(|r| r.cid == cid);
@@ -43,11 +46,13 @@ fn test_soft_delete_excluded_from_search_after_rebuild() {
 #[test]
 fn test_bm25_search_exposed_for_hybrid_fallback() {
     let dir = tempfile::tempdir().unwrap();
+    let cas = Arc::new(CASStorage::new(dir.path().join("cas")).unwrap());
     let stub_emb = Arc::new(StubEmbeddingProvider::new()) as Arc<dyn plico::fs::embedding::EmbeddingProvider>;
     let search_idx = Arc::new(InMemoryBackend::new()) as Arc<dyn plico::fs::search::SemanticSearch>;
 
     let fs = SemanticFS::new(
         dir.path().to_path_buf(),
+        cas,
         stub_emb,
         search_idx,
         None,

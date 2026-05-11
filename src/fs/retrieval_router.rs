@@ -201,8 +201,8 @@ impl RetrievalConfig {
                 use_vector: true,
                 time_decay_boost: false,
                 typed_retrieval: None,
-                bm25_weight: 0.7,
-                vector_weight: 1.3,
+                bm25_weight: 1.2,
+                vector_weight: 0.8,
                 use_reranker: true,
             },
             QueryIntent::Preference => Self {

@@ -11,6 +11,7 @@ pub mod deleted;
 pub mod intent;
 pub mod messaging;
 pub mod tool;
+pub mod core_ops;
 pub mod events;
 pub mod context;
 pub mod skills;
@@ -37,6 +38,7 @@ pub use agent::{
 pub use memory::{
     cmd_remember, cmd_recall, cmd_tags,
     cmd_memmove, cmd_memdelete,
+    cmd_memory_export, cmd_memory_import,
 };
 pub use graph::{
     cmd_explore, cmd_add_node, cmd_add_edge,

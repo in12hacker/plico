@@ -4,12 +4,8 @@
 //! can use `make_kernel()` without importing from the test crate.
 
 #[cfg(test)]
-pub fn make_kernel() -> (crate::kernel::AIKernel, tempfile::TempDir) {
-    let _ = std::env::set_var("EMBEDDING_BACKEND", "stub");
-    let _ = std::env::set_var("LLM_BACKEND", "stub");
-    let dir = tempfile::tempdir().unwrap();
-    let kernel = crate::kernel::AIKernel::new(dir.path().to_path_buf()).expect("kernel init");
-    (kernel, dir)
+pub fn make_kernel() -> (std::sync::Arc<crate::kernel::AIKernel>, tempfile::TempDir) {
+    make_kernel_arc()
 }
 
 #[cfg(test)]
@@ -17,6 +13,6 @@ pub fn make_kernel_arc() -> (std::sync::Arc<crate::kernel::AIKernel>, tempfile::
     let _ = std::env::set_var("EMBEDDING_BACKEND", "stub");
     let _ = std::env::set_var("LLM_BACKEND", "stub");
     let dir = tempfile::tempdir().unwrap();
-    let kernel = std::sync::Arc::new(crate::kernel::AIKernel::new(dir.path().to_path_buf()).expect("kernel init"));
+    let kernel = crate::kernel::AIKernel::new(dir.path().to_path_buf()).expect("kernel init");
     (kernel, dir)
 }

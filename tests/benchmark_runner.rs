@@ -14,6 +14,7 @@
 //! - `Scenario`: A realistic agent workflow to measure
 //! - `BenchmarkReport`: Detailed output for analysis
 
+use std::sync::Arc;
 use plico::kernel::AIKernel;
 use plico::memory::MemoryScope;
 use plico::api::permission::PermissionAction;
@@ -311,13 +312,14 @@ pub trait Scenario {
 }
 
 /// Helper: create a fresh kernel with stub embedding backend.
-pub fn make_kernel() -> (AIKernel, tempfile::TempDir) {
+pub fn make_kernel() -> (Arc<AIKernel>, tempfile::TempDir) {
     let _ = std::env::set_var("EMBEDDING_BACKEND", "stub");
     let _ = std::env::set_var("LLM_BACKEND", "stub");
     let dir = tempfile::tempdir().unwrap();
     let kernel = AIKernel::new(dir.path().to_path_buf()).expect("kernel init");
     (kernel, dir)
 }
+
 
 /// Helper: register an agent with full permissions.
 pub fn register_with_permissions(kernel: &AIKernel, name: &str) -> String {

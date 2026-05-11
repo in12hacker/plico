@@ -23,36 +23,52 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from plico_client import PlicoClient
 
-READER_PROMPT = """You are a helpful assistant answering questions based ONLY on the provided context.
-If the context does not contain enough information, say "I don't know."
+READER_PROMPT = """Answer the question using ONLY the context below. Be extremely concise.
 
 Context:
 {context}
 
 Question: {question}
 
-Answer concisely in 1-3 sentences."""
+Rules:
+- Give the shortest possible answer (name, date, yes/no, or one phrase)
+- Do NOT start with "Based on" or "The text says"
+- If the answer is a name or number, output ONLY that
+- If the context does not contain the answer, say "I don't know"
+- Maximum 15 words
 
-TEMPORAL_PROMPT = """You are a helpful assistant answering TEMPORAL questions about when events happened.
-Pay close attention to dates, timestamps, and temporal markers in the context.
-Answer with the specific date/time if available, or relative time (e.g., "two weeks ago").
+Answer:"""
 
-Context:
-{context}
-
-Question: {question}
-
-Answer with the specific time/date mentioned in the context. Be precise."""
-
-MULTI_HOP_PROMPT = """You are a helpful assistant answering complex questions that require connecting information from multiple pieces of context.
-Read ALL context carefully. The answer requires combining facts from different parts.
+TEMPORAL_PROMPT = """Answer the temporal question using ONLY the context below. Be extremely concise.
 
 Context:
 {context}
 
 Question: {question}
 
-Think step by step. First identify the relevant facts, then combine them to answer. Be concise."""
+Rules:
+- Give the specific date/time if available (e.g., "March 5th", "two weeks ago")
+- Output ONLY the time/date answer, nothing else
+- Do NOT start with "Based on" or "The text says"
+- Maximum 10 words
+
+Answer:"""
+
+MULTI_HOP_PROMPT = """Answer the question using ONLY the context below. Be extremely concise.
+
+Context:
+{context}
+
+Question: {question}
+
+Rules:
+- Start with Yes/No/Likely/Unlikely if applicable
+- Then give the key reason in ONE short sentence
+- Do NOT start with "Based on" or "The text says"
+- Do NOT explain your reasoning process
+- Maximum 15 words
+
+Answer:"""
 
 JUDGE_PROMPT = """You are an impartial judge. Rate the following answer on a scale of 1-5 based on its accuracy and completeness compared to the ground truth.
 
@@ -134,23 +150,22 @@ def ingest_conversation(client: PlicoClient, conv: dict, conv_idx: int) -> str:
 def search_for_context(client: PlicoClient, question: str, agent_id: str, conv_idx: int, k: int = 15,
                        category: str = "unknown") -> str:
     """Search plicod for relevant context using intent-aware routed recall."""
-    for attempt in range(3):
-        try:
-            resp = client.recall_routed(
-                agent_id=agent_id,
-                query=question,
-                k=k,
-            )
-            memories = resp.get("memory", [])
-            if memories:
-                return "\n".join(memories)
-            break
-        except (ConnectionError, OSError, TimeoutError):
-            if attempt < 2:
-                time.sleep(0.5)
-                client.close()
-        except Exception:
-            break
+    # For multi-hop: also search with decomposed sub-queries
+    all_memories = set()
+
+    # Primary search with full question
+    memories = _recall_single(client, question, agent_id, k)
+    all_memories.update(memories)
+
+    # Multi-hop: decompose into sub-queries for broader recall
+    if category == "multi-hop" and len(memories) < k:
+        sub_queries = decompose_query(question)
+        for sq in sub_queries[:2]:  # Max 2 sub-queries
+            sub_memories = _recall_single(client, sq, agent_id, k // 2)
+            all_memories.update(sub_memories)
+
+    if all_memories:
+        return "\n".join(all_memories)
 
     # Fallback to basic search
     resp = {"results": []}
@@ -167,13 +182,65 @@ def search_for_context(client: PlicoClient, question: str, agent_id: str, conv_i
             if attempt < 2:
                 time.sleep(0.5)
                 client.close()
-                
+
     snippets = []
     for r in resp.get("results", []):
         snippet = r.get("snippet", "")
         if snippet:
             snippets.append(snippet)
     return "\n".join(snippets)
+
+
+def _recall_single(client: PlicoClient, query: str, agent_id: str, k: int) -> list[str]:
+    """Single recall_routed call with retry."""
+    for attempt in range(3):
+        try:
+            resp = client.recall_routed(agent_id=agent_id, query=query, k=k)
+            memories = resp.get("memory", [])
+            return memories if memories else []
+        except (ConnectionError, OSError, TimeoutError):
+            if attempt < 2:
+                time.sleep(0.5)
+                client.close()
+        except Exception:
+            break
+    return []
+
+
+def decompose_query(question: str) -> list[str]:
+    """Rule-based query decomposition for multi-hop questions.
+    Breaks 'why X caused Y' into ['X', 'Y caused by X'] etc."""
+    q = question.lower()
+    sub_queries = []
+
+    # "Why did X cause Y?" -> ["X", "Y"]
+    if "why" in q:
+        # Extract the main entities/concepts
+        words = [w for w in question.split() if len(w) > 2 and w.lower() not in
+                 {"why", "did", "does", "the", "this", "that", "what", "how", "when", "where"}]
+        if len(words) >= 2:
+            mid = len(words) // 2
+            sub_queries.append(" ".join(words[:mid]))
+            sub_queries.append(" ".join(words[mid:]))
+
+    # "What is the relationship between X and Y?" -> ["X", "Y"]
+    elif "relationship" in q or "related" in q:
+        if "between" in q:
+            parts = q.split("between")
+            if len(parts) == 2:
+                entities = parts[1].strip().rstrip("?").split(" and ")
+                if len(entities) == 2:
+                    sub_queries.extend([e.strip() for e in entities])
+
+    # "How did X lead to Y?" -> ["X", "Y"]
+    elif "lead to" in q or "led to" in q or "result" in q:
+        words = [w for w in question.split() if len(w) > 2]
+        if len(words) >= 2:
+            mid = len(words) // 2
+            sub_queries.append(" ".join(words[:mid]))
+            sub_queries.append(" ".join(words[mid:]))
+
+    return sub_queries
 
 
 def call_llm(url: str, model: str, prompt: str, max_tokens: int = 1024) -> str:
@@ -261,19 +328,24 @@ def evaluate_conversation(
             print(f"    [Conv {conv_idx}] Processed {len(results)}/{len(qa_pairs)} QAs...", flush=True)
 
         t_search_start = time.perf_counter()
-        context = search_for_context(client, question, agent_id, conv_idx, category=category)
+        # Multi-hop queries need more context for cross-snippet reasoning
+        search_k = 25 if category == "multi-hop" else 15
+        context = search_for_context(client, question, agent_id, conv_idx, k=search_k, category=category)
         t_search_end = time.perf_counter()
         
         # Select intent-specific prompt
         if category == "temporal":
             prompt = TEMPORAL_PROMPT.format(context=context, question=question)
+            reader_max_tokens = 200
         elif category == "multi-hop":
             prompt = MULTI_HOP_PROMPT.format(context=context, question=question)
+            reader_max_tokens = 200  # Concise answers only
         else:
             prompt = READER_PROMPT.format(context=context, question=question)
-            
+            reader_max_tokens = 200
+
         t_reader_start = time.perf_counter()
-        answer = call_llm(reader_url, reader_model, prompt)
+        answer = call_llm(reader_url, reader_model, prompt, max_tokens=reader_max_tokens)
         t_reader_end = time.perf_counter()
 
         f1 = compute_f1(answer, gold_answer)

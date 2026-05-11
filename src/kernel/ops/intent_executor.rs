@@ -207,7 +207,7 @@ impl AutonomousExecutor {
             self.stats.record(op_type.to_string(), duration_ms);
 
             // Soul v3.0: Notify CognitiveLoop of step completion for trajectory tracking
-            if let Some(ref cognitive_loop) = self.kernel.cognitive_loop {
+            if let Some(ref cognitive_loop) = *self.kernel.cognitive_loop.read().unwrap() {
                 let step_desc = format!("{}:{}", op_type, step.step_id);
                 let _ = cognitive_loop.on_operation_completed(
                     agent_id,
@@ -519,7 +519,7 @@ mod tests {
         let _ = std::env::set_var("LLM_BACKEND", "stub");
         let dir = std::env::temp_dir().join(format!("plico_test_{}_{}", std::process::id(), rand::random::<u32>()));
         std::fs::create_dir_all(&dir).expect("temp dir");
-        let kernel = std::sync::Arc::new(AIKernel::new(dir.clone()).expect("kernel init"));
+        let kernel = AIKernel::new(dir.clone()).expect("kernel init");
         (kernel, dir)
     }
 
@@ -905,7 +905,7 @@ async fn test_learning_loop_methods_called() {
         let _ = std::env::set_var("LLM_BACKEND", "stub");
         let dir = std::env::temp_dir().join(format!("plico_test_{}_{}", std::process::id(), rand::random::<u32>()));
         std::fs::create_dir_all(&dir).expect("temp dir");
-        let kernel = std::sync::Arc::new(AIKernel::new(dir.clone()).expect("kernel init"));
+        let kernel = AIKernel::new(dir.clone()).expect("kernel init");
 
         let agent_id = "test-agent-learning";
 
@@ -950,7 +950,7 @@ async fn test_learning_loop_methods_called() {
         let _ = std::env::set_var("LLM_BACKEND", "stub");
         let dir = std::env::temp_dir().join(format!("plico_test_{}_{}", std::process::id(), rand::random::<u32>()));
         std::fs::create_dir_all(&dir).expect("temp dir");
-        let kernel = std::sync::Arc::new(AIKernel::new(dir.clone()).expect("kernel init"));
+        let kernel = AIKernel::new(dir.clone()).expect("kernel init");
 
         let agent_id = "test-agent-prefetch";
 
@@ -996,7 +996,7 @@ async fn test_learning_loop_methods_called() {
         let _ = std::env::set_var("LLM_BACKEND", "stub");
         let dir = std::env::temp_dir().join(format!("plico_test_{}_{}", std::process::id(), rand::random::<u32>()));
         std::fs::create_dir_all(&dir).expect("temp dir");
-        let kernel = std::sync::Arc::new(AIKernel::new(dir.clone()).expect("kernel init"));
+        let kernel = AIKernel::new(dir.clone()).expect("kernel init");
 
         // Execute a plan that produces CIDs
         let mut plan = IntentPlan::new("data:process".to_string());
@@ -1034,7 +1034,7 @@ async fn test_learning_loop_methods_called() {
         let _ = std::env::set_var("LLM_BACKEND", "stub");
         let dir = std::env::temp_dir().join(format!("plico_test_{}_{}", std::process::id(), rand::random::<u32>()));
         std::fs::create_dir_all(&dir).expect("temp dir");
-        let kernel = std::sync::Arc::new(AIKernel::new(dir.clone()).expect("kernel init"));
+        let kernel = AIKernel::new(dir.clone()).expect("kernel init");
 
         let agent_id = "test-agent-loop";
 

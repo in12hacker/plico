@@ -814,3 +814,91 @@ fn test_ppr_no_seeds() {
     let result = kg.personalized_pagerank(&[], 0.15, 50, 5).unwrap();
     assert!(result.is_empty());
 }
+
+#[test]
+fn test_temporal_diff() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let kg = PetgraphBackend::open(dir.path().to_path_buf());
+
+    kg.add_node(make_node("a", KGNodeType::Entity, vec![], "agent1")).unwrap();
+    kg.add_node(make_node("b", KGNodeType::Entity, vec![], "agent1")).unwrap();
+    kg.add_node(make_node("c", KGNodeType::Entity, vec![], "agent1")).unwrap();
+
+    // At t=100: edge a→b
+    let mut e1 = make_edge("a", "b", KGEdgeType::RelatedTo, 0.8);
+    e1.valid_at = Some(100);
+    kg.add_edge(e1).unwrap();
+
+    // At t=200: edge a→c added
+    let mut e2 = make_edge("a", "c", KGEdgeType::RelatedTo, 0.7);
+    e2.valid_at = Some(200);
+    kg.add_edge(e2).unwrap();
+
+    // Diff t=50 to t=150: should see a→b added
+    let diff = kg.temporal_diff("agent1", 50, 150).unwrap();
+    assert_eq!(diff.added.len(), 1);
+    assert_eq!(diff.added[0].dst, "b");
+    assert!(diff.removed.is_empty());
+
+    // Diff t=150 to t=250: should see a→c added
+    let diff = kg.temporal_diff("agent1", 150, 250).unwrap();
+    assert_eq!(diff.added.len(), 1);
+    assert_eq!(diff.added[0].dst, "c");
+    assert_eq!(diff.unchanged.len(), 1); // a→b still valid
+}
+
+#[test]
+fn test_consolidate_versions() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let kg = PetgraphBackend::open(dir.path().to_path_buf());
+
+    kg.add_node(make_node("a", KGNodeType::Entity, vec![], "agent1")).unwrap();
+    kg.add_node(make_node("b", KGNodeType::Entity, vec![], "agent1")).unwrap();
+
+    // Create 3 temporal versions of the same a→b edge (different created_at)
+    let mut e1 = make_edge("a", "b", KGEdgeType::RelatedTo, 0.8);
+    e1.created_at = 100;
+    e1.invalid_at = Some(200);
+    kg.add_edge(e1).unwrap();
+
+    let mut e2 = make_edge("a", "b", KGEdgeType::RelatedTo, 0.7);
+    e2.created_at = 200;
+    e2.invalid_at = Some(300);
+    kg.add_edge(e2).unwrap();
+
+    let mut e3 = make_edge("a", "b", KGEdgeType::RelatedTo, 0.9);
+    e3.created_at = 300;
+    e3.invalid_at = Some(400);
+    kg.add_edge(e3).unwrap();
+
+    // Consolidate keeping only 1 most recent invalidated version
+    let expired = kg.consolidate_versions("a", "b", KGEdgeType::RelatedTo, 1).unwrap();
+    assert_eq!(expired, 2); // 2 older versions expired
+
+    // Verify history: 3 edges total, 2 expired
+    let history = kg.edge_history("a", "b", Some(KGEdgeType::RelatedTo)).unwrap();
+    let expired_count = history.iter().filter(|e| e.expired_at.is_some()).count();
+    assert_eq!(expired_count, 2);
+}
+
+#[test]
+fn test_consolidation_preserves_valid() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let kg = PetgraphBackend::open(dir.path().to_path_buf());
+
+    kg.add_node(make_node("a", KGNodeType::Entity, vec![], "agent1")).unwrap();
+    kg.add_node(make_node("b", KGNodeType::Entity, vec![], "agent1")).unwrap();
+
+    // Create a valid (non-invalidated) edge
+    let e1 = make_edge("a", "b", KGEdgeType::RelatedTo, 0.8);
+    kg.add_edge(e1).unwrap();
+
+    // Consolidate — should not expire the valid edge
+    let expired = kg.consolidate_versions("a", "b", KGEdgeType::RelatedTo, 0).unwrap();
+    assert_eq!(expired, 0);
+
+    // Edge should still be valid
+    let edge = kg.get_valid_edge_between("a", "b", Some(KGEdgeType::RelatedTo), now_ms()).unwrap();
+    assert!(edge.is_some());
+    assert!(edge.unwrap().expired_at.is_none());
+}

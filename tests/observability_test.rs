@@ -6,18 +6,20 @@
 //! - Metrics counter increment
 //! - Metrics latency histogram
 
+use std::sync::Arc;
 use plico::kernel::AIKernel;
 use plico::kernel::ops::observability::{CorrelationId, KernelMetrics, OpType, OperationTimer, LatencyHistogram};
 use std::time::Duration;
 use tempfile::tempdir;
 
-fn make_kernel() -> (AIKernel, tempfile::TempDir) {
+fn make_kernel() -> (Arc<AIKernel>, tempfile::TempDir) {
     let _ = std::env::set_var("EMBEDDING_BACKEND", "stub");
     let _ = std::env::set_var("LLM_BACKEND", "stub");
-    let dir = tempdir().unwrap();
+    let dir = tempfile::tempdir().unwrap();
     let kernel = AIKernel::new(dir.path().to_path_buf()).expect("kernel init");
     (kernel, dir)
 }
+
 
 #[test]
 fn test_correlation_id_generation() {

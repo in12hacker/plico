@@ -250,6 +250,21 @@ impl crate::kernel::AIKernel {
         self.remember_long_term_scoped(agent_id, tenant_id, content, tags, importance, MemoryScope::Private)
     }
 
+    /// Store a confirmed action as a long-term memory with equal weight.
+    ///
+    /// Implements the "confirmed action as storage" paradigm from Mem0 v3:
+    /// every confirmed agent action is stored with equal importance (50),
+    /// without pre-judging significance. Semantic dedup prevents duplicates.
+    pub fn remember_action(
+        &self,
+        agent_id: &str,
+        tenant_id: &str,
+        content: String,
+        tags: Vec<String>,
+    ) -> Result<String, String> {
+        self.remember_long_term_scoped(agent_id, tenant_id, content, tags, 50, MemoryScope::Private)
+    }
+
     /// Store a long-term memory entry with explicit scope.
     /// Returns the entry ID on success.
     pub fn remember_long_term_scoped(
@@ -275,6 +290,16 @@ impl crate::kernel::AIKernel {
         let ctx = PermissionContext::new(agent_id.to_string(), tenant_id.to_string());
         self.permissions.check(&ctx, PermissionAction::Write).map_err(|e| e.to_string())?;
         let embedding = self.embedding.embed(&content).ok().map(|r| r.embedding);
+
+        // Semantic dedup: if a similar long-term memory exists, just touch it
+        if let Some(ref emb) = embedding {
+            if let Some(existing_id) = self.memory.find_similar_long_term(agent_id, emb, 0.85) {
+                self.memory.touch_entry(agent_id, &existing_id);
+                tracing::info!("Dedup: merged with existing memory {}", existing_id);
+                return Ok(existing_id);
+            }
+        }
+
         let entry_id = uuid::Uuid::new_v4().to_string();
         let created_at = crate::memory::layered::now_ms();
         let content_for_ingest = content.clone();
@@ -522,6 +547,17 @@ impl crate::kernel::AIKernel {
         tenant_id: &str,
         query: &str,
     ) -> Result<(Vec<MemoryEntry>, crate::fs::retrieval_router::ClassifiedIntent), String> {
+        self.recall_routed_with_k(agent_id, tenant_id, query, None)
+    }
+
+    /// Intent-aware recall with optional top_k override.
+    pub fn recall_routed_with_k(
+        &self,
+        agent_id: &str,
+        tenant_id: &str,
+        query: &str,
+        top_k_override: Option<usize>,
+    ) -> Result<(Vec<MemoryEntry>, crate::fs::retrieval_router::ClassifiedIntent), String> {
         use crate::fs::retrieval_router::{
             classify_by_rules, classify_by_llm_response,
             intent_classification_prompt, RetrievalConfig,
@@ -623,7 +659,10 @@ impl crate::kernel::AIKernel {
             (classified, emb_result, bm25_hits, kg_hits)
         });
 
-        let config = RetrievalConfig::for_intent(classified.intent);
+        let mut config = RetrievalConfig::for_intent(classified.intent);
+        if let Some(k) = top_k_override {
+            config.top_k = k;
+        }
 
         // Build BM25 score map for RFE
         let bm25_score_map: std::collections::HashMap<String, f32> = bm25_hits.iter().cloned().collect();

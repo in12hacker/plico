@@ -1144,6 +1144,7 @@ mod tests {
 
         let fs = Arc::new(crate::fs::SemanticFS::new(
             dir.path().to_path_buf(),
+            cas.clone(),
             embedding.clone(),
             search.clone(),
             None,

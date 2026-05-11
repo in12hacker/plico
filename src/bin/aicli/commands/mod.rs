@@ -24,10 +24,25 @@ pub fn execute_local(kernel: &AIKernel, args: &[String]) -> ApiResponse {
 }
 
 fn execute_local_inner(kernel: &AIKernel, args: &[String]) -> ApiResponse {
+    let _agent_id = || extract_arg(args, "--agent").unwrap_or_else(|| "cli".to_string());
     use handlers::*;
     match args.first().map(|s| s.as_str()) {
+        // ── Core Polymorphic Verbs (v1.0) ──
+        Some("get") => core_ops::cmd_core_get(kernel, args),
+        Some("list") => core_ops::cmd_core_list(kernel, args),
+        Some("search_unified") | Some("search-all") => core_ops::cmd_core_search(kernel, args),
+        Some("store") => core_ops::cmd_core_store(kernel, args),
+        Some("patch") => core_ops::cmd_core_patch(kernel, args),
+        Some("remove") => core_ops::cmd_core_remove(kernel, args),
+        Some("invoke") => core_ops::cmd_core_invoke(kernel, args),
+        Some("inspect") => core_ops::cmd_core_inspect(kernel, args),
+        Some("link") => core_ops::cmd_core_link(kernel, args),
+        Some("ask") => core_ops::cmd_core_ask(kernel, args),
+        Some("control") => core_ops::cmd_core_state(kernel, args),
+
+        // ── Specific Verbs (Legacy/Specialized) ──
         Some("put") | Some("create") => cmd_create(kernel, args),
-        Some("get") | Some("read") => cmd_read(kernel, args),
+        Some("read") => cmd_read(kernel, args),
         Some("search") => cmd_search(kernel, args),
         Some("update") => cmd_update(kernel, args),
         Some("delete") => cmd_delete(kernel, args),
@@ -64,6 +79,8 @@ fn execute_local_inner(kernel: &AIKernel, args: &[String]) -> ApiResponse {
         Some("ack") => cmd_ack_message(kernel, args),
         Some("memmove") => cmd_memmove(kernel, args),
         Some("memdelete") => cmd_memdelete(kernel, args),
+        Some("memory-export") => cmd_memory_export(kernel, args),
+        Some("memory-import") => cmd_memory_import(kernel, args),
         Some("events") => cmd_events(kernel, args),
         Some("context") => cmd_context(kernel, args),
         Some("history") => cmd_history(kernel, args),

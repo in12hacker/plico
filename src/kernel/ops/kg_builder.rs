@@ -12,8 +12,10 @@
 
 use std::sync::Arc;
 
+use crate::fs::embedding::EmbeddingProvider;
 use crate::fs::{KnowledgeGraph, KGNode, KGNodeType, KGEdge, KGEdgeType};
 use crate::llm::{LlmProvider, ChatMessage, ChatOptions};
+use crate::kernel::ops::entity_resolver::EntityResolver;
 
 /// A write event sent from the CAS create path to the KG builder worker.
 #[derive(Debug, Clone)]
@@ -92,14 +94,16 @@ impl KgBuilderHandle {
 pub fn start_kg_builder(
     kg: Arc<dyn KnowledgeGraph>,
     llm: Arc<dyn LlmProvider>,
+    event_bus: Arc<crate::kernel::event_bus::EventBus>,
     config: KgBuilderConfig,
+    embedder: Option<Arc<dyn EmbeddingProvider>>,
 ) -> KgBuilderHandle {
     let (tx, rx) = std::sync::mpsc::sync_channel::<WriteEvent>(256);
 
     std::thread::Builder::new()
         .name("kg-builder".to_string())
         .spawn(move || {
-            kg_builder_loop(rx, kg, llm, config);
+            kg_builder_loop(rx, kg, llm, event_bus, config, embedder);
         })
         .expect("failed to spawn kg-builder thread");
 
@@ -110,7 +114,9 @@ fn kg_builder_loop(
     rx: std::sync::mpsc::Receiver<WriteEvent>,
     kg: Arc<dyn KnowledgeGraph>,
     llm: Arc<dyn LlmProvider>,
+    event_bus: Arc<crate::kernel::event_bus::EventBus>,
     config: KgBuilderConfig,
+    embedder: Option<Arc<dyn EmbeddingProvider>>,
 ) {
     let timeout = std::time::Duration::from_millis(config.timeout_ms);
     let mut batch: Vec<WriteEvent> = Vec::with_capacity(config.batch_size);
@@ -127,7 +133,7 @@ fn kg_builder_loop(
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => None,
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
                     if !batch.is_empty() {
-                        process_batch(&batch, &kg, &llm);
+                        process_batch(&batch, &kg, &llm, &event_bus, &embedder);
                     }
                     break;
                 }
@@ -140,7 +146,7 @@ fn kg_builder_loop(
         }
 
         if batch.len() >= config.batch_size || (!batch.is_empty() && !received) {
-            process_batch(&batch, &kg, &llm);
+            process_batch(&batch, &kg, &llm, &event_bus, &embedder);
             batch.clear();
         }
     }
@@ -150,12 +156,16 @@ fn process_batch(
     batch: &[WriteEvent],
     kg: &Arc<dyn KnowledgeGraph>,
     llm: &Arc<dyn LlmProvider>,
+    event_bus: &Arc<crate::kernel::event_bus::EventBus>,
+    embedder: &Option<Arc<dyn EmbeddingProvider>>,
 ) {
+    let resolver = embedder.as_ref().map(|e| EntityResolver::new(kg.clone(), e.clone(), 0.85));
+
     for event in batch {
         if event.text.trim().is_empty() || event.text.len() < 20 {
             continue;
         }
-        match extract_and_insert(event, kg, llm) {
+        match extract_and_insert(event, kg, llm, event_bus, &resolver) {
             Ok(preferences) => {
                 for pref in &preferences {
                     tracing::debug!(
@@ -193,6 +203,8 @@ fn extract_and_insert(
     event: &WriteEvent,
     kg: &Arc<dyn KnowledgeGraph>,
     llm: &Arc<dyn LlmProvider>,
+    event_bus: &crate::kernel::event_bus::EventBus,
+    resolver: &Option<EntityResolver>,
 ) -> Result<Vec<ExtractedPreference>, Box<dyn std::error::Error>> {
     let truncated = if event.text.len() > 2000 {
         &event.text[..2000]
@@ -210,6 +222,7 @@ fn extract_and_insert(
     let (response, _input_tokens, _output_tokens) = llm.chat(&messages, &opts)?;
 
     let extraction = parse_extraction(&response);
+    tracing::info!(cid = %crate::util::safe_truncate(&event.cid, 8), triples = extraction.triples.len(), prefs = extraction.preferences.len(), "KG extraction complete");
     if extraction.triples.is_empty() && extraction.preferences.is_empty() {
         return Ok(Vec::new());
     }
@@ -233,9 +246,6 @@ fn extract_and_insert(
     }
 
     for triple in &triples {
-        let src_id = format!("ent:{}", triple.subject);
-        let dst_id = format!("ent:{}", triple.object);
-
         let edge_type = map_relation_type(triple.relation_type.as_deref(), &triple.predicate);
         let src_node_type = if edge_type == KGEdgeType::Follows || edge_type == KGEdgeType::Causes {
             KGNodeType::Event
@@ -243,6 +253,46 @@ fn extract_and_insert(
             KGNodeType::Entity
         };
         let dst_node_type = src_node_type;
+
+        // F-37: Active Entity Linking (Cross-Session)
+        // Tier 1+2: Exact match + semantic resolution via EntityResolver
+        let (src_id, src_emb) = if let Some(ref resolver) = resolver {
+            match resolver.resolve(&triple.subject, src_node_type, &event.agent_id) {
+                Ok(result) => {
+                    let id = result.resolved_id.unwrap_or_else(|| format!("ent:{}", triple.subject));
+                    (id, Some(result.embedding))
+                }
+                Err(e) => {
+                    tracing::debug!("Entity resolver error for '{}': {}", triple.subject, e);
+                    (format!("ent:{}", triple.subject), None)
+                }
+            }
+        } else {
+            // Fallback: exact match only (no embedder available)
+            let id = kg.list_nodes(&event.agent_id, Some(src_node_type))
+                .ok()
+                .and_then(|nodes| nodes.iter().find(|n| n.label.eq_ignore_ascii_case(&triple.subject)).map(|n| n.id.clone()))
+                .unwrap_or_else(|| format!("ent:{}", triple.subject));
+            (id, None)
+        };
+        let (dst_id, dst_emb) = if let Some(ref resolver) = resolver {
+            match resolver.resolve(&triple.object, dst_node_type, &event.agent_id) {
+                Ok(result) => {
+                    let id = result.resolved_id.unwrap_or_else(|| format!("ent:{}", triple.object));
+                    (id, Some(result.embedding))
+                }
+                Err(e) => {
+                    tracing::debug!("Entity resolver error for '{}': {}", triple.object, e);
+                    (format!("ent:{}", triple.object), None)
+                }
+            }
+        } else {
+            let id = kg.list_nodes(&event.agent_id, Some(dst_node_type))
+                .ok()
+                .and_then(|nodes| nodes.iter().find(|n| n.label.eq_ignore_ascii_case(&triple.object)).map(|n| n.id.clone()))
+                .unwrap_or_else(|| format!("ent:{}", triple.object));
+            (id, None)
+        };
 
         if kg.get_node(&src_id)?.is_none() {
             let mut node = KGNode::new(
@@ -253,6 +303,11 @@ fn extract_and_insert(
             );
             node.id = src_id.clone();
             node.valid_at = Some(event.created_at);
+            // Store embedding for future entity resolution
+            if let Some(ref emb) = src_emb {
+                let emb_json: Vec<serde_json::Value> = emb.iter().map(|v| serde_json::json!(*v)).collect();
+                node.properties["embedding"] = serde_json::Value::Array(emb_json);
+            }
             kg.add_node(node)?;
         }
 
@@ -265,16 +320,70 @@ fn extract_and_insert(
             );
             node.id = dst_id.clone();
             node.valid_at = Some(event.created_at);
+            // Store embedding for future entity resolution
+            if let Some(ref emb) = dst_emb {
+                let emb_json: Vec<serde_json::Value> = emb.iter().map(|v| serde_json::json!(*v)).collect();
+                node.properties["embedding"] = serde_json::Value::Array(emb_json);
+            }
             kg.add_node(node)?;
         }
 
-        let edge = KGEdge::new_with_episode(
+        // Tier 3: Link resolved entities — create IsAliasOf edge if entity matched a different node
+        if let Some(ref resolver) = resolver {
+            if let Some(ref emb) = src_emb {
+                let expected_id = format!("ent:{}", triple.subject);
+                if src_id != expected_id {
+                    let _ = resolver.link_and_store(
+                        &expected_id, &triple.subject, &src_id, emb,
+                        &event.agent_id, &tenant, event.created_at,
+                    );
+                }
+            }
+            if let Some(ref emb) = dst_emb {
+                let expected_id = format!("ent:{}", triple.object);
+                if dst_id != expected_id {
+                    let _ = resolver.link_and_store(
+                        &expected_id, &triple.object, &dst_id, emb,
+                        &event.agent_id, &tenant, event.created_at,
+                    );
+                }
+            }
+        }
+
+        let mut edge = KGEdge::new_with_episode(
             src_id.clone(),
             dst_id.clone(),
             edge_type,
             0.8,
             event.cid.clone(),
         );
+
+        // F-37: If predicate is "is" or "alias", also add IsAliasOf edge
+        if triple.predicate.to_lowercase() == "is" || triple.predicate.to_lowercase() == "alias" {
+            edge.edge_type = KGEdgeType::IsAliasOf;
+        }
+
+        // F-37: Temporal Consolidation & Conflict Detection
+        if let Ok(existing_edges) = kg.list_edges(&event.agent_id) {
+            for mut old_edge in existing_edges {
+                if old_edge.src == src_id && old_edge.edge_type == edge.edge_type && old_edge.dst != dst_id && old_edge.invalid_at.is_none() {
+                    tracing::info!(src = %src_id, old = %old_edge.dst, new = %dst_id, type = ?edge.edge_type, "Cognitive conflict/update detected");
+                    
+                    // Invalidate old fact (Temporal Consolidation)
+                    old_edge.invalid_at = Some(event.created_at);
+                    let _ = kg.add_edge(old_edge.clone());
+
+                    // Emit diagnostic event
+                    event_bus.emit(crate::kernel::event_bus::KernelEvent::VerificationFailed {
+                        tool_name: "KgBuilder".into(),
+                        operation: "ConflictDetection".into(),
+                        reason: format!("Entity {} has conflicting {:?} targets: {} vs {}", src_id, edge.edge_type, old_edge.dst, dst_id),
+                        agent_id: event.agent_id.clone(),
+                    });
+                }
+            }
+        }
+
         let _ = kg.add_edge(edge);
 
         // Link both entities to the source document

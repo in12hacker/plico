@@ -33,7 +33,7 @@ fn now_ms() -> u64 {
         .as_millis() as u64
 }
 
-fn make_kernel() -> (AIKernel, tempfile::TempDir) {
+fn make_kernel() -> (std::sync::Arc<AIKernel>, tempfile::TempDir) {
     let _ = std::env::set_var("EMBEDDING_BACKEND", "stub");
     let _ = std::env::set_var("LLM_BACKEND", "stub");
     let dir = tempdir().unwrap();
