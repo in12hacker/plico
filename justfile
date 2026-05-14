@@ -60,8 +60,8 @@ fmt-check:
 fmt:
     cargo fmt
 
-# Full quality gate: test + clippy
-gate: test lint
+# Full quality gate: test + clippy + coverage
+gate: test lint coverage
 
 # --- Daemon ---
 

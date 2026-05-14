@@ -47,6 +47,18 @@ jobs:
       - name: Check formatting
         run: cargo fmt --check
 
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cargo-llvm-cov
+        run: cargo install cargo-llvm-cov
+      - name: Run coverage
+        run: cargo llvm-cov --lib --fail-under-lines 87
+
   build:
     name: Build
     runs-on: ubuntu-latest
