@@ -1,386 +1,126 @@
 # 太初 (Plico) — AI-Native Operating System
 
-An operating system kernel designed entirely from AI perspective. No human CLI/GUI. All data operations via semantic APIs for upper-layer AI agents. The system is model-agnostic and does not depend on any specific AI or agent. "太初" means "Genesis / In the Beginning" — the primordial state where an AI-OS becomes self-aware.
+专为 AI Agent 设计的操作系统内核。无人类 CLI/GUI，所有数据操作通过语义 API。系统与模型无关。详见 `system-v3.md`（Soul 3.0）和 `docs/genesis-reference.md`。
 
-## Architecture Overview
-
-Four-layer architecture: **Application Layer** (external AI agents) → **AI-Friendly Interface Layer** (semantic API/CLI/MCP) → **AI Kernel Layer** (agent scheduler, layered memory, event bus, tool registry, permission guardrails) → **AI-Native File System** (CAS, vector index, knowledge graph, layered context).
-
-**Daemon-First**: `plicod` hosts the single `AIKernel` instance. All clients (`aicli`, `plico_mcp`, `plico_sse`) connect via Unix Domain Socket (UDS) or TCP using the length-prefixed JSON framing protocol (`[4-byte BE length][JSON payload]`). The `KernelClient` trait (`src/client.rs`) abstracts the transport: `EmbeddedClient` for `--embedded` mode, `RemoteClient` for daemon communication.
-
-Core philosophy: management unit = agents/intents (not processes/files); storage addressing = content hashes + semantic tags (not filesystem paths); indexing = vectors + knowledge graphs (not filenames).
-
-## Directory Map
+## 目录地图
 
 ```
 src/
-├── cas/                 # Content-Addressed Storage — SHA-256 object identity, auto-dedup
-│   ├── object.rs        # AIObject, AIObjectMeta, ContentType
-│   ├── storage.rs       # CASStorage engine (sharded, atomic writes)
-│   └── mod.rs           # Re-exports
-├── memory/              # Layered memory — Ephemeral / Working / LongTerm / Procedural
-│   ├── layered/
-│   │   ├── mod.rs       # LayeredMemory, MemoryTier, MemoryEntry, MemoryContent, cognitive methods
-│   │   └── tests.rs     # Unit tests
-│   ├── persist.rs       # CASPersister, MemoryPersister trait, MemoryLoader
-│   ├── relevance.rs     # RelevanceScore, scoring, budget selection, TTL, promotion thresholds
-│   ├── context_snapshot.rs # ContextSnapshot — suspend/resume cognitive continuity
-│   └── mod.rs           # MemoryQuery, MemoryResult (public types)
-├── intent/              # Intent router — NL → ApiRequest (heuristic + optional LLM chain)
-│   ├── mod.rs           # IntentRouter, ChainRouter, ResolvedIntent, IntentError, RoutingAction
-│   ├── heuristic.rs     # HeuristicRouter — keyword/pattern + temporal bounds
-│   ├── llm.rs           # LlmRouter — Ollama-backed resolution
-│   ├── execution.rs     # execute_sync — app-layer NL→execute→learn loop
-│   └── INDEX.md
-├── scheduler/           # Agent lifecycle — registration, priority queue, intent dispatch, messaging
-│   ├── agent.rs         # Agent, AgentId, AgentState, Intent, IntentPriority, AgentResources, AgentUsage
-│   ├── queue.rs         # SchedulerQueue (binary heap, priority + timestamp ordering)
-│   ├── dispatch.rs      # AgentExecutor, KernelExecutor, LocalExecutor, TokioDispatchLoop, DispatchHandle
-│   ├── messaging.rs     # MessageBus — bounded mailboxes, send/read/ack
-│   └── mod.rs           # AgentScheduler, AgentHandle
-├── fs/                  # Semantic filesystem — tag-based CRUD, vector search, KG
-│   ├── semantic_fs/
-│   │   ├── mod.rs       # SemanticFS + CRUD + search + event container
-│   │   ├── events.rs    # Event types and operations
-│   │   ├── tests.rs     # Unit tests
-│   │   └── INDEX.md
-│   ├── embedding/
-│   │   ├── mod.rs       # EmbeddingProvider trait + re-exports
-│   │   ├── types.rs     # Shared embedding types
-│   │   ├── ollama.rs    # OllamaBackend
-│   │   ├── local.rs     # LocalEmbeddingBackend (Python ONNX)
-│   │   ├── ort_backend.rs # OrtEmbeddingBackend (ONNX Runtime, feature-gated)
-│   │   ├── stub.rs      # StubEmbeddingProvider
-│   │   ├── circuit_breaker.rs # EmbeddingCircuitBreaker (3-state failure protection)
-│   │   ├── json_rpc.rs  # JSON-RPC embedding adapter
-│   │   └── INDEX.md
-│   ├── search/
-│   │   ├── mod.rs       # SemanticSearch trait, SearchFilter, re-exports
-│   │   ├── memory.rs    # InMemoryBackend (brute-force cosine)
-│   │   ├── bm25.rs      # BM25 keyword search index
-│   │   ├── hnsw.rs      # HnswBackend (HNSW ANN via usearch, f16 quantization)
-│   │   └── INDEX.md
-│   ├── graph/
-│   │   ├── mod.rs       # KnowledgeGraph trait, ExploreDirection, re-exports
-│   │   ├── types.rs     # KGNode, KGEdge, KGNodeType, KGEdgeType, DiskGraph
-│   │   ├── backend.rs   # PetgraphBackend, EdgeRecord — directed graph + disk persistence
-│   │   ├── tests.rs     # Unit tests
-│   │   └── INDEX.md
-│   ├── context_loader.rs # L0/L1/L2 layered context loading
-│   ├── context_budget.rs # Context budget engine — adaptive multi-object assembly
-│   ├── summarizer.rs    # Summarizer trait, LlmSummarizer
-│   ├── types.rs         # Shared FS types
-│   └── mod.rs           # Re-exports
-├── kernel/              # AI Kernel — orchestrates all subsystems
-│   ├── mod.rs           # AIKernel struct, constructor, handle_api_request dispatch
-│   ├── cognition/       # Soul v3.0 — Cognitive Symbiotic Engine
-│   │   ├── mod.rs       # Re-exports + shared types (CognitiveError, Skill, etc.)
-│   │   ├── cognitive_loop.rs # CognitiveLoop — active context optimization
-│   │   ├── context_quality.rs # ContextQualityEngine — context compression/deduplication
-│   │   ├── intent_network.rs  # IntentSemanticNetwork — causal/temporal/semantic relations
-│   │   ├── skill_forge.rs     # SkillForge — automatic skill extraction/validation/evolution
-│   │   ├── trajectory_tracker.rs # TrajectoryTracker — agent behavior pattern tracking
-│   │   └── ...            # skill_registry, skill_validator, skill_composer, experience_miner, wasm_runtime, dsl_interpreter
-│   ├── api_dispatch.rs  # Thin dispatch → handlers/ (14 domain handler modules)
-│   ├── handlers/        # Domain-specific API request handlers
-│   │   └── {cas,memory,agent,graph,intent,events,session,system,tools,messaging,permission,tenant,model,storage}.rs
-│   ├── builtin_tools.rs # Tool registration + dispatch → tools/ (7 tool handler modules)
-│   ├── tools/           # Built-in tool handlers by category
-│   │   └── {cas,memory,graph,agent,system,messaging,permission}.rs
-│   ├── persistence.rs   # Restore/persist agents, intents, memories, search index, event log
-│   ├── event_bus.rs     # EventBus — typed pub/sub, kernel events, persisted log
-│   ├── ops/             # Operation groups (keeps mod.rs manageable)
-│   │   ├── mod.rs       # Re-exports
-│   │   ├── fs.rs        # FS-related kernel operations (search, CRUD, stats, evict)
-│   │   ├── agent.rs     # Agent lifecycle (register, ensure_registered, suspend, resume)
-│   │   ├── memory.rs    # Memory tier operations (recall, store, promote, compress)
-│   │   ├── events.rs    # Event bus + event log operations
-│   │   ├── graph.rs     # Knowledge graph operations (CRUD, traverse, impact, causal)
-│   │   ├── dispatch.rs  # Dispatch loop + result consumer
-│   │   ├── messaging.rs # Inter-agent messaging
-│   │   ├── dashboard.rs # SystemStatus, health_indicators
-│   │   ├── permission.rs # Permission delegation
-│   │   ├── tools_external.rs # External tool provider integration (MCP)
-│   │   ├── session.rs   # Session lifecycle (start, end, orchestrate, compound response)
-│   │   ├── delta.rs     # Delta tracking (changes since seq, watch CIDs/tags)
-│   │   ├── prefetch.rs  # ⚠ 1680 lines — Intent prefetcher + feedback + async assembly
-│   │   ├── hybrid.rs    # Graph-RAG hybrid retrieval (vector + KG)
-│   │   ├── model.rs     # LLM model management (hot-swap, list providers)
-│   │   ├── cache.rs     # Multi-layer caching (intent, search, embedding)
-│   │   ├── batch.rs     # Batch operations (multi-object CRUD)
-│   │   ├── checkpoint.rs # Agent state checkpoint / restore
-│   │   ├── tenant.rs    # Tenant isolation operations
-│   │   ├── task.rs      # Task delegation between agents
-│   │   ├── observability.rs # Metrics, telemetry, performance counters
-│   │   ├── tier_maintenance.rs # Memory tier maintenance (TTL, promotion)
-│   │   └── distributed.rs # Distributed operation stubs
-│   └── INDEX.md
-├── api/                 # API layer — permission guardrails + semantic JSON protocol
-│   ├── agent_auth.rs    # Agent identity authentication (HMAC-SHA256 tokens)
-│   ├── semantic.rs      # ApiRequest, ApiResponse, SystemStatus, protocol types
-│   ├── permission.rs    # PermissionGuard, PermissionContext, PermissionAction
-│   ├── mod.rs           # Re-exports
-│   └── INDEX.md
-├── tool/                # Tool Abstraction — "Everything is a Tool" capability system
-│   ├── mod.rs           # ToolDescriptor, ToolResult, ToolSchema, ToolHandler trait
-│   ├── registry.rs      # ToolRegistry — agent-discoverable capability catalog
-│   ├── procedure_provider.rs # Procedural memory → tool bridge
-│   └── INDEX.md
-├── temporal/            # Temporal reasoning — natural language time → time ranges
-│   ├── resolver.rs      # TemporalResolver trait, StubTemporalResolver
-│   ├── rules.rs         # HeuristicTemporalResolver, pre-defined temporal rules
-│   ├── mod.rs           # Re-exports
-│   └── INDEX.md
-├── llm/                 # LLM provider abstraction — model-agnostic chat interface
-│   ├── mod.rs           # LlmProvider trait, ChatMessage, ChatOptions, LlmError
-│   ├── ollama.rs        # OllamaProvider — local Ollama daemon
-│   ├── openai.rs        # OpenAICompatibleProvider — OpenAI-compatible endpoints
-│   └── stub.rs          # StubProvider — fixed responses for testing
-├── mcp/                 # MCP client — connect to external MCP servers
-│   ├── mod.rs           # Re-exports (ExternalToolProvider adapter)
-│   ├── client.rs        # McpClient, McpToolDef, McpError
-│   └── tests.rs         # Unit tests
-├── client.rs            # KernelClient trait + EmbeddedClient + RemoteClient (UDS/TCP framing)
-├── bin/
-│   ├── plicod.rs        # Daemon — hosts AIKernel, TCP + UDS, start/stop/status lifecycle, PID file multi-instance protection
-│   ├── plico_mcp.rs     # MCP stdio server (JSON-RPC 2.0 over stdin/stdout)
-│   ├── plico_sse.rs     # SSE streaming adapter for A2A protocol compatibility
-│   └── aicli/           # AI-friendly semantic CLI (daemon-first, --embedded fallback)
-│       ├── main.rs      # CLI entry: daemon (default) or --embedded or --tcp mode
-│       └── commands/
-│           ├── mod.rs   # execute_local dispatch + shared parse utilities
-│           └── handlers/
-│               ├── mod.rs       # Re-exports all handler functions
-│               ├── crud.rs      # put/get/search/update/delete/history/rollback
-│               ├── agent.rs     # agent register/status/suspend/resume/terminate/complete/fail/checkpoint/restore/quota/discover/delegate
-│               ├── memory.rs    # remember/recall/memmove/memdelete
-│               ├── graph.rs     # node/edge/nodes/edges/paths/get-node/rm-node/rm-edge/update-node/edge-history/explore
-│               ├── deleted.rs   # deleted/restore (recycle bin)
-│               ├── intent.rs    # intent (NL resolve + --description submit)
-│               ├── messaging.rs # send/messages/ack
-│               ├── tool.rs      # tool list/describe/call
-│               ├── events.rs    # events list/by-time
-│               ├── context.rs   # context assembly
-│               ├── skills.rs    # skills register/discover
-│               ├── session.rs   # session-start/session-end/growth
-│               ├── delta.rs     # delta change tracking
-│               ├── hybrid.rs    # hybrid Graph-RAG retrieval
-│               ├── permission.rs # permission grant/revoke/list
-│               └── INDEX.md
-├── lib.rs               # Crate root: pub mod declarations + PlicoError + re-exports (includes `pub mod client`)
-└── main.rs              # Stub — directs to plicod/aicli/plico-mcp
+├── cas/                 # Content-Addressed Storage — SHA-256 对象标识，自动去重
+├── memory/              # Layered Memory — Ephemeral / Working / LongTerm / Procedural
+├── intent/              # Intent Router — NL → ApiRequest（启发式 + LLM 链）
+├── scheduler/           # Agent 生命周期 — 注册、优先队列、意图调度、消息传递
+├── fs/                  # Semantic Filesystem — 标签 CRUD、向量搜索、KG
+│   ├── semantic_fs/     #   核心 CRUD + 事件存储
+│   ├── embedding/       #   Embedding 后端（5 种 + circuit breaker）
+│   ├── search/          #   向量 + BM25 搜索（HNSW + 内存后端）
+│   └── graph/           #   Knowledge Graph（PetgraphBackend + redb 4.0）
+├── kernel/              # AI Kernel — 中央编排器
+│   ├── cognition/       #   Soul v3.0 认知共生引擎（12 文件）
+│   ├── handlers/        #   14 个领域 handler
+│   ├── tools/           #   7 个内置工具 handler
+│   └── ops/             #   24 个操作文件
+├── api/                 # API 层 — 权限护栏 + 语义 JSON 协议
+├── tool/                # Tool 抽象 — "Everything is a Tool"
+├── temporal/            # 时间推理 — 自然语言时间 → 时间范围
+├── llm/                 # LLM provider 抽象 — 模型无关聊天接口
+├── mcp/                 # MCP client — 连接外部 MCP server
+├── client.rs            # KernelClient trait + EmbeddedClient + RemoteClient
+├── bin/                 # 4 个二进制入口
+│   ├── plicod.rs        #   Daemon — TCP + UDS，start/stop/status 生命周期
+│   ├── plico_mcp.rs     #   MCP stdio server (JSON-RPC 2.0)
+│   ├── plico_sse.rs     #   SSE 流式适配器
+│   └── aicli/           #   AI 语义 CLI（daemon-first, --embedded 回退）
+├── lib.rs               # Crate root
+└── main.rs              # Stub — 指向 plicod/aicli/plico-mcp
 
-tests/                   # Integration tests (33 files)
-├── kernel_test.rs       # AIKernel full integration (agents, CRUD, tools, events, dispatch, status)
-├── ai_experience_test.rs # C-6: Multi-session AI agent workflow (cross-agent search, auto-reg)
-├── fs_test.rs           # SemanticFS CRUD + event tests
-├── cli_test.rs          # CLI binary tests
-├── memory_test.rs       # Layered memory tests
-├── memory_persist_test.rs # Memory persistence
-├── semantic_search_test.rs # Vector + BM25 hybrid search
-├── embedding_test.rs    # Embedding provider tests
-├── permission_test.rs   # Permission guard tests
-├── intent_test.rs       # Intent router tests
-├── mcp_test.rs          # MCP server tests
-├── batch_ops_test.rs    # Batch operation tests
-├── kg_causal_test.rs    # Knowledge graph causal reasoning
-├── observability_test.rs # Metrics and observability
-├── node4_hybrid.rs      # Node 4 hybrid retrieval tests
-├── node4_knowledge_event.rs # Node 4 knowledge events
-├── node4_task.rs        # Node 4 task delegation
-├── node4_crash_recovery.rs # Node 4 crash recovery
-├── node5_self_evolving_test.rs # Node 5 self-evolving skills
-├── api_version_test.rs  # API versioning tests
-├── model_hot_swap_test.rs # Model hot-swap tests
-├── integration_demo_test.rs # E2E demo scenario
-└── ...                  # + benchmark/metrics tests (v9, v11, v22)
-
-Cargo.toml               # Rust crate definition (3 binaries: plicod, aicli, plico-mcp)
-CLAUDE.md                # AI guidance (soul document reference)
-
-docs/                    # Tier B — iteration-end human docs (not maintained per-commit)
-└── plans/               # Milestone plans (Git-visible); see docs/plans/INDEX.md
+tests/                   # 集成测试（33 文件）
+benchmarks/              # 自研 benchmark 框架（Python, uv 管理）
 ```
 
-## Quick Navigation
+## 快速导航
 
-| Area | Entry Point | Purpose |
-|------|-------------|---------|
-| CAS storage | `src/cas/INDEX.md` | AIObject, CASStorage, content addressing |
-| Memory system | `src/memory/INDEX.md` | LayeredMemory, 4-tier hierarchy, persistence |
-| Intent router | `src/intent/INDEX.md` | NL → `ApiRequest`, ChainRouter, heuristic + LLM |
-| Agent scheduling | `src/scheduler/INDEX.md` | AgentScheduler, Intent, messaging, resources, dispatch |
-| Semantic FS | `src/fs/INDEX.md` | SemanticFS, vector search, KG, context loading |
-| AI Kernel | `src/kernel/INDEX.md` | AIKernel — central orchestrator |
-| API layer | `src/api/INDEX.md` | Permission guard, semantic JSON protocol |
-| Tool system | `src/tool/INDEX.md` | ToolRegistry, ToolDescriptor, execute_tool — "Everything is a Tool" |
-| Temporal | `src/temporal/INDEX.md` | Time expression → Unix ms range resolution |
-| LLM providers | `src/llm/INDEX.md` | LlmProvider trait, Ollama/OpenAI/Stub backends |
-| MCP client | `src/mcp/INDEX.md` | External tool integration via MCP protocol |
-| Cognitive engine | `src/kernel/cognition/INDEX.md` | Soul v3.0 — CognitiveLoop, SkillForge, IntentSemanticNetwork |
-| Event bus | `src/kernel/event_bus.rs` | Kernel pub/sub, persisted event log |
-| Kernel ops | `src/kernel/ops/INDEX.md` | 25 operation files (session, delta, prefetch, hybrid, kg_builder, etc.) |
-| KernelClient | `src/client.rs` | Transport abstraction: EmbeddedClient + RemoteClient (UDS/TCP) |
-| Binaries | `src/bin/INDEX.md` | plicod (TCP+UDS daemon), plico-mcp (MCP stdio), aicli (CLI) |
-| Milestone plans | `docs/plans/INDEX.md` | v0.5+ roadmap copies for Git; sync at iteration end |
+| 区域 | 入口 | 用途 |
+|------|------|------|
+| CAS 存储 | `src/cas/INDEX.md` | AIObject, CASStorage, 内容寻址 |
+| Memory 系统 | `src/memory/INDEX.md` | LayeredMemory, 4 层架构, 持久化 |
+| Intent 路由 | `src/intent/INDEX.md` | NL → `ApiRequest`, ChainRouter |
+| Agent 调度 | `src/scheduler/INDEX.md` | AgentScheduler, Intent, 消息传递 |
+| Semantic FS | `src/fs/INDEX.md` | SemanticFS, 向量搜索, KG, 上下文加载 |
+| AI Kernel | `src/kernel/INDEX.md` | AIKernel — 中央编排器 |
+| API 层 | `src/api/INDEX.md` | 权限护栏, 语义 JSON 协议 |
+| Tool 系统 | `src/tool/INDEX.md` | ToolRegistry, "Everything is a Tool" |
+| 认知引擎 | `src/kernel/cognition/INDEX.md` | Soul v3.0 — CognitiveLoop, SkillForge |
+| 二进制 | `src/bin/INDEX.md` | plicod, plico-mcp, plico-sse, aicli |
+| Benchmark | `benchmarks/README.md` | 端到端性能与质量评测 |
 
-## Build & Test
+## 构建与测试
 
-| Command | Purpose |
-|---------|---------|
-| `cargo build` | Build all targets |
-| `cargo build --bin aicli` | Build CLI binary only |
-| `cargo build --bin plicod` | Build daemon binary only |
-| `cargo build --bin plico-mcp` | Build MCP server only |
-| `cargo test --lib` | Run unit tests (co-located in source) |
-| `cargo test` | Run all tests (unit + integration) |
-| `cargo test [test_name]` | Run a single test |
-| `cargo clippy` | Lint check (must be zero warnings) |
-| `cargo build --release` | Release build (LTO + single codegen unit) |
-| `cargo run --bin aicli -- --embedded put --content "test" --tags "test"` | Quick CLI test, embedded mode |
-| `cargo run --bin aicli -- system-status` | Check kernel health (requires running daemon) |
-| `cargo run --bin plicod -- start --port 7878` | Start daemon on TCP + UDS (defaults to ~/.plico) |
-| `cargo run --bin plicod -- stop` | Graceful daemon shutdown via PID file |
-| `cargo run --bin plicod -- status` | JSON daemon status (pid, uptime, socket) |
-| `cargo run --bin plicod -- --no-uds` | Run daemon TCP-only (disable UDS) |
+| 命令 | 用途 |
+|------|------|
+| `cargo build` | 构建所有目标 |
+| `EMBEDDING_BACKEND=stub LLM_BACKEND=stub cargo test --lib` | 运行单元测试（最快） |
+| `EMBEDDING_BACKEND=stub LLM_BACKEND=stub cargo test` | 运行所有测试 |
+| `EMBEDDING_BACKEND=stub LLM_BACKEND=stub cargo llvm-cov --lib` | 覆盖率测量 |
+| `cargo clippy -- -D warnings` | Lint 检查（必须零警告） |
+| `cargo build --release` | Release 构建 |
 
-## Conventions
+## 代码规范
 
-- **Files**: `snake_case.rs`, one concept per file, target < 300 lines
-- **Naming**: `snake_case` functions, `PascalCase` types, `SCREAMING_SNAKE` constants
-- **Modules**: `pub mod` in `mod.rs`; large modules split into `dir/mod.rs` + subfiles (see `fs/`, `memory/`, `kernel/ops/`)
-- **Public API**: `pub fn`, private by default
-- **L2 file headers**: doc comment (`//!`) with module purpose + `# Panics`, `# Errors`, `# Safety`
-- **Tests**: `#[cfg(test)] mod tests` co-located in same file; large test suites in separate `tests.rs` under the module dir
+- **文件**：`snake_case.rs`，每文件一个概念，目标 < 300 行
+- **命名**：`snake_case` 函数，`PascalCase` 类型，`SCREAMING_SNAKE` 常量
+- **模块**：`pub mod` 在 `mod.rs`；大模块拆分为 `dir/mod.rs` + 子文件
+- **公共 API**：`pub fn`，默认私有
+- **测试**：`#[cfg(test)] mod tests` 同文件内联；大测试套件放在模块目录下 `tests.rs`
 
-## Architectural Constraints
+## 架构约束
 
-- Dependency direction: **api/bin → kernel → tool/fs/intent → cas/memory/scheduler/temporal/llm** (never reverse)
-- `kernel/` is the only module that imports all other modules — all subsystem calls go through `AIKernel`
-- `AIKernel` fields are `pub(crate)` — visible only inside the `plico` crate; integration tests in `tests/` use the public API
-- Binaries (`bin/`) import only `kernel/`, `api/`, and `client`, never subsystem modules directly
-- CAS is the only module that touches the host filesystem directly
-- No `unsafe` blocks in library code without a `# Safety` doc comment
-- `plicod` listens on **TCP + UDS** — no HTTP endpoints; UDS is primary for local clients, TCP for remote; supports `start/stop/status` subcommands with PID-file multi-instance protection
-- `aicli` defaults to daemon mode (connects via UDS); use `--embedded` for direct kernel access
-- Agent lifecycle requests (`AgentStatus`, `AgentSuspend`, etc.) do NOT auto-register agents — they fail if the agent does not exist
-- **Soul v3.0**: Plico is a **cognitive symbiont** — it optimizes the Agent's input quality (context compression, proactive prefetch, skill recommendation) but never replaces the Agent's decision-making. See `system-v3.md` for full principles.
-- All known soul violations from prior iterations have been resolved:
-  - Behavioral pipeline removed from `semantic_fs`
-  - Dashboard hardcoded dev data removed; replaced by `SystemStatus` (runtime metrics only)
-  - Project-management KGNodeType/KGEdgeType removed from graph types
-  - All test scenarios converted from human-centric to AI-native
-  - Legacy "brain modules" (intent_decomposer, goal_generator, etc.) removed from `kernel/ops/` — replaced by `cognition/` module following Soul v3.0 principles
+- 依赖方向：**api/bin → kernel → tool/fs/intent → cas/memory/scheduler/temporal/llm**（禁止反向）
+- `kernel/` 是唯一导入所有其他模块的模块 — 所有子系统调用通过 `AIKernel`
+- `AIKernel` 字段为 `pub(crate)` — 仅 crate 内可见
+- CAS 是唯一直接接触宿主文件系统的模块
+- 无 `unsafe` 块（库代码中）除非有 `# Safety` 文档注释
+- **Soul v3.0**：Plico 是**认知共生体** — 优化 Agent 的输入质量，但从不替代 Agent 的决策
 
-## Cross-Cutting Patterns
+## 跨模块模式
 
-### Error Handling
-- All errors typed: `CASError`, `MemoryError`, `SchedulerError`, `FSError`, `KGError`, `LlmError`, `McpError` (all `thiserror`)
-- `Result<T>` aliases per module; crate root exposes `PlicoError`
-- I/O errors converted to `std::io::Error` at API boundary (daemon/CLI)
-- Never panicking in library code except for critical invariants (`expect()` with message)
+### 错误处理
+- 所有错误类型化：`CASError`, `MemoryError`, `SchedulerError`, `FSError`, `KGError`, `LlmError`, `McpError`（均 `thiserror`）
+- 库代码中禁止 panic（除非关键不变量 `expect()` 带消息）
 
-### Logging
-- `tracing` crate for structured logging with `tracing::info!/warn!/debug!`
-- `tracing_subscriber::fmt` + `env_filter` called in `plicod.rs` and `aicli/main.rs` — reads `RUST_LOG` env var
-- Library code uses `tracing` only; subscriber setup is binary responsibility
+### 日志
+- `tracing` crate 结构化日志，`tracing_subscriber::fmt` + `env_filter`
 
-### Concurrency
-- `RwLock` for in-memory maps (memory tiers, tag index, recycle bin, event log)
-- `tokio` for async TCP/UDS server (`plicod`); `aicli` runs on `std` blocking via `RemoteClient`
-- All `Arc<...>` wrapping shared kernel state in daemon
-- `EventBus` uses `tokio::sync::broadcast` for pub/sub + `Mutex` for subscriptions
+### 并发
+- `RwLock` 用于内存映射，`tokio` 用于异步 TCP/UDS，`EventBus` 用 `tokio::sync::broadcast`
 
-### Serialization
-- JSON for: CAS object persistence, TCP protocol, event log, graph persistence, MCP messages
-- `serde_json` for serialization; `serde` derive on all public types
-- MCP protocol: JSON-RPC 2.0 over stdio
+### 序列化
+- JSON 用于 CAS、TCP 协议、事件日志、图持久化、MCP 消息
 
-### Clippy Policy
-- `cargo clippy` runs clean (zero warnings) — no `#[allow(clippy::...)]` for structural lints; only `dead_code` / `unused_imports` in test code
+### Clippy 策略
+- `cargo clippy` 零警告 — 无 `#[allow(clippy::...)]`（结构 lint）
 
-## Dogfooding Tag Convention
+## Agent 工作流（编辑前检查清单）
 
-Plico manages its own project data (ADRs, progress, experiences) through its standard API.
-Tags use the `plico:` namespace with colon-separated hierarchical dimensions:
+**在任何代码修改前完成：**
 
-| Dimension | Values | Purpose |
-|-----------|--------|---------|
-| `plico:type:<T>` | adr, progress, experience, test-result, bug, code-change, doc | Artifact type |
-| `plico:module:<M>` | cas, fs, kernel, api, scheduler, memory, graph, temporal, cli, daemon, intent, llm, mcp, tool | Module scope |
-| `plico:status:<S>` | active, superseded, resolved, wip | Lifecycle state |
-| `plico:milestone:<V>` | v0.1, v0.2, v0.3, ... | Target milestone |
-| `plico:severity:<L>` | critical, high, medium, low | Bug severity only |
+- [ ] 通过快速导航表定位目标模块
+- [ ] 打开模块 `INDEX.md`，修改公共 API 前检查 Dependents
+- [ ] 确认签名/错误类型变更的 Modification Risk
+- [ ] 运行 `EMBEDDING_BACKEND=stub LLM_BACKEND=stub cargo test --lib` — 所有测试必须通过
+- [ ] 如果二进制变更：`cargo build --bin [name]` 成功
+- [ ] 如果新模块或构建命令变更：更新 AGENTS.md
 
-KG nodes use generic types (Entity, Fact) with `properties` JSON to encode domain meaning.
-No project-specific KGNodeType or KGEdgeType — all semantics via tags + properties.
-
-## Key Environment Variables
-
-| Variable | Purpose | Required |
-|----------|---------|----------|
-| `EMBEDDING_BACKEND` | `"openai"` (default) / `"local"` / `"ollama"` / `"ort"` / `"stub"` | No |
-| `EMBEDDING_API_BASE` | OpenAI-compatible embedding endpoint (default: `http://127.0.0.1:8080/v1`) | No |
-| `EMBEDDING_MODEL` | Model name for openai backend (default: `default`) | No |
-| `EMBEDDING_MODEL_ID` | HuggingFace model ID for local backend (default: `BAAI/bge-small-en-v1.5`) | No |
-| `EMBEDDING_PYTHON` | Python interpreter path (default: `python3`) | No |
-| `LLM_BACKEND` | `"llama"` (default) / `"ollama"` / `"openai"` / `"stub"` | No |
-| `LLAMA_URL` | llama.cpp server URL (default: `http://127.0.0.1:8080/v1`) | No |
-| `LLAMA_MODEL` | Model name for llama backend | No |
-| `OPENAI_API_BASE` | OpenAI-compatible LLM endpoint | No |
-| `OLLAMA_URL` | Ollama daemon URL (default: `http://localhost:11434`) | No |
-| `PLICO_ROOT` | Storage root for all binaries (default: `~/.plico`) | No |
-| `RUST_LOG` | Tracing log level filter (default: `info`) | No |
-| `AICLI_OUTPUT` | CLI output format: `json` (default) / `human` | No |
-| `PLICO_PERSIST_INTERVAL_SECS` | Periodic persist interval for `plicod` (default: 300) | No |
-| `PLICO_RRF_K` | RRF rank constant (default: 60) | No |
-| `PLICO_RRF_BM25_WEIGHT` | Static BM25 weight (overrides adaptive) | No |
-| `PLICO_RRF_VECTOR_WEIGHT` | Static vector weight (overrides adaptive) | No |
-| `PLICO_KG_AUTO_EXTRACT` | Enable async KG extraction on writes (`1`/`true`) | No |
-| `PLICO_KG_EXTRACT_BATCH_SIZE` | KG extraction batch size (default: 5) | No |
-| `PLICO_KG_EXTRACT_TIMEOUT_MS` | KG extraction batch timeout ms (default: 3000) | No |
-| `PLICO_JUDGE_API_BASE` | Judge model API base URL | No |
-| `PLICO_JUDGE_MODEL` | Judge model name | No |
-
-## AI Agent Instructions
-
-This project uses a two-tier documentation model:
-
-- **Tier A (this file + all `INDEX.md` + file doc headers)**: Maintain in real-time, atomic with every code change. A code change is NOT complete until Tier A indexes reflect it.
-- **Tier B (`README.md`, `README_zh.md`, `system.md`, `docs/`)**: Do NOT read or update during active development. Updated only at iteration-end sync.
-
-When modifying code:
-1. Update the parent `INDEX.md` if files are added/removed/renamed
-2. Update this `AGENTS.md` if modules or navigation entries change
-3. Update `INDEX.md` Dependents/Dependencies if call relationships change
-4. Do NOT touch Tier B files during active development
-
-## Agent Workflow (Read Before Edit)
-
-**Checklist-at-END — complete before any code modification:**
-
-- [ ] Locate target module via Quick Navigation table above
-- [ ] Open module `INDEX.md` and check Dependents before modifying public API
-- [ ] Confirm Modification Risk for signature/error-type changes
-- [ ] Run `cargo test --lib` — all tests must pass before finishing
-- [ ] If binary changed: `cargo build --bin [name]` succeeds
-- [ ] Update AGENTS.md if new modules or build commands were added
-
-## Index Exclusions
+## 索引排除
 
 ```
-target/          # Cargo build output
+target/          # Cargo 构建输出
 Cargo.lock       # Lock file
-.claude/         # Claude Code settings
-.cursor/         # Cursor settings
-.runtime/        # Runtime data (CAS objects, KG db, agent keys) — auto-generated by plicod
-.logs/           # Daemon log files — auto-generated by plicod
-bench/archive/   # Old benchmark result JSONs — historical reference only
-bench/data/      # Benchmark datasets (large, gitignored)
-bench/.venv/     # Python venv for benchmark scripts
-benchmarks/      # Legacy datasets directory (gitignored)
-*.rlib           # Compiled Rust library files
-*.bak            # Backup files
-docs/design/     # Tier B design documents
-docs/plans/      # Tier B milestone plans (see docs/plans/INDEX.md)
+.claude/         # Claude Code 设置
+.cursor/         # Cursor 设置
+.runtime/        # 开发时运行时暂存空间
+.logs/           # Daemon 日志文件
+benchmarks/      # Benchmark 框架（独立管理）
+*.rlib           # 编译的 Rust 库文件
+*.bak            # 备份文件
 ```

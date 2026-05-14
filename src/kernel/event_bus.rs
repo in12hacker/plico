@@ -1121,4 +1121,274 @@ mod tests {
         assert_eq!(snap[0].seq, 8);
         assert_eq!(snap[2].seq, 10);
     }
+
+    // ─── Additional tests for coverage ───────────────────────────
+
+    #[test]
+    fn test_with_persistence_emit_and_read_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let log_path = dir.path().join("events.jsonl");
+        let bus = EventBus::with_persistence(log_path.clone());
+
+        bus.emit(KernelEvent::ObjectStored {
+            cid: "c1".into(), agent_id: "a1".into(), tags: vec!["t1".into()],
+        });
+        bus.emit(KernelEvent::MemoryStored {
+            agent_id: "a1".into(), tier: "working".into(),
+        });
+
+        // Read back from file
+        let loaded = EventBus::load_event_log(&log_path).unwrap();
+        assert_eq!(loaded.len(), 2);
+        assert_eq!(loaded[0].seq, 1);
+        assert_eq!(loaded[1].seq, 2);
+    }
+
+    #[test]
+    fn test_load_event_log_nonexistent() {
+        let result = EventBus::load_event_log(std::path::Path::new("/tmp/nonexistent_events.jsonl"));
+        assert!(result.unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_load_event_log_malformed_lines() {
+        let dir = tempfile::tempdir().unwrap();
+        let log_path = dir.path().join("events.jsonl");
+        std::fs::write(&log_path, "not json\nalso bad\n").unwrap();
+
+        let loaded = EventBus::load_event_log(&log_path).unwrap();
+        assert!(loaded.is_empty()); // all malformed
+    }
+
+    #[test]
+    fn test_load_event_log_mixed_valid_invalid() {
+        let dir = tempfile::tempdir().unwrap();
+        let log_path = dir.path().join("events.jsonl");
+
+        let valid = SequencedEvent {
+            seq: 1,
+            timestamp_ms: 1000,
+            event: KernelEvent::ObjectStored {
+                cid: "c1".into(), agent_id: "a1".into(), tags: vec![],
+            },
+        };
+        let valid_json = serde_json::to_string(&valid).unwrap();
+        std::fs::write(&log_path, format!("not json\n{}\n", valid_json)).unwrap();
+
+        let loaded = EventBus::load_event_log(&log_path).unwrap();
+        assert_eq!(loaded.len(), 1);
+    }
+
+    #[test]
+    fn test_rotate_segment_no_persistence() {
+        let bus = EventBus::new(); // no persistence
+        let result = bus.rotate_segment().unwrap();
+        assert!(result.is_none()); // no path → no rotation
+    }
+
+    #[test]
+    fn test_rotate_segment_no_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let log_path = dir.path().join("events.jsonl");
+        let bus = EventBus::with_persistence(log_path);
+        // File doesn't exist yet
+        let result = bus.rotate_segment().unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_rotate_segment_creates_archive() {
+        let dir = tempfile::tempdir().unwrap();
+        let log_path = dir.path().join("events.jsonl");
+        let bus = EventBus::with_persistence(log_path.clone());
+
+        bus.emit(KernelEvent::ObjectStored {
+            cid: "c1".into(), agent_id: "a1".into(), tags: vec![],
+        });
+
+        let result = bus.rotate_segment().unwrap();
+        assert!(result.is_some());
+        let archive_path = result.unwrap();
+        assert!(archive_path.exists());
+
+        // Original log should be gone (renamed)
+        assert!(!log_path.exists());
+
+        // Archive should contain the event
+        let loaded = EventBus::load_event_log(&archive_path).unwrap();
+        assert_eq!(loaded.len(), 1);
+    }
+
+    #[test]
+    fn test_list_archive_segments_empty() {
+        let bus = EventBus::new();
+        assert!(bus.list_archive_segments().is_empty());
+    }
+
+    #[test]
+    fn test_with_rotation_parameters() {
+        let dir = tempfile::tempdir().unwrap();
+        let log_path = dir.path().join("events.jsonl");
+        let bus = EventBus::with_rotation(log_path, 60_000, 2);
+
+        bus.emit(KernelEvent::ObjectStored {
+            cid: "c1".into(), agent_id: "a1".into(), tags: vec![],
+        });
+        assert_eq!(bus.event_count(), 1);
+    }
+
+    #[test]
+    fn test_event_filter_no_match() {
+        let filter = EventFilter {
+            event_types: Some(vec!["NonExistent".into()]),
+            agent_ids: None,
+        };
+        let event = KernelEvent::ObjectStored {
+            cid: "c1".into(), agent_id: "a1".into(), tags: vec![],
+        };
+        assert!(!filter.matches(&event));
+    }
+
+    #[test]
+    fn test_event_filter_agent_no_match() {
+        let filter = EventFilter {
+            event_types: None,
+            agent_ids: Some(vec!["other-agent".into()]),
+        };
+        let event = KernelEvent::ObjectStored {
+            cid: "c1".into(), agent_id: "a1".into(), tags: vec![],
+        };
+        assert!(!filter.matches(&event));
+    }
+
+    #[test]
+    fn test_ring_event_log_empty_events_since() {
+        let log = RingEventLog::new(10);
+        let events = log.events_since(0);
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn test_ring_event_log_empty_snapshot() {
+        let log = RingEventLog::new(10);
+        assert!(log.snapshot().is_empty());
+        assert_eq!(log.len(), 0);
+    }
+
+    #[test]
+    fn test_ring_event_log_restore_within_capacity() {
+        let mut log = RingEventLog::new(10);
+        let events: Vec<SequencedEvent> = (1..=3).map(|i| SequencedEvent {
+            seq: i,
+            timestamp_ms: 1000 + i,
+            event: KernelEvent::ObjectStored {
+                cid: format!("c{}", i), agent_id: "a1".into(), tags: vec![],
+            },
+        }).collect();
+        log.restore(events);
+        assert_eq!(log.len(), 3);
+        assert_eq!(log.min_seq, 0);
+    }
+
+    #[test]
+    fn test_sequenced_event_fields() {
+        let event = SequencedEvent {
+            seq: 42,
+            timestamp_ms: 1234567890,
+            event: KernelEvent::IntentCompleted {
+                intent_id: "i1".into(),
+                success: true,
+            },
+        };
+        assert_eq!(event.seq, 42);
+        assert_eq!(event.timestamp_ms, 1234567890);
+    }
+
+    #[test]
+    fn test_kernel_event_all_variants_agent_id() {
+        assert_eq!(KernelEvent::KnowledgeShared {
+            cid: "c".into(), agent_id: "a".into(), scope: "shared".into(),
+            tags: vec![], summary: "s".into(),
+        }.agent_id(), Some("a"));
+
+        assert_eq!(KernelEvent::KnowledgeSuperseded {
+            old_cid: "o".into(), new_cid: "n".into(), agent_id: "a".into(),
+        }.agent_id(), Some("a"));
+
+        assert_eq!(KernelEvent::TaskDelegated {
+            task_id: "t".into(), from_agent: "f".into(), to_agent: "t".into(),
+        }.agent_id(), Some("f"));
+
+        assert_eq!(KernelEvent::TaskCompleted {
+            task_id: "t".into(), agent_id: "a".into(), result_cids: vec![],
+        }.agent_id(), Some("a"));
+
+        assert_eq!(KernelEvent::VerificationFailed {
+            tool_name: "t".into(), operation: "o".into(),
+            reason: "r".into(), agent_id: "a".into(),
+        }.agent_id(), Some("a"));
+
+        assert_eq!(KernelEvent::CognitiveConflictDetected {
+            conflict_id: "c".into(), conflict_type: "t".into(),
+            description: "d".into(), involved_cids: vec![],
+            agent_id: "a".into(), severity: "high".into(),
+        }.agent_id(), Some("a"));
+    }
+
+    #[test]
+    fn test_kernel_event_all_variants_event_type_name() {
+        assert_eq!(KernelEvent::KnowledgeShared {
+            cid: "c".into(), agent_id: "a".into(), scope: "s".into(),
+            tags: vec![], summary: "s".into(),
+        }.event_type_name(), "KnowledgeShared");
+
+        assert_eq!(KernelEvent::KnowledgeSuperseded {
+            old_cid: "o".into(), new_cid: "n".into(), agent_id: "a".into(),
+        }.event_type_name(), "KnowledgeSuperseded");
+
+        assert_eq!(KernelEvent::TaskDelegated {
+            task_id: "t".into(), from_agent: "f".into(), to_agent: "t".into(),
+        }.event_type_name(), "TaskDelegated");
+
+        assert_eq!(KernelEvent::TaskCompleted {
+            task_id: "t".into(), agent_id: "a".into(), result_cids: vec![],
+        }.event_type_name(), "TaskCompleted");
+
+        assert_eq!(KernelEvent::VerificationFailed {
+            tool_name: "t".into(), operation: "o".into(),
+            reason: "r".into(), agent_id: "a".into(),
+        }.event_type_name(), "VerificationFailed");
+
+        assert_eq!(KernelEvent::CognitiveConflictDetected {
+            conflict_id: "c".into(), conflict_type: "t".into(),
+            description: "d".into(), involved_cids: vec![],
+            agent_id: "a".into(), severity: "high".into(),
+        }.event_type_name(), "CognitiveConflictDetected");
+    }
+
+    #[test]
+    fn test_should_rotate_no_path() {
+        let bus = EventBus::new();
+        assert!(!bus.should_rotate());
+    }
+
+    #[test]
+    fn test_cleanup_old_archives_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let bus = EventBus::with_persistence(dir.path().join("events.jsonl"));
+        let result = bus.cleanup_old_archives(dir.path());
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_subscribe_filtered_with_filter() {
+        let bus = EventBus::new();
+        let filter = EventFilter {
+            event_types: Some(vec!["ObjectStored".into()]),
+            agent_ids: None,
+        };
+        let sub = bus.subscribe_filtered(Some(filter));
+        assert!(!sub.is_empty());
+        assert_eq!(bus.subscription_count(), 1);
+    }
 }

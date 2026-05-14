@@ -47,10 +47,21 @@ fn initialize_and_notify(
     stdin.flush().unwrap();
 }
 
+struct McpChildGuard {
+    child: std::process::Child,
+    _dir: tempfile::TempDir,
+}
+
+impl Drop for McpChildGuard {
+    fn drop(&mut self) {
+        let _ = self.child.wait();
+    }
+}
+
 fn spawn_plico_mcp() -> (
     std::process::ChildStdin,
     BufReader<std::process::ChildStdout>,
-    tempfile::TempDir,
+    McpChildGuard,
 ) {
     let dir = tempfile::TempDir::new().unwrap();
 
@@ -70,7 +81,7 @@ fn spawn_plico_mcp() -> (
 
     initialize_and_notify(&mut stdin, &mut stdout);
 
-    (stdin, stdout, dir)
+    (stdin, stdout, McpChildGuard { child, _dir: dir })
 }
 
 // ─── Test 1: Pipeline mode reduces round-trips (Token Economy) ────────────────
@@ -80,8 +91,7 @@ fn test_pipeline_reduces_round_trips() {
     let (mut stdin, mut stdout, _dir) = spawn_plico_mcp();
 
     // Store multiple content items that will be used together
-    let cids = vec![
-        send_and_recv(
+    let cids = [send_and_recv(
             &mut stdin,
             &mut stdout,
             &serde_json::json!({
@@ -134,8 +144,7 @@ fn test_pipeline_reduces_round_trips() {
                     }
                 }
             }),
-        ),
-    ];
+        )];
 
     // Extract CIDs
     let cid_values: Vec<String> = cids
@@ -703,8 +712,7 @@ fn test_full_session_self_evolution() {
     let end_resp: Result<serde_json::Value, _> = serde_json::from_str(text);
     // Session end may fail if session doesn't exist (test uses fake session_id)
     // But that's fine for this test - we're validating the API exists and responds
-    if end_resp.is_ok() {
-        let end_val = end_resp.as_ref().unwrap();
+    if let Ok(end_val) = end_resp {
         assert!(end_val["ok"].as_bool().unwrap_or(false) || end_val.get("error").is_some(),
             "session_end should respond (ok or error)");
     }

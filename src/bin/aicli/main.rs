@@ -19,7 +19,8 @@ use tracing_subscriber::util::SubscriberInitExt;
 
 mod commands;
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let env = std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string());
     tracing_subscriber::fmt()
         .with_env_filter(&env)

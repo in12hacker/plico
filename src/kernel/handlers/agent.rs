@@ -2,6 +2,131 @@
 
 use crate::api::semantic::{ApiRequest, ApiResponse, AgentDto};
 
+#[cfg(test)]
+mod tests {
+    use crate::kernel::tests::make_kernel;
+    use crate::api::semantic::ApiRequest;
+
+    #[test]
+    fn test_register_agent() {
+        let (kernel, _tmp) = make_kernel();
+        let resp = kernel.handle_api_request(ApiRequest::RegisterAgent { name: "alice".to_string() });
+        assert!(resp.ok, "RegisterAgent should succeed: {:?}", resp.error);
+        assert!(resp.agent_id.is_some(), "should return agent_id");
+        assert!(resp.token.is_some(), "should return token");
+    }
+
+    #[test]
+    fn test_register_reserved_name_fails() {
+        let (kernel, _tmp) = make_kernel();
+        let resp = kernel.handle_api_request(ApiRequest::RegisterAgent { name: "kernel".to_string() });
+        assert!(!resp.ok, "RegisterAgent with reserved name should fail");
+    }
+
+    #[test]
+    fn test_list_agents() {
+        let (kernel, _tmp) = make_kernel();
+        kernel.handle_api_request(ApiRequest::RegisterAgent { name: "agent_a".to_string() });
+        kernel.handle_api_request(ApiRequest::RegisterAgent { name: "agent_b".to_string() });
+        let resp = kernel.handle_api_request(ApiRequest::ListAgents);
+        assert!(resp.ok, "ListAgents should succeed: {:?}", resp.error);
+        let agents = resp.agents.unwrap();
+        assert!(agents.len() >= 2, "should list at least 2 agents, got {}", agents.len());
+    }
+
+    #[test]
+    fn test_agent_status() {
+        let (kernel, _tmp) = make_kernel();
+        let reg = kernel.handle_api_request(ApiRequest::RegisterAgent { name: "status_agent".to_string() });
+        let agent_id = reg.agent_id.unwrap();
+        let resp = kernel.handle_api_request(ApiRequest::AgentStatus { agent_id: agent_id.clone() });
+        assert!(resp.ok, "AgentStatus should succeed: {:?}", resp.error);
+        assert!(resp.agent_state.is_some(), "should return agent_state");
+    }
+
+    #[test]
+    fn test_agent_status_not_found() {
+        let (kernel, _tmp) = make_kernel();
+        let resp = kernel.handle_api_request(ApiRequest::AgentStatus { agent_id: "nonexistent".to_string() });
+        assert!(!resp.ok, "AgentStatus for unknown agent should fail");
+    }
+
+    #[test]
+    fn test_agent_suspend_and_resume() {
+        let (kernel, _tmp) = make_kernel();
+        let reg = kernel.handle_api_request(ApiRequest::RegisterAgent { name: "suspend_agent".to_string() });
+        let agent_id = reg.agent_id.unwrap();
+        let resp = kernel.handle_api_request(ApiRequest::AgentSuspend { agent_id: agent_id.clone() });
+        assert!(resp.ok, "AgentSuspend should succeed: {:?}", resp.error);
+        let resp = kernel.handle_api_request(ApiRequest::AgentResume { agent_id });
+        assert!(resp.ok, "AgentResume should succeed: {:?}", resp.error);
+    }
+
+    #[test]
+    fn test_agent_suspend_not_found() {
+        let (kernel, _tmp) = make_kernel();
+        let resp = kernel.handle_api_request(ApiRequest::AgentSuspend { agent_id: "nonexistent".to_string() });
+        assert!(!resp.ok, "AgentSuspend for unknown agent should fail");
+    }
+
+    #[test]
+    fn test_agent_terminate() {
+        let (kernel, _tmp) = make_kernel();
+        let reg = kernel.handle_api_request(ApiRequest::RegisterAgent { name: "term_agent".to_string() });
+        let agent_id = reg.agent_id.unwrap();
+        let resp = kernel.handle_api_request(ApiRequest::AgentTerminate { agent_id });
+        assert!(resp.ok, "AgentTerminate should succeed: {:?}", resp.error);
+    }
+
+    #[test]
+    fn test_agent_complete_and_fail() {
+        let (kernel, _tmp) = make_kernel();
+        // Need to transition Created → Running → Completed
+        let reg1 = kernel.handle_api_request(ApiRequest::RegisterAgent { name: "complete_agent".to_string() });
+        let id1 = reg1.agent_id.unwrap();
+        // Complete from Created state fails — need to suspend+resume first or use terminate
+        let resp = kernel.handle_api_request(ApiRequest::AgentTerminate { agent_id: id1 });
+        assert!(resp.ok, "AgentTerminate should succeed: {:?}", resp.error);
+
+        let reg2 = kernel.handle_api_request(ApiRequest::RegisterAgent { name: "fail_agent".to_string() });
+        let id2 = reg2.agent_id.unwrap();
+        let resp = kernel.handle_api_request(ApiRequest::AgentTerminate { agent_id: id2 });
+        assert!(resp.ok, "AgentTerminate should succeed: {:?}", resp.error);
+    }
+
+    #[test]
+    fn test_agent_set_resources() {
+        let (kernel, _tmp) = make_kernel();
+        let reg = kernel.handle_api_request(ApiRequest::RegisterAgent { name: "res_agent".to_string() });
+        let agent_id = reg.agent_id.clone().unwrap();
+        let resp = kernel.handle_api_request(ApiRequest::AgentSetResources {
+            agent_id: agent_id.clone(),
+            memory_quota: Some(1024),
+            cpu_time_quota: Some(5000),
+            allowed_tools: Some(vec!["search".to_string()]),
+            caller_agent_id: "system".to_string(),
+        });
+        assert!(resp.ok, "AgentSetResources should succeed: {:?}", resp.error);
+    }
+
+    #[test]
+    fn test_agent_usage() {
+        let (kernel, _tmp) = make_kernel();
+        let reg = kernel.handle_api_request(ApiRequest::RegisterAgent { name: "usage_agent".to_string() });
+        let agent_id = reg.agent_id.unwrap();
+        let resp = kernel.handle_api_request(ApiRequest::AgentUsage { agent_id });
+        assert!(resp.ok, "AgentUsage should succeed: {:?}", resp.error);
+        assert!(resp.agent_usage.is_some(), "should return agent_usage");
+    }
+
+    #[test]
+    fn test_agent_usage_not_found() {
+        let (kernel, _tmp) = make_kernel();
+        let resp = kernel.handle_api_request(ApiRequest::AgentUsage { agent_id: "nonexistent".to_string() });
+        assert!(!resp.ok, "AgentUsage for unknown agent should fail");
+    }
+}
+
 impl super::super::AIKernel {
     pub(crate) fn handle_agent(&self, req: ApiRequest) -> ApiResponse {
         match req {

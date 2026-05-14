@@ -5,6 +5,288 @@ use crate::memory::MemoryScope;
 use crate::DEFAULT_TENANT;
 use super::super::ops;
 
+#[cfg(test)]
+mod tests {
+    use crate::kernel::tests::make_kernel;
+    use crate::api::semantic::ApiRequest;
+
+    #[test]
+    fn test_remember_and_recall() {
+        let (kernel, _tmp) = make_kernel();
+        let resp = kernel.handle_api_request(ApiRequest::Remember {
+            agent_id: "test_agent".to_string(),
+            content: "the quick brown fox".to_string(),
+            tenant_id: None,
+        });
+        assert!(resp.ok, "Remember should succeed: {:?}", resp.error);
+
+        let resp = kernel.handle_api_request(ApiRequest::Recall {
+            agent_id: "test_agent".to_string(),
+            scope: None,
+            query: None,
+            limit: None,
+            tier: None,
+        });
+        assert!(resp.ok, "Recall should succeed: {:?}", resp.error);
+        let memories = resp.memory.unwrap();
+        assert!(!memories.is_empty(), "should have at least one memory");
+    }
+
+    #[test]
+    fn test_recall_with_query_filter() {
+        let (kernel, _tmp) = make_kernel();
+        kernel.handle_api_request(ApiRequest::Remember {
+            agent_id: "test_agent".to_string(),
+            content: "alpha content".to_string(),
+            tenant_id: None,
+        });
+        kernel.handle_api_request(ApiRequest::Remember {
+            agent_id: "test_agent".to_string(),
+            content: "beta content".to_string(),
+            tenant_id: None,
+        });
+        let resp = kernel.handle_api_request(ApiRequest::Recall {
+            agent_id: "test_agent".to_string(),
+            scope: None,
+            query: Some("alpha".to_string()),
+            limit: None,
+            tier: None,
+        });
+        assert!(resp.ok);
+        let memories = resp.memory.unwrap();
+        assert_eq!(memories.len(), 1, "should filter to only alpha");
+        assert!(memories[0].contains("alpha"));
+    }
+
+    #[test]
+    fn test_remember_long_term() {
+        let (kernel, _tmp) = make_kernel();
+        let resp = kernel.handle_api_request(ApiRequest::RememberLongTerm {
+            agent_id: "test_agent".to_string(),
+            content: "important fact".to_string(),
+            tags: vec!["fact".to_string()],
+            importance: 80,
+            scope: None,
+            tenant_id: None,
+        });
+        assert!(resp.ok, "RememberLongTerm should succeed: {:?}", resp.error);
+    }
+
+    #[test]
+    fn test_remember_long_term_batch() {
+        use crate::api::dto::BatchLongTermItem;
+        let (kernel, _tmp) = make_kernel();
+        let resp = kernel.handle_api_request(ApiRequest::RememberLongTermBatch {
+            agent_id: "test_agent".to_string(),
+            items: vec![
+                BatchLongTermItem {
+                    content: "fact one".to_string(),
+                    tags: vec!["batch".to_string()],
+                    importance: 50,
+                },
+                BatchLongTermItem {
+                    content: "fact two".to_string(),
+                    tags: vec!["batch".to_string()],
+                    importance: 60,
+                },
+            ],
+            tenant_id: None,
+        });
+        assert!(resp.ok, "RememberLongTermBatch should succeed: {:?}", resp.error);
+        assert!(resp.data.is_some(), "should return stored IDs");
+    }
+
+    #[test]
+    fn test_recall_semantic() {
+        let (kernel, _tmp) = make_kernel();
+        // Store something first
+        kernel.handle_api_request(ApiRequest::Remember {
+            agent_id: "test_agent".to_string(),
+            content: "rust programming language".to_string(),
+            tenant_id: None,
+        });
+        let resp = kernel.handle_api_request(ApiRequest::RecallSemantic {
+            agent_id: "test_agent".to_string(),
+            query: "programming".to_string(),
+            k: 5,
+        });
+        assert!(resp.ok, "RecallSemantic should succeed: {:?}", resp.error);
+    }
+
+    #[test]
+    fn test_remember_and_recall_procedural() {
+        use crate::api::dto::ProcedureStepDto;
+        let (kernel, _tmp) = make_kernel();
+        let resp = kernel.handle_api_request(ApiRequest::RememberProcedural {
+            agent_id: "test_agent".to_string(),
+            name: "deploy".to_string(),
+            description: "Deploy procedure".to_string(),
+            steps: vec![
+                ProcedureStepDto {
+                    description: "build".to_string(),
+                    action: "cargo build --release".to_string(),
+                    expected_outcome: Some("binary built".to_string()),
+                },
+            ],
+            learned_from: Some("experience".to_string()),
+            tags: vec!["ops".to_string()],
+            scope: None,
+        });
+        assert!(resp.ok, "RememberProcedural should succeed: {:?}", resp.error);
+        assert!(resp.data.is_some());
+
+        let resp = kernel.handle_api_request(ApiRequest::RecallProcedural {
+            agent_id: "test_agent".to_string(),
+            name: Some("deploy".to_string()),
+        });
+        assert!(resp.ok, "RecallProcedural should succeed: {:?}", resp.error);
+        assert!(resp.data.is_some());
+    }
+
+    #[test]
+    fn test_recall_visible() {
+        let (kernel, _tmp) = make_kernel();
+        kernel.handle_api_request(ApiRequest::Remember {
+            agent_id: "test_agent".to_string(),
+            content: "visible memory".to_string(),
+            tenant_id: None,
+        });
+        let resp = kernel.handle_api_request(ApiRequest::RecallVisible {
+            agent_id: "test_agent".to_string(),
+            groups: vec![],
+        });
+        assert!(resp.ok, "RecallVisible should succeed: {:?}", resp.error);
+        assert!(resp.memory.is_some());
+    }
+
+    #[test]
+    fn test_memory_move_unknown_entry() {
+        let (kernel, _tmp) = make_kernel();
+        let resp = kernel.handle_api_request(ApiRequest::MemoryMove {
+            agent_id: "test_agent".to_string(),
+            entry_id: "nonexistent_entry".to_string(),
+            target_tier: "long_term".to_string(),
+            tenant_id: None,
+        });
+        assert!(!resp.ok, "MemoryMove for unknown entry should fail");
+    }
+
+    #[test]
+    fn test_memory_delete_unknown_entry() {
+        let (kernel, _tmp) = make_kernel();
+        let resp = kernel.handle_api_request(ApiRequest::MemoryDeleteEntry {
+            agent_id: "test_agent".to_string(),
+            entry_id: "nonexistent_entry".to_string(),
+            tenant_id: None,
+        });
+        assert!(!resp.ok, "MemoryDeleteEntry for unknown entry should fail");
+    }
+
+    #[test]
+    fn test_evict_expired() {
+        let (kernel, _tmp) = make_kernel();
+        // Grant Delete permission required for eviction
+        kernel.handle_api_request(ApiRequest::GrantPermission {
+            agent_id: "test_agent".to_string(),
+            action: "Delete".to_string(),
+            scope: Some("*".to_string()),
+            expires_at: None,
+        });
+        let resp = kernel.handle_api_request(ApiRequest::EvictExpired {
+            agent_id: "test_agent".to_string(),
+            tenant_id: None,
+        });
+        assert!(resp.ok, "EvictExpired should succeed: {:?}", resp.error);
+        assert_eq!(resp.data.as_deref(), Some("0"), "no expired memories yet");
+    }
+
+    #[test]
+    fn test_memory_stats() {
+        let (kernel, _tmp) = make_kernel();
+        let resp = kernel.handle_api_request(ApiRequest::MemoryStats {
+            agent_id: "test_agent".to_string(),
+            tier: None,
+            tenant_id: None,
+        });
+        assert!(resp.ok, "MemoryStats should succeed: {:?}", resp.error);
+        assert!(resp.memory_stats.is_some());
+    }
+
+    #[test]
+    fn test_batch_memory_store() {
+        use crate::api::dto::BatchMemoryEntry;
+        let (kernel, _tmp) = make_kernel();
+        let resp = kernel.handle_api_request(ApiRequest::BatchMemoryStore {
+            entries: vec![
+                BatchMemoryEntry {
+                    content: "batch entry 1".to_string(),
+                    tier: "working".to_string(),
+                    importance: 50,
+                    tags: vec![],
+                },
+                BatchMemoryEntry {
+                    content: "batch entry 2".to_string(),
+                    tier: "working".to_string(),
+                    importance: 60,
+                    tags: vec!["batch".to_string()],
+                },
+            ],
+            agent_id: "test_agent".to_string(),
+            tenant_id: None,
+        });
+        assert!(resp.ok, "BatchMemoryStore should succeed: {:?}", resp.error);
+        let batch = resp.batch_memory_store.unwrap();
+        assert_eq!(batch.results.len(), 2);
+    }
+
+    #[test]
+    fn test_discover_knowledge() {
+        use crate::api::dto::DiscoveryScope;
+        let (kernel, _tmp) = make_kernel();
+        let resp = kernel.handle_api_request(ApiRequest::DiscoverKnowledge {
+            query: "test".to_string(),
+            scope: DiscoveryScope::default(),
+            knowledge_types: vec![],
+            max_results: 10,
+            token_budget: None,
+            agent_id: "test_agent".to_string(),
+        });
+        assert!(resp.ok, "DiscoverKnowledge should succeed: {:?}", resp.error);
+        assert!(resp.discovery_result.is_some());
+    }
+
+    #[test]
+    fn test_recall_with_tier_filter() {
+        let (kernel, _tmp) = make_kernel();
+        kernel.handle_api_request(ApiRequest::Remember {
+            agent_id: "test_agent".to_string(),
+            content: "working memory item".to_string(),
+            tenant_id: None,
+        });
+        let resp = kernel.handle_api_request(ApiRequest::Recall {
+            agent_id: "test_agent".to_string(),
+            scope: None,
+            query: None,
+            limit: None,
+            tier: Some("working".to_string()),
+        });
+        assert!(resp.ok, "Recall with tier filter should succeed: {:?}", resp.error);
+    }
+
+    #[test]
+    fn test_recall_shared_scope() {
+        let (kernel, _tmp) = make_kernel();
+        let resp = kernel.handle_api_request(ApiRequest::Recall {
+            agent_id: "test_agent".to_string(),
+            scope: Some("shared".to_string()),
+            query: None,
+            limit: None,
+            tier: None,
+        });
+        assert!(resp.ok, "Recall shared scope should succeed: {:?}", resp.error);
+    }
+}
+
 pub(super) fn parse_scope(scope: Option<String>) -> MemoryScope {
     match scope.as_deref() {
         None | Some("private") => MemoryScope::Private,

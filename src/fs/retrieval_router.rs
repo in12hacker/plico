@@ -194,7 +194,7 @@ impl RetrievalConfig {
                 use_reranker: true,
             },
             QueryIntent::MultiHop => Self {
-                top_k: 15,
+                top_k: 30,
                 use_kg: true,
                 use_ppr: true,
                 use_bm25: true,
@@ -391,7 +391,7 @@ mod tests {
         let config = RetrievalConfig::for_intent(QueryIntent::MultiHop);
         assert!(config.use_kg);
         assert!(config.use_ppr);
-        assert_eq!(config.top_k, 15);
+        assert_eq!(config.top_k, 30);
         assert!(config.use_reranker);
     }
 

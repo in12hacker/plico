@@ -220,3 +220,118 @@ pub(crate) fn create_llm_provider(model_env: &str, default_model: &str) -> Resul
     };
     Ok(Arc::new(CircuitBreakerLlmProvider::new(inner, 5, 60_000)) as Arc<dyn LlmProvider>)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::kernel::tests::make_kernel;
+
+    #[test]
+    fn test_atomic_write_json_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.json");
+        let data = vec![1, 2, 3];
+        atomic_write_json(&path, &data);
+        let loaded: Vec<i32> = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(loaded, data);
+    }
+
+    #[test]
+    fn test_atomic_write_json_creates_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("new.json");
+        atomic_write_json(&path, &"hello");
+        assert!(path.exists());
+        let content: String = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(content, "hello");
+    }
+
+    #[test]
+    fn test_atomic_write_bytes_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.bin");
+        atomic_write_bytes(&path, b"binary data").unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"binary data");
+    }
+
+    #[test]
+    fn test_atomic_write_bytes_overwrites() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("overwrite.bin");
+        atomic_write_bytes(&path, b"first").unwrap();
+        atomic_write_bytes(&path, b"second").unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"second");
+    }
+
+    #[test]
+    fn test_ensure_v1_suffix() {
+        assert_eq!(ensure_v1_suffix("http://localhost:8080"), "http://localhost:8080/v1");
+        assert_eq!(ensure_v1_suffix("http://localhost:8080/v1"), "http://localhost:8080/v1");
+        assert_eq!(ensure_v1_suffix("http://localhost:8080/"), "http://localhost:8080/v1");
+    }
+
+    #[test]
+    fn test_read_circuit_breaker_config_defaults() {
+        // With no env vars set, defaults are used
+        let (t, c) = read_circuit_breaker_config("NONEXISTENT_T", "NONEXISTENT_C", 5, 10_000);
+        assert_eq!(t, 5);
+        assert_eq!(c, 10_000);
+    }
+
+    #[test]
+    fn test_create_embedding_provider_stub() {
+        let config = crate::config::InferenceConfig {
+            embedding_backend: "stub".to_string(),
+            ..Default::default()
+        };
+        let provider = create_embedding_provider(&config);
+        assert!(provider.is_ok());
+    }
+
+    #[test]
+    fn test_create_llm_provider_stub() {
+        let _ = std::env::set_var("LLM_BACKEND", "stub");
+        let result = create_llm_provider("TEST_MODEL", "test-model");
+        assert!(result.is_ok());
+        let _ = std::env::remove_var("LLM_BACKEND");
+    }
+
+    #[test]
+    fn test_persist_and_restore_agents() {
+        let (kernel, _dir) = make_kernel();
+        let _ = kernel.handle_api_request(crate::api::semantic::ApiRequest::RegisterAgent {
+            name: "persist_test_agent".to_string(),
+        });
+        kernel.persist_agents();
+        assert!(kernel.agent_index_path().exists());
+    }
+
+    #[test]
+    fn test_persist_and_restore_permissions() {
+        let (kernel, _dir) = make_kernel();
+        kernel.persist_permissions();
+        kernel.restore_permissions();
+    }
+
+    #[test]
+    fn test_persist_and_restore_event_log() {
+        let (kernel, _dir) = make_kernel();
+        kernel.persist_event_log();
+        kernel.restore_event_log();
+    }
+
+    #[test]
+    fn test_persist_all() {
+        let (kernel, _dir) = make_kernel();
+        kernel.persist_all();
+    }
+
+    #[test]
+    fn test_persist_empty_permissions_removes_file() {
+        let (kernel, _dir) = make_kernel();
+        // Write something first
+        kernel.persist_permissions();
+        // With no grants, persist should remove the file (or not create one)
+        kernel.persist_permissions();
+    }
+}

@@ -106,7 +106,7 @@ fn test_grant_with_expiry() {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_millis() as u64
-        - 3600_000;
+        - 3_600_000;
 
     guard.grant(
         "agent1",

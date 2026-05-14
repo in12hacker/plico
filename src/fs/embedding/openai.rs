@@ -39,6 +39,8 @@ impl OpenAIEmbeddingBackend {
 
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .pool_max_idle_per_host(1)
             .build()
             .map_err(EmbedError::Http)?;
 
@@ -240,7 +242,7 @@ impl EmbeddingProvider for OpenAIEmbeddingBackend {
                     rt.block_on(self.embed_async(text))
                 } else {
                     let rt = tokio::runtime::Builder::new_current_thread().enable_all().build()
-                        .map_err(|e| EmbedError::Runtime(e))?;
+                        .map_err(EmbedError::Runtime)?;
                     rt.block_on(self.embed_async(text))
                 }
             }
@@ -268,7 +270,7 @@ impl EmbeddingProvider for OpenAIEmbeddingBackend {
                     rt.block_on(self.embed_batch_async(&owned))
                 } else {
                     let rt = tokio::runtime::Builder::new_current_thread().enable_all().build()
-                        .map_err(|e| EmbedError::Runtime(e))?;
+                        .map_err(EmbedError::Runtime)?;
                     rt.block_on(self.embed_batch_async(&owned))
                 }
             }

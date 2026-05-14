@@ -3,6 +3,130 @@
 use crate::api::semantic::{ApiRequest, ApiResponse};
 use super::super::hook;
 
+#[cfg(test)]
+mod tests {
+    use crate::kernel::tests::make_kernel;
+    use crate::api::semantic::ApiRequest;
+
+    #[test]
+    fn test_tool_list() {
+        let (kernel, _tmp) = make_kernel();
+        let resp = kernel.handle_api_request(ApiRequest::ToolList {
+            agent_id: "test_agent".to_string(),
+        });
+        assert!(resp.ok, "ToolList should succeed: {:?}", resp.error);
+        assert!(resp.tools.is_some(), "should return tools list");
+    }
+
+    #[test]
+    fn test_tool_describe_not_found() {
+        let (kernel, _tmp) = make_kernel();
+        let resp = kernel.handle_api_request(ApiRequest::ToolDescribe {
+            tool: "nonexistent_tool".to_string(),
+            agent_id: "test_agent".to_string(),
+        });
+        assert!(!resp.ok, "ToolDescribe for unknown tool should fail");
+    }
+
+    #[test]
+    fn test_hook_list_empty() {
+        let (kernel, _tmp) = make_kernel();
+        let resp = kernel.handle_api_request(ApiRequest::HookList);
+        assert!(resp.ok, "HookList should succeed: {:?}", resp.error);
+        assert!(resp.hook_list.is_some());
+    }
+
+    #[test]
+    fn test_hook_register_block() {
+        let (kernel, _tmp) = make_kernel();
+        let resp = kernel.handle_api_request(ApiRequest::HookRegister {
+            point: "PreToolCall".to_string(),
+            action: "block".to_string(),
+            tool_pattern: Some("dangerous".to_string()),
+            reason: Some("safety".to_string()),
+            priority: Some(10),
+        });
+        assert!(resp.ok, "HookRegister block should succeed: {:?}", resp.error);
+    }
+
+    #[test]
+    fn test_hook_register_log() {
+        let (kernel, _tmp) = make_kernel();
+        let resp = kernel.handle_api_request(ApiRequest::HookRegister {
+            point: "PostToolCall".to_string(),
+            action: "log".to_string(),
+            tool_pattern: None,
+            reason: None,
+            priority: None,
+        });
+        assert!(resp.ok, "HookRegister log should succeed: {:?}", resp.error);
+    }
+
+    #[test]
+    fn test_hook_register_unknown_point() {
+        let (kernel, _tmp) = make_kernel();
+        let resp = kernel.handle_api_request(ApiRequest::HookRegister {
+            point: "InvalidPoint".to_string(),
+            action: "block".to_string(),
+            tool_pattern: None,
+            reason: None,
+            priority: None,
+        });
+        assert!(!resp.ok, "HookRegister with unknown point should fail");
+    }
+
+    #[test]
+    fn test_hook_register_unknown_action() {
+        let (kernel, _tmp) = make_kernel();
+        let resp = kernel.handle_api_request(ApiRequest::HookRegister {
+            point: "PreToolCall".to_string(),
+            action: "invalid_action".to_string(),
+            tool_pattern: None,
+            reason: None,
+            priority: None,
+        });
+        assert!(!resp.ok, "HookRegister with unknown action should fail");
+    }
+
+    #[test]
+    fn test_hook_list_after_register() {
+        let (kernel, _tmp) = make_kernel();
+        let before = kernel.handle_api_request(ApiRequest::HookList);
+        let count_before = before.hook_list.as_ref().unwrap().len();
+        kernel.handle_api_request(ApiRequest::HookRegister {
+            point: "PreWrite".to_string(),
+            action: "log".to_string(),
+            tool_pattern: None,
+            reason: None,
+            priority: Some(25),
+        });
+        let resp = kernel.handle_api_request(ApiRequest::HookList);
+        assert!(resp.ok);
+        let hooks = resp.hook_list.unwrap();
+        assert_eq!(hooks.len(), count_before + 1, "should have 1 more hook after register");
+    }
+
+    #[test]
+    fn test_tool_call() {
+        let (kernel, _tmp) = make_kernel();
+        // Grant Execute permission to agent
+        kernel.handle_api_request(ApiRequest::GrantPermission {
+            agent_id: "test_agent".to_string(),
+            action: "execute".to_string(),
+            scope: None,
+            expires_at: None,
+        });
+        let resp = kernel.handle_api_request(ApiRequest::ToolCall {
+            tool: "nonexistent".to_string(),
+            params: serde_json::json!({}),
+            agent_id: "test_agent".to_string(),
+        });
+        // Tool call should succeed even if tool not found (returns error in ToolResult)
+        assert!(resp.ok, "ToolCall should return ok: {:?}", resp.error);
+        assert!(resp.tool_result.is_some(), "should return tool_result");
+    }
+}
+
 struct ApiBlockHook {
     tool_pattern: Option<String>,
     reason: String,

@@ -45,3 +45,61 @@ impl super::AIKernel {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::kernel::tests::make_kernel;
+
+    #[test]
+    fn test_link_memory_to_kg_basic() {
+        let (kernel, _dir) = make_kernel();
+        kernel.link_memory_to_kg("entry_001", "test_agent", "default", &["tag1".to_string()]);
+        // Should create a KG node without panicking
+    }
+
+    #[test]
+    fn test_link_memory_to_kg_with_multiple_tags() {
+        let (kernel, _dir) = make_kernel();
+        kernel.link_memory_to_kg("entry_002", "test_agent", "default", &[
+            "tag1".to_string(), "tag2".to_string(), "tag3".to_string(),
+        ]);
+    }
+
+    #[test]
+    fn test_link_memory_to_kg_empty_tags() {
+        let (kernel, _dir) = make_kernel();
+        kernel.link_memory_to_kg("entry_003", "test_agent", "default", &[]);
+    }
+
+    #[test]
+    fn test_link_memory_to_kg_creates_similar_edges() {
+        let (kernel, _dir) = make_kernel();
+        // Create first memory link
+        kernel.link_memory_to_kg("entry_a", "test_agent", "default", &["shared_tag".to_string()]);
+        // Create second memory with overlapping tag — should create SimilarTo edge
+        kernel.link_memory_to_kg("entry_b", "test_agent", "default", &["shared_tag".to_string()]);
+    }
+
+    #[test]
+    fn test_link_memory_to_kg_no_shared_tags() {
+        let (kernel, _dir) = make_kernel();
+        kernel.link_memory_to_kg("entry_x", "test_agent", "default", &["unique_a".to_string()]);
+        kernel.link_memory_to_kg("entry_y", "test_agent", "default", &["unique_b".to_string()]);
+        // No SimilarTo edge should be created since tags don't overlap
+    }
+
+    #[test]
+    fn test_link_memory_short_entry_id() {
+        let (kernel, _dir) = make_kernel();
+        // Entry ID shorter than 8 chars — tests the min() guard
+        kernel.link_memory_to_kg("ab", "test_agent", "default", &["tag".to_string()]);
+    }
+
+    #[test]
+    fn test_link_memory_partial_tag_overlap() {
+        let (kernel, _dir) = make_kernel();
+        kernel.link_memory_to_kg("entry_p1", "test_agent", "default", &["a".to_string(), "b".to_string()]);
+        kernel.link_memory_to_kg("entry_p2", "test_agent", "default", &["b".to_string(), "c".to_string()]);
+        // Should create edge with weight = 1/3 (1 shared out of max 2)
+    }
+}

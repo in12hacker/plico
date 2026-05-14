@@ -105,9 +105,9 @@ impl ConflictDetector {
                     if group.len() > 1 {
                         // Keep the newest, invalidate the rest
                         let mut sorted = group.clone();
-                        sorted.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+                        sorted.sort_by_key(|e| std::cmp::Reverse(e.created_at));
                         for older in &sorted[1..] {
-                            if self.kg.invalidate_edge(&older.src, &older.dst, older.edge_type.clone()).unwrap_or(false) {
+                            if self.kg.invalidate_edge(&older.src, &older.dst, older.edge_type).unwrap_or(false) {
                                 repairs += 1;
                             }
                         }
@@ -165,7 +165,7 @@ impl ConflictDetector {
 
     /// Detect duplicate entities: entities with high embedding similarity but no IsAliasOf edge.
     fn detect_duplicate_entities(&self, agent_id: &str) -> Vec<DetectedConflict> {
-        let embedder = match &self.embedder {
+        let _embedder = match &self.embedder {
             Some(e) => e,
             None => return vec![],
         };
@@ -318,6 +318,73 @@ mod tests {
 
         // After repair, only one edge should be valid
         let remaining = detector.detect_temporal_conflicts("agent1");
+        assert!(remaining.is_empty(), "Expected no conflicts after repair, got {}", remaining.len());
+    }
+
+    #[test]
+    fn test_detect_all_empty_graph() {
+        let (detector, _kg) = setup();
+
+        // No nodes or edges added — detect_all should return empty
+        let conflicts = detector.detect_all("agent_empty");
+        assert!(conflicts.is_empty(), "Expected no conflicts on empty graph, got {}", conflicts.len());
+    }
+
+    #[test]
+    fn test_detect_all_finds_temporal_conflict() {
+        let (detector, kg) = setup();
+
+        kg.add_node(make_node("x", "agent2")).unwrap();
+        kg.add_node(make_node("y", "agent2")).unwrap();
+        kg.add_node(make_node("z", "agent2")).unwrap();
+
+        // Two valid edges from x with same type but different dst
+        kg.add_edge(KGEdge::new("x".into(), "y".into(), KGEdgeType::SimilarTo, 0.9)).unwrap();
+        kg.add_edge(KGEdge::new("x".into(), "z".into(), KGEdgeType::SimilarTo, 0.85)).unwrap();
+
+        let conflicts = detector.detect_all("agent2");
+        assert_eq!(conflicts.len(), 1);
+        assert_eq!(conflicts[0].conflict_type, "temporal_inconsistency");
+        assert_eq!(conflicts[0].severity, ConflictSeverity::Medium);
+        assert!(conflicts[0].description.contains("x"));
+    }
+
+    #[test]
+    fn test_detect_and_repair_no_conflicts() {
+        let (detector, kg) = setup();
+
+        kg.add_node(make_node("p", "agent3")).unwrap();
+        kg.add_node(make_node("q", "agent3")).unwrap();
+
+        // Single valid edge — no conflict
+        kg.add_edge(KGEdge::new("p".into(), "q".into(), KGEdgeType::RelatedTo, 0.5)).unwrap();
+
+        let (conflicts, repairs) = detector.detect_and_repair("agent3");
+        assert!(conflicts.is_empty(), "Expected no conflicts, got {}", conflicts.len());
+        assert_eq!(repairs, 0, "Expected 0 repairs with no conflicts, got {}", repairs);
+    }
+
+    #[test]
+    fn test_detect_and_repair_with_conflict_positive_count() {
+        let (detector, kg) = setup();
+
+        kg.add_node(make_node("m", "agent4")).unwrap();
+        kg.add_node(make_node("n1", "agent4")).unwrap();
+        kg.add_node(make_node("n2", "agent4")).unwrap();
+
+        // Two valid edges from m with same type — creates temporal conflict
+        kg.add_edge(KGEdge::new("m".into(), "n1".into(), KGEdgeType::RelatedTo, 0.9)).unwrap();
+
+        std::thread::sleep(std::time::Duration::from_millis(10));
+
+        kg.add_edge(KGEdge::new("m".into(), "n2".into(), KGEdgeType::RelatedTo, 0.7)).unwrap();
+
+        let (conflicts, repairs) = detector.detect_and_repair("agent4");
+        assert!(!conflicts.is_empty(), "Expected at least one conflict");
+        assert!(repairs > 0, "Expected repair_count > 0, got {}", repairs);
+
+        // After repair, re-running should find no more conflicts
+        let (remaining, _) = detector.detect_and_repair("agent4");
         assert!(remaining.is_empty(), "Expected no conflicts after repair, got {}", remaining.len());
     }
 }

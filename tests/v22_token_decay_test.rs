@@ -23,8 +23,8 @@ use tempfile::tempdir;
 
 /// Helper to create a kernel for testing.
 fn make_kernel() -> (Arc<AIKernel>, tempfile::TempDir) {
-    let _ = std::env::set_var("EMBEDDING_BACKEND", "stub");
-    let _ = std::env::set_var("LLM_BACKEND", "stub");
+    std::env::set_var("EMBEDDING_BACKEND", "stub");
+    std::env::set_var("LLM_BACKEND", "stub");
     let dir = tempdir().unwrap();
     let kernel = AIKernel::new(dir.path().to_path_buf()).expect("kernel init");
     (kernel, dir)
@@ -117,7 +117,7 @@ fn test_token_decay_curve_10_sessions() {
         )
         .expect("should create doc");
 
-    let _ = kernel.remember_working(
+    kernel.remember_working(
         &agent_id,
         "default",
         "User is working on authentication improvements".to_string(),
@@ -286,13 +286,11 @@ fn test_intent_cache_hit_rate_stub_mode() {
     let total_intents = 50;
     let exact_repeats = 15;
 
-    let intent_pool = vec![
-        "fix auth bug",
+    let intent_pool = ["fix auth bug",
         "fix memory leak",
         "fix race condition",
         "improve performance",
-        "add logging",
-    ];
+        "add logging"];
 
     let mut hits = 0u64;
     let mut total_entries = 0usize;

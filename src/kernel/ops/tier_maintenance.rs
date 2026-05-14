@@ -225,4 +225,156 @@ mod tests {
         // High-importance ephemeral should be promoted, low-importance evicted
         assert!(stats.evicted_count >= 1 || stats.promoted_count >= 1);
     }
+
+    #[test]
+    fn test_check_entry_promotion_ephemeral_to_working() {
+        let maintenance = TierMaintenance::new();
+
+        // Ephemeral entry with access_count >= 3 (default threshold) -> should promote to Working
+        let entry = make_entry("a1", MemoryTier::Ephemeral, 50, 3);
+        let result = maintenance.check_entry_promotion(&entry);
+        assert_eq!(result, Some(MemoryTier::Working));
+
+        // Exactly at threshold
+        let entry = make_entry("a1", MemoryTier::Ephemeral, 80, 3);
+        assert_eq!(maintenance.check_entry_promotion(&entry), Some(MemoryTier::Working));
+
+        // Above threshold
+        let entry = make_entry("a1", MemoryTier::Ephemeral, 20, 5);
+        assert_eq!(maintenance.check_entry_promotion(&entry), Some(MemoryTier::Working));
+
+        // Below threshold
+        let entry = make_entry("a1", MemoryTier::Ephemeral, 50, 2);
+        assert_eq!(maintenance.check_entry_promotion(&entry), None);
+    }
+
+    #[test]
+    fn test_check_entry_promotion_working_to_longterm() {
+        let maintenance = TierMaintenance::new();
+
+        // Working entry with access_count >= 10 AND importance >= 50 -> should promote to LongTerm
+        let entry = make_entry("a1", MemoryTier::Working, 50, 10);
+        let result = maintenance.check_entry_promotion(&entry);
+        assert_eq!(result, Some(MemoryTier::LongTerm));
+
+        // Above both thresholds
+        let entry = make_entry("a1", MemoryTier::Working, 80, 15);
+        assert_eq!(maintenance.check_entry_promotion(&entry), Some(MemoryTier::LongTerm));
+
+        // access_count met but importance too low
+        let entry = make_entry("a1", MemoryTier::Working, 49, 10);
+        assert_eq!(maintenance.check_entry_promotion(&entry), None);
+
+        // importance met but access_count too low
+        let entry = make_entry("a1", MemoryTier::Working, 60, 9);
+        assert_eq!(maintenance.check_entry_promotion(&entry), None);
+    }
+
+    #[test]
+    fn test_should_evict_ephemeral_boundary() {
+        let maintenance = TierMaintenance::new();
+
+        // importance == 69: should evict (< 70)
+        let entry = make_entry("a1", MemoryTier::Ephemeral, 69, 0);
+        assert!(maintenance.should_evict_ephemeral(&entry));
+
+        // importance == 70: should NOT evict (>= 70)
+        let entry = make_entry("a1", MemoryTier::Ephemeral, 70, 0);
+        assert!(!maintenance.should_evict_ephemeral(&entry));
+
+        // importance == 71: should NOT evict
+        let entry = make_entry("a1", MemoryTier::Ephemeral, 71, 0);
+        assert!(!maintenance.should_evict_ephemeral(&entry));
+
+        // Non-ephemeral entry: should NOT evict regardless of importance
+        let entry = make_entry("a1", MemoryTier::Working, 10, 0);
+        assert!(!maintenance.should_evict_ephemeral(&entry));
+    }
+
+    #[test]
+    fn test_with_thresholds_custom() {
+        // Custom thresholds: ephemeral->working at access 1, working->longterm at access 5 + importance 30
+        let thresholds = PromotionThresholds {
+            ephemeral_to_working_access: 1,
+            working_to_longterm_access: 5,
+            working_to_longterm_importance: 30,
+        };
+        let maintenance = TierMaintenance::with_thresholds(thresholds);
+
+        // Ephemeral with access_count == 1: should promote (threshold is 1)
+        let entry = make_entry("a1", MemoryTier::Ephemeral, 50, 1);
+        assert_eq!(
+            maintenance.check_entry_promotion(&entry),
+            Some(MemoryTier::Working),
+            "access_count == 1 should meet custom threshold"
+        );
+
+        // Ephemeral with access_count == 0: should NOT promote
+        let entry = make_entry("a1", MemoryTier::Ephemeral, 50, 0);
+        assert_eq!(maintenance.check_entry_promotion(&entry), None);
+
+        // Working with access_count == 5, importance == 30: should promote (both at threshold)
+        let entry = make_entry("a1", MemoryTier::Working, 30, 5);
+        assert_eq!(
+            maintenance.check_entry_promotion(&entry),
+            Some(MemoryTier::LongTerm),
+            "access 5 + importance 30 should meet custom thresholds"
+        );
+
+        // Working with access_count == 5, importance == 29: should NOT promote
+        let entry = make_entry("a1", MemoryTier::Working, 29, 5);
+        assert_eq!(maintenance.check_entry_promotion(&entry), None);
+
+        // Working with access_count == 4, importance == 30: should NOT promote
+        let entry = make_entry("a1", MemoryTier::Working, 30, 4);
+        assert_eq!(maintenance.check_entry_promotion(&entry), None);
+    }
+
+    #[test]
+    fn test_run_maintenance_cycle_exact_stats() {
+        let mem = LayeredMemory::new();
+        let maintenance = TierMaintenance::new();
+
+        // 2 ephemeral entries: one promotes (access >= 3, importance >= 70), one evicts (importance < 70)
+        mem.store(make_entry("a1", MemoryTier::Ephemeral, 80, 3)); // promotes to Working
+        mem.store(make_entry("a1", MemoryTier::Ephemeral, 50, 0)); // evicts
+
+        let stats = maintenance.run_maintenance_cycle(&mem, "a1");
+
+        // Before: 2 ephemeral, 0 working, 0 longterm
+        assert_eq!(stats.ephemeral_before, 2);
+        assert_eq!(stats.working_before, 0);
+        assert_eq!(stats.longterm_before, 0);
+
+        // After: 0 ephemeral, 1 working (promoted), 0 longterm
+        assert_eq!(stats.ephemeral_after, 0);
+        assert_eq!(stats.working_after, 1);
+        assert_eq!(stats.longterm_after, 0);
+
+        // Counts
+        assert_eq!(stats.promoted_count, 1); // 1 promoted Ephemeral->Working
+        assert_eq!(stats.evicted_count, 1);  // 1 evicted (low importance)
+        assert_eq!(stats.linked_count, 0);   // set by caller, default 0
+    }
+
+    #[test]
+    fn test_run_maintenance_cycle_no_changes() {
+        let mem = LayeredMemory::new();
+        let maintenance = TierMaintenance::new();
+
+        // One working entry that does NOT meet promotion to LongTerm (access < 10)
+        // and one ephemeral entry with importance < 70 (will be evicted)
+        // Focus: working entry stays put — no promotion, no eviction affects working tier
+        mem.store(make_entry("a1", MemoryTier::Working, 30, 2));
+
+        let stats = maintenance.run_maintenance_cycle(&mem, "a1");
+
+        // Working entry stays: no promotion (access < 10) and no eviction (not ephemeral)
+        assert_eq!(stats.ephemeral_before, 0);
+        assert_eq!(stats.ephemeral_after, 0);
+        assert_eq!(stats.working_before, 1);
+        assert_eq!(stats.working_after, 1);
+        assert_eq!(stats.promoted_count, 0);
+        assert_eq!(stats.evicted_count, 0);
+    }
 }

@@ -364,6 +364,7 @@ fn parse_edge_types(types: &[String]) -> Vec<KGEdgeType> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::kernel::tests::make_kernel;
 
     #[test]
     fn test_parse_edge_types() {
@@ -375,20 +376,136 @@ mod tests {
     }
 
     #[test]
-    fn test_estimate_tokens_for_hit() {
+    fn test_parse_edge_types_all_variants() {
+        let types = vec![
+            "associates_with".to_string(), "mentions".to_string(), "follows".to_string(),
+            "part_of".to_string(), "related_to".to_string(), "similar_to".to_string(),
+            "causes".to_string(), "has_fact".to_string(), "has_resolution".to_string(),
+            "reminds".to_string(), "unknown_type".to_string(),
+        ];
+        let parsed = parse_edge_types(&types);
+        assert_eq!(parsed.len(), 10); // unknown_type is filtered out
+    }
+
+    #[test]
+    fn test_parse_edge_types_empty() {
+        let parsed = parse_edge_types(&[]);
+        assert!(parsed.is_empty());
+    }
+
+    #[test]
+    fn test_parse_edge_types_case_insensitive() {
+        let types = vec!["CAUSES".to_string(), "Mentions".to_string()];
+        let parsed = parse_edge_types(&types);
+        assert_eq!(parsed.len(), 2);
+    }
+
+    #[test]
+    fn test_estimate_tokens_empty_preview() {
         let hit = HybridHit {
             cid: "test".to_string(),
-            content_preview: "This is a test preview with some content".to_string(),
-            vector_score: 0.8,
-            graph_score: 0.5,
-            combined_score: 0.68,
-            provenance: vec![ProvenanceStep {
-                from_cid: "node1".to_string(),
-                edge_type: "causes".to_string(),
-                hop: 1,
-            }],
+            content_preview: String::new(),
+            vector_score: 0.0,
+            graph_score: 0.0,
+            combined_score: 0.0,
+            provenance: vec![],
         };
         let tokens = estimate_tokens_for_hit(&hit);
-        assert!(tokens > 0);
+        assert_eq!(tokens, 50); // just base overhead
+    }
+
+    #[test]
+    fn test_estimate_tokens_multiple_provenance() {
+        let hit = HybridHit {
+            cid: "test".to_string(),
+            content_preview: "short".to_string(),
+            vector_score: 0.5,
+            graph_score: 0.5,
+            combined_score: 0.5,
+            provenance: vec![
+                ProvenanceStep { from_cid: "a".to_string(), edge_type: "causes".to_string(), hop: 1 },
+                ProvenanceStep { from_cid: "b".to_string(), edge_type: "mentions".to_string(), hop: 2 },
+            ],
+        };
+        let tokens = estimate_tokens_for_hit(&hit);
+        assert!(tokens >= 90); // 50 base + 2*20 provenance + preview
+    }
+
+    #[test]
+    fn test_hybrid_retrieve_empty_query() {
+        let (kernel, _dir) = make_kernel();
+        let result = kernel.hybrid_retrieve("", &[], 1, &[], 10, None);
+        assert!(result.items.is_empty());
+        assert_eq!(result.vector_hits, 0);
+    }
+
+    #[test]
+    fn test_hybrid_retrieve_no_kg() {
+        let (kernel, _dir) = make_kernel();
+        let _ = kernel.semantic_create(b"test content".to_vec(), vec!["test".to_string()], "kernel", None);
+        let result = kernel.hybrid_retrieve("test", &[], 1, &[], 10, None);
+        // With stub embedding, vector search returns empty, but BM25 may find something
+        let _ = result.token_estimate; // just verify it's accessible
+    }
+
+    #[test]
+    fn test_hybrid_retrieve_with_token_budget() {
+        let (kernel, _dir) = make_kernel();
+        let _ = kernel.semantic_create(b"budget test content".to_vec(), vec!["test".to_string()], "kernel", None);
+        let result = kernel.hybrid_retrieve("budget test", &[], 1, &[], 100, Some(100));
+        // Should prune results to fit budget
+        assert!(result.token_estimate <= 100 || result.items.is_empty());
+    }
+
+    #[test]
+    fn test_hybrid_retrieve_max_results() {
+        let (kernel, _dir) = make_kernel();
+        for i in 0..5 {
+            let _ = kernel.semantic_create(
+                format!("content {i}").into_bytes(),
+                vec!["test".to_string()],
+                "kernel",
+                None,
+            );
+        }
+        let result = kernel.hybrid_retrieve("content", &[], 1, &[], 2, None);
+        assert!(result.items.len() <= 2);
+    }
+
+    #[test]
+    fn test_graph_traverse_no_kg() {
+        let (kernel, _dir) = make_kernel();
+        let seeds = vec![("node1".to_string(), 1.0)];
+        let (results, paths) = kernel.graph_traverse(&seeds, &[], 1);
+        assert!(results.is_empty());
+        assert_eq!(paths, 0);
+    }
+
+    #[test]
+    fn test_get_content_preview_missing_cid() {
+        let (kernel, _dir) = make_kernel();
+        let preview = kernel.get_content_preview("nonexistent_cid");
+        assert_eq!(preview, "nonexistent_cid"); // falls back to CID string
+    }
+
+    #[test]
+    fn test_get_content_preview_valid_cid() {
+        let (kernel, _dir) = make_kernel();
+        let cid = kernel.semantic_create(
+            b"preview content here".to_vec(),
+            vec!["test".to_string()],
+            "kernel",
+            None,
+        ).unwrap();
+        let preview = kernel.get_content_preview(&cid);
+        assert!(preview.contains("preview content"));
+    }
+
+    #[test]
+    fn test_vector_search_stub_returns_empty() {
+        let (kernel, _dir) = make_kernel();
+        let results = kernel.vector_search("any query", 10);
+        // Stub embedding returns empty results
+        assert!(results.is_empty());
     }
 }

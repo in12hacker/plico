@@ -31,7 +31,7 @@ pub enum Query {
 }
 
 /// A search result with relevance score.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchResult {
     pub cid: String,
     pub relevance: f32,

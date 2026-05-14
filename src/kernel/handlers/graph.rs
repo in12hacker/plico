@@ -235,3 +235,379 @@ impl super::super::AIKernel {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::kernel::tests::make_kernel;
+    use crate::api::semantic::ApiRequest;
+    use crate::fs::graph::{KGNodeType, KGEdgeType};
+
+    #[test]
+    fn test_add_node_and_get_node() {
+        let (kernel, _dir) = make_kernel();
+        let req = ApiRequest::AddNode {
+            label: "test_entity".to_string(),
+            node_type: KGNodeType::Entity,
+            properties: serde_json::json!({"key": "value"}),
+            agent_id: "test_agent".to_string(),
+            tenant_id: None,
+        };
+        let resp = kernel.handle_api_request(req);
+        assert!(resp.ok, "AddNode should succeed: {:?}", resp.error);
+        let node_id = resp.node_id.clone().expect("should return node_id");
+
+        let req = ApiRequest::GetNode {
+            node_id,
+            agent_id: "test_agent".to_string(),
+            tenant_id: None,
+        };
+        let resp = kernel.handle_api_request(req);
+        assert!(resp.ok, "GetNode should succeed: {:?}", resp.error);
+        assert!(resp.nodes.is_some());
+        let nodes = resp.nodes.unwrap();
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].label, "test_entity");
+        assert_eq!(nodes[0].node_type, KGNodeType::Entity);
+    }
+
+    #[test]
+    fn test_get_node_not_found() {
+        let (kernel, _dir) = make_kernel();
+        let req = ApiRequest::GetNode {
+            node_id: "nonexistent_id".to_string(),
+            agent_id: "test_agent".to_string(),
+            tenant_id: None,
+        };
+        let resp = kernel.handle_api_request(req);
+        assert!(!resp.ok, "GetNode for missing node should fail");
+        assert!(resp.error.unwrap().contains("not found"));
+    }
+
+    #[test]
+    fn test_add_edge_and_list_edges() {
+        let (kernel, _dir) = make_kernel();
+        // Create two nodes
+        let resp1 = kernel.handle_api_request(ApiRequest::AddNode {
+            label: "node_a".to_string(),
+            node_type: KGNodeType::Entity,
+            properties: serde_json::json!({}),
+            agent_id: "test_agent".to_string(),
+            tenant_id: None,
+        });
+        let id_a = resp1.node_id.unwrap();
+        let resp2 = kernel.handle_api_request(ApiRequest::AddNode {
+            label: "node_b".to_string(),
+            node_type: KGNodeType::Entity,
+            properties: serde_json::json!({}),
+            agent_id: "test_agent".to_string(),
+            tenant_id: None,
+        });
+        let id_b = resp2.node_id.unwrap();
+
+        // Add edge
+        let resp = kernel.handle_api_request(ApiRequest::AddEdge {
+            src_id: id_a.clone(),
+            dst_id: id_b.clone(),
+            edge_type: KGEdgeType::RelatedTo,
+            weight: Some(0.8),
+            agent_id: "test_agent".to_string(),
+            tenant_id: None,
+        });
+        assert!(resp.ok, "AddEdge should succeed: {:?}", resp.error);
+
+        // List edges
+        let resp = kernel.handle_api_request(ApiRequest::ListEdges {
+            agent_id: "test_agent".to_string(),
+            tenant_id: None,
+            node_id: None,
+            limit: None,
+            offset: None,
+        });
+        assert!(resp.ok, "ListEdges should succeed: {:?}", resp.error);
+        let edges = resp.edges.unwrap();
+        assert!(!edges.is_empty());
+    }
+
+    #[test]
+    fn test_list_nodes_with_limit() {
+        let (kernel, _dir) = make_kernel();
+        // Create multiple nodes
+        for i in 0..3 {
+            kernel.handle_api_request(ApiRequest::AddNode {
+                label: format!("node_{}", i),
+                node_type: KGNodeType::Entity,
+                properties: serde_json::json!({}),
+                agent_id: "test_agent".to_string(),
+                tenant_id: None,
+            });
+        }
+
+        let resp = kernel.handle_api_request(ApiRequest::ListNodes {
+            node_type: None,
+            agent_id: "test_agent".to_string(),
+            tenant_id: None,
+            limit: Some(2),
+            offset: None,
+        });
+        assert!(resp.ok, "ListNodes should succeed: {:?}", resp.error);
+        let nodes = resp.nodes.unwrap();
+        assert_eq!(nodes.len(), 2);
+        assert_eq!(resp.total_count, Some(3));
+        assert_eq!(resp.has_more, Some(true));
+    }
+
+    #[test]
+    fn test_list_nodes_with_type_filter() {
+        let (kernel, _dir) = make_kernel();
+        kernel.handle_api_request(ApiRequest::AddNode {
+            label: "entity1".to_string(),
+            node_type: KGNodeType::Entity,
+            properties: serde_json::json!({}),
+            agent_id: "test_agent".to_string(),
+            tenant_id: None,
+        });
+        kernel.handle_api_request(ApiRequest::AddNode {
+            label: "fact1".to_string(),
+            node_type: KGNodeType::Fact,
+            properties: serde_json::json!({}),
+            agent_id: "test_agent".to_string(),
+            tenant_id: None,
+        });
+
+        let resp = kernel.handle_api_request(ApiRequest::ListNodes {
+            node_type: Some(KGNodeType::Fact),
+            agent_id: "test_agent".to_string(),
+            tenant_id: None,
+            limit: None,
+            offset: None,
+        });
+        assert!(resp.ok);
+        let nodes = resp.nodes.unwrap();
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].label, "fact1");
+    }
+
+    #[test]
+    fn test_remove_node() {
+        use crate::api::permission::PermissionAction;
+        let (kernel, _dir) = make_kernel();
+        kernel.permission_grant("test_agent", PermissionAction::Delete, None, None);
+        let resp = kernel.handle_api_request(ApiRequest::AddNode {
+            label: "to_delete".to_string(),
+            node_type: KGNodeType::Entity,
+            properties: serde_json::json!({}),
+            agent_id: "test_agent".to_string(),
+            tenant_id: None,
+        });
+        let node_id = resp.node_id.unwrap();
+
+        let resp = kernel.handle_api_request(ApiRequest::RemoveNode {
+            node_id: node_id.clone(),
+            agent_id: "test_agent".to_string(),
+            tenant_id: None,
+        });
+        assert!(resp.ok, "RemoveNode should succeed: {:?}", resp.error);
+
+        // Verify removed
+        let resp = kernel.handle_api_request(ApiRequest::GetNode {
+            node_id,
+            agent_id: "test_agent".to_string(),
+            tenant_id: None,
+        });
+        assert!(!resp.ok, "GetNode after delete should fail");
+    }
+
+    #[test]
+    fn test_update_node() {
+        let (kernel, _dir) = make_kernel();
+        let resp = kernel.handle_api_request(ApiRequest::AddNode {
+            label: "original_label".to_string(),
+            node_type: KGNodeType::Entity,
+            properties: serde_json::json!({"a": 1}),
+            agent_id: "test_agent".to_string(),
+            tenant_id: None,
+        });
+        let node_id = resp.node_id.unwrap();
+
+        let resp = kernel.handle_api_request(ApiRequest::UpdateNode {
+            node_id: node_id.clone(),
+            label: Some("updated_label".to_string()),
+            properties: Some(serde_json::json!({"b": 2})),
+            agent_id: "test_agent".to_string(),
+            tenant_id: None,
+        });
+        assert!(resp.ok, "UpdateNode should succeed: {:?}", resp.error);
+
+        let resp = kernel.handle_api_request(ApiRequest::GetNode {
+            node_id,
+            agent_id: "test_agent".to_string(),
+            tenant_id: None,
+        });
+        assert!(resp.ok);
+        let nodes = resp.nodes.unwrap();
+        assert_eq!(nodes[0].label, "updated_label");
+    }
+
+    #[test]
+    fn test_remove_edge() {
+        use crate::api::permission::PermissionAction;
+        let (kernel, _dir) = make_kernel();
+        kernel.permission_grant("test_agent", PermissionAction::Delete, None, None);
+        let r1 = kernel.handle_api_request(ApiRequest::AddNode {
+            label: "ea".to_string(),
+            node_type: KGNodeType::Entity,
+            properties: serde_json::json!({}),
+            agent_id: "test_agent".to_string(),
+            tenant_id: None,
+        });
+        let r2 = kernel.handle_api_request(ApiRequest::AddNode {
+            label: "eb".to_string(),
+            node_type: KGNodeType::Entity,
+            properties: serde_json::json!({}),
+            agent_id: "test_agent".to_string(),
+            tenant_id: None,
+        });
+        let (id_a, id_b) = (r1.node_id.unwrap(), r2.node_id.unwrap());
+
+        kernel.handle_api_request(ApiRequest::AddEdge {
+            src_id: id_a.clone(),
+            dst_id: id_b.clone(),
+            edge_type: KGEdgeType::Causes,
+            weight: None,
+            agent_id: "test_agent".to_string(),
+            tenant_id: None,
+        });
+
+        let resp = kernel.handle_api_request(ApiRequest::RemoveEdge {
+            src_id: id_a,
+            dst_id: id_b,
+            edge_type: Some(KGEdgeType::Causes),
+            agent_id: "test_agent".to_string(),
+            tenant_id: None,
+        });
+        assert!(resp.ok, "RemoveEdge should succeed: {:?}", resp.error);
+    }
+
+    #[test]
+    fn test_explore_neighbors() {
+        let (kernel, _dir) = make_kernel();
+        let r1 = kernel.handle_api_request(ApiRequest::AddNode {
+            label: "center".to_string(),
+            node_type: KGNodeType::Entity,
+            properties: serde_json::json!({}),
+            agent_id: "test_agent".to_string(),
+            tenant_id: None,
+        });
+        let r2 = kernel.handle_api_request(ApiRequest::AddNode {
+            label: "neighbor".to_string(),
+            node_type: KGNodeType::Entity,
+            properties: serde_json::json!({}),
+            agent_id: "test_agent".to_string(),
+            tenant_id: None,
+        });
+        let (center_id, neighbor_id) = (r1.node_id.unwrap(), r2.node_id.unwrap());
+
+        kernel.handle_api_request(ApiRequest::AddEdge {
+            src_id: center_id.clone(),
+            dst_id: neighbor_id,
+            edge_type: KGEdgeType::AssociatesWith,
+            weight: None,
+            agent_id: "test_agent".to_string(),
+            tenant_id: None,
+        });
+
+        let resp = kernel.handle_api_request(ApiRequest::Explore {
+            cid: center_id,
+            edge_type: None,
+            depth: Some(1),
+            agent_id: "test_agent".to_string(),
+        });
+        assert!(resp.ok, "Explore should succeed: {:?}", resp.error);
+        let neighbors = resp.neighbors.unwrap();
+        assert!(!neighbors.is_empty());
+    }
+
+    #[test]
+    fn test_find_paths() {
+        let (kernel, _dir) = make_kernel();
+        let r1 = kernel.handle_api_request(ApiRequest::AddNode {
+            label: "path_start".to_string(),
+            node_type: KGNodeType::Entity,
+            properties: serde_json::json!({}),
+            agent_id: "test_agent".to_string(),
+            tenant_id: None,
+        });
+        let r2 = kernel.handle_api_request(ApiRequest::AddNode {
+            label: "path_mid".to_string(),
+            node_type: KGNodeType::Entity,
+            properties: serde_json::json!({}),
+            agent_id: "test_agent".to_string(),
+            tenant_id: None,
+        });
+        let r3 = kernel.handle_api_request(ApiRequest::AddNode {
+            label: "path_end".to_string(),
+            node_type: KGNodeType::Entity,
+            properties: serde_json::json!({}),
+            agent_id: "test_agent".to_string(),
+            tenant_id: None,
+        });
+        let (n1, n2, n3) = (r1.node_id.unwrap(), r2.node_id.unwrap(), r3.node_id.unwrap());
+
+        kernel.handle_api_request(ApiRequest::AddEdge {
+            src_id: n1.clone(), dst_id: n2.clone(),
+            edge_type: KGEdgeType::Follows, weight: None,
+            agent_id: "test_agent".to_string(), tenant_id: None,
+        });
+        kernel.handle_api_request(ApiRequest::AddEdge {
+            src_id: n2, dst_id: n3.clone(),
+            edge_type: KGEdgeType::Follows, weight: None,
+            agent_id: "test_agent".to_string(), tenant_id: None,
+        });
+
+        let resp = kernel.handle_api_request(ApiRequest::FindPaths {
+            src_id: n1,
+            dst_id: n3,
+            max_depth: Some(3),
+            weighted: false,
+            agent_id: "test_agent".to_string(),
+            tenant_id: None,
+        });
+        assert!(resp.ok, "FindPaths should succeed: {:?}", resp.error);
+        let paths = resp.paths.unwrap();
+        assert!(!paths.is_empty());
+    }
+
+    #[test]
+    fn test_kg_impact_analysis() {
+        let (kernel, _dir) = make_kernel();
+        let r1 = kernel.handle_api_request(ApiRequest::AddNode {
+            label: "impact_src".to_string(),
+            node_type: KGNodeType::Entity,
+            properties: serde_json::json!({}),
+            agent_id: "test_agent".to_string(),
+            tenant_id: None,
+        });
+        let r2 = kernel.handle_api_request(ApiRequest::AddNode {
+            label: "impact_dst".to_string(),
+            node_type: KGNodeType::Entity,
+            properties: serde_json::json!({}),
+            agent_id: "test_agent".to_string(),
+            tenant_id: None,
+        });
+        let (src, dst) = (r1.node_id.unwrap(), r2.node_id.unwrap());
+        kernel.handle_api_request(ApiRequest::AddEdge {
+            src_id: src.clone(), dst_id: dst,
+            edge_type: KGEdgeType::Causes, weight: None,
+            agent_id: "test_agent".to_string(), tenant_id: None,
+        });
+
+        let resp = kernel.handle_api_request(ApiRequest::KGImpactAnalysis {
+            node_id: src,
+            propagation_depth: 2,
+            agent_id: "test_agent".to_string(),
+            tenant_id: None,
+        });
+        assert!(resp.ok, "KGImpactAnalysis should succeed: {:?}", resp.error);
+        assert!(resp.impact_analysis.is_some());
+    }
+}

@@ -284,7 +284,7 @@ mod tests {
         assert!(e.to_string().contains("parse error"));
         let e = RerankError::Unavailable("down".into());
         assert!(e.to_string().contains("unavailable"));
-        let e = RerankError::Io(std::io::Error::new(std::io::ErrorKind::Other, "io"));
+        let e = RerankError::Io(std::io::Error::other("io"));
         assert!(e.to_string().contains("IO error"));
     }
 

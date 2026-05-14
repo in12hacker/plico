@@ -82,3 +82,112 @@ pub(in crate::kernel) fn handle(kernel: &AIKernel, name: &str, params: &serde_js
         _ => ToolResult::error(format!("unknown CAS tool: {}", name)),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::kernel::tests::make_kernel;
+
+    #[test]
+    fn test_cas_create() {
+        let (kernel, _dir) = make_kernel();
+        let params = json!({"content": "test content", "tags": ["test"]});
+        let result = handle(&kernel, "cas.create", &params, "test_agent");
+        assert!(result.success, "cas.create should succeed: {:?}", result.error);
+        let cid = result.output.get("cid").unwrap().as_str().unwrap();
+        assert!(!cid.is_empty());
+    }
+
+    #[test]
+    fn test_cas_read() {
+        let (kernel, _dir) = make_kernel();
+        let create = handle(&kernel, "cas.create", &json!({"content": "read me", "tags": []}), "test_agent");
+        let cid = create.output["cid"].as_str().unwrap().to_string();
+        let result = handle(&kernel, "cas.read", &json!({"cid": cid}), "test_agent");
+        assert!(result.success);
+        assert_eq!(result.output["data"].as_str().unwrap(), "read me");
+    }
+
+    #[test]
+    fn test_cas_read_not_found() {
+        let (kernel, _dir) = make_kernel();
+        let result = handle(&kernel, "cas.read", &json!({"cid": "nonexistent"}), "test_agent");
+        assert!(!result.success);
+    }
+
+    #[test]
+    fn test_cas_search() {
+        let (kernel, _dir) = make_kernel();
+        let _ = handle(&kernel, "cas.create", &json!({"content": "searchable content", "tags": ["searchable"]}), "test_agent");
+        let result = handle(&kernel, "cas.search", &json!({"query": "searchable", "limit": 5}), "test_agent");
+        assert!(result.success);
+    }
+
+    #[test]
+    fn test_cas_update() {
+        let (kernel, _dir) = make_kernel();
+        let create = handle(&kernel, "cas.create", &json!({"content": "original", "tags": ["v1"]}), "test_agent");
+        let cid = create.output["cid"].as_str().unwrap().to_string();
+        let result = handle(&kernel, "cas.update", &json!({"cid": cid, "content": "updated", "new_tags": ["v2"]}), "test_agent");
+        assert!(result.success);
+    }
+
+    #[test]
+    fn test_cas_delete() {
+        let (kernel, _dir) = make_kernel();
+        // Grant Delete permission first
+        kernel.handle_api_request(crate::api::semantic::ApiRequest::GrantPermission {
+            agent_id: "test_agent".to_string(),
+            action: "Delete".to_string(),
+            scope: Some("*".to_string()),
+            expires_at: None,
+        });
+        let create = handle(&kernel, "cas.create", &json!({"content": "delete me", "tags": []}), "test_agent");
+        let cid = create.output["cid"].as_str().unwrap().to_string();
+        let result = handle(&kernel, "cas.delete", &json!({"cid": cid}), "test_agent");
+        assert!(result.success, "delete should succeed: {:?}", result.error);
+    }
+
+    #[test]
+    fn test_cas_unknown_tool() {
+        let (kernel, _dir) = make_kernel();
+        let result = handle(&kernel, "cas.unknown", &json!({}), "test_agent");
+        assert!(!result.success);
+        assert!(result.error.unwrap().contains("unknown CAS tool"));
+    }
+
+    #[test]
+    fn test_cas_create_empty_content() {
+        let (kernel, _dir) = make_kernel();
+        let result = handle(&kernel, "cas.create", &json!({"content": "", "tags": []}), "test_agent");
+        // Empty content may be rejected
+        let _ = result;
+    }
+
+    #[test]
+    fn test_cas_search_with_tags() {
+        let (kernel, _dir) = make_kernel();
+        let _ = handle(&kernel, "cas.create", &json!({"content": "tagged content", "tags": ["important", "review"]}), "test_agent");
+        let result = handle(&kernel, "cas.search", &json!({
+            "query": "tagged",
+            "require_tags": ["important"],
+            "limit": 5
+        }), "test_agent");
+        assert!(result.success);
+    }
+
+    #[test]
+    fn test_cas_update_not_found() {
+        let (kernel, _dir) = make_kernel();
+        let result = handle(&kernel, "cas.update", &json!({"cid": "nonexistent", "content": "new"}), "test_agent");
+        assert!(!result.success);
+    }
+
+    #[test]
+    fn test_cas_delete_not_found() {
+        let (kernel, _dir) = make_kernel();
+        let result = handle(&kernel, "cas.delete", &json!({"cid": "nonexistent"}), "test_agent");
+        // Delete of nonexistent may succeed (soft delete) or fail
+        let _ = result;
+    }
+}

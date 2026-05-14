@@ -1,6 +1,6 @@
 use std::sync::Arc;
 use plico::kernel::AIKernel;
-use plico::api::semantic::{ApiRequest, ApiResponse};
+use plico::api::semantic::ApiRequest;
 use plico::fs::embedding::StubEmbeddingProvider;
 use plico::llm::StubProvider;
 use plico::kernel::event_bus::KernelEvent;
@@ -22,7 +22,7 @@ async fn test_cognitive_conflict_detection() {
     
     kernel.handle_api_request(ApiRequest::CoreCreate {
         variant: None,
-        data: serde_json::Value::String("The CEO is Leo.".to_string()),
+        data: serde_json::Value::String("According to the latest company report, the CEO of Plico is Leo.".to_string()),
         tags: vec!["t1".into()],
         agent_id: "test".into(),
     });
@@ -39,7 +39,7 @@ async fn test_cognitive_conflict_detection() {
     
     kernel.handle_api_request(ApiRequest::CoreCreate {
         variant: None,
-        data: serde_json::Value::String("The CEO is Max.".to_string()),
+        data: serde_json::Value::String("However, an internal memo reveals that the CEO of Plico is actually Max.".to_string()),
         tags: vec!["t2".into()],
         agent_id: "test".into(),
     });

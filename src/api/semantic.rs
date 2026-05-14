@@ -145,7 +145,7 @@ pub enum ApiRequest {
         /// Optional intent context for context-dependent gravity re-ranking (F-6).
         /// When provided, search results are boosted based on hot objects from
         /// the agent's profile and current intent alignment.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(default, skip_serializing_if = "Option::is_none", alias = "intent")]
         intent_context: Option<String>,
     },
 

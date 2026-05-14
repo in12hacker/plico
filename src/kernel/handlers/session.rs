@@ -4,6 +4,143 @@ use crate::api::semantic::{ApiRequest, ApiResponse};
 use crate::scheduler::AgentId;
 use super::super::ops;
 
+#[cfg(test)]
+mod tests {
+    use crate::kernel::tests::make_kernel;
+    use crate::api::semantic::ApiRequest;
+
+    #[test]
+    fn test_start_session() {
+        let (kernel, _tmp) = make_kernel();
+        // Register agent first to get a token
+        let reg = kernel.handle_api_request(ApiRequest::RegisterAgent {
+            name: "session_agent".to_string(),
+        });
+        let agent_id = reg.agent_id.unwrap();
+        let token = reg.token.unwrap();
+
+        let resp = kernel.handle_api_request(ApiRequest::StartSession {
+            agent_id: agent_id,
+            agent_token: Some(token),
+            intent_hint: Some("test intent".to_string()),
+            load_tiers: vec![],
+            last_seen_seq: None,
+        });
+        assert!(resp.ok, "StartSession should succeed: {:?}", resp.error);
+        let started = resp.session_started.unwrap();
+        assert!(!started.session_id.is_empty(), "should return session_id");
+    }
+
+    #[test]
+    fn test_start_and_end_session() {
+        let (kernel, _tmp) = make_kernel();
+        let reg = kernel.handle_api_request(ApiRequest::RegisterAgent {
+            name: "cycle_agent".to_string(),
+        });
+        let agent_id = reg.agent_id.clone().unwrap();
+        let token = reg.token.unwrap();
+
+        let start = kernel.handle_api_request(ApiRequest::StartSession {
+            agent_id: agent_id.clone(),
+            agent_token: Some(token),
+            intent_hint: None,
+            load_tiers: vec![],
+            last_seen_seq: None,
+        });
+        assert!(start.ok);
+        let session_id = start.session_started.unwrap().session_id;
+
+        let resp = kernel.handle_api_request(ApiRequest::EndSession {
+            agent_id: agent_id,
+            session_id: session_id,
+            auto_checkpoint: true,
+        });
+        assert!(resp.ok, "EndSession should succeed: {:?}", resp.error);
+        let ended = resp.session_ended.unwrap();
+        assert!(ended.last_seq > 0 || ended.last_seq == 0, "should return last_seq");
+    }
+
+    #[test]
+    fn test_register_skill() {
+        let (kernel, _tmp) = make_kernel();
+        // Register agent to get a valid UUID
+        let reg = kernel.handle_api_request(ApiRequest::RegisterAgent { name: "skill_agent".to_string() });
+        let agent_id = reg.agent_id.unwrap();
+        let resp = kernel.handle_api_request(ApiRequest::RegisterSkill {
+            agent_id: agent_id,
+            name: "my_skill".to_string(),
+            description: "A test skill".to_string(),
+            tags: vec!["test".to_string()],
+        });
+        assert!(resp.ok, "RegisterSkill should succeed: {:?}", resp.error);
+        assert!(resp.node_id.is_some(), "should return node_id");
+    }
+
+    #[test]
+    fn test_discover_skills() {
+        let (kernel, _tmp) = make_kernel();
+        let reg = kernel.handle_api_request(ApiRequest::RegisterAgent { name: "discover_agent".to_string() });
+        let agent_id = reg.agent_id.unwrap();
+        kernel.handle_api_request(ApiRequest::RegisterSkill {
+            agent_id: agent_id,
+            name: "search_skill".to_string(),
+            description: "Search skill".to_string(),
+            tags: vec!["search".to_string()],
+        });
+        let resp = kernel.handle_api_request(ApiRequest::DiscoverSkills {
+            query: None,
+            agent_id_filter: None,
+            tag_filter: None,
+        });
+        assert!(resp.ok, "DiscoverSkills should succeed: {:?}", resp.error);
+        let skills = resp.discovered_skills.unwrap();
+        assert_eq!(skills.len(), 1, "should find 1 skill");
+    }
+
+    #[test]
+    fn test_discover_skills_with_query() {
+        let (kernel, _tmp) = make_kernel();
+        let reg = kernel.handle_api_request(ApiRequest::RegisterAgent { name: "query_agent".to_string() });
+        let agent_id = reg.agent_id.unwrap();
+        kernel.handle_api_request(ApiRequest::RegisterSkill {
+            agent_id: agent_id.clone(),
+            name: "data_analysis".to_string(),
+            description: "Analyze data".to_string(),
+            tags: vec!["analytics".to_string()],
+        });
+        kernel.handle_api_request(ApiRequest::RegisterSkill {
+            agent_id: agent_id,
+            name: "web_search".to_string(),
+            description: "Search the web".to_string(),
+            tags: vec!["search".to_string()],
+        });
+        let resp = kernel.handle_api_request(ApiRequest::DiscoverSkills {
+            query: Some("analysis".to_string()),
+            agent_id_filter: None,
+            tag_filter: None,
+        });
+        assert!(resp.ok, "DiscoverSkills with query should succeed: {:?}", resp.error);
+    }
+
+    #[test]
+    fn test_start_session_invalid_token() {
+        let (kernel, _tmp) = make_kernel();
+        let reg = kernel.handle_api_request(ApiRequest::RegisterAgent {
+            name: "token_agent".to_string(),
+        });
+        let agent_id = reg.agent_id.unwrap();
+
+        let resp = kernel.handle_api_request(ApiRequest::StartSession {
+            agent_id: agent_id,
+            agent_token: Some("wrong_token".to_string()),
+            intent_hint: None,
+            load_tiers: vec![],
+            last_seen_seq: None,
+        });
+        assert!(!resp.ok, "StartSession with invalid token should fail");
+    }
+}
+
 impl super::super::AIKernel {
     pub(crate) fn handle_session(&self, req: ApiRequest) -> ApiResponse {
         match req {

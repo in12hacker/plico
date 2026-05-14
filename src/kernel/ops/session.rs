@@ -108,7 +108,7 @@ impl AgentProfile {
         }
 
         // Sort by count descending, keep top 50
-        self.hot_objects.sort_by(|a, b| b.1.cmp(&a.1));
+        self.hot_objects.sort_by_key(|(_, count)| std::cmp::Reverse(*count));
         self.hot_objects.truncate(50);
     }
 
@@ -160,7 +160,7 @@ impl AgentProfile {
         // Remove objects with zero count
         self.hot_objects.retain(|(_, count)| *count > 0);
         // Re-sort and truncate
-        self.hot_objects.sort_by(|a, b| b.1.cmp(&a.1));
+        self.hot_objects.sort_by_key(|(_, count)| std::cmp::Reverse(*count));
         self.hot_objects.truncate(50);
     }
 }
@@ -1255,5 +1255,785 @@ mod tests {
         // Also verify the CID format is correct (64 hex chars, not UUID)
         assert_eq!(warm_cid.len(), 64, "CID should be 64 hex chars");
         assert!(warm_cid.chars().all(|c| c.is_ascii_hexdigit()), "CID should be hex digits only");
+    }
+
+    // ── AgentProfile: hot object tracking ──────────────────────────────────────
+
+    #[test]
+    fn test_record_cid_usage_new_entry() {
+        let mut profile = AgentProfile::new("a1".to_string());
+        profile.record_cid_usage("cid-abc");
+
+        assert_eq!(profile.hot_objects.len(), 1);
+        assert_eq!(profile.hot_objects[0].0, "cid-abc");
+        assert_eq!(profile.hot_objects[0].1, 1);
+    }
+
+    #[test]
+    fn test_record_cid_usage_increments_existing() {
+        let mut profile = AgentProfile::new("a1".to_string());
+        profile.record_cid_usage("cid-abc");
+        profile.record_cid_usage("cid-abc");
+        profile.record_cid_usage("cid-abc");
+
+        assert_eq!(profile.hot_objects.len(), 1);
+        assert_eq!(profile.hot_objects[0].1, 3);
+    }
+
+    #[test]
+    fn test_record_cid_usage_sorted_by_count_desc() {
+        let mut profile = AgentProfile::new("a1".to_string());
+        profile.record_cid_usage("cid-low");
+        profile.record_cid_usage("cid-high");
+        profile.record_cid_usage("cid-high");
+        profile.record_cid_usage("cid-high");
+
+        assert_eq!(profile.hot_objects[0].0, "cid-high");
+        assert_eq!(profile.hot_objects[0].1, 3);
+        assert_eq!(profile.hot_objects[1].0, "cid-low");
+        assert_eq!(profile.hot_objects[1].1, 1);
+    }
+
+    #[test]
+    fn test_record_cid_usage_truncates_at_50() {
+        let mut profile = AgentProfile::new("a1".to_string());
+        for i in 0..55 {
+            profile.record_cid_usage(&format!("cid-{:04}", i));
+        }
+        assert_eq!(profile.hot_objects.len(), 50);
+    }
+
+    #[test]
+    fn test_record_cid_usages_batch() {
+        let mut profile = AgentProfile::new("a1".to_string());
+        let cids = vec!["a".to_string(), "b".to_string(), "a".to_string()];
+        profile.record_cid_usages(&cids);
+
+        assert_eq!(profile.hot_objects.len(), 2);
+        // "a" was recorded twice, so it should be first (higher count)
+        assert_eq!(profile.hot_objects[0].0, "a");
+        assert_eq!(profile.hot_objects[0].1, 2);
+        assert_eq!(profile.hot_objects[1].0, "b");
+        assert_eq!(profile.hot_objects[1].1, 1);
+    }
+
+    #[test]
+    fn test_record_cid_usages_empty_slice() {
+        let mut profile = AgentProfile::new("a1".to_string());
+        profile.record_cid_usages(&[]);
+        assert!(profile.hot_objects.is_empty());
+    }
+
+    // ── AgentProfile: decay_object ─────────────────────────────────────────────
+
+    #[test]
+    fn test_decay_object_reduces_count() {
+        let mut profile = AgentProfile::new("a1".to_string());
+        profile.record_cid_usage("cid-1");
+        profile.record_cid_usage("cid-1");
+        profile.record_cid_usage("cid-1");
+
+        profile.decay_object("cid-1");
+        assert_eq!(profile.hot_objects[0].1, 2);
+    }
+
+    #[test]
+    fn test_decay_object_removes_at_zero() {
+        let mut profile = AgentProfile::new("a1".to_string());
+        profile.record_cid_usage("cid-1");
+
+        // Count is 1, decay should reduce to 0 and remove
+        profile.decay_object("cid-1");
+        assert!(profile.hot_objects.is_empty());
+    }
+
+    #[test]
+    fn test_decay_object_noop_for_unknown_cid() {
+        let mut profile = AgentProfile::new("a1".to_string());
+        profile.record_cid_usage("cid-1");
+        profile.decay_object("nonexistent");
+        assert_eq!(profile.hot_objects.len(), 1);
+        assert_eq!(profile.hot_objects[0].1, 1);
+    }
+
+    #[test]
+    fn test_decay_object_resaturating_sub() {
+        let mut profile = AgentProfile::new("a1".to_string());
+        profile.record_cid_usage("cid-1");
+        // Decay twice — second should be a no-op (saturating_sub at 0 removes it)
+        profile.decay_object("cid-1");
+        profile.decay_object("cid-1");
+        assert!(profile.hot_objects.is_empty());
+    }
+
+    // ── AgentProfile: preference facts ─────────────────────────────────────────
+
+    #[test]
+    fn test_add_preference_new() {
+        let mut profile = AgentProfile::new("a1".to_string());
+        profile.add_preference("lang".into(), "rust".into(), 0.9);
+
+        assert_eq!(profile.preference_facts.len(), 1);
+        assert_eq!(profile.preference_facts[0].category, "lang");
+        assert_eq!(profile.preference_facts[0].preference, "rust");
+        assert!((profile.preference_facts[0].confidence - 0.9).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_add_preference_updates_when_higher_confidence() {
+        let mut profile = AgentProfile::new("a1".to_string());
+        profile.add_preference("lang".into(), "rust".into(), 0.5);
+        profile.add_preference("lang".into(), "python".into(), 0.8);
+
+        assert_eq!(profile.preference_facts.len(), 1);
+        assert_eq!(profile.preference_facts[0].preference, "python");
+        assert!((profile.preference_facts[0].confidence - 0.8).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_add_preference_keeps_existing_when_lower_confidence() {
+        let mut profile = AgentProfile::new("a1".to_string());
+        profile.add_preference("lang".into(), "rust".into(), 0.9);
+        profile.add_preference("lang".into(), "python".into(), 0.5);
+
+        assert_eq!(profile.preference_facts.len(), 1);
+        assert_eq!(profile.preference_facts[0].preference, "rust");
+        assert!((profile.preference_facts[0].confidence - 0.9).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_add_preference_updates_when_equal_confidence() {
+        let mut profile = AgentProfile::new("a1".to_string());
+        profile.add_preference("lang".into(), "rust".into(), 0.7);
+        profile.add_preference("lang".into(), "go".into(), 0.7);
+
+        assert_eq!(profile.preference_facts.len(), 1);
+        // Equal confidence should update (>= check)
+        assert_eq!(profile.preference_facts[0].preference, "go");
+    }
+
+    #[test]
+    fn test_add_preference_sorted_by_confidence_desc() {
+        let mut profile = AgentProfile::new("a1".to_string());
+        profile.add_preference("a".into(), "low".into(), 0.1);
+        profile.add_preference("b".into(), "high".into(), 0.9);
+        profile.add_preference("c".into(), "mid".into(), 0.5);
+
+        assert_eq!(profile.preference_facts[0].preference, "high");
+        assert_eq!(profile.preference_facts[1].preference, "mid");
+        assert_eq!(profile.preference_facts[2].preference, "low");
+    }
+
+    #[test]
+    fn test_add_preference_truncates_at_50() {
+        let mut profile = AgentProfile::new("a1".to_string());
+        for i in 0..55 {
+            profile.add_preference(format!("cat-{}", i), format!("pref-{}", i), 0.5);
+        }
+        assert_eq!(profile.preference_facts.len(), 50);
+    }
+
+    #[test]
+    fn test_preference_keywords_filters_by_confidence() {
+        let mut profile = AgentProfile::new("a1".to_string());
+        profile.add_preference("a".into(), "high".into(), 0.9);
+        profile.add_preference("b".into(), "mid".into(), 0.5);
+        profile.add_preference("c".into(), "low".into(), 0.1);
+
+        let keywords = profile.preference_keywords(0.5);
+        assert_eq!(keywords.len(), 2);
+        assert!(keywords.contains(&"high"));
+        assert!(keywords.contains(&"mid"));
+    }
+
+    #[test]
+    fn test_preference_keywords_empty_when_none_above_threshold() {
+        let mut profile = AgentProfile::new("a1".to_string());
+        profile.add_preference("a".into(), "low".into(), 0.1);
+
+        let keywords = profile.preference_keywords(0.9);
+        assert!(keywords.is_empty());
+    }
+
+    #[test]
+    fn test_preference_keywords_empty_profile() {
+        let profile = AgentProfile::new("a1".to_string());
+        let keywords = profile.preference_keywords(0.0);
+        assert!(keywords.is_empty());
+    }
+
+    // ── AgentProfile: record_intent edge cases ─────────────────────────────────
+
+    #[test]
+    fn test_record_intent_with_none_next() {
+        let mut profile = AgentProfile::new("a1".to_string());
+        // When next_tag_key is None, no transition should be recorded
+        profile.record_intent("auth|test", None);
+        assert!(profile.intent_transitions.is_empty());
+    }
+
+    #[test]
+    fn test_record_intent_truncates_successors_at_10() {
+        let mut profile = AgentProfile::new("a1".to_string());
+        // Add 12 distinct successors
+        for i in 0..12 {
+            profile.record_intent("start", Some(&format!("succ-{:02}", i)));
+        }
+        let successors = profile.intent_transitions.get("start").unwrap();
+        assert_eq!(successors.len(), 10);
+    }
+
+    // ── IntentKeyStrategy: truncation at 5 tags ────────────────────────────────
+
+    #[test]
+    fn test_tag_extraction_truncates_at_five_tags() {
+        let strategy = IntentKeyStrategy::TagExtraction;
+        let known_tags = vec![
+            "aa".into(), "bb".into(), "cc".into(), "dd".into(), "ee".into(), "ff".into(),
+        ];
+        let intent = "aa bb cc dd ee ff";
+        let key = strategy.extract_tag_key(intent, &known_tags);
+        assert!(key.is_some());
+        let key = key.unwrap();
+        let parts: Vec<&str> = key.split('|').collect();
+        assert_eq!(parts.len(), 5, "should truncate to 5 tags, got: {}", key);
+    }
+
+    // ── SessionStore: completed sessions ───────────────────────────────────────
+
+    #[test]
+    fn test_end_session_with_summary_records_completion() {
+        let store = SessionStore::new();
+        store.start_session("s1".into(), "a1".into(), 0);
+
+        let summary = SessionSummary {
+            top_tags: vec!["auth".into()],
+            object_count: 5,
+            intent: Some("fix auth".into()),
+            summary_cid: None,
+        };
+
+        let removed = store.end_session_with_summary("s1", Some(100), Some(summary));
+        assert!(removed.is_some());
+
+        let completed = store.get_completed_sessions("a1", None);
+        assert_eq!(completed.len(), 1);
+        assert_eq!(completed[0].tokens_used, 100);
+        assert!(completed[0].summary.is_some());
+        let s = completed[0].summary.as_ref().unwrap();
+        assert_eq!(s.top_tags, vec!["auth"]);
+        assert_eq!(s.object_count, 5);
+    }
+
+    #[test]
+    fn test_end_session_without_tokens_does_not_record_completion() {
+        let store = SessionStore::new();
+        store.start_session("s1".into(), "a1".into(), 0);
+        store.end_session("s1", None);
+
+        let completed = store.get_completed_sessions("a1", None);
+        assert!(completed.is_empty());
+    }
+
+    #[test]
+    fn test_completed_session_count() {
+        let store = SessionStore::new();
+        for i in 0..3 {
+            store.start_session(format!("s{}", i), "a1".into(), 0);
+            store.end_session(&format!("s{}", i), Some(10));
+        }
+        assert_eq!(store.completed_session_count("a1"), 3);
+        assert_eq!(store.completed_session_count("unknown"), 0);
+    }
+
+    #[test]
+    fn test_get_completed_sessions_with_period_filter() {
+        let store = SessionStore::new();
+        store.start_session("s1".into(), "a1".into(), 0);
+        store.end_session("s1", Some(10));
+
+        // With no period filter, should return all
+        let all = store.get_completed_sessions("a1", None);
+        assert_eq!(all.len(), 1);
+
+        // With a very large period (1 year in ms), should include the just-completed session
+        let one_year_ms: u64 = 365 * 24 * 3600 * 1000;
+        let with_period = store.get_completed_sessions("a1", Some(one_year_ms));
+        assert_eq!(with_period.len(), 1);
+    }
+
+    #[test]
+    fn test_completed_sessions_max_per_agent() {
+        let store = SessionStore::new();
+        // Create more than MAX_COMPLETED_SESSIONS_PER_AGENT (100)
+        for i in 0..105 {
+            store.start_session(format!("s{}", i), "a1".into(), 0);
+            store.end_session(&format!("s{}", i), Some(10));
+        }
+        let completed = store.get_completed_sessions("a1", None);
+        assert_eq!(completed.len(), MAX_COMPLETED_SESSIONS_PER_AGENT);
+    }
+
+    // ── SessionStore: session queries ──────────────────────────────────────────
+
+    #[test]
+    fn test_list_returns_all_active_sessions() {
+        let store = SessionStore::new();
+        store.start_session("s1".into(), "a1".into(), 0);
+        store.start_session("s2".into(), "a2".into(), 0);
+
+        let all = store.list();
+        assert_eq!(all.len(), 2);
+    }
+
+    #[test]
+    fn test_list_empty_when_no_sessions() {
+        let store = SessionStore::new();
+        assert!(store.list().is_empty());
+    }
+
+    #[test]
+    fn test_active_session_count_per_agent() {
+        let store = SessionStore::new();
+        store.start_session("s1".into(), "a1".into(), 0);
+        store.start_session("s2".into(), "a1".into(), 0);
+        store.start_session("s3".into(), "a2".into(), 0);
+
+        assert_eq!(store.active_session_count("a1"), 2);
+        assert_eq!(store.active_session_count("a2"), 1);
+        assert_eq!(store.active_session_count("a3"), 0);
+    }
+
+    #[test]
+    fn test_total_active_count() {
+        let store = SessionStore::new();
+        assert_eq!(store.total_active_count(), 0);
+
+        store.start_session("s1".into(), "a1".into(), 0);
+        store.start_session("s2".into(), "a2".into(), 0);
+        assert_eq!(store.total_active_count(), 2);
+
+        store.end_session("s1", None);
+        assert_eq!(store.total_active_count(), 1);
+    }
+
+    #[test]
+    fn test_get_active_sessions_with_cutoff() {
+        let store = SessionStore::new();
+        store.start_session("s1".into(), "a1".into(), 0);
+
+        // With a future cutoff, no sessions should match
+        let future_cutoff = now_ms() + 1_000_000;
+        let sessions = store.get_active_sessions("a1", Some(future_cutoff));
+        assert!(sessions.is_empty());
+
+        // With no cutoff, should return the session
+        let sessions = store.get_active_sessions("a1", None);
+        assert_eq!(sessions.len(), 1);
+    }
+
+    #[test]
+    fn test_get_active_sessions_filters_by_agent() {
+        let store = SessionStore::new();
+        store.start_session("s1".into(), "a1".into(), 0);
+        store.start_session("s2".into(), "a2".into(), 0);
+
+        let sessions = store.get_active_sessions("a1", None);
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].session_id, "s1");
+    }
+
+    // ── SessionStore: set_current_intent ───────────────────────────────────────
+
+    #[test]
+    fn test_set_current_intent() {
+        let store = SessionStore::new();
+        store.start_session("s1".into(), "a1".into(), 0);
+
+        store.set_current_intent("a1", Some("fix bugs".into()));
+        let session = store.get("s1").unwrap();
+        assert_eq!(session.current_intent.as_deref(), Some("fix bugs"));
+    }
+
+    #[test]
+    fn test_set_current_intent_clears_with_none() {
+        let store = SessionStore::new();
+        store.start_session("s1".into(), "a1".into(), 0);
+
+        store.set_current_intent("a1", Some("fix bugs".into()));
+        store.set_current_intent("a1", None);
+        let session = store.get("s1").unwrap();
+        assert!(session.current_intent.is_none());
+    }
+
+    #[test]
+    fn test_set_current_intent_only_affects_matching_agent() {
+        let store = SessionStore::new();
+        store.start_session("s1".into(), "a1".into(), 0);
+        store.start_session("s2".into(), "a2".into(), 0);
+
+        store.set_current_intent("a1", Some("fix bugs".into()));
+        assert_eq!(store.get("s1").unwrap().current_intent.as_deref(), Some("fix bugs"));
+        assert!(store.get("s2").unwrap().current_intent.is_none());
+    }
+
+    // ── SessionStore: expired_sessions ─────────────────────────────────────────
+
+    #[test]
+    fn test_expired_sessions_returns_old_sessions() {
+        let store = SessionStore::new();
+        // Start a session and manually make it look old
+        store.start_session("s1".into(), "a1".into(), 0);
+
+        // Mutate last_active_ms to be far in the past
+        {
+            let mut sessions = store.sessions.write().unwrap();
+            if let Some(s) = sessions.get_mut("s1") {
+                s.last_active_ms = 0;
+            }
+        }
+
+        let expired = store.expired_sessions();
+        assert_eq!(expired.len(), 1);
+        assert_eq!(expired[0].session_id, "s1");
+    }
+
+    #[test]
+    fn test_expired_sessions_empty_when_all_active() {
+        let store = SessionStore::new();
+        store.start_session("s1".into(), "a1".into(), 0);
+
+        // Session was just created, should not be expired with default TTL
+        let expired = store.expired_sessions();
+        assert!(expired.is_empty());
+    }
+
+    // ── SessionStore: ttl_ms ───────────────────────────────────────────────────
+
+    #[test]
+    fn test_ttl_ms_returns_default() {
+        let store = SessionStore::new();
+        assert_eq!(store.ttl_ms(), DEFAULT_SESSION_TTL_MS);
+        assert_eq!(store.ttl_ms(), 30 * 60 * 1000);
+    }
+
+    // ── SessionStore: recent_session_summaries ─────────────────────────────────
+
+    #[test]
+    fn test_recent_session_summaries_returns_summaries() {
+        let store = SessionStore::new();
+        for i in 0..3 {
+            store.start_session(format!("s{}", i), "a1".into(), 0);
+            store.end_session_with_summary(
+                &format!("s{}", i),
+                Some(10),
+                Some(SessionSummary {
+                    top_tags: vec![format!("tag-{}", i)],
+                    object_count: i,
+                    intent: None,
+                    summary_cid: None,
+                }),
+            );
+        }
+
+        let summaries = store.recent_session_summaries("a1", 10);
+        assert_eq!(summaries.len(), 3);
+        // Should be in reverse order (most recent first)
+        assert_eq!(summaries[0].top_tags[0], "tag-2");
+    }
+
+    #[test]
+    fn test_recent_session_summaries_limits_count() {
+        let store = SessionStore::new();
+        for i in 0..5 {
+            store.start_session(format!("s{}", i), "a1".into(), 0);
+            store.end_session_with_summary(
+                &format!("s{}", i),
+                Some(10),
+                Some(SessionSummary {
+                    top_tags: vec![],
+                    object_count: 0,
+                    intent: None,
+                    summary_cid: None,
+                }),
+            );
+        }
+
+        let summaries = store.recent_session_summaries("a1", 2);
+        assert_eq!(summaries.len(), 2);
+    }
+
+    #[test]
+    fn test_recent_session_summaries_empty_for_unknown_agent() {
+        let store = SessionStore::new();
+        let summaries = store.recent_session_summaries("unknown", 10);
+        assert!(summaries.is_empty());
+    }
+
+    #[test]
+    fn test_recent_session_summaries_skips_sessions_without_summary() {
+        let store = SessionStore::new();
+        // End session without summary
+        store.start_session("s1".into(), "a1".into(), 0);
+        store.end_session("s1", Some(10));
+
+        let summaries = store.recent_session_summaries("a1", 10);
+        assert!(summaries.is_empty());
+    }
+
+    // ── SessionStore: persist / restore ────────────────────────────────────────
+
+    #[test]
+    fn test_persist_and_restore_active_sessions() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SessionStore::new();
+        store.start_session("s1".into(), "a1".into(), 42);
+        store.set_current_intent("a1", Some("test intent".into()));
+
+        store.persist(dir.path()).unwrap();
+
+        let restored = SessionStore::restore(dir.path());
+        let session = restored.get("s1").unwrap();
+        assert_eq!(session.agent_id, "a1");
+        assert_eq!(session.start_seq, 42);
+        assert_eq!(session.current_intent.as_deref(), Some("test intent"));
+    }
+
+    #[test]
+    fn test_persist_and_restore_completed_sessions() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SessionStore::new();
+        store.start_session("s1".into(), "a1".into(), 0);
+        store.end_session_with_summary(
+            "s1",
+            Some(100),
+            Some(SessionSummary {
+                top_tags: vec!["auth".into()],
+                object_count: 5,
+                intent: Some("fix".into()),
+                summary_cid: None,
+            }),
+        );
+
+        store.persist(dir.path()).unwrap();
+
+        let restored = SessionStore::restore(dir.path());
+        let completed = restored.get_completed_sessions("a1", None);
+        assert_eq!(completed.len(), 1);
+        assert_eq!(completed[0].tokens_used, 100);
+        assert!(completed[0].summary.is_some());
+    }
+
+    #[test]
+    fn test_restore_from_nonexistent_dir_returns_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let nonexistent = dir.path().join("nonexistent");
+        let restored = SessionStore::restore(&nonexistent);
+        assert!(restored.list().is_empty());
+    }
+
+    #[test]
+    fn test_restore_handles_corrupted_json_gracefully() {
+        let dir = tempfile::tempdir().unwrap();
+        // Write invalid JSON
+        std::fs::write(dir.path().join("sessions.json"), "not valid json!!!").unwrap();
+        let restored = SessionStore::restore(dir.path());
+        // Should not panic, just return empty
+        assert!(restored.list().is_empty());
+    }
+
+    // ── SessionStore: end_session non-existent ─────────────────────────────────
+
+    #[test]
+    fn test_end_session_returns_none_for_unknown_id() {
+        let store = SessionStore::new();
+        assert!(store.end_session("nonexistent", Some(10)).is_none());
+    }
+
+    // ── SessionStore: touch non-existent ───────────────────────────────────────
+
+    #[test]
+    fn test_touch_nonexistent_session_is_noop() {
+        let store = SessionStore::new();
+        // Should not panic
+        store.touch("nonexistent");
+    }
+
+    // ── SessionStore: get non-existent ─────────────────────────────────────────
+
+    #[test]
+    fn test_get_returns_none_for_unknown_id() {
+        let store = SessionStore::new();
+        assert!(store.get("nonexistent").is_none());
+    }
+
+    // ── SessionStore: Default impl ─────────────────────────────────────────────
+
+    #[test]
+    fn test_session_store_default() {
+        let store = SessionStore::default();
+        assert_eq!(store.ttl_ms(), DEFAULT_SESSION_TTL_MS);
+        assert!(store.list().is_empty());
+    }
+
+    // ── end_session_orchestrate ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_end_session_orchestrate_session_not_found() {
+        let store = SessionStore::new();
+        let memory = Arc::new(crate::memory::LayeredMemory::new());
+        let dir = tempfile::tempdir().unwrap();
+
+        let result = end_session_orchestrate(
+            "a1",
+            "nonexistent",
+            false,
+            &store,
+            &memory,
+            dir.path(),
+            None,
+        );
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Session not found"));
+    }
+
+    #[test]
+    fn test_end_session_orchestrate_wrong_agent() {
+        let store = SessionStore::new();
+        store.start_session("s1".into(), "a1".into(), 0);
+        let memory = Arc::new(crate::memory::LayeredMemory::new());
+        let dir = tempfile::tempdir().unwrap();
+
+        let result = end_session_orchestrate(
+            "wrong-agent",
+            "s1",
+            false,
+            &store,
+            &memory,
+            dir.path(),
+            None,
+        );
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("does not belong to agent"));
+    }
+
+    #[test]
+    fn test_end_session_orchestrate_success() {
+        let store = SessionStore::new();
+        store.start_session("s1".into(), "a1".into(), 10);
+        let memory = Arc::new(crate::memory::LayeredMemory::new());
+        let dir = tempfile::tempdir().unwrap();
+
+        let result = end_session_orchestrate(
+            "a1",
+            "s1",
+            false,
+            &store,
+            &memory,
+            dir.path(),
+            None,
+        );
+        assert!(result.is_ok());
+        let r = result.unwrap();
+        assert_eq!(r.last_seq, 10);
+        assert!(r.checkpoint_id.is_none());
+        // Session should be removed
+        assert!(store.get("s1").is_none());
+        // Should have been recorded as completed
+        assert_eq!(store.completed_session_count("a1"), 1);
+    }
+
+    #[test]
+    fn test_end_session_orchestrate_with_auto_checkpoint() {
+        let store = SessionStore::new();
+        store.start_session("s1".into(), "a1".into(), 0);
+        let memory = Arc::new(crate::memory::LayeredMemory::new());
+        let dir = tempfile::tempdir().unwrap();
+
+        let result = end_session_orchestrate(
+            "a1",
+            "s1",
+            true, // auto_checkpoint
+            &store,
+            &memory,
+            dir.path(),
+            None,
+        );
+        assert!(result.is_ok());
+        // checkpoint_id is currently None even with auto_checkpoint=true
+        // (relying on explicit AgentCheckpoint)
+        let r = result.unwrap();
+        assert!(r.checkpoint_id.is_none());
+    }
+
+    #[test]
+    fn test_end_session_orchestrate_records_session_summary() {
+        let store = SessionStore::new();
+        store.start_session("s1".into(), "a1".into(), 0);
+        store.set_current_intent("a1", Some("fix auth".into()));
+        let memory = Arc::new(crate::memory::LayeredMemory::new());
+        let dir = tempfile::tempdir().unwrap();
+
+        end_session_orchestrate("a1", "s1", false, &store, &memory, dir.path(), None).unwrap();
+
+        let completed = store.get_completed_sessions("a1", None);
+        assert_eq!(completed.len(), 1);
+        let summary = completed[0].summary.as_ref().unwrap();
+        assert_eq!(summary.intent.as_deref(), Some("fix auth"));
+    }
+
+    // ── ActiveSession: touch via private method ────────────────────────────────
+
+    #[test]
+    fn test_active_session_touch_updates_timestamp() {
+        let mut session = ActiveSession::new("s1".into(), "a1".into(), 0);
+        let before = session.last_active_ms;
+        std::thread::sleep(Duration::from_millis(2));
+        session.touch();
+        assert!(session.last_active_ms >= before);
+    }
+
+    #[test]
+    fn test_active_session_is_expired_boundary() {
+        let mut session = ActiveSession::new("s1".into(), "a1".into(), 0);
+        session.last_active_ms = now_ms();
+        // Should NOT be expired with a large TTL
+        assert!(!session.is_expired(u64::MAX));
+        // Should be expired with TTL=0 if last_active is in the past
+        session.last_active_ms = 0;
+        assert!(session.is_expired(1));
+    }
+
+    // ── SessionSummary serialization ───────────────────────────────────────────
+
+    #[test]
+    fn test_session_summary_serialization_round_trip() {
+        let summary = SessionSummary {
+            top_tags: vec!["auth".into(), "test".into()],
+            object_count: 42,
+            intent: Some("fix bugs".into()),
+            summary_cid: Some("abc123".into()),
+        };
+        let json = serde_json::to_string(&summary).unwrap();
+        let deserialized: SessionSummary = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.top_tags, summary.top_tags);
+        assert_eq!(deserialized.object_count, 42);
+        assert_eq!(deserialized.intent, summary.intent);
+        assert_eq!(deserialized.summary_cid, summary.summary_cid);
+    }
+
+    #[test]
+    fn test_completed_session_deserializes_without_summary() {
+        // Ensure backward compat: CompletedSession without summary field
+        let json = r#"{
+            "session_id": "s1",
+            "agent_id": "a1",
+            "created_at_ms": 100,
+            "ended_at_ms": 200,
+            "tokens_used": 50
+        }"#;
+        let cs: CompletedSession = serde_json::from_str(json).unwrap();
+        assert!(cs.summary.is_none());
+        assert_eq!(cs.tokens_used, 50);
     }
 }

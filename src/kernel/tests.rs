@@ -10,8 +10,8 @@ pub fn make_kernel() -> (std::sync::Arc<crate::kernel::AIKernel>, tempfile::Temp
 
 #[cfg(test)]
 pub fn make_kernel_arc() -> (std::sync::Arc<crate::kernel::AIKernel>, tempfile::TempDir) {
-    let _ = std::env::set_var("EMBEDDING_BACKEND", "stub");
-    let _ = std::env::set_var("LLM_BACKEND", "stub");
+    std::env::set_var("EMBEDDING_BACKEND", "stub");
+    std::env::set_var("LLM_BACKEND", "stub");
     let dir = tempfile::tempdir().unwrap();
     let kernel = crate::kernel::AIKernel::new(dir.path().to_path_buf()).expect("kernel init");
     (kernel, dir)

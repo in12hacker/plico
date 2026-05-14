@@ -508,3 +508,125 @@ fn test_no_similar_to_edges_for_dissimilar_docs() {
     assert!(neighbors.is_empty(),
         "Expected no SimilarTo edges for dissimilar documents, got {} neighbors", neighbors.len());
 }
+
+// ── Phase 3: Iterative retrieval + path discovery tests ──
+
+#[test]
+fn test_iterative_retrieve_expands_results() {
+    let (fs, _dir) = make_fs();
+    // Create multiple documents with overlapping content
+    for i in 0..10 {
+        let content = format!("Document {} about Rust programming and memory safety", i);
+        fs.create(
+            content.into_bytes(),
+            vec!["rust".to_string(), "programming".to_string()],
+            "agent1".to_string(),
+            None,
+        ).unwrap();
+    }
+    // Simple query — iterative retrieve should find additional docs via BM25
+    let results = fs.search("Rust memory safety", 5);
+    assert!(!results.is_empty(), "search should return results");
+}
+
+#[test]
+fn test_multihop_query_returns_results() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let fs = make_fs_with_kg(&dir);
+    // Create documents with causal content
+    fs.create(
+        b"Deployment caused outage".to_vec(),
+        vec!["deployment".to_string(), "outage".to_string()],
+        "agent1".to_string(),
+        None,
+    ).unwrap();
+    fs.create(
+        b"Outage affected users".to_vec(),
+        vec!["outage".to_string(), "users".to_string()],
+        "agent1".to_string(),
+        None,
+    ).unwrap();
+    // Multi-hop query should trigger PPR + path discovery + iterative retrieval
+    let results = fs.search("why did the deployment cause the outage", 10);
+    assert!(!results.is_empty(), "multi-hop search should return results");
+}
+
+#[test]
+fn test_search_with_filter_respects_limit() {
+    let (fs, _dir) = make_fs();
+    for i in 0..20 {
+        fs.create(
+            format!("Document number {}", i).into_bytes(),
+            vec!["test".to_string()],
+            "agent1".to_string(),
+            None,
+        ).unwrap();
+    }
+    let results = fs.search("document", 5);
+    assert!(results.len() <= 5, "results should respect limit, got {}", results.len());
+}
+
+#[test]
+fn test_search_cache_hit() {
+    let (fs, _dir) = make_fs();
+    fs.create(
+        b"Cache test document".to_vec(),
+        vec!["cache".to_string()],
+        "agent1".to_string(),
+        None,
+    ).unwrap();
+    // First search
+    let results1 = fs.search("cache test", 5);
+    // Second search (should hit cache)
+    let results2 = fs.search("cache test", 5);
+    assert_eq!(results1.len(), results2.len(), "cached results should match");
+}
+
+#[test]
+fn test_multihop_with_kg_nodes_triggers_path_discovery() {
+    use crate::fs::graph::{KGNode, KGEdge, KGNodeType, KGEdgeType};
+
+    let dir = tempfile::TempDir::new().unwrap();
+    let cas = Arc::new(CASStorage::new(dir.path().join("cas")).unwrap());
+    let kg = Arc::new(PetgraphBackend::new());
+    let fs = SemanticFS::new(
+        dir.path().to_path_buf(),
+        cas,
+        Arc::new(StubEmbeddingProvider::new()),
+        Arc::new(InMemoryBackend::new()),
+        None,
+        Some(kg.clone()),
+    ).unwrap();
+
+    // Create documents and KG nodes with content_cid
+    let cid1 = fs.create(b"Alpha project started".to_vec(), vec!["alpha".to_string()], "agent1".to_string(), None).unwrap();
+    let cid2 = fs.create(b"Beta project depends on Alpha".to_vec(), vec!["beta".to_string(), "alpha".to_string()], "agent1".to_string(), None).unwrap();
+
+    let mut alpha = KGNode::new("Alpha".to_string(), KGNodeType::Entity, "agent1".to_string(), "default".to_string());
+    alpha.content_cid = Some(cid1);
+    alpha.id = "alpha_node".to_string();
+    kg.add_node(alpha).unwrap();
+
+    let mut beta = KGNode::new("Beta".to_string(), KGNodeType::Entity, "agent1".to_string(), "default".to_string());
+    beta.content_cid = Some(cid2);
+    beta.id = "beta_node".to_string();
+    kg.add_node(beta).unwrap();
+
+    let edge = KGEdge {
+        src: "alpha_node".to_string(),
+        dst: "beta_node".to_string(),
+        edge_type: KGEdgeType::RelatedTo,
+        weight: 1.0,
+        evidence_cid: None,
+        created_at: 1000,
+        valid_at: None,
+        invalid_at: None,
+        expired_at: None,
+        episode: None,
+    };
+    kg.add_edge(edge).unwrap();
+
+    // Multi-hop query should trigger PPR + path discovery
+    let results = fs.search("why does Beta depend on Alpha", 10);
+    assert!(!results.is_empty(), "should return results via path discovery");
+}

@@ -3,6 +3,133 @@
 use crate::api::semantic::{ApiRequest, ApiResponse};
 use crate::DEFAULT_TENANT;
 
+#[cfg(test)]
+mod tests {
+    use crate::kernel::tests::make_kernel;
+    use crate::api::semantic::ApiRequest;
+
+    #[test]
+    fn test_create_tenant() {
+        let (kernel, _tmp) = make_kernel();
+        let resp = kernel.handle_api_request(ApiRequest::CreateTenant {
+            tenant_id: "tenant_a".to_string(),
+            admin_agent_id: "admin_agent".to_string(),
+            caller_agent_id: "system".to_string(),
+        });
+        assert!(resp.ok, "CreateTenant should succeed: {:?}", resp.error);
+    }
+
+    #[test]
+    fn test_create_tenant_unauthorized() {
+        let (kernel, _tmp) = make_kernel();
+        let resp = kernel.handle_api_request(ApiRequest::CreateTenant {
+            tenant_id: "tenant_b".to_string(),
+            admin_agent_id: "admin_agent".to_string(),
+            caller_agent_id: "regular_agent".to_string(),
+        });
+        assert!(!resp.ok, "CreateTenant by untrusted agent should fail");
+    }
+
+    #[test]
+    fn test_list_tenants() {
+        let (kernel, _tmp) = make_kernel();
+        kernel.handle_api_request(ApiRequest::CreateTenant {
+            tenant_id: "tenant_list".to_string(),
+            admin_agent_id: "admin_agent".to_string(),
+            caller_agent_id: "system".to_string(),
+        });
+        let resp = kernel.handle_api_request(ApiRequest::ListTenants {
+            agent_id: "admin_agent".to_string(),
+        });
+        assert!(resp.ok, "ListTenants should succeed: {:?}", resp.error);
+        let tenants = resp.tenants.unwrap();
+        assert!(!tenants.is_empty(), "should have at least one tenant");
+    }
+
+    #[test]
+    fn test_tenant_share() {
+        let (kernel, _tmp) = make_kernel();
+        kernel.handle_api_request(ApiRequest::CreateTenant {
+            tenant_id: "src_tenant".to_string(),
+            admin_agent_id: "admin_agent".to_string(),
+            caller_agent_id: "system".to_string(),
+        });
+        kernel.handle_api_request(ApiRequest::CreateTenant {
+            tenant_id: "dst_tenant".to_string(),
+            admin_agent_id: "admin_agent".to_string(),
+            caller_agent_id: "system".to_string(),
+        });
+        let resp = kernel.handle_api_request(ApiRequest::TenantShare {
+            from_tenant: "src_tenant".to_string(),
+            to_tenant: "dst_tenant".to_string(),
+            resource_type: "kg".to_string(),
+            resource_pattern: "*".to_string(),
+            agent_id: "system".to_string(),
+        });
+        assert!(resp.ok, "TenantShare should succeed: {:?}", resp.error);
+        assert!(resp.data.is_some());
+    }
+
+    #[test]
+    fn test_tenant_share_invalid_resource_type() {
+        let (kernel, _tmp) = make_kernel();
+        kernel.handle_api_request(ApiRequest::CreateTenant {
+            tenant_id: "src2".to_string(),
+            admin_agent_id: "admin".to_string(),
+            caller_agent_id: "system".to_string(),
+        });
+        kernel.handle_api_request(ApiRequest::CreateTenant {
+            tenant_id: "dst2".to_string(),
+            admin_agent_id: "admin".to_string(),
+            caller_agent_id: "system".to_string(),
+        });
+        let resp = kernel.handle_api_request(ApiRequest::TenantShare {
+            from_tenant: "src2".to_string(),
+            to_tenant: "dst2".to_string(),
+            resource_type: "invalid_type".to_string(),
+            resource_pattern: "*".to_string(),
+            agent_id: "system".to_string(),
+        });
+        assert!(!resp.ok, "TenantShare with invalid resource_type should fail");
+    }
+
+    #[test]
+    fn test_tenant_share_nonexistent_tenant() {
+        let (kernel, _tmp) = make_kernel();
+        let resp = kernel.handle_api_request(ApiRequest::TenantShare {
+            from_tenant: "nonexistent".to_string(),
+            to_tenant: "also_nonexistent".to_string(),
+            resource_type: "cas".to_string(),
+            resource_pattern: "*".to_string(),
+            agent_id: "system".to_string(),
+        });
+        assert!(!resp.ok, "TenantShare with nonexistent tenants should fail");
+    }
+
+    #[test]
+    fn test_tenant_share_requires_permission() {
+        let (kernel, _tmp) = make_kernel();
+        kernel.handle_api_request(ApiRequest::CreateTenant {
+            tenant_id: "perm_src".to_string(),
+            admin_agent_id: "admin".to_string(),
+            caller_agent_id: "system".to_string(),
+        });
+        kernel.handle_api_request(ApiRequest::CreateTenant {
+            tenant_id: "perm_dst".to_string(),
+            admin_agent_id: "admin".to_string(),
+            caller_agent_id: "system".to_string(),
+        });
+        let resp = kernel.handle_api_request(ApiRequest::TenantShare {
+            from_tenant: "perm_src".to_string(),
+            to_tenant: "perm_dst".to_string(),
+            resource_type: "memory".to_string(),
+            resource_pattern: "*".to_string(),
+            agent_id: "untrusted_agent".to_string(),
+        });
+        assert!(!resp.ok, "TenantShare by agent without CrossTenant permission should fail");
+    }
+}
+
 impl super::super::AIKernel {
     pub(crate) fn handle_tenant(&self, req: ApiRequest) -> ApiResponse {
         match req {

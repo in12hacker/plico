@@ -59,25 +59,17 @@ fn validate_cold_params(method: &str, params: &serde_json::Map<String, Value>) -
                 return Some("Missing 'to_id'. Example: {method:'causal_path', from_id:'<node_a>', to_id:'<node_b>', agent_id:'your-agent'}".to_string());
             }
         }
-        "impact" => {
-            if !params.contains_key("node_id") {
-                return Some("Missing 'node_id'. Example: {method:'impact', node_id:'<node_id>', depth:3, agent_id:'your-agent'}".to_string());
-            }
+        "impact" if !params.contains_key("node_id") => {
+            return Some("Missing 'node_id'. Example: {method:'impact', node_id:'<node_id>', depth:3, agent_id:'your-agent'}".to_string());
         }
-        "delegate" => {
-            if !params.contains_key("task_description") {
-                return Some("Missing 'task_description'. Example: {method:'delegate', task_description:'analyze logs', to_agent:'<agent>', agent_id:'your-agent'}".to_string());
-            }
+        "delegate" if !params.contains_key("task_description") => {
+            return Some("Missing 'task_description'. Example: {method:'delegate', task_description:'analyze logs', to_agent:'<agent>', agent_id:'your-agent'}".to_string());
         }
-        "complete" => {
-            if !params.contains_key("task_id") {
-                return Some("Missing 'task_id'. Example: {method:'complete', task_id:'<task_id>', agent_id:'your-agent'}".to_string());
-            }
+        "complete" if !params.contains_key("task_id") => {
+            return Some("Missing 'task_id'. Example: {method:'complete', task_id:'<task_id>', agent_id:'your-agent'}".to_string());
         }
-        "batch_create" => {
-            if !params.contains_key("items") {
-                return Some("Missing 'items' array. Example: {method:'batch_create', items:[{content:'text', tags:['tag']}], agent_id:'your-agent'}".to_string());
-            }
+        "batch_create" if !params.contains_key("items") => {
+            return Some("Missing 'items' array. Example: {method:'batch_create', items:[{content:'text', tags:['tag']}], agent_id:'your-agent'}".to_string());
         }
         _ => {}
     }

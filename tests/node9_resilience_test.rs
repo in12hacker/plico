@@ -33,8 +33,8 @@ fn test_bm25_score_normalization() {
     // F-36: Normalized top-1 should be close to 1.0
     assert!(top_score > 0.5, "top-1 score should be > 0.5, got {}", top_score);
     // F-36: Scores are in valid range
-    assert!(top_score >= 0.0 && top_score <= 1.0);
-    assert!(noise_score >= 0.0 && noise_score <= 1.0);
+    assert!((0.0..=1.0).contains(&top_score));
+    assert!((0.0..=1.0).contains(&noise_score));
 }
 
 /// F-36: BM25 discriminates between relevant and irrelevant documents.

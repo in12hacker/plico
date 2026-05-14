@@ -358,4 +358,194 @@ mod tests {
         assert_eq!(scheduler.get_usage(&aid_a).tool_call_count, 2);
         assert_eq!(scheduler.get_usage(&aid_b).tool_call_count, 1);
     }
+
+    #[test]
+    fn test_resolve_by_id() {
+        let scheduler = AgentScheduler::new();
+        let agent = Agent::new("resolve-test".into());
+        let id = agent.id().clone();
+        scheduler.register(agent);
+        assert_eq!(scheduler.resolve(&id.0), Some(id));
+    }
+
+    #[test]
+    fn test_resolve_by_name() {
+        let scheduler = AgentScheduler::new();
+        let agent = Agent::new("my-agent".into());
+        let id = agent.id().clone();
+        scheduler.register(agent);
+        assert_eq!(scheduler.resolve("my-agent"), Some(id));
+    }
+
+    #[test]
+    fn test_resolve_not_found() {
+        let scheduler = AgentScheduler::new();
+        assert_eq!(scheduler.resolve("nonexistent"), None);
+    }
+
+    #[test]
+    fn test_update_state() {
+        let scheduler = AgentScheduler::new();
+        let agent = Agent::new("state-test".into());
+        let id = agent.id().clone();
+        scheduler.register(agent);
+        let result = scheduler.update_state(&id, AgentState::Running);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_get_agent() {
+        let scheduler = AgentScheduler::new();
+        let agent = Agent::new("get-test".into());
+        let id = agent.id().clone();
+        scheduler.register(agent);
+        assert!(scheduler.get(&id).is_some());
+        assert!(scheduler.get(&AgentId("nope".into())).is_none());
+    }
+
+    #[test]
+    fn test_has_agent() {
+        let scheduler = AgentScheduler::new();
+        let agent = Agent::new("has-test".into());
+        let id = agent.id().clone();
+        scheduler.register(agent);
+        assert!(scheduler.has_agent(&id));
+        assert!(!scheduler.has_agent(&AgentId("nope".into())));
+    }
+
+    #[test]
+    fn test_remove_agent() {
+        let scheduler = AgentScheduler::new();
+        let agent = Agent::new("remove-test".into());
+        let id = agent.id().clone();
+        scheduler.register(agent);
+        assert!(scheduler.has_agent(&id));
+        scheduler.remove(&id);
+        assert!(!scheduler.has_agent(&id));
+    }
+
+    #[test]
+    fn test_snapshot_and_restore_agents() {
+        let scheduler = AgentScheduler::new();
+        let agent = Agent::new("snap-test".into());
+        scheduler.register(agent);
+        let snapshot = scheduler.snapshot_agents();
+        assert_eq!(snapshot.len(), 1);
+
+        let scheduler2 = AgentScheduler::new();
+        scheduler2.restore_agents(snapshot);
+        assert_eq!(scheduler2.list_agents().len(), 1);
+    }
+
+    #[test]
+    fn test_register_existing() {
+        let scheduler = AgentScheduler::new();
+        let agent = Agent::new("existing".into());
+        let id = agent.id().clone();
+        scheduler.register_existing(agent);
+        assert!(scheduler.has_agent(&id));
+        assert!(scheduler.resolve("existing").is_some());
+    }
+
+    #[test]
+    fn test_get_set_resources() {
+        let scheduler = AgentScheduler::new();
+        let agent = Agent::new("res-test".into());
+        let id = agent.id().clone();
+        scheduler.register(agent);
+        let res = scheduler.get_resources(&id);
+        assert!(res.is_some());
+        let new_res = res.unwrap();
+        assert!(scheduler.set_resources(&id, new_res));
+        assert!(!scheduler.set_resources(&AgentId("nope".into()), AgentResources::default()));
+    }
+
+    #[test]
+    fn test_snapshot_and_restore_usage() {
+        let scheduler = AgentScheduler::new();
+        let agent = Agent::new("usage-snap".into());
+        let id = agent.id().clone();
+        scheduler.register(agent);
+        scheduler.record_tool_call(&id);
+        let snap = scheduler.snapshot_usage();
+        assert_eq!(snap.len(), 1);
+
+        let scheduler2 = AgentScheduler::new();
+        scheduler2.restore_usage(snap);
+        assert_eq!(scheduler2.get_usage(&id).tool_call_count, 1);
+    }
+
+    #[test]
+    fn test_record_token_usage() {
+        let scheduler = AgentScheduler::new();
+        let agent = Agent::new("token-test".into());
+        let id = agent.id().clone();
+        scheduler.register(agent);
+        scheduler.record_token_usage(&id, 100);
+        scheduler.record_token_usage(&id, 50);
+        let usage = scheduler.get_usage(&id);
+        assert_eq!(usage.total_tokens_consumed, 150);
+    }
+
+    #[test]
+    fn test_record_token_usage_zero_noop() {
+        let scheduler = AgentScheduler::new();
+        let agent = Agent::new("zero-token".into());
+        let id = agent.id().clone();
+        scheduler.register(agent);
+        scheduler.record_token_usage(&id, 0);
+        let usage = scheduler.get_usage(&id);
+        assert_eq!(usage.total_tokens_consumed, 0);
+    }
+
+    #[test]
+    fn test_snapshot_and_restore_intents() {
+        let scheduler = AgentScheduler::new();
+        scheduler.submit(Intent::new(IntentPriority::High, "intent1".into()));
+        scheduler.submit(Intent::new(IntentPriority::Low, "intent2".into()));
+        let snap = scheduler.snapshot_intents();
+        assert_eq!(snap.len(), 2);
+        // Queue should still have the intents after snapshot
+        assert_eq!(scheduler.pending_intent_count(), 2);
+
+        let scheduler2 = AgentScheduler::new();
+        scheduler2.restore_intents(snap);
+        assert_eq!(scheduler2.pending_intent_count(), 2);
+    }
+
+    #[test]
+    fn test_pending_intent_count() {
+        let scheduler = AgentScheduler::new();
+        assert_eq!(scheduler.pending_intent_count(), 0);
+        scheduler.submit(Intent::new(IntentPriority::High, "test".into()));
+        assert_eq!(scheduler.pending_intent_count(), 1);
+    }
+
+    #[test]
+    fn test_agent_handle_from_agent() {
+        let agent = Agent::new("handle-test".into());
+        let handle = AgentHandle::from_agent(&agent);
+        assert_eq!(handle.name, "handle-test");
+        assert_eq!(handle.id, agent.id().0);
+    }
+
+    #[test]
+    fn test_default_scheduler() {
+        let scheduler = AgentScheduler::default();
+        assert_eq!(scheduler.list_agents().len(), 0);
+    }
+
+    #[test]
+    fn test_dequeue_empty() {
+        let scheduler = AgentScheduler::new();
+        assert!(scheduler.dequeue().is_none());
+    }
+
+    #[test]
+    fn test_update_state_nonexistent() {
+        let scheduler = AgentScheduler::new();
+        // Should not panic
+        let result = scheduler.update_state(&AgentId("nope".into()), AgentState::Running);
+        assert!(result.is_ok());
+    }
 }

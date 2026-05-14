@@ -404,15 +404,13 @@ fn bench_b5_kernel_store_recall() {
     println!("  Stored {} facts via CAS, total: {}ms (avg: {:.0}ms)",
         facts.len(), store_ms_total, store_ms_total as f64 / facts.len() as f64);
 
-    let queries = vec![
-        ("project deadline", "march"),
+    let queries = [("project deadline", "march"),
         ("auth module developer", "alice"),
         ("primary database", "postgresql"),
         ("services communication protocol", "grpc"),
-        ("production deploy schedule", "wednesday"),
-    ];
+        ("production deploy schedule", "wednesday")];
 
-    println!("\n  {:>5} {:<45} {:>8} {:>6} {}", "#", "Query", "Lat(ms)", "Found", "Top result preview");
+    println!("\n  {:>5} {:<45} {:>8} {:>6} Top result preview", "#", "Query", "Lat(ms)", "Found");
     println!("  {}", "-".repeat(120));
 
     let mut found_count = 0;
@@ -496,13 +494,11 @@ fn bench_b6_recall_routed() {
     let store_ms = t_store.elapsed().as_millis();
     println!("  Stored {} memories to LongTerm (with embeddings) in {}ms", memories.len(), store_ms);
 
-    let routed_queries = vec![
-        ("What happened after the K8s migration?", QueryIntent::Temporal),
+    let routed_queries = [("What happened after the K8s migration?", QueryIntent::Temporal),
         ("Why did the API gateway have performance issues?", QueryIntent::MultiHop),
         ("What does Alice prefer for deployment?", QueryIntent::Preference),
         ("How many API requests per day?", QueryIntent::Factual),
-        ("Summarize all infrastructure decisions", QueryIntent::Aggregation),
-    ];
+        ("Summarize all infrastructure decisions", QueryIntent::Aggregation)];
 
     println!("\n  {:>5} {:<50} {:>10} {:>10} {:>8} {:>6}",
         "#", "Query", "Expected", "Classified", "Lat(ms)", "Hits");
@@ -745,7 +741,7 @@ fn bench_b9_scale_store_search() {
         ("team member joined date", "joined"),
     ];
 
-    println!("\n  {:>3} {:<45} {:>8} {:>6} {}", "#", "Query", "Lat(ms)", "Hits", "Top result");
+    println!("\n  {:>3} {:<45} {:>8} {:>6} Top result", "#", "Query", "Lat(ms)", "Hits");
     println!("  {}", "-".repeat(110));
 
     let mut search_latencies = Vec::with_capacity(search_queries.len());
@@ -869,8 +865,7 @@ fn bench_b11_multi_session_memory() {
 
     println!("\n=== B11: Multi-Session Memory Persistence ===");
 
-    let sessions = vec![
-        vec![
+    let sessions = [vec![
             "Project Alpha uses React 18 for the frontend",
             "The backend is built with Rust and Actix-web",
             "PostgreSQL 15 is the primary database",
@@ -884,8 +879,7 @@ fn bench_b11_multi_session_memory() {
             "Deployed v2.0 of Project Alpha to production",
             "Performance improved 30% after Rust migration",
             "Next milestone is to add real-time notifications",
-        ],
-    ];
+        ]];
 
     let mut total_store_ms = 0u128;
     for (session_idx, session) in sessions.iter().enumerate() {
@@ -903,15 +897,13 @@ fn bench_b11_multi_session_memory() {
         println!("  Session {}: stored {} memories in {}ms", session_idx + 1, session.len(), ms);
     }
 
-    let cross_session_queries = vec![
-        ("What technology stack does Project Alpha use?", vec!["react", "rust"]),
+    let cross_session_queries = [("What technology stack does Project Alpha use?", vec!["react", "rust"]),
         ("Who is responsible for the frontend?", vec!["alice"]),
         ("What was the performance improvement?", vec!["30%"]),
         ("When is sprint planning?", vec!["monday"]),
-        ("What is the next milestone?", vec!["notification"]),
-    ];
+        ("What is the next milestone?", vec!["notification"])];
 
-    println!("\n  {:>3} {:<50} {:>8} {:>6} {}", "#", "Cross-session Query", "Lat(ms)", "Found", "Evidence");
+    println!("\n  {:>3} {:<50} {:>8} {:>6} Evidence", "#", "Cross-session Query", "Lat(ms)", "Found");
     println!("  {}", "-".repeat(110));
 
     let mut found_count = 0;
@@ -1098,8 +1090,7 @@ fn bench_b14_conversation_cycle() {
 
     println!("\n=== B14: Multi-Round Conversation Cycle ===");
 
-    let rounds = vec![
-        vec![
+    let rounds = [vec![
             ("User asked about deployment strategy", MemoryType::Episodic, &["deploy"][..]),
             ("Team decided on blue-green deployment", MemoryType::Semantic, &["deploy", "decision"][..]),
         ],
@@ -1111,8 +1102,7 @@ fn bench_b14_conversation_cycle() {
         vec![
             ("Sprint 5 planning: focus on auth redesign", MemoryType::Episodic, &["sprint", "auth"][..]),
             ("Auth will use JWT with refresh tokens", MemoryType::Semantic, &["auth", "decision"][..]),
-        ],
-    ];
+        ]];
 
     let mut total_store_ms = 0u128;
     let mut total_distill_ms = 0u128;
@@ -1154,13 +1144,11 @@ fn bench_b14_conversation_cycle() {
 
     println!("\n  Totals: store={}ms, distill={}ms, LT entries={}", total_store_ms, total_distill_ms, all_lt_count);
 
-    let verification_queries = vec![
-        ("What deployment strategy did the team choose?", "blue-green"),
+    let verification_queries = [("What deployment strategy did the team choose?", "blue-green"),
         ("What monitoring tools are being used?", "prometheus"),
-        ("How does the auth system work?", "jwt"),
-    ];
+        ("How does the auth system work?", "jwt")];
 
-    println!("\n  {:>3} {:<50} {:>8} {:>6} {}", "#", "Verification Query", "Lat(ms)", "Found", "Top result");
+    println!("\n  {:>3} {:<50} {:>8} {:>6} Top result", "#", "Verification Query", "Lat(ms)", "Found");
     println!("  {}", "-".repeat(100));
 
     let mut found_count = 0;
@@ -1582,7 +1570,7 @@ fn bench_b19_real_world_context_ingestion() {
     ];
 
     println!("  Phase 2: Recalling with {} development queries...\n", recall_queries.len());
-    println!("  {:>3} {:<50} {:>8} {:>6} {}", "#", "Query", "Lat(ms)", "Found", "Top result preview");
+    println!("  {:>3} {:<50} {:>8} {:>6} Top result preview", "#", "Query", "Lat(ms)", "Found");
     println!("  {}", "-".repeat(110));
 
     let mut found_count = 0;
@@ -2125,11 +2113,11 @@ fn bench_b23_real_context_scale() {
                             .and_then(|v| v.as_str())
                         {
                             let t = text.trim();
-                            if t.len() >= 80 && t.len() <= 500 {
-                                if t.contains("Plico") || t.contains("kernel")
+                            if t.len() >= 80 && t.len() <= 500
+                                && (t.contains("Plico") || t.contains("kernel")
                                     || t.contains("memory") || t.contains("benchmark")
                                     || t.contains("embedding") || t.contains("retrieval")
-                                    || t.contains("LLM") || t.contains("agent")
+                                    || t.contains("LLM") || t.contains("agent"))
                                 {
                                     knowledge_items.push((
                                         t.to_string(),
@@ -2138,7 +2126,6 @@ fn bench_b23_real_context_scale() {
                                     line_count += 1;
                                     if line_count >= 10 { break; }
                                 }
-                            }
                         }
                     }
                 }
@@ -2567,9 +2554,9 @@ fn bench_b25_longmemeval_real() {
         if hit { *hits += 1; }
 
         let trunc_q: String = if question.len() > 48 { format!("{}...", &question[..48]) } else { question.to_string() };
-        println!("  {:>3} {:<24} {:<50} {:>5}ms {:>5}ms {:>6} [{}]",
+        println!("  {:>3} {:<24} {:<50} {:>5}ms {:>5}ms {:>6} [{:?}]",
             qi + 1, qtype, trunc_q, ingest_ms, query_ms, if hit { "✓" } else { "✗" },
-            format!("{:?}", classified.intent));
+            classified.intent);
     }
 
     println!("\n  ══ B25 LongMemEval Category Breakdown ══");
@@ -2634,8 +2621,7 @@ fn bench_b26_locomo_real() {
 
     let category_names = ["unknown", "single-hop", "temporal", "common-sense", "multi-hop", "adversarial"];
 
-    for ci in 0..convs_to_test {
-        let conv = &dataset[ci];
+    for (ci, conv) in dataset.iter().enumerate().take(convs_to_test) {
         let conv_data = &conv["conversation"];
         let speaker_a = conv_data["speaker_a"].as_str().unwrap_or("A");
         let speaker_b = conv_data["speaker_b"].as_str().unwrap_or("B");
@@ -2809,9 +2795,9 @@ fn bench_b26_locomo_real() {
             total_qa_tested += 1;
 
             let trunc_q: String = if question.len() > 50 { format!("{}...", &question[..50]) } else { question.to_string() };
-            println!("  {:>3} {:<14} {:<52} {:>5}ms {:>5} [{}]",
+            println!("  {:>3} {:<14} {:<52} {:>5}ms {:>5} [{:?}]",
                 qi + 1, cat_name, trunc_q, query_ms, if hit { "✓" } else { "✗" },
-                format!("{:?}", classified.intent));
+                classified.intent);
         }
         println!();
     }

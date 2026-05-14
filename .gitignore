@@ -23,11 +23,13 @@ Thumbs.db
 .claude/settings.local.json
 
 # ── Benchmark ──
-bench/data/
-bench/.venv/
-bench/**/__pycache__/
-bench/**/*.pyc
+bench/
+benchmarks/.venv/
+benchmarks/**/__pycache__/
+benchmarks/**/*.pyc
 benchmarks/datasets/
+benchmarks/results/*.json
+.runtime/bench_legacy/
 bench/archive/
 
 # ── Model files ──

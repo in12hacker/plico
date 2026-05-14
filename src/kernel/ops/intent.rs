@@ -275,7 +275,7 @@ impl IntentPlan {
         let mut step_durations: Vec<(u64, usize)> = sorted.iter()
             .map(|&idx| (get_duration(idx), idx))
             .collect();
-        step_durations.sort_by(|a, b| b.0.cmp(&a.0)); // longest first
+        step_durations.sort_by_key(|(dur, _)| std::cmp::Reverse(*dur));
 
         for (_, step_idx) in step_durations {
             // Find earliest position where all dependencies are placed before this position

@@ -9,7 +9,6 @@
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use serde::{Deserialize, Serialize};
-use crate::cas::AIObject;
 use crate::fs::summarizer::SummaryLayer;
 
 /// Represents a unit of cognitive work in the pipeline.
@@ -87,6 +86,162 @@ pub fn start_cognitive_pipeline(
     });
     
     CognitivePipelineHandle { sender: tx }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::kernel::tests::make_kernel;
+
+    #[tokio::test]
+    async fn test_start_cognitive_pipeline() {
+        let (kernel, _dir) = make_kernel();
+        let _handle = start_cognitive_pipeline(kernel, 64);
+        // Handle created successfully — pipeline worker spawned
+    }
+
+    #[tokio::test]
+    async fn test_enqueue_sync() {
+        let (kernel, _dir) = make_kernel();
+        let handle = start_cognitive_pipeline(kernel.clone(), 256);
+
+        let cid = kernel.semantic_create(
+            b"test content for pipeline".to_vec(),
+            vec!["test".to_string()],
+            "kernel",
+            None,
+        ).unwrap();
+
+        let task = CognitiveTask::Summarize {
+            cid,
+            layer: SummaryLayer::L0,
+            agent_id: "kernel".to_string(),
+        };
+        let result = handle.enqueue_sync(task);
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_enqueue_async() {
+        let (kernel, _dir) = make_kernel();
+        let handle = start_cognitive_pipeline(kernel.clone(), 256);
+
+        let cid = kernel.semantic_create(
+            b"async test content".to_vec(),
+            vec!["test".to_string()],
+            "kernel",
+            None,
+        ).unwrap();
+
+        let task = CognitiveTask::Summarize {
+            cid,
+            layer: SummaryLayer::L0,
+            agent_id: "kernel".to_string(),
+        };
+        let result = handle.enqueue(task).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_process_task_summarize_missing_cid() {
+        let (kernel, _dir) = make_kernel();
+        let task = CognitiveTask::Summarize {
+            cid: "nonexistent_cid_12345".to_string(),
+            layer: SummaryLayer::L0,
+            agent_id: "kernel".to_string(),
+        };
+        let result = process_task(kernel, task).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("not found"));
+    }
+
+    #[tokio::test]
+    async fn test_process_task_kg_extract() {
+        let (kernel, _dir) = make_kernel();
+        let cid = kernel.semantic_create(
+            b"knowledge content to extract".to_vec(),
+            vec!["knowledge".to_string()],
+            "kernel",
+            None,
+        ).unwrap();
+        let task = CognitiveTask::KgExtract {
+            cid,
+            agent_id: "kernel".to_string(),
+        };
+        let result = process_task(kernel, task).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_process_task_link_similarity() {
+        let (kernel, _dir) = make_kernel();
+        let task = CognitiveTask::LinkSimilarity {
+            cid: "any_cid".to_string(),
+            agent_id: "kernel".to_string(),
+        };
+        let result = process_task(kernel, task).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_process_task_process_document_missing() {
+        let (kernel, _dir) = make_kernel();
+        let task = CognitiveTask::ProcessDocument {
+            cid: "nonexistent_doc".to_string(),
+            agent_id: "kernel".to_string(),
+            force_chunking: false,
+        };
+        let result = process_task(kernel, task).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_process_task_process_document() {
+        let (kernel, _dir) = make_kernel();
+        let cid = kernel.semantic_create(
+            b"document content for full processing pipeline test".to_vec(),
+            vec!["document".to_string()],
+            "kernel",
+            None,
+        ).unwrap();
+        let task = CognitiveTask::ProcessDocument {
+            cid,
+            agent_id: "kernel".to_string(),
+            force_chunking: false,
+        };
+        let result = process_task(kernel, task).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_cognitive_task_serialization() {
+        let task = CognitiveTask::Summarize {
+            cid: "test_cid".to_string(),
+            layer: SummaryLayer::L0,
+            agent_id: "agent1".to_string(),
+        };
+        let json = serde_json::to_string(&task).unwrap();
+        let deserialized: CognitiveTask = serde_json::from_str(&json).unwrap();
+        match deserialized {
+            CognitiveTask::Summarize { cid, agent_id, .. } => {
+                assert_eq!(cid, "test_cid");
+                assert_eq!(agent_id, "agent1");
+            }
+            _ => panic!("Wrong variant"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_enqueue_sync_channel_full() {
+        let (kernel, _dir) = make_kernel();
+        let handle = start_cognitive_pipeline(kernel.clone(), 1);
+        // Fill the channel
+        let cid = kernel.semantic_create(b"content".to_vec(), vec![], "kernel", None).unwrap();
+        let _ = handle.enqueue_sync(CognitiveTask::LinkSimilarity {
+            cid: cid.clone(), agent_id: "kernel".to_string(),
+        });
+        // The channel might be full now or the task was consumed — either way, no panic
+    }
 }
 
 async fn process_task(kernel: Arc<crate::kernel::AIKernel>, task: CognitiveTask) -> Result<(), String> {

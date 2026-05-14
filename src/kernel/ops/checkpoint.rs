@@ -294,7 +294,7 @@ impl CheckpointStore {
                     (k.clone(), c.created_at_ms)
                 })
                 .collect();
-            with_timestamps.sort_by(|a, b| a.1.cmp(&b.1)); // Sort by timestamp ascending
+            with_timestamps.sort_by_key(|(_, ts)| *ts);
 
             let to_remove_count = agent_checkpoint_ids.len() - self.max_checkpoints_per_agent + 1;
             for (k, _) in with_timestamps.into_iter().take(to_remove_count) {
@@ -327,7 +327,7 @@ impl CheckpointStore {
             .map(|(k, c)| (k.clone(), c.created_at_ms))
             .collect();
 
-        agent_checkpoints.sort_by(|a, b| b.1.cmp(&a.1)); // Newest first
+        agent_checkpoints.sort_by_key(|(_, ts)| std::cmp::Reverse(*ts));
 
         for (i, (k, _)) in agent_checkpoints.into_iter().enumerate() {
             if i >= keep_count {
@@ -528,5 +528,485 @@ mod tests {
         assert!(entry.tags.contains(&CHECKPOINT_TAG.to_string()));
         assert_eq!(entry.tier, MemoryTier::LongTerm);
         assert_eq!(entry.importance, 100);
+    }
+
+    #[test]
+    fn test_checkpoint_memory_text_roundtrip() {
+        let entry = MemoryEntry {
+            id: "mem-text".to_string(),
+            agent_id: "agent-1".to_string(),
+            tenant_id: "default".to_string(),
+            tier: MemoryTier::LongTerm,
+            content: MemoryContent::Text("hello world".to_string()),
+            importance: 80,
+            access_count: 10,
+            last_accessed: 2000,
+            created_at: 1000,
+            tags: vec!["important".to_string()],
+            embedding: None,
+            ttl_ms: None,
+            original_ttl_ms: None,
+            scope: MemoryScope::Shared,
+            memory_type: crate::memory::MemoryType::default(),
+            causal_parent: None,
+            supersedes: None,
+        };
+
+        let cm = CheckpointMemory::from_entry(entry.clone());
+        assert_eq!(cm.tier, "long_term");
+        assert_eq!(cm.importance, 80);
+        assert_eq!(cm.scope, "shared");
+        assert_eq!(cm.access_count, 10);
+
+        let restored = cm.to_memory_entry("agent-1", "default");
+        assert_eq!(restored.id, "mem-text");
+        assert_eq!(restored.importance, 80);
+        match &restored.content {
+            MemoryContent::Text(s) => assert_eq!(s, "hello world"),
+            _ => panic!("expected Text content"),
+        }
+    }
+
+    #[test]
+    fn test_checkpoint_memory_object_ref_roundtrip() {
+        let entry = MemoryEntry {
+            id: "mem-obj".to_string(),
+            agent_id: "agent-1".to_string(),
+            tenant_id: "default".to_string(),
+            tier: MemoryTier::Working,
+            content: MemoryContent::ObjectRef("sha256abc".to_string()),
+            importance: 50,
+            access_count: 3,
+            last_accessed: 1500,
+            created_at: 1000,
+            tags: vec![],
+            embedding: None,
+            ttl_ms: None,
+            original_ttl_ms: None,
+            scope: MemoryScope::Private,
+            memory_type: crate::memory::MemoryType::default(),
+            causal_parent: None,
+            supersedes: None,
+        };
+
+        let cm = CheckpointMemory::from_entry(entry);
+        let restored = cm.to_memory_entry("agent-1", "default");
+        match &restored.content {
+            MemoryContent::ObjectRef(cid) => assert_eq!(cid, "sha256abc"),
+            _ => panic!("expected ObjectRef"),
+        }
+    }
+
+    #[test]
+    fn test_checkpoint_memory_procedure_roundtrip() {
+        use crate::memory::layered::Procedure;
+        let entry = MemoryEntry {
+            id: "mem-proc".to_string(),
+            agent_id: "agent-1".to_string(),
+            tenant_id: "default".to_string(),
+            tier: MemoryTier::Procedural,
+            content: MemoryContent::Procedure(Procedure {
+                name: "test_proc".to_string(),
+                description: "a test procedure".to_string(),
+                steps: vec![
+                    crate::memory::layered::ProcedureStep {
+                        step_number: 1,
+                        description: "first step".to_string(),
+                        action: "do thing".to_string(),
+                        expected_outcome: "done".to_string(),
+                    },
+                    crate::memory::layered::ProcedureStep {
+                        step_number: 2,
+                        description: "second step".to_string(),
+                        action: "do other".to_string(),
+                        expected_outcome: "finished".to_string(),
+                    },
+                ],
+                learned_from: "experience".to_string(),
+            }),
+            importance: 90,
+            access_count: 7,
+            last_accessed: 3000,
+            created_at: 2000,
+            tags: vec!["skill".to_string()],
+            embedding: None,
+            ttl_ms: None,
+            original_ttl_ms: None,
+            scope: MemoryScope::Private,
+            memory_type: crate::memory::MemoryType::default(),
+            causal_parent: None,
+            supersedes: None,
+        };
+
+        let cm = CheckpointMemory::from_entry(entry);
+        let restored = cm.to_memory_entry("agent-1", "default");
+        match &restored.content {
+            MemoryContent::Procedure(p) => {
+                assert_eq!(p.name, "test_proc");
+                assert_eq!(p.steps.len(), 2);
+            }
+            _ => panic!("expected Procedure"),
+        }
+    }
+
+    #[test]
+    fn test_checkpoint_memory_knowledge_roundtrip() {
+        use crate::memory::layered::KnowledgePiece;
+        let entry = MemoryEntry {
+            id: "mem-know".to_string(),
+            agent_id: "agent-1".to_string(),
+            tenant_id: "default".to_string(),
+            tier: MemoryTier::LongTerm,
+            content: MemoryContent::Knowledge(KnowledgePiece {
+                subject: "rust".to_string(),
+                statement: "borrow checker prevents data races".to_string(),
+                confidence: 0.95,
+                source: "experience".to_string(),
+            }),
+            importance: 95,
+            access_count: 20,
+            last_accessed: 5000,
+            created_at: 4000,
+            tags: vec!["knowledge".to_string()],
+            embedding: None,
+            ttl_ms: None,
+            original_ttl_ms: None,
+            scope: MemoryScope::Private,
+            memory_type: crate::memory::MemoryType::default(),
+            causal_parent: None,
+            supersedes: None,
+        };
+
+        let cm = CheckpointMemory::from_entry(entry);
+        let restored = cm.to_memory_entry("agent-1", "default");
+        match &restored.content {
+            MemoryContent::Knowledge(k) => {
+                assert_eq!(k.subject, "rust");
+                assert!((k.confidence - 0.95).abs() < 0.01);
+            }
+            _ => panic!("expected Knowledge"),
+        }
+    }
+
+    #[test]
+    fn test_checkpoint_memory_group_scope() {
+        let entry = MemoryEntry {
+            id: "mem-group".to_string(),
+            agent_id: "agent-1".to_string(),
+            tenant_id: "default".to_string(),
+            tier: MemoryTier::Working,
+            content: MemoryContent::Text("group data".to_string()),
+            importance: 50,
+            access_count: 1,
+            last_accessed: 1000,
+            created_at: 1000,
+            tags: vec![],
+            embedding: None,
+            ttl_ms: None,
+            original_ttl_ms: None,
+            scope: MemoryScope::Group("team-a".to_string()),
+            memory_type: crate::memory::MemoryType::default(),
+            causal_parent: None,
+            supersedes: None,
+        };
+
+        let cm = CheckpointMemory::from_entry(entry);
+        assert_eq!(cm.scope, "group:team-a");
+
+        let restored = cm.to_memory_entry("agent-1", "default");
+        assert_eq!(restored.scope, MemoryScope::Group("team-a".to_string()));
+    }
+
+    #[test]
+    fn test_checkpoint_memory_unknown_tier_defaults_to_working() {
+        let cm = CheckpointMemory {
+            id: "m1".to_string(),
+            tier: "unknown_tier".to_string(),
+            content_json: r#"{"type":"text","content":"test"}"#.to_string(),
+            importance: 50,
+            tags: vec![],
+            scope: "private".to_string(),
+            created_at_ms: 1000,
+            access_count: 0,
+        };
+        let entry = cm.to_memory_entry("agent-1", "default");
+        assert_eq!(entry.tier, MemoryTier::Working);
+    }
+
+    #[test]
+    fn test_checkpoint_memory_unknown_scope_defaults_to_private() {
+        let cm = CheckpointMemory {
+            id: "m1".to_string(),
+            tier: "working".to_string(),
+            content_json: r#"{"type":"text","content":"test"}"#.to_string(),
+            importance: 50,
+            tags: vec![],
+            scope: "unknown_scope".to_string(),
+            created_at_ms: 1000,
+            access_count: 0,
+        };
+        let entry = cm.to_memory_entry("agent-1", "default");
+        assert_eq!(entry.scope, MemoryScope::Private);
+    }
+
+    #[test]
+    fn test_checkpoint_memory_empty_content_json() {
+        let cm = CheckpointMemory {
+            id: "m1".to_string(),
+            tier: "working".to_string(),
+            content_json: String::new(),
+            importance: 50,
+            tags: vec![],
+            scope: "private".to_string(),
+            created_at_ms: 1000,
+            access_count: 0,
+        };
+        let entry = cm.to_memory_entry("agent-1", "default");
+        match &entry.content {
+            MemoryContent::Text(s) => assert!(s.is_empty()),
+            _ => panic!("expected Text for empty content"),
+        }
+    }
+
+    #[test]
+    fn test_checkpoint_memory_invalid_json_fallback() {
+        let cm = CheckpointMemory {
+            id: "m1".to_string(),
+            tier: "working".to_string(),
+            content_json: "not valid json".to_string(),
+            importance: 50,
+            tags: vec![],
+            scope: "private".to_string(),
+            created_at_ms: 1000,
+            access_count: 0,
+        };
+        let entry = cm.to_memory_entry("agent-1", "default");
+        match &entry.content {
+            MemoryContent::Text(s) => assert_eq!(s, "not valid json"),
+            _ => panic!("expected Text fallback"),
+        }
+    }
+
+    #[test]
+    fn test_checkpoint_memory_structured_content() {
+        let cm = CheckpointMemory {
+            id: "m1".to_string(),
+            tier: "working".to_string(),
+            content_json: r#"{"custom":"data","nested":{"key":"value"}}"#.to_string(),
+            importance: 50,
+            tags: vec![],
+            scope: "private".to_string(),
+            created_at_ms: 1000,
+            access_count: 0,
+        };
+        let entry = cm.to_memory_entry("agent-1", "default");
+        // Should be Structured since it's a JSON object but type is not text/object_ref/procedure/knowledge
+        assert!(matches!(entry.content, MemoryContent::Structured(_)));
+    }
+
+    #[test]
+    fn test_find_latest_checkpoint_empty() {
+        let result = find_latest_checkpoint(&[]);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_find_latest_checkpoint_no_matching_tags() {
+        let entries = vec![MemoryEntry {
+            id: "m1".to_string(),
+            agent_id: "agent-1".to_string(),
+            tenant_id: "default".to_string(),
+            tier: MemoryTier::LongTerm,
+            content: MemoryContent::Text("not a checkpoint".to_string()),
+            importance: 50,
+            access_count: 0,
+            last_accessed: 1000,
+            created_at: 1000,
+            tags: vec!["other".to_string()],
+            embedding: None,
+            ttl_ms: None,
+            original_ttl_ms: None,
+            scope: MemoryScope::Private,
+            memory_type: crate::memory::MemoryType::default(),
+            causal_parent: None,
+            supersedes: None,
+        }];
+        let result = find_latest_checkpoint(&entries);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_checkpoint_store_get_nonexistent() {
+        let store = CheckpointStore::new(5);
+        assert!(store.get("nonexistent").is_none());
+    }
+
+    #[test]
+    fn test_checkpoint_store_latest_for_agent_empty() {
+        let store = CheckpointStore::new(5);
+        assert!(store.latest_for_agent("agent-1").is_none());
+    }
+
+    #[test]
+    fn test_checkpoint_store_list_for_agent_empty() {
+        let store = CheckpointStore::new(5);
+        assert!(store.list_for_agent("agent-1").is_empty());
+    }
+
+    #[test]
+    fn test_checkpoint_store_list_all_empty() {
+        let store = CheckpointStore::new(5);
+        assert!(store.list_all().is_empty());
+    }
+
+    #[test]
+    fn test_checkpoint_store_save_and_get() {
+        let store = CheckpointStore::new(5);
+        let cp = AgentCheckpoint::new(
+            "agent-1".to_string(),
+            "default".to_string(),
+            crate::scheduler::AgentState::Running,
+            1,
+            vec![],
+            vec![],
+            None,
+        );
+        let id = cp.checkpoint_id.clone();
+        store.save(cp);
+
+        let retrieved = store.get(&id);
+        assert!(retrieved.is_some());
+        assert_eq!(retrieved.unwrap().agent_id, "agent-1");
+    }
+
+    #[test]
+    fn test_checkpoint_store_latest_for_agent() {
+        let store = CheckpointStore::new(5);
+        let cp1 = AgentCheckpoint::new(
+            "agent-1".to_string(),
+            "default".to_string(),
+            crate::scheduler::AgentState::Running,
+            1,
+            vec![],
+            vec![],
+            None,
+        );
+        let cp2 = AgentCheckpoint::new(
+            "agent-1".to_string(),
+            "default".to_string(),
+            crate::scheduler::AgentState::Waiting,
+            2,
+            vec![],
+            vec![],
+            None,
+        );
+        store.save(cp1);
+        store.save(cp2);
+
+        let latest = store.latest_for_agent("agent-1");
+        assert!(latest.is_some());
+    }
+
+    #[test]
+    fn test_checkpoint_store_prune_old() {
+        let store = CheckpointStore::new(10);
+        for i in 0..5 {
+            let cp = AgentCheckpoint::new(
+                "agent-1".to_string(),
+                "default".to_string(),
+                crate::scheduler::AgentState::Running,
+                i,
+                vec![],
+                vec![],
+                None,
+            );
+            store.save(cp);
+        }
+        assert_eq!(store.list_for_agent("agent-1").len(), 5);
+
+        store.prune_old("agent-1", 2);
+        assert_eq!(store.list_for_agent("agent-1").len(), 2);
+    }
+
+    #[test]
+    fn test_checkpoint_store_list_all() {
+        let store = CheckpointStore::new(5);
+        let cp1 = AgentCheckpoint::new(
+            "agent-1".to_string(),
+            "default".to_string(),
+            crate::scheduler::AgentState::Running,
+            1,
+            vec![],
+            vec![],
+            None,
+        );
+        let cp2 = AgentCheckpoint::new(
+            "agent-2".to_string(),
+            "default".to_string(),
+            crate::scheduler::AgentState::Waiting,
+            1,
+            vec![],
+            vec![],
+            None,
+        );
+        store.save(cp1);
+        store.save(cp2);
+
+        let all = store.list_all();
+        assert_eq!(all.len(), 2);
+    }
+
+    #[test]
+    fn test_checkpoint_to_migration_ticket() {
+        let cp = AgentCheckpoint::new(
+            "agent-1".to_string(),
+            "default".to_string(),
+            crate::scheduler::AgentState::Running,
+            0,
+            vec![],
+            vec![],
+            None,
+        );
+        let ticket = cp.to_migration_ticket(
+            crate::kernel::ops::distributed::NodeId("node-a".to_string()),
+            crate::kernel::ops::distributed::NodeId("node-b".to_string()),
+        );
+        assert_eq!(ticket.agent_id, "agent-1");
+        assert_eq!(ticket.from_node.0, "node-a");
+        assert_eq!(ticket.to_node.0, "node-b");
+    }
+
+    #[test]
+    fn test_checkpoint_memory_unknown_content_type() {
+        let cm = CheckpointMemory {
+            id: "m1".to_string(),
+            tier: "working".to_string(),
+            content_json: r#"{"type":"unknown_type","data":"test"}"#.to_string(),
+            importance: 50,
+            tags: vec![],
+            scope: "private".to_string(),
+            created_at_ms: 1000,
+            access_count: 0,
+        };
+        let entry = cm.to_memory_entry("agent-1", "default");
+        // Unknown type → Structured
+        assert!(matches!(entry.content, MemoryContent::Structured(_)));
+    }
+
+    #[test]
+    fn test_checkpoint_memory_non_object_json() {
+        let cm = CheckpointMemory {
+            id: "m1".to_string(),
+            tier: "working".to_string(),
+            content_json: r#"["array","not","object"]"#.to_string(),
+            importance: 50,
+            tags: vec![],
+            scope: "private".to_string(),
+            created_at_ms: 1000,
+            access_count: 0,
+        };
+        let entry = cm.to_memory_entry("agent-1", "default");
+        // JSON array → Structured (not an object)
+        assert!(matches!(entry.content, MemoryContent::Structured(_)));
     }
 }

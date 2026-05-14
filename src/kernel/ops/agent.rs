@@ -9,6 +9,15 @@ use crate::api::semantic::{AgentUsageDto, AgentCardDto, SkillDto};
 /// and would bypass all permission checks if user-registerable.
 const RESERVED_AGENT_NAMES: &[&str] = &["kernel", "system", "root", "admin"];
 
+/// Wrapper around memory entries to ensure checkpoint CIDs are unique
+/// and do not collide with CASPersister-generated CIDs.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct CheckpointEnvelope {
+    entries: Vec<crate::memory::MemoryEntry>,
+    #[serde(default)]
+    _checkpoint: bool,
+}
+
 fn transition_err(e: TransitionError) -> std::io::Error {
     std::io::Error::new(std::io::ErrorKind::InvalidInput, e.to_string())
 }
@@ -311,7 +320,8 @@ impl crate::kernel::AIKernel {
         self.scheduler.get(&aid).ok_or_else(|| format!("Agent not found: {}", agent_id))?;
 
         let entries = self.memory.get_all(agent_id);
-        let payload = serde_json::to_vec(&entries)
+        let envelope = CheckpointEnvelope { entries: entries.clone(), _checkpoint: true };
+        let payload = serde_json::to_vec(&envelope)
             .map_err(|e| format!("Failed to serialize checkpoint: {}", e))?;
 
         let cid = self.semantic_create(
@@ -344,8 +354,9 @@ impl crate::kernel::AIKernel {
         let obj = self.get_object(checkpoint_cid, agent_id, "default")
             .map_err(|e| format!("Failed to fetch checkpoint: {}", e))?;
 
-        let entries: Vec<crate::memory::MemoryEntry> = serde_json::from_slice(&obj.data)
+        let envelope: CheckpointEnvelope = serde_json::from_slice(&obj.data)
             .map_err(|e| format!("Failed to deserialize checkpoint: {}", e))?;
+        let entries = envelope.entries;
 
         let count = entries.len();
         self.memory.clear_agent(agent_id);

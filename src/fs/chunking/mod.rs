@@ -32,7 +32,7 @@ pub enum ChunkingMode {
 }
 
 impl ChunkingMode {
-    pub fn from_str(mode: &str) -> Self {
+    pub fn parse(mode: &str) -> Self {
         match mode.to_lowercase().as_str() {
             "semantic" => Self::Semantic,
             "fixed" => Self::Fixed,
@@ -44,7 +44,7 @@ impl ChunkingMode {
     pub fn from_env() -> Self {
         let mode = std::env::var("PLICO_CHUNKING")
             .unwrap_or_else(|_| "none".to_string());
-        Self::from_str(&mode)
+        Self::parse(&mode)
     }
 }
 
@@ -320,6 +320,10 @@ mod tests {
     fn test_chunking_mode_from_env() {
         std::env::remove_var("PLICO_CHUNKING");
         assert_eq!(ChunkingMode::from_env(), ChunkingMode::None);
+        // Verify parse is consistent with from_env
+        std::env::set_var("PLICO_CHUNKING", "semantic");
+        assert_eq!(ChunkingMode::from_env(), ChunkingMode::Semantic);
+        std::env::remove_var("PLICO_CHUNKING");
     }
 
     #[test]

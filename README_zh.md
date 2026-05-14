@@ -8,7 +8,7 @@
 
 ## 状态
 
-**太初 (Node 31) — 191 个源文件, 62,176 行 Rust, 1,035+ 单元测试 (0 失败)**
+**v46 — 212 个源文件, 85,116 行 Rust, 2,075 单元测试 (0 失败), 44 个集成测试文件**
 
 核心栈：CAS、语义文件系统（向量 + BM25 + redb 知识图谱，17 种边类型）、分层记忆（四层 + MemoryScope）、智能体调度器、内核事件总线（类型化发布/订阅 + 过滤 + 持久化日志）、权限护栏、Hook 系统（5 个拦截点）、意图系统（DAG 分解 + 自主执行）、上下文预算引擎（L0/L1/L2）、工具注册表（37 个内置 + 外部 MCP）、智能体生命周期（检查点/恢复/发现/委派）、学习闭环（执行统计 + 技能发现 + 自我修复）、检索融合引擎（RFE，7 路自适应排序）、统一配置（`config.json` + 环境变量 + CLI）、`plicod`（TCP+UDS 守护进程 + start/stop/status 生命周期管理）、`plico-sse`（A2A SSE 适配器）、`plico-mcp`（stdio JSON-RPC）、`aicli`（语义 CLI）。
 
@@ -37,6 +37,7 @@
 │  ├─ 意图系统（DAG 分解 + 自主执行器）               │
 │  ├─ 上下文预算引擎（L0/L1/L2）                     │
 │  ├─ 内置工具注册表（37 个工具）                     │
+│  ├─ 认知引擎（Soul v3.0）                          │
 │  └─ 权限护栏 + 智能体认证（HMAC）                  │
 ├────────────────────────────────────────────────────┤
 │  AI 原生文件系统                                    │
@@ -55,29 +56,68 @@
 # 构建
 cargo build --release
 
-# 运行全部测试 (1,435 个)
-cargo test
+# 运行测试（stub 后端，无外部依赖）
+EMBEDDING_BACKEND=stub LLM_BACKEND=stub cargo test
 
-# 启动守护进程（推荐）
-cargo run --bin plicod -- start --port 7878
+# 仅 lib 测试（最快，~2s）
+EMBEDDING_BACKEND=stub LLM_BACKEND=stub cargo test --lib
+
+# 覆盖率测量
+EMBEDDING_BACKEND=stub LLM_BACKEND=stub cargo llvm-cov --lib
+
+# Clippy（零警告要求）
+cargo clippy -- -D warnings
+
+# 启动守护进程（推荐 — 默认绑定 127.0.0.1:7878）
+cargo run --bin plicod -- start
+cargo run --bin plicod -- start --host 0.0.0.0 --port 9000
 
 # 守护进程生命周期
 cargo run --bin plicod -- stop       # 优雅停止
 cargo run --bin plicod -- status     # JSON 状态输出
 
 # CLI（默认连接守护进程）
-aicli agent --name my-agent
-aicli put --content "关于 Plico 架构的知识" --tags "plico,arch"
-aicli search "架构"
-aicli remember --content "重要洞察" --tier working --agent my-agent
-aicli recall --agent my-agent
+cargo run --bin aicli -- agent --name my-agent
+cargo run --bin aicli -- put --content "关于 Plico 架构的知识" --tags "plico,arch"
+cargo run --bin aicli -- search "架构"
+cargo run --bin aicli -- remember --content "重要洞察" --tier working --agent my-agent
+cargo run --bin aicli -- recall --agent my-agent
 
 # CLI 嵌入模式（无需守护进程）
-aicli --embedded put --content "hello" --tags "test"
+cargo run --bin aicli -- --embedded put --content "hello" --tags "test"
+
+# SSE 适配器（A2A 协议，默认绑定 127.0.0.1:7879）
+cargo run --bin plico-sse
 
 # MCP 适配器（stdio JSON-RPC 2.0）
 cargo run --bin plico-mcp
 ```
+
+## 推断后端配置
+
+Embedding 和 LLM 后端**与推断框架无关**。任何暴露 OpenAI-compatible `/v1/embeddings` 或 `/v1/chat/completions` 端点的服务器均可。
+
+**默认配置（自动检测 llama-server 端口，回退 :8080）：**
+- `LLM_BACKEND=llama` → 自动检测 llama-server URL
+- `EMBEDDING_BACKEND=openai` → 同上
+- Model: `qwen2.5-coder-7b-instruct`（通过 `LLAMA_MODEL` 覆盖）
+
+URL 解析优先级：`LLAMA_URL` env > `OPENAI_API_BASE` env > `~/.plico/llama.url` 文件 > `ps` 自动检测 > `:8080` 回退。
+
+```bash
+# 仅用于单元测试：stub 后端（无外部服务）
+export EMBEDDING_BACKEND=stub
+export LLM_BACKEND=stub
+```
+
+## 配置
+
+Plico 使用三层级联（最低 → 最高优先级）：
+
+1. **内置默认值** — 零配置即可运行
+2. **配置文件** — `~/.plico/config.json`（或 `$PLICO_ROOT/config.json`）
+3. **环境变量** — `PLICO_HOST`、`PLICO_DAEMON_PORT`、`EMBEDDING_BACKEND` 等
+4. **CLI 标志** — `--host`、`--port`、`--root`（最高优先级）
 
 ## 十条公理（灵魂 3.0）
 
@@ -98,37 +138,61 @@ cargo run --bin plico-mcp
 
 ```
 src/
-├── cas/            # SHA-256 内容寻址对象存储
-├── memory/         # 分层记忆（瞬时 → 长期）+ 持久化
-├── intent/         # NL → 结构化 ApiRequest（接口层，非内核）
-├── scheduler/      # 智能体、优先级、消息、执行派发
-├── fs/             # 语义存储：标签、嵌入、图、上下文
-│   ├── embedding/  # EmbeddingProvider（OpenAI-compatible、Ollama、ONNX、stub）
-│   ├── search/     # SemanticSearch（BM25、HNSW）
-│   └── graph/      # KnowledgeGraph（redb，17 种边类型）
-├── kernel/         # AIKernel — 编排、工具、Hook、持久化
-│   ├── hook.rs     # Hook 注册表（5 个拦截点）
-│   ├── event_bus.rs # 类型化发布/订阅 + 持久化事件日志
-│   └── ops/        # 24 个操作模块
-├── api/            # ApiRequest / ApiResponse + 权限 + 认证
-├── tool/           # Tool trait 与注册表（「一切皆工具」）
-├── llm/            # LlmProvider trait（OpenAI-compatible / Ollama / llama.cpp / stub）
-├── mcp/            # MCP 客户端 — 外部工具集成
-├── client.rs       # KernelClient trait（嵌入 / UDS / TCP）
+├── cas/                 # SHA-256 内容寻址对象存储
+├── memory/              # 分层记忆（瞬时 → 长期）+ 持久化
+├── intent/              # NL → 结构化 ApiRequest（接口层，非内核）
+├── scheduler/           # 智能体、优先级、消息、执行派发
+├── fs/                  # 语义存储：标签、嵌入、图、上下文
+│   ├── embedding/       # EmbeddingProvider（OpenAI-compatible、Ollama、ONNX、stub）
+│   ├── search/          # SemanticSearch（BM25、HNSW）
+│   ├── graph/           # KnowledgeGraph（redb，17 种边类型）
+│   ├── semantic_fs/     # 核心 CRUD + 事件存储
+│   ├── query_decompose.rs # 查询分解引擎
+│   └── retrieval_router.rs # 意图路由检索
+├── kernel/              # AIKernel — 编排、工具、Hook、持久化
+│   ├── cognition/       # Soul v3.0 认知引擎（12 个文件）
+│   ├── handlers/        # 14 个领域 handler
+│   ├── tools/           # 7 个内置工具 handler
+│   ├── hook.rs          # Hook 注册表（5 个拦截点）
+│   ├── event_bus.rs     # 类型化发布/订阅 + 持久化事件日志
+│   └── ops/             # 24 个操作模块
+├── api/                 # ApiRequest / ApiResponse + 权限 + 认证
+├── tool/                # Tool trait 与注册表（「一切皆工具」）
+├── temporal/            # 时间推理（自然语言时间 → 时间范围）
+├── llm/                 # LlmProvider trait（OpenAI-compatible / Ollama / stub）
+├── mcp/                 # MCP 客户端 — 外部工具集成
+├── client.rs            # KernelClient trait（嵌入 / UDS / TCP）
 └── bin/
-    ├── plicod.rs       # 守护进程（TCP + UDS，start/stop/status 生命周期，PID 文件）
-    ├── plico_mcp/      # MCP stdio 服务（JSON-RPC 2.0）
-    └── aicli/          # 语义 CLI（守护进程优先）
+    ├── plicod.rs        # 守护进程（TCP + UDS，start/stop/status 生命周期，PID 文件）
+    ├── plico_sse.rs     # SSE 适配器（A2A 协议）
+    ├── plico_mcp/       # MCP stdio 服务（JSON-RPC 2.0）
+    └── aicli/           # 语义 CLI（守护进程优先，--embedded 回退）
 
-tests/              # 33 个集成测试文件
+tests/                   # 44 个集成测试文件
+benchmarks/              # 自研 benchmark 框架（Python, uv）
 docs/
-├── genesis-reference.md    # 太初完整参考文档
-├── genesis-audit-n25*.md   # 审计报告
-└── design-node*.md         # 24 份设计文档（N2-N25）
+├── genesis-reference.md # 太初完整参考文档
+├── milestones/          # 里程碑文档（含模板）
+├── plans/               # 进行中的计划
+└── design/              # 架构设计文档
 ```
+
+## 开发流程
+
+本项目遵循**里程碑驱动的开发流程**，有严格的质量门控：
+
+1. **里程碑规划** — `docs/milestones/TEMPLATE.md`
+2. **模块开发** — 逐模块开发，每个模块必须覆盖测试
+3. **质量门控** — `cargo test` + `cargo llvm-cov --lib` ≥ 90% + `cargo clippy` 零警告
+4. **退化检测** — `tests/perf_regression.rs`（P50/P95 阈值）
+5. **端到端验证** — benchmark suite（`benchmarks/`）
+
+详见 `CLAUDE.md` 中的开发流程规范。
 
 ## 设计文档
 
 - `system-v3.md` — 灵魂 3.0：AI 第一人称视角的十条公理
 - `docs/genesis-reference.md` — 太初完整参考文档
-- `AGENTS.md` — 面向 AI 智能体的详细目录导航
+- `AGENTS.md` — AI 智能体导航（目录地图 + 快速导航）
+- `CLAUDE.md` — AI 编码助手的项目级规则
+- `benchmarks/README.md` — Benchmark 框架文档

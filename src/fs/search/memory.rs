@@ -304,7 +304,7 @@ mod tests {
     fn test_upsert_replaces_existing() {
         let backend = InMemoryBackend::new();
 
-        backend.upsert("cid1", &vec![1.0, 0.0, 0.0, 0.0], SearchIndexMeta {
+        backend.upsert("cid1", &[1.0, 0.0, 0.0, 0.0], SearchIndexMeta {
             cid: "cid1".to_string(),
             tags: vec!["old".to_string()],
             snippet: "old".to_string(),
@@ -312,7 +312,7 @@ mod tests {
             created_at: 0,
             memory_type: None,
         });
-        backend.upsert("cid1", &vec![0.0, 1.0, 0.0, 0.0], SearchIndexMeta {
+        backend.upsert("cid1", &[0.0, 1.0, 0.0, 0.0], SearchIndexMeta {
             cid: "cid1".to_string(),
             tags: vec!["new".to_string()],
             snippet: "new".to_string(),
@@ -323,7 +323,7 @@ mod tests {
 
         assert_eq!(backend.len(), 1);
         let filter = SearchFilter::default();
-        let results = backend.search(&vec![0.0, 1.0, 0.0, 0.0], 1, &filter);
+        let results = backend.search(&[0.0, 1.0, 0.0, 0.0], 1, &filter);
         assert_eq!(results[0].cid, "cid1");
         assert!(results[0].meta.tags.contains(&"new".to_string()));
     }

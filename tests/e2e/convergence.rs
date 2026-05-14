@@ -116,8 +116,8 @@ mod tests {
 
     #[test]
     fn test_full_ai_os_loop_convergence() {
-        let _ = std::env::set_var("EMBEDDING_BACKEND", "stub");
-        let _ = std::env::set_var("LLM_BACKEND", "stub");
+        std::env::set_var("EMBEDDING_BACKEND", "stub");
+        std::env::set_var("LLM_BACKEND", "stub");
         let dir = tempfile::tempdir().unwrap();
         let kernel = plico::AIKernel::new(dir.path().to_path_buf()).expect("kernel init");
         let rt = tokio::runtime::Runtime::new().unwrap();

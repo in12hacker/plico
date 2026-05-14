@@ -153,7 +153,7 @@ impl AIKernel {
             };
             Some(crate::kernel::ops::kg_builder::start_kg_builder(
                 knowledge_graph.clone().unwrap(),
-                llm.clone(),
+                Arc::new(llm_hswap.clone()),
                 ev_bus.clone(),
                 builder_cfg,
                 Some(embedding.clone()),
@@ -222,7 +222,12 @@ impl AIKernel {
                 tracing::warn!("Embedding backend failed: {e}. Using stub (tag-only search).");
                 Arc::new(StubEmbeddingProvider::new()) as Arc<dyn EmbeddingProvider>
             });
-        let embedding_inner: Arc<RwLock<Arc<dyn EmbeddingProvider>>> = Arc::new(RwLock::new(embedding_raw));
+
+        let edge_cache = Arc::new(EdgeCache::default());
+        let embedding_cached: Arc<dyn EmbeddingProvider> = Arc::new(
+            crate::fs::embedding::CachingEmbeddingProvider::new(embedding_raw, edge_cache.embedding.clone())
+        );
+        let embedding_inner: Arc<RwLock<Arc<dyn EmbeddingProvider>>> = Arc::new(RwLock::new(embedding_cached));
         let embedding = HotSwapEmbeddingProvider::new(embedding_inner.clone());
 
         let llm_raw: Arc<dyn LlmProvider> = match persistence::create_llm_provider("PLICO_SUMMARIZER_MODEL", "qwen2.5-coder-7b-instruct") {
@@ -258,7 +263,7 @@ impl AIKernel {
         let scheduler = Arc::new(AgentScheduler::new());
         let reranker = crate::fs::reranker::create_reranker_provider();
 
-        let mut fs = SemanticFS::with_reranker(
+        let mut fs = SemanticFS::with_reranker_and_cache(
             root.clone(),
             cas.clone(),
             Arc::new(embedding.clone()) as Arc<dyn EmbeddingProvider>,
@@ -266,18 +271,19 @@ impl AIKernel {
             summarizer.clone(),
             knowledge_graph.clone(),
             reranker.clone(),
+            Some(edge_cache.search.clone()),
         )?;
         fs.set_chunking_mode(config.tuning.chunking_mode.clone());
         fs.set_auto_summarize(config.tuning.auto_summarize);
         let fs_arc = Arc::new(fs);
-        
+
         let permissions = Arc::new(PermissionGuard::new());
         let persister = match CASPersister::new(cas.clone(), root.clone()) {
             Ok(p) => { let ap: Arc<dyn MemoryPersister + Send + Sync> = Arc::new(p); memory.set_persister(ap.clone()); Some(ap) }
             Err(e) => { tracing::warn!("Failed to create memory persister: {e}"); None }
         };
 
-        let tool_registry = Arc::new(ToolRegistry::new());
+        let _tool_registry = Arc::new(ToolRegistry::new());
         let message_bus = Arc::new(MessageBus::new());
         let event_bus = Arc::new(EventBus::with_persistence(root.join("event_log.jsonl")));
         let hook_registry = Arc::new(hook::HookRegistry::new());
@@ -304,8 +310,7 @@ impl AIKernel {
         let key_store = Arc::new(AgentKeyStore::open(&root));
         let tenant_store = Arc::new(ops::tenant::TenantStore::restore(&root));
         let metrics = Arc::new(KernelMetrics::new());
-        let edge_cache = Arc::new(EdgeCache::default());
-        
+
         let cluster = Arc::new(ClusterManager::new(
             NodeId::new(), "plico-cluster".into(), true, "127.0.0.1".into(), 7878,
         ));
@@ -483,7 +488,7 @@ impl AIKernel {
 
     fn maybe_persist_search_index(&self) {
         let count = self.search_op_count.fetch_add(1, Ordering::Relaxed) + 1;
-        if count % Self::SEARCH_PERSIST_EVERY_N == 0 {
+        if count.is_multiple_of(Self::SEARCH_PERSIST_EVERY_N) {
             let backend = Arc::clone(&self.search_backend);
             let root = self.root.clone();
             let fs = Arc::clone(&self.fs);
@@ -521,8 +526,8 @@ mod kernel_mod_tests {
 
     #[test]
     fn test_kernel_new_creates_valid_kernel() {
-        let _ = std::env::set_var("EMBEDDING_BACKEND", "stub");
-        let _ = std::env::set_var("LLAMA_MODEL", "stub");
+        std::env::set_var("EMBEDDING_BACKEND", "stub");
+        std::env::set_var("LLAMA_MODEL", "stub");
         let dir = tempfile::tempdir().unwrap();
         let kernel = AIKernel::new(dir.path().to_path_buf()).expect("kernel init");
         assert!(!kernel.root.as_os_str().is_empty());

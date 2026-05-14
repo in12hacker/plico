@@ -28,14 +28,13 @@ use plico::api::semantic::{ApiRequest, ApiResponse};
 use plico::kernel::AIKernel;
 use plico::memory::MemoryTier;
 use std::time::Instant;
-use tempfile::tempdir;
 
 // ── Test Infrastructure ────────────────────────────────────────────────────────
 
 /// Helper to create a kernel with stub embedding backend.
 fn make_kernel() -> (Arc<AIKernel>, tempfile::TempDir) {
-    let _ = std::env::set_var("EMBEDDING_BACKEND", "stub");
-    let _ = std::env::set_var("LLM_BACKEND", "stub");
+    std::env::set_var("EMBEDDING_BACKEND", "stub");
+    std::env::set_var("LLM_BACKEND", "stub");
     let dir = tempfile::tempdir().unwrap();
     let kernel = AIKernel::new(dir.path().to_path_buf()).expect("kernel init");
     (kernel, dir)
@@ -297,13 +296,11 @@ fn benchmark_intent_cache_hit_rate() {
     println!("  Unique intents: {}", TOTAL_INTENTS - EXACT_REPEATS);
 
     // Intent pool - 5 themes with variations
-    let intent_pool = vec![
-        "fix authentication bug",
+    let intent_pool = ["fix authentication bug",
         "fix memory leak issue",
         "fix race condition in scheduler",
         "improve performance bottleneck",
-        "add logging to module",
-    ];
+        "add logging to module"];
 
     // Declare intents: first 15 are exact repeats of "fix authentication bug"
     let mut hits = 0u64;

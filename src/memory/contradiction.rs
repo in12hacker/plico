@@ -293,7 +293,7 @@ mod tests {
             embedding_divergence: 0.2,
             causal_distance: Some(1),
             shared_ancestor_count: 1,
-            time_gap_ms: 3600_000,
+            time_gap_ms: 3_600_000,
         };
         let result = RuleBasedClassifier.classify(&old, &new, &ctx);
         assert!(result.confidence > 0.4);
@@ -320,5 +320,457 @@ mod tests {
         let graph = CausalGraph::build(&[root, a.clone(), b.clone()]);
         let ctx = build_context(&a, &b, Some(&graph));
         assert!(ctx.shared_ancestor_count > 0 || ctx.causal_distance.is_some());
+    }
+
+    // ─── cosine_sim coverage ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_cosine_sim_empty_vectors() {
+        // cosine_sim is private, but we can exercise it through build_context
+        let mut old = make_entry("a", "x", vec![]);
+        let mut new = make_entry("b", "y", vec![]);
+        old.embedding = Some(vec![]);
+        new.embedding = Some(vec![]);
+        let ctx = build_context(&old, &new, None);
+        assert_eq!(ctx.cosine_similarity, 0.0);
+        assert_eq!(ctx.embedding_divergence, 1.0);
+    }
+
+    #[test]
+    fn test_cosine_sim_unequal_length() {
+        let mut old = make_entry("a", "x", vec![]);
+        let mut new = make_entry("b", "y", vec![]);
+        old.embedding = Some(vec![1.0, 2.0]);
+        new.embedding = Some(vec![1.0]);
+        let ctx = build_context(&old, &new, None);
+        assert_eq!(ctx.cosine_similarity, 0.0);
+        assert_eq!(ctx.embedding_divergence, 1.0);
+    }
+
+    #[test]
+    fn test_cosine_sim_zero_norm() {
+        let mut old = make_entry("a", "x", vec![]);
+        let mut new = make_entry("b", "y", vec![]);
+        old.embedding = Some(vec![0.0, 0.0]);
+        new.embedding = Some(vec![1.0, 0.0]);
+        let ctx = build_context(&old, &new, None);
+        assert_eq!(ctx.cosine_similarity, 0.0);
+    }
+
+    #[test]
+    fn test_cosine_sim_normal_vectors() {
+        let mut old = make_entry("a", "x", vec![]);
+        let mut new = make_entry("b", "y", vec![]);
+        // Identical vectors → cosine = 1.0
+        old.embedding = Some(vec![1.0, 2.0, 3.0]);
+        new.embedding = Some(vec![1.0, 2.0, 3.0]);
+        let ctx = build_context(&old, &new, None);
+        assert!((ctx.cosine_similarity - 1.0).abs() < 1e-5);
+        assert!(ctx.embedding_divergence < 1e-5);
+    }
+
+    #[test]
+    fn test_cosine_sim_orthogonal_vectors() {
+        let mut old = make_entry("a", "x", vec![]);
+        let mut new = make_entry("b", "y", vec![]);
+        old.embedding = Some(vec![1.0, 0.0]);
+        new.embedding = Some(vec![0.0, 1.0]);
+        let ctx = build_context(&old, &new, None);
+        assert!((ctx.cosine_similarity - 0.0).abs() < 1e-5);
+        assert!((ctx.embedding_divergence - 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_build_context_one_embedding_missing() {
+        let mut old = make_entry("a", "x", vec![]);
+        let new = make_entry("b", "y", vec![]);
+        old.embedding = Some(vec![1.0, 2.0]);
+        // new.embedding is None
+        let ctx = build_context(&old, &new, None);
+        assert_eq!(ctx.cosine_similarity, 0.0);
+        assert_eq!(ctx.embedding_divergence, 1.0);
+    }
+
+    #[test]
+    fn test_build_context_both_embeddings_with_graph() {
+        let mut root = make_entry("root", "origin", vec![]);
+        root.causal_parent = None;
+        let mut a = make_entry("a", "claim A", vec![]);
+        a.causal_parent = Some("root".to_string());
+        a.embedding = Some(vec![1.0, 0.0, 0.0]);
+        let mut b = make_entry("b", "claim B", vec![]);
+        b.causal_parent = Some("root".to_string());
+        b.embedding = Some(vec![0.0, 1.0, 0.0]);
+        let graph = CausalGraph::build(&[root, a.clone(), b.clone()]);
+        let ctx = build_context(&a, &b, Some(&graph));
+        // Orthogonal embeddings
+        assert!((ctx.cosine_similarity).abs() < 1e-5);
+        assert!(ctx.shared_ancestor_count > 0);
+    }
+
+    // ─── RuleBasedClassifier edge cases ──────────────────────────────────────
+
+    #[test]
+    fn test_rule_based_near_identical_early_return() {
+        let old = make_entry("a", "The sky is blue", vec!["weather"]);
+        let new = make_entry("b", "The sky is blue", vec!["weather"]);
+        let ctx = ContradictionContext {
+            cosine_similarity: 0.99,
+            embedding_divergence: 0.01,
+            causal_distance: Some(1),
+            shared_ancestor_count: 2,
+            time_gap_ms: 100,
+        };
+        let result = RuleBasedClassifier.classify(&old, &new, &ctx);
+        assert!(!result.is_contradiction);
+        assert_eq!(result.confidence, 0.0);
+        assert_eq!(result.evidence, "near-identical content");
+    }
+
+    #[test]
+    fn test_rule_based_high_shared_ancestors_capped() {
+        let old = make_entry("a", "A is true", vec!["topic"]);
+        let new = make_entry("b", "A is false", vec!["topic"]);
+        // Many shared ancestors — causal signal should cap at 0.3
+        let ctx = ContradictionContext {
+            cosine_similarity: 0.7,
+            embedding_divergence: 0.3,
+            causal_distance: Some(2),
+            shared_ancestor_count: 10,
+            time_gap_ms: 3_600_000,
+        };
+        let result = RuleBasedClassifier.classify(&old, &new, &ctx);
+        assert!(result.confidence > 0.35);
+        assert!(result.evidence.contains("10 shared ancestors"));
+    }
+
+    #[test]
+    fn test_rule_based_causal_distance_far() {
+        let old = make_entry("a", "X", vec![]);
+        let new = make_entry("b", "Y", vec![]);
+        let ctx = ContradictionContext {
+            cosine_similarity: 0.5,
+            embedding_divergence: 0.5,
+            causal_distance: Some(10), // far away
+            shared_ancestor_count: 0,
+            time_gap_ms: 100_000_000, // > 24h
+        };
+        let result = RuleBasedClassifier.classify(&old, &new, &ctx);
+        // Only topic signal: 0.5 * 0.5 = 0.25, below 0.35
+        assert!(!result.is_contradiction);
+        assert!(!result.evidence.contains("causal distance"));
+    }
+
+    #[test]
+    fn test_rule_based_recent_divergence_signal() {
+        let old = make_entry("a", "Service runs on port 8080", vec!["infra"]);
+        let new = make_entry("b", "Service runs on port 9090", vec!["infra"]);
+        let ctx = ContradictionContext {
+            cosine_similarity: 0.6,
+            embedding_divergence: 0.4,
+            causal_distance: None,
+            shared_ancestor_count: 0,
+            time_gap_ms: 60_000, // 1 minute — recent
+        };
+        let result = RuleBasedClassifier.classify(&old, &new, &ctx);
+        assert!(result.evidence.contains("recent divergence"));
+    }
+
+    #[test]
+    fn test_rule_based_tag_overlap_high_jaccard() {
+        let old = make_entry("a", "CPU usage is high", vec!["monitoring", "alert", "cpu"]);
+        let new = make_entry("b", "CPU usage is normal", vec!["monitoring", "alert", "status"]);
+        let ctx = ContradictionContext {
+            cosine_similarity: 0.65,
+            embedding_divergence: 0.35,
+            causal_distance: None,
+            shared_ancestor_count: 0,
+            time_gap_ms: 100_000_000, // > 24h, no recent signal
+        };
+        let result = RuleBasedClassifier.classify(&old, &new, &ctx);
+        // Jaccard: intersection={"monitoring","alert"}=2, union=4, jaccard=2/4=0.5 > 0.3
+        assert!(result.evidence.contains("tag overlap"));
+    }
+
+    #[test]
+    fn test_rule_based_tag_overlap_low_jaccard() {
+        let old = make_entry("a", "Alpha", vec!["only-shared-tag", "b", "c"]);
+        let new = make_entry("b", "Beta", vec!["only-shared-tag", "d", "e", "f"]);
+        let ctx = ContradictionContext {
+            cosine_similarity: 0.5,
+            embedding_divergence: 0.5,
+            causal_distance: None,
+            shared_ancestor_count: 0,
+            time_gap_ms: 100_000_000,
+        };
+        let result = RuleBasedClassifier.classify(&old, &new, &ctx);
+        // Jaccard: intersection=1, union=6, jaccard=1/6≈0.167 < 0.3
+        assert!(!result.evidence.contains("tag overlap"));
+    }
+
+    #[test]
+    fn test_rule_based_no_tags_no_signals() {
+        let old = make_entry("a", "Unrelated text", vec![]);
+        let new = make_entry("b", "Another unrelated", vec![]);
+        let ctx = ContradictionContext {
+            cosine_similarity: 0.1,
+            embedding_divergence: 0.9,
+            causal_distance: None,
+            shared_ancestor_count: 0,
+            time_gap_ms: 100_000_000,
+        };
+        let result = RuleBasedClassifier.classify(&old, &new, &ctx);
+        assert!(!result.is_contradiction);
+        assert_eq!(result.evidence, "no contradiction signals");
+        assert_eq!(result.confidence, 0.0);
+    }
+
+    #[test]
+    fn test_rule_based_score_exactly_at_threshold() {
+        // Score must be > 0.35 to be a contradiction; exactly 0.35 is not.
+        let old = make_entry("a", "Temperature is 20C", vec!["temp"]);
+        let new = make_entry("b", "Temperature is 25C", vec!["temp"]);
+        let ctx = ContradictionContext {
+            cosine_similarity: 0.9,    // topic_signal = 0.9 * 0.5 = 0.45
+            embedding_divergence: 0.1,
+            causal_distance: None,
+            shared_ancestor_count: 0,
+            time_gap_ms: 100_000_000, // > 24h
+        };
+        let result = RuleBasedClassifier.classify(&old, &new, &ctx);
+        // 0.45 > 0.35 → contradiction
+        assert!(result.is_contradiction);
+    }
+
+    // ─── LlmContradictionClassifier ──────────────────────────────────────────
+
+    #[test]
+    fn test_llm_classifier_new() {
+        let llm = std::sync::Arc::new(crate::llm::StubProvider::new("yes"));
+        let registry = std::sync::Arc::new(crate::prompt::PromptRegistry::new());
+        let classifier = LlmContradictionClassifier::new(llm, registry);
+        // Verify it implements ContradictionClassifier
+        let old = make_entry("a", "X", vec![]);
+        let new = make_entry("b", "Y", vec![]);
+        let ctx = ContradictionContext {
+            cosine_similarity: 0.5,
+            embedding_divergence: 0.5,
+            causal_distance: None,
+            shared_ancestor_count: 0,
+            time_gap_ms: 1000,
+        };
+        let _ = classifier.classify(&old, &new, &ctx);
+    }
+
+    #[test]
+    fn test_llm_classifier_says_yes_no_ancestors() {
+        let llm = std::sync::Arc::new(crate::llm::StubProvider::new("yes"));
+        let registry = std::sync::Arc::new(crate::prompt::PromptRegistry::new());
+        let classifier = LlmContradictionClassifier::new(llm, registry);
+
+        let old = make_entry("a", "Deploy weekly", vec![]);
+        let new = make_entry("b", "Deploy monthly", vec![]);
+        let ctx = ContradictionContext {
+            cosine_similarity: 0.7,
+            embedding_divergence: 0.3,
+            causal_distance: None,
+            shared_ancestor_count: 0,
+            time_gap_ms: 3_600_000,
+        };
+        let result = classifier.classify(&old, &new, &ctx);
+        // LLM=yes → llm_score=0.7, causal_signal=0.2 (no ancestors)
+        // fused = 0.5*0.7 + 0.3*0.3 + 0.2*0.2 = 0.35 + 0.09 + 0.04 = 0.48
+        assert!(result.is_contradiction);
+        assert!(result.evidence.contains("LLM=yes"));
+        assert!(result.confidence > 0.0);
+    }
+
+    #[test]
+    fn test_llm_classifier_says_yes_with_ancestors() {
+        let llm = std::sync::Arc::new(crate::llm::StubProvider::new("yes"));
+        let registry = std::sync::Arc::new(crate::prompt::PromptRegistry::new());
+        let classifier = LlmContradictionClassifier::new(llm, registry);
+
+        let old = make_entry("a", "Claim A", vec![]);
+        let new = make_entry("b", "Claim B", vec![]);
+        let ctx = ContradictionContext {
+            cosine_similarity: 0.7,
+            embedding_divergence: 0.3,
+            causal_distance: Some(2),
+            shared_ancestor_count: 3,
+            time_gap_ms: 3_600_000,
+        };
+        let result = classifier.classify(&old, &new, &ctx);
+        // LLM=yes → llm_score=0.7, causal_signal=0.6 (has ancestors)
+        // fused = 0.5*0.7 + 0.3*0.3 + 0.2*0.6 = 0.35 + 0.09 + 0.12 = 0.56
+        assert!(result.is_contradiction);
+        assert!(result.evidence.contains("LLM=yes"));
+    }
+
+    #[test]
+    fn test_llm_classifier_says_no() {
+        let llm = std::sync::Arc::new(crate::llm::StubProvider::new("no"));
+        let registry = std::sync::Arc::new(crate::prompt::PromptRegistry::new());
+        let classifier = LlmContradictionClassifier::new(llm, registry);
+
+        let old = make_entry("a", "Sky is blue", vec![]);
+        let new = make_entry("b", "Grass is green", vec![]);
+        let ctx = ContradictionContext {
+            cosine_similarity: 0.3,
+            embedding_divergence: 0.7,
+            causal_distance: None,
+            shared_ancestor_count: 0,
+            time_gap_ms: 1_000_000,
+        };
+        let result = classifier.classify(&old, &new, &ctx);
+        // LLM=no → llm_score=0.1, causal_signal=0.2
+        // fused = 0.5*0.1 + 0.3*0.7 + 0.2*0.2 = 0.05 + 0.21 + 0.04 = 0.30
+        assert!(!result.is_contradiction);
+        assert!(result.evidence.contains("LLM=no"));
+    }
+
+    #[test]
+    fn test_llm_classifier_fallback_on_error() {
+        // Use a provider that always errors
+        struct ErrorLlm;
+        impl crate::llm::LlmProvider for ErrorLlm {
+            fn chat(&self, _: &[crate::llm::ChatMessage], _: &crate::llm::ChatOptions)
+                -> Result<(String, u32, u32), crate::llm::LlmError>
+            {
+                Err(crate::llm::LlmError::Api("test error".into()))
+            }
+            fn model_name(&self) -> &str { "error-llm" }
+        }
+
+        let llm = std::sync::Arc::new(ErrorLlm);
+        let registry = std::sync::Arc::new(crate::prompt::PromptRegistry::new());
+        let classifier = LlmContradictionClassifier::new(llm, registry);
+
+        let old = make_entry("a", "Deploy weekly", vec!["deploy", "policy"]);
+        let new = make_entry("b", "Deploy monthly", vec!["deploy", "policy"]);
+        let ctx = ContradictionContext {
+            cosine_similarity: 0.8,
+            embedding_divergence: 0.2,
+            causal_distance: Some(1),
+            shared_ancestor_count: 1,
+            time_gap_ms: 3_600_000,
+        };
+        let result = classifier.classify(&old, &new, &ctx);
+        // Should fall back to RuleBasedClassifier
+        // Same as test_rule_based_contradiction_signals
+        assert!(result.confidence > 0.4);
+        assert!(!result.evidence.contains("LLM="));
+    }
+
+    #[test]
+    fn test_llm_classifier_with_prompt_registry_template() {
+        use crate::prompt::PromptTemplate;
+
+        let llm = std::sync::Arc::new(crate::llm::StubProvider::new("yes"));
+        let registry = crate::prompt::PromptRegistry::new();
+        registry.set_override(
+            "contradiction",
+            PromptTemplate::new("contradiction", "Compare: {{old_content}} vs {{new_content}}", &["old_content", "new_content"]),
+            None,
+        );
+        let registry = std::sync::Arc::new(registry);
+        let classifier = LlmContradictionClassifier::new(llm, registry);
+
+        let old = make_entry("a", "Statement one", vec![]);
+        let new = make_entry("b", "Statement two", vec![]);
+        let ctx = ContradictionContext {
+            cosine_similarity: 0.7,
+            embedding_divergence: 0.3,
+            causal_distance: Some(1),
+            shared_ancestor_count: 1,
+            time_gap_ms: 1000,
+        };
+        let result = classifier.classify(&old, &new, &ctx);
+        // Should use the registry template, not the fallback
+        assert!(result.evidence.contains("LLM=yes"));
+    }
+
+    #[test]
+    fn test_llm_classifier_no_contradiction_below_threshold() {
+        let llm = std::sync::Arc::new(crate::llm::StubProvider::new("no"));
+        let registry = std::sync::Arc::new(crate::prompt::PromptRegistry::new());
+        let classifier = LlmContradictionClassifier::new(llm, registry);
+
+        let old = make_entry("a", "Random fact", vec![]);
+        let new = make_entry("b", "Another fact", vec![]);
+        let ctx = ContradictionContext {
+            cosine_similarity: 0.1,
+            embedding_divergence: 0.02,
+            causal_distance: None,
+            shared_ancestor_count: 0,
+            time_gap_ms: 100_000_000,
+        };
+        let result = classifier.classify(&old, &new, &ctx);
+        // LLM=no → 0.1, divergence=0.02, causal=0.2
+        // fused = 0.5*0.1 + 0.3*0.02 + 0.2*0.2 = 0.05 + 0.006 + 0.04 = 0.096
+        assert!(!result.is_contradiction);
+    }
+
+    // ─── ContradictionResult / ContradictionContext debug ─────────────────────
+
+    #[test]
+    fn test_contradiction_result_debug_clone() {
+        let result = ContradictionResult {
+            is_contradiction: true,
+            confidence: 0.85,
+            evidence: "test evidence".to_string(),
+        };
+        let cloned = result.clone();
+        assert_eq!(cloned.is_contradiction, true);
+        assert_eq!(cloned.confidence, 0.85);
+        assert_eq!(cloned.evidence, "test evidence");
+        // Debug trait
+        let _ = format!("{:?}", result);
+    }
+
+    #[test]
+    fn test_contradiction_context_debug_clone() {
+        let ctx = ContradictionContext {
+            cosine_similarity: 0.5,
+            embedding_divergence: 0.5,
+            causal_distance: Some(3),
+            shared_ancestor_count: 2,
+            time_gap_ms: 1000,
+        };
+        let cloned = ctx.clone();
+        assert_eq!(cloned.causal_distance, Some(3));
+        let _ = format!("{:?}", ctx);
+    }
+
+    #[test]
+    fn test_build_context_time_gap() {
+        let mut old = make_entry("a", "x", vec![]);
+        let mut new = make_entry("b", "y", vec![]);
+        old.created_at = 1000;
+        new.created_at = 5000;
+        let ctx = build_context(&old, &new, None);
+        assert_eq!(ctx.time_gap_ms, 4000);
+    }
+
+    #[test]
+    fn test_build_context_time_gap_reversed() {
+        let mut old = make_entry("a", "x", vec![]);
+        let mut new = make_entry("b", "y", vec![]);
+        old.created_at = 5000;
+        new.created_at = 1000;
+        let ctx = build_context(&old, &new, None);
+        assert_eq!(ctx.time_gap_ms, 4000);
+    }
+
+    #[test]
+    fn test_build_context_unknown_ids_in_graph() {
+        let mut a = make_entry("a", "x", vec![]);
+        let mut b = make_entry("b", "y", vec![]);
+        a.causal_parent = None;
+        b.causal_parent = None;
+        let graph = CausalGraph::build(&[a.clone(), b.clone()]);
+        // Both are roots — common ancestors should be empty, path may or may not exist
+        let ctx = build_context(&a, &b, Some(&graph));
+        assert_eq!(ctx.shared_ancestor_count, 0);
     }
 }

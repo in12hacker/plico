@@ -219,4 +219,112 @@ mod tests {
         assert!(prompts.contains(&"summarization".to_string()));
         assert!(prompts.contains(&"intent_classification".to_string()));
     }
+
+    #[test]
+    fn test_template_with_version() {
+        let t = PromptTemplate::new("vtest", "hi", &[]).with_version(5);
+        assert_eq!(t.version, 5);
+    }
+
+    #[test]
+    fn test_template_with_max_tokens() {
+        let t = PromptTemplate::new("mtest", "hi", &[]).with_max_tokens(1024);
+        assert_eq!(t.max_tokens_hint, Some(1024));
+    }
+
+    #[test]
+    fn test_remove_override() {
+        let reg = PromptRegistry::new();
+        reg.set_override("x", PromptTemplate::new("x", "override", &[]), None);
+        let resolved = reg.resolve("x", None);
+        assert!(resolved.is_some());
+        reg.remove_override("x", None);
+        let resolved = reg.resolve("x", None);
+        assert!(resolved.is_none());
+    }
+
+    #[test]
+    fn test_resolve_global_override() {
+        let mut reg = PromptRegistry::new();
+        reg.register_default(PromptTemplate::new("g", "default", &[]));
+        reg.set_override("g", PromptTemplate::new("g", "global", &[]), None);
+        let resolved = reg.resolve("g", Some("any-agent")).unwrap();
+        assert_eq!(resolved.template, "global");
+    }
+
+    #[test]
+    fn test_resolve_default_fallback() {
+        let mut reg = PromptRegistry::new();
+        reg.register_default(PromptTemplate::new("d", "default_val", &[]));
+        let resolved = reg.resolve("d", None).unwrap();
+        assert_eq!(resolved.template, "default_val");
+    }
+
+    #[test]
+    fn test_list_prompts_sorted() {
+        let mut reg = PromptRegistry::new();
+        reg.register_default(PromptTemplate::new("z", "", &[]));
+        reg.register_default(PromptTemplate::new("a", "", &[]));
+        reg.register_default(PromptTemplate::new("m", "", &[]));
+        let list = reg.list_prompts();
+        assert_eq!(list, vec!["a", "m", "z"]);
+    }
+
+    #[test]
+    fn test_get_info_with_override() {
+        let reg = PromptRegistry::new();
+        reg.set_override("info_test", PromptTemplate::new("info_test", "ovr", &["x"]), Some("a1"));
+        let info = reg.get_info("info_test", Some("a1")).unwrap();
+        assert!(info.is_override);
+        assert_eq!(info.variables, vec!["x"]);
+    }
+
+    #[test]
+    fn test_get_info_without_override() {
+        let mut reg = PromptRegistry::new();
+        reg.register_default(PromptTemplate::new("no_ovr", "tpl", &["y"]));
+        let info = reg.get_info("no_ovr", None).unwrap();
+        assert!(!info.is_override);
+    }
+
+    #[test]
+    fn test_get_info_missing() {
+        let reg = PromptRegistry::new();
+        assert!(reg.get_info("nope", None).is_none());
+    }
+
+    #[test]
+    fn test_render_missing_variable() {
+        let mut reg = PromptRegistry::new();
+        reg.register_default(PromptTemplate::new("mv", "Hello {{name}}", &["name"]));
+        let vars = HashMap::new();
+        let err = reg.render("mv", &vars, None).unwrap_err();
+        assert!(matches!(err, RenderError::MissingVariable { .. }));
+    }
+
+    #[test]
+    fn test_render_error_display() {
+        let not_found = RenderError::NotFound("x".into());
+        assert!(not_found.to_string().contains("x"));
+        let missing = RenderError::MissingVariable { prompt: "p".into(), var: "v".into() };
+        assert!(missing.to_string().contains("v"));
+    }
+
+    #[test]
+    fn test_render_no_variables() {
+        let mut reg = PromptRegistry::new();
+        reg.register_default(PromptTemplate::new("static", "no vars here", &[]));
+        let vars = HashMap::new();
+        let result = reg.render("static", &vars, None).unwrap();
+        assert_eq!(result, "no vars here");
+    }
+
+    #[test]
+    fn test_remove_override_agent_specific() {
+        let reg = PromptRegistry::new();
+        reg.set_override("ap", PromptTemplate::new("ap", "agent_override", &[]), Some("a1"));
+        assert!(reg.resolve("ap", Some("a1")).is_some());
+        reg.remove_override("ap", Some("a1"));
+        assert!(reg.resolve("ap", Some("a1")).is_none());
+    }
 }

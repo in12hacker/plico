@@ -37,6 +37,7 @@ pub mod graph;
 pub mod types;
 pub mod retrieval_router;
 pub mod query_augment;
+pub mod query_decompose;
 pub mod adaptive_budget;
 pub mod retrieval_fusion;
 
@@ -53,3 +54,4 @@ pub use graph::{
 pub use reranker::{RerankerProvider, RerankError, RerankResult, LlamaCppReranker, create_reranker_provider};
 pub use retrieval_router::{QueryIntent, ClassifiedIntent, ClassificationMethod, RetrievalConfig, classify_by_rules, classify_by_llm_response, intent_classification_prompt};
 pub use query_augment::{AugmentedQuery, augment_query, expand_entities_from_kg, expand_with_tags, extract_time_range, rewrite_prompt, parse_rewrite_response};
+pub use query_decompose::{DecomposedQuery, SubQuery, SubQueryRole, decompose, parse_llm_decomposition, decomposition_prompt};

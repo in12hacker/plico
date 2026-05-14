@@ -246,11 +246,121 @@ impl crate::kernel::AIKernel {
             ApiRequest::TaskFail { .. } => PermissionAction::Write, // Lifecycle is Write-equivalent
 
             ApiRequest::GrantPermission { .. } |
-            ApiRequest::RevokePermission { .. } |
+            ApiRequest::RevokePermission { .. } => PermissionAction::Write, // Permission mgmt requires Write (embedded bootstrap)
             ApiRequest::ListPermissions { .. } |
-            ApiRequest::CheckPermission { .. } => PermissionAction::All, // Permission mgmt requires All
+            ApiRequest::CheckPermission { .. } => PermissionAction::Read, // Query operations are Read
 
             _ => PermissionAction::Read, // Default to safe Read
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::kernel::tests::make_kernel;
+
+    #[test]
+    fn test_extract_security_info_create() {
+        let (kernel, _dir) = make_kernel();
+        let req = ApiRequest::Create {
+            api_version: None,
+            content: "test".to_string(),
+            content_encoding: Default::default(),
+            tags: vec![],
+            agent_id: "test-agent".to_string(),
+            tenant_id: Some("tenant-a".to_string()),
+            agent_token: Some("tok123".to_string()),
+            intent: None,
+        };
+        let (agent_id, token, tenant) = kernel.extract_security_info(&req);
+        assert_eq!(agent_id, Some("test-agent".to_string()));
+        assert_eq!(token, Some("tok123".to_string()));
+        assert_eq!(tenant, Some("tenant-a".to_string()));
+    }
+
+    #[test]
+    fn test_extract_security_info_register_agent() {
+        let (kernel, _dir) = make_kernel();
+        let req = ApiRequest::RegisterAgent {
+            name: "new-agent".to_string(),
+        };
+        let (agent_id, token, tenant) = kernel.extract_security_info(&req);
+        assert_eq!(agent_id, Some("new-agent".to_string()));
+        assert!(token.is_none());
+        assert!(tenant.is_none());
+    }
+
+    #[test]
+    fn test_extract_security_info_system_status() {
+        let (kernel, _dir) = make_kernel();
+        let req = ApiRequest::SystemStatus;
+        let (agent_id, token, tenant) = kernel.extract_security_info(&req);
+        assert!(agent_id.is_none());
+        assert!(token.is_none());
+        assert!(tenant.is_none());
+    }
+
+    #[test]
+    fn test_map_request_to_action_create() {
+        let (kernel, _dir) = make_kernel();
+        let req = ApiRequest::Create {
+            api_version: None,
+            content: "test".to_string(),
+            content_encoding: Default::default(),
+            tags: vec![],
+            agent_id: "agent".to_string(),
+            tenant_id: None,
+            agent_token: None,
+            intent: None,
+        };
+        assert_eq!(kernel.map_request_to_action(&req), PermissionAction::Write);
+    }
+
+    #[test]
+    fn test_map_request_to_action_read() {
+        let (kernel, _dir) = make_kernel();
+        let req = ApiRequest::Read {
+            cid: "abc".to_string(),
+            agent_id: "agent".to_string(),
+            tenant_id: None,
+            agent_token: None,
+        };
+        assert_eq!(kernel.map_request_to_action(&req), PermissionAction::Read);
+    }
+
+    #[test]
+    fn test_map_request_to_action_delete() {
+        let (kernel, _dir) = make_kernel();
+        let req = ApiRequest::Delete {
+            cid: "abc".to_string(),
+            agent_id: "agent".to_string(),
+            tenant_id: None,
+            agent_token: None,
+        };
+        assert_eq!(kernel.map_request_to_action(&req), PermissionAction::Delete);
+    }
+
+    #[test]
+    fn test_map_request_to_action_system_status() {
+        let (kernel, _dir) = make_kernel();
+        let req = ApiRequest::SystemStatus;
+        assert_eq!(kernel.map_request_to_action(&req), PermissionAction::Read);
+    }
+
+    #[test]
+    fn test_validate_security_system_status() {
+        let (kernel, _dir) = make_kernel();
+        let req = ApiRequest::SystemStatus;
+        assert!(kernel.validate_security(&req).is_ok());
+    }
+
+    #[test]
+    fn test_validate_security_register_agent() {
+        let (kernel, _dir) = make_kernel();
+        let req = ApiRequest::RegisterAgent {
+            name: "brand-new-agent".to_string(),
+        };
+        assert!(kernel.validate_security(&req).is_ok());
     }
 }

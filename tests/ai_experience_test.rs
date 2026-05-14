@@ -22,8 +22,8 @@ fn call_api(kernel: &AIKernel, req: ApiRequest) -> ApiResponse {
 /// Covers C-1 (event persistence), C-2 (cross-agent search), C-3 (auto-registration).
 #[test]
 fn test_ai_agent_multi_session_experience() {
-    let _ = std::env::set_var("EMBEDDING_BACKEND", "stub");
-    let _ = std::env::set_var("LLM_BACKEND", "stub");
+    std::env::set_var("EMBEDDING_BACKEND", "stub");
+    std::env::set_var("LLM_BACKEND", "stub");
     let root = tempdir().unwrap();
 
     // === Session 1: Agent A creates data ===
@@ -257,8 +257,8 @@ fn test_ai_agent_multi_session_experience() {
 /// TODO: C-3 (auto-registration via StartSession) is not yet implemented.
 #[test]
 fn test_explicit_agent_registration_and_usage() {
-    let _ = std::env::set_var("EMBEDDING_BACKEND", "stub");
-    let _ = std::env::set_var("LLM_BACKEND", "stub");
+    std::env::set_var("EMBEDDING_BACKEND", "stub");
+    std::env::set_var("LLM_BACKEND", "stub");
     let root = tempdir().unwrap();
 
     let kernel = AIKernel::new(root.path().to_path_buf()).unwrap();
@@ -309,8 +309,8 @@ fn test_explicit_agent_registration_and_usage() {
 /// Covers C-1: event log persistence and C-5: checkpoint/restore.
 #[test]
 fn test_session_checkpoint_persistence() {
-    let _ = std::env::set_var("EMBEDDING_BACKEND", "stub");
-    let _ = std::env::set_var("LLM_BACKEND", "stub");
+    std::env::set_var("EMBEDDING_BACKEND", "stub");
+    std::env::set_var("LLM_BACKEND", "stub");
     let root = tempdir().unwrap();
 
     // Session 1: Create data and checkpoint

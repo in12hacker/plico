@@ -137,3 +137,204 @@ impl super::super::AIKernel {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::kernel::tests::make_kernel;
+    use crate::api::semantic::ApiRequest;
+
+    fn create_object(kernel: &crate::kernel::AIKernel, content: &str, tags: Vec<&str>) -> String {
+        let resp = kernel.handle_api_request(ApiRequest::Create {
+            api_version: None,
+            content: content.to_string(),
+            content_encoding: Default::default(),
+            tags: tags.into_iter().map(String::from).collect(),
+            agent_id: "test_agent".to_string(),
+            tenant_id: None,
+            agent_token: None,
+            intent: None,
+        });
+        assert!(resp.ok, "Create should succeed: {:?}", resp.error);
+        resp.cid.unwrap()
+    }
+
+    #[test]
+    fn test_create_and_read() {
+        let (kernel, _dir) = make_kernel();
+        let cid = create_object(&kernel, "hello world", vec!["test"]);
+        let resp = kernel.handle_api_request(ApiRequest::Read {
+            cid, agent_id: "test_agent".to_string(), tenant_id: None, agent_token: None,
+        });
+        assert!(resp.ok);
+        assert_eq!(resp.data.unwrap(), "hello world");
+    }
+
+    #[test]
+    fn test_read_not_found() {
+        let (kernel, _dir) = make_kernel();
+        let resp = kernel.handle_api_request(ApiRequest::Read {
+            cid: "nonexistent".to_string(), agent_id: "test_agent".to_string(), tenant_id: None, agent_token: None,
+        });
+        assert!(!resp.ok);
+    }
+
+    #[test]
+    fn test_search_basic() {
+        let (kernel, _dir) = make_kernel();
+        create_object(&kernel, "rust programming", vec!["code"]);
+        let resp = kernel.handle_api_request(ApiRequest::Search {
+            query: "rust".to_string(), agent_id: "test_agent".to_string(), tenant_id: None,
+            limit: Some(10), offset: None, require_tags: vec![], exclude_tags: vec![],
+            since: None, until: None, intent_context: None, agent_token: None,
+        });
+        assert!(resp.ok, "Search should succeed: {:?}", resp.error);
+    }
+
+    #[test]
+    fn test_search_with_tags() {
+        let (kernel, _dir) = make_kernel();
+        create_object(&kernel, "tagged content", vec!["important", "review"]);
+        let resp = kernel.handle_api_request(ApiRequest::Search {
+            query: "tagged".to_string(), agent_id: "test_agent".to_string(), tenant_id: None,
+            limit: Some(10), offset: None, require_tags: vec!["important".to_string()], exclude_tags: vec![],
+            since: None, until: None, intent_context: None, agent_token: None,
+        });
+        assert!(resp.ok);
+    }
+
+    #[test]
+    fn test_search_with_pagination() {
+        let (kernel, _dir) = make_kernel();
+        for i in 0..5 {
+            create_object(&kernel, &format!("item {i}"), vec!["batch"]);
+        }
+        let resp = kernel.handle_api_request(ApiRequest::Search {
+            query: "item".to_string(), agent_id: "test_agent".to_string(), tenant_id: None,
+            limit: Some(2), offset: Some(1), require_tags: vec![], exclude_tags: vec![],
+            since: None, until: None, intent_context: None, agent_token: None,
+        });
+        assert!(resp.ok, "Search with pagination should succeed: {:?}", resp.error);
+        // total_count depends on search backend (stub embedding may not find all)
+        assert!(resp.total_count.is_some());
+    }
+
+    #[test]
+    fn test_update() {
+        let (kernel, _dir) = make_kernel();
+        let cid = create_object(&kernel, "original", vec!["v1"]);
+        let resp = kernel.handle_api_request(ApiRequest::Update {
+            cid, content: "updated".to_string(), content_encoding: Default::default(),
+            new_tags: Some(vec!["v2".to_string()]),
+            agent_id: "test_agent".to_string(), tenant_id: None, agent_token: None,
+        });
+        assert!(resp.ok, "Update should succeed: {:?}", resp.error);
+        assert!(resp.cid.is_some());
+    }
+
+    #[test]
+    fn test_delete_and_list_deleted() {
+        let (kernel, _dir) = make_kernel();
+        // Grant Delete permission
+        kernel.handle_api_request(ApiRequest::GrantPermission {
+            agent_id: "test_agent".to_string(), action: "Delete".to_string(),
+            scope: Some("*".to_string()), expires_at: None,
+        });
+        let cid = create_object(&kernel, "to be deleted", vec![]);
+        let resp = kernel.handle_api_request(ApiRequest::Delete {
+            cid: cid.clone(), agent_id: "test_agent".to_string(), tenant_id: None, agent_token: None,
+        });
+        assert!(resp.ok, "Delete should succeed: {:?}", resp.error);
+
+        let resp = kernel.handle_api_request(ApiRequest::ListDeleted {
+            agent_id: "test_agent".to_string(),
+        });
+        assert!(resp.ok);
+        let deleted = resp.deleted.unwrap();
+        assert!(deleted.iter().any(|d| d.cid == cid));
+    }
+
+    #[test]
+    fn test_restore() {
+        let (kernel, _dir) = make_kernel();
+        kernel.handle_api_request(ApiRequest::GrantPermission {
+            agent_id: "test_agent".to_string(), action: "Delete".to_string(),
+            scope: Some("*".to_string()), expires_at: None,
+        });
+        let cid = create_object(&kernel, "restore me", vec![]);
+        kernel.handle_api_request(ApiRequest::Delete {
+            cid: cid.clone(), agent_id: "test_agent".to_string(), tenant_id: None, agent_token: None,
+        });
+        let resp = kernel.handle_api_request(ApiRequest::Restore {
+            cid: cid.clone(), agent_id: "test_agent".to_string(),
+        });
+        assert!(resp.ok, "Restore should succeed: {:?}", resp.error);
+    }
+
+    #[test]
+    fn test_history() {
+        let (kernel, _dir) = make_kernel();
+        let cid = create_object(&kernel, "versioned content", vec!["history"]);
+        let resp = kernel.handle_api_request(ApiRequest::History {
+            cid, agent_id: "test_agent".to_string(),
+        });
+        assert!(resp.ok, "History should succeed: {:?}", resp.error);
+    }
+
+    #[test]
+    fn test_rollback() {
+        let (kernel, _dir) = make_kernel();
+        let cid = create_object(&kernel, "original", vec![]);
+        // Update to create a version chain
+        let resp = kernel.handle_api_request(ApiRequest::Update {
+            cid: cid.clone(), content: "v2".to_string(), content_encoding: Default::default(),
+            new_tags: None, agent_id: "test_agent".to_string(), tenant_id: None, agent_token: None,
+        });
+        let new_cid = resp.cid.unwrap();
+        // Rollback to original
+        let resp = kernel.handle_api_request(ApiRequest::Rollback {
+            cid: new_cid, agent_id: "test_agent".to_string(),
+        });
+        assert!(resp.ok, "Rollback should succeed: {:?}", resp.error);
+    }
+
+    #[test]
+    fn test_batch_create() {
+        use crate::api::dto::BatchCreateItem;
+        use crate::api::semantic::ContentEncoding;
+        let (kernel, _dir) = make_kernel();
+        let items = vec![
+            BatchCreateItem { content: "item1".to_string(), content_encoding: ContentEncoding::default(), tags: vec!["batch".to_string()], intent: None },
+            BatchCreateItem { content: "item2".to_string(), content_encoding: ContentEncoding::default(), tags: vec!["batch".to_string()], intent: None },
+        ];
+        let resp = kernel.handle_api_request(ApiRequest::BatchCreate {
+            items, agent_id: "test_agent".to_string(), tenant_id: None,
+        });
+        assert!(resp.ok, "BatchCreate should succeed: {:?}", resp.error);
+        let batch = resp.batch_create.unwrap();
+        assert_eq!(batch.successful, 2);
+    }
+
+    #[test]
+    fn test_search_with_intent_context() {
+        let (kernel, _dir) = make_kernel();
+        create_object(&kernel, "intent context test", vec!["intent"]);
+        let resp = kernel.handle_api_request(ApiRequest::Search {
+            query: "intent".to_string(), agent_id: "test_agent".to_string(), tenant_id: None,
+            limit: Some(10), offset: None, require_tags: vec![], exclude_tags: vec![],
+            since: None, until: None, intent_context: Some("testing".to_string()), agent_token: None,
+        });
+        assert!(resp.ok, "Search with intent_context should succeed: {:?}", resp.error);
+    }
+
+    #[test]
+    fn test_search_with_time_range() {
+        let (kernel, _dir) = make_kernel();
+        create_object(&kernel, "time range test", vec![]);
+        let resp = kernel.handle_api_request(ApiRequest::Search {
+            query: "time range".to_string(), agent_id: "test_agent".to_string(), tenant_id: None,
+            limit: Some(10), offset: None, require_tags: vec![], exclude_tags: vec![],
+            since: Some(0), until: Some(u64::MAX as i64), intent_context: None, agent_token: None,
+        });
+        assert!(resp.ok);
+    }
+}

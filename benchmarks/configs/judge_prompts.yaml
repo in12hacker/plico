@@ -1,0 +1,46 @@
+prompts:
+  default:
+    binary: |
+      You are evaluating whether an AI assistant's answer is correct.
+      Question: {question}
+      Expected answer: {expected}
+      AI answer: {actual}
+
+      Is the AI answer correct or essentially equivalent to the expected answer?
+      Reply with ONLY "correct" or "incorrect".
+
+  locomo:
+    binary: |
+      You are evaluating whether an AI assistant's answer is correct.
+      Question: {question}
+      Expected answer: {expected}
+      AI answer: {actual}
+
+      Is the AI answer correct or essentially equivalent to the expected answer?
+      Reply with ONLY "correct" or "incorrect".
+
+    score: |
+      Rate the correctness of the AI answer on a scale of 0-10.
+      Question: {question}
+      Expected answer: {expected}
+      AI answer: {actual}
+
+      Reply with ONLY a number from 0 to 10.
+
+  longmemeval:
+    binary: |
+      Evaluate whether the assistant's answer contains the correct information.
+      Question: {question}
+      Expected answer: {expected}
+      AI answer: {actual}
+
+      Is the AI answer correct? Reply with ONLY "correct" or "incorrect".
+
+  temporal:
+    binary: |
+      Evaluate the temporal correctness of the answer.
+      Question: {question}
+      Expected answer: {expected}
+      AI answer: {actual}
+
+      Is the AI answer temporally correct? Reply with ONLY "correct" or "incorrect".

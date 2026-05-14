@@ -500,7 +500,7 @@ fn test_end_to_end_scenario_with_metrics() {
     // Verify targets
     assert!(time_reduction >= TIME_REDUCTION_TARGET_PCT || elapsed_ms < baseline_time,
         "Time should be reduced or be less than baseline");
-    assert!(tool_reduction >= TOOL_REDUCTION_TARGET_PCT || tool_calls < baseline_tools as usize,
+    assert!(tool_reduction >= TOOL_REDUCTION_TARGET_PCT || tool_calls < baseline_tools,
         "Tool calls should be reduced or be less than baseline");
     assert!(token_pct <= TOKEN_TARGET_PCT * 1.5, // Allow some slack for stub
         "Token percentage should be reasonably close to target");

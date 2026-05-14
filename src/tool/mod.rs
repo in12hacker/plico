@@ -151,4 +151,60 @@ mod tests {
         let decoded: ToolDescriptor = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded.name, "cas.create");
     }
+
+    #[test]
+    fn tool_result_is_ok_err() {
+        let ok = ToolResult::ok(serde_json::json!(null));
+        assert!(ok.is_ok());
+        assert!(!ok.is_err());
+        let err = ToolResult::error("fail");
+        assert!(!err.is_ok());
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn tool_result_unwrap_success() {
+        let r = ToolResult::ok(serde_json::json!({"key": "value"}));
+        let val = r.unwrap();
+        assert_eq!(val["key"], "value");
+    }
+
+    #[test]
+    #[should_panic(expected = "ToolResult::unwrap called on error")]
+    fn tool_result_unwrap_panics_on_error() {
+        let r = ToolResult::error("bad");
+        r.unwrap();
+    }
+
+    #[test]
+    fn tool_result_unwrap_err_success() {
+        let r = ToolResult::error("something broke");
+        let msg = r.unwrap_err();
+        assert_eq!(msg, "something broke");
+    }
+
+    #[test]
+    #[should_panic(expected = "ToolResult::unwrap_err called on success")]
+    fn tool_result_unwrap_err_panics_on_ok() {
+        let r = ToolResult::ok(serde_json::json!(null));
+        r.unwrap_err();
+    }
+
+    #[test]
+    fn tool_result_error_default_on_empty() {
+        let r = ToolResult { success: false, output: serde_json::Value::Null, error: None };
+        let msg = r.unwrap_err();
+        assert!(msg.is_empty());
+    }
+
+    #[test]
+    fn tool_handler_closure() {
+        let handler = |params: &serde_json::Value, _agent_id: &str| -> ToolResult {
+            let x = params.get("x").and_then(|v| v.as_i64()).unwrap_or(0);
+            ToolResult::ok(serde_json::json!({"result": x * 2}))
+        };
+        let result = handler.execute(&serde_json::json!({"x": 5}), "agent1");
+        assert!(result.is_ok());
+        assert_eq!(result.output["result"], 10);
+    }
 }

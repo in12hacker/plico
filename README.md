@@ -8,7 +8,7 @@ An operating system kernel designed **entirely from an AI perspective**. No huma
 
 ## Status
 
-**Genesis (Node 31) — 191 source files, 62,176 lines of Rust, 1,035+ unit tests (0 failures).**
+**v46 — 212 source files, 85,116 lines of Rust, 2,075 unit tests (0 failures), 44 integration test files.**
 
 Core stack: CAS, semantic filesystem (vectors + BM25 + knowledge graph with redb, 17 edge types), layered memory (4-tier + MemoryScope), agent scheduler, kernel event bus (pub/sub + filtering + persistent log), permission guardrails, hook system (5 interception points), intent system (DAG decomposition + autonomous execution), context budget engine (L0/L1/L2), tool registry (37 built-in + external MCP), agent lifecycle (checkpoint/restore/discover/delegate), learning loop (execution stats + skill discovery + self-healing), retrieval fusion engine (RFE, 7-signal adaptive ranking), unified configuration (`config.json` + env vars + CLI), `plicod` (TCP+UDS daemon with `start/stop/status` lifecycle), `plico-sse` (A2A SSE adapter), `plico-mcp` (stdio JSON-RPC), and `aicli` (semantic CLI).
 
@@ -37,6 +37,7 @@ External AI agents / MCP clients
 │  ├─ Intent system (DAG decomposition + executor)   │
 │  ├─ Context budget engine (L0/L1/L2)              │
 │  ├─ Built-in tool registry (37 tools)             │
+│  ├─ Cognitive engine (Soul v3.0)                   │
 │  └─ Permission guardrails + agent auth (HMAC)     │
 ├────────────────────────────────────────────────────┤
 │  AI-Native File System                             │
@@ -49,39 +50,64 @@ External AI agents / MCP clients
 
 **Daemon-First**: `plicod` hosts the kernel with `start/stop/status` lifecycle commands and PID-file multi-instance protection. Clients connect via UDS or TCP using length-prefixed JSON framing. `--embedded` mode available for testing.
 
-## Quick start
+## Quick Start
 
 ```bash
 # Build
 cargo build --release
 
-# Run all tests
-cargo test
+# Run tests (stub backend, no external dependencies)
+EMBEDDING_BACKEND=stub LLM_BACKEND=stub cargo test
 
-# Start the daemon (recommended — binds 127.0.0.1:7878 by default)
+# Run only lib tests (fastest, ~2s)
+EMBEDDING_BACKEND=stub LLM_BACKEND=stub cargo test --lib
+
+# Coverage measurement
+EMBEDDING_BACKEND=stub LLM_BACKEND=stub cargo llvm-cov --lib
+
+# Clippy (zero warnings required)
+cargo clippy -- -D warnings
+
+# Start daemon (recommended — binds 127.0.0.1:7878 by default)
 cargo run --bin plicod -- start
-cargo run --bin plicod -- start --host 0.0.0.0 --port 9000  # custom bind
+cargo run --bin plicod -- start --host 0.0.0.0 --port 9000
 
 # Daemon lifecycle
 cargo run --bin plicod -- stop       # graceful shutdown
 cargo run --bin plicod -- status     # JSON status output
 
 # CLI (connects to daemon by default)
-aicli agent --name my-agent
-aicli put --content "knowledge about Plico architecture" --tags "plico,arch"
-aicli search "architecture"
-aicli remember --content "important insight" --tier working --agent my-agent
-aicli recall --agent my-agent
+cargo run --bin aicli -- agent --name my-agent
+cargo run --bin aicli -- put --content "knowledge about Plico architecture" --tags "plico,arch"
+cargo run --bin aicli -- search "architecture"
+cargo run --bin aicli -- remember --content "important insight" --tier working --agent my-agent
+cargo run --bin aicli -- recall --agent my-agent
 
 # CLI in embedded mode (no daemon needed)
-aicli --embedded put --content "hello" --tags "test"
+cargo run --bin aicli -- --embedded put --content "hello" --tags "test"
 
 # SSE adapter (A2A protocol, binds 127.0.0.1:7879 by default)
 cargo run --bin plico-sse
-cargo run --bin plico-sse -- --host 0.0.0.0 --port 9000  # custom bind
 
 # MCP adapter (stdio JSON-RPC 2.0)
 cargo run --bin plico-mcp
+```
+
+## Inference Backend Configuration
+
+Embedding and LLM backends are **inference-framework-agnostic**. Any server exposing an OpenAI-compatible `/v1/embeddings` or `/v1/chat/completions` endpoint works.
+
+**Defaults (auto-detect llama-server port, fallback :8080):**
+- `LLM_BACKEND=llama` → auto-detected llama-server URL
+- `EMBEDDING_BACKEND=openai` → same auto-detected URL
+- Model: `qwen2.5-coder-7b-instruct` (override via `LLAMA_MODEL`)
+
+URL resolution priority: `LLAMA_URL` env > `OPENAI_API_BASE` env > `~/.plico/llama.url` file > auto-detect from `ps` > `:8080` fallback.
+
+```bash
+# For unit tests: stub backend (no external service)
+export EMBEDDING_BACKEND=stub
+export LLM_BACKEND=stub
 ```
 
 ## Configuration
@@ -92,23 +118,6 @@ Plico uses a three-layer cascade (lowest → highest priority):
 2. **Config file** — `~/.plico/config.json` (or `$PLICO_ROOT/config.json`)
 3. **Environment variables** — `PLICO_HOST`, `PLICO_DAEMON_PORT`, `EMBEDDING_BACKEND`, etc.
 4. **CLI flags** — `--host`, `--port`, `--root` (highest priority)
-
-```bash
-# Generate default config
-cargo run --bin plicod -- start  # creates ~/.plico/ if needed
-
-# Override via environment
-PLICO_HOST=0.0.0.0 PLICO_DAEMON_PORT=9000 cargo run --bin plicod -- start
-
-# Override via config file (~/.plico/config.json)
-cat > ~/.plico/config.json <<EOF
-{
-  "network": { "host": "127.0.0.1", "daemon_port": 7878, "sse_port": 7879 },
-  "inference": { "embedding_backend": "openai", "llm_backend": "llama" },
-  "tuning": { "persist_interval_secs": 300 }
-}
-EOF
-```
 
 ## 10 Axioms (Soul 3.0)
 
@@ -125,43 +134,65 @@ EOF
 | 9 | **Better with use** | AgentProfile accumulates, skills discovered |
 | 10 | **Sessions are first-class** | session-start/end, warm_context, delta tracking |
 
-## Crate layout
+## Crate Layout
 
 ```
 src/
-├── cas/            # SHA-256 content-addressed object store
-├── memory/         # Tiered memory (ephemeral → long-term) + persistence
-├── intent/         # NL → structured ApiRequest (interface layer, NOT kernel)
-├── scheduler/      # Agents, priorities, messaging, execution dispatch
-├── fs/             # Semantic store: tags, embeddings, graph, context loader
-│   ├── embedding/  # EmbeddingProvider (OpenAI-compatible, Ollama, ONNX, stub)
-│   ├── search/     # SemanticSearch (BM25, HNSW)
-│   └── graph/      # KnowledgeGraph (redb backend, 17 edge types)
-├── kernel/         # AIKernel — orchestration, tools, hooks, persistence
-│   ├── hook.rs     # Hook registry (5 interception points)
-│   ├── event_bus.rs # Typed pub/sub + persistent event log
-│   └── ops/        # 24 operation modules
-├── api/            # ApiRequest / ApiResponse + permission + auth
-├── tool/           # Tool trait and registry ("everything is a tool")
-├── llm/            # LlmProvider trait (OpenAI-compatible / Ollama / llama.cpp / stub)
-├── mcp/            # MCP client — external tool integration
-├── config.rs       # Unified configuration (3-layer cascade)
-├── client.rs       # KernelClient trait (Embedded / UDS / TCP)
+├── cas/                 # SHA-256 content-addressed object store
+├── memory/              # Tiered memory (ephemeral → long-term) + persistence
+├── intent/              # NL → structured ApiRequest (interface layer, NOT kernel)
+├── scheduler/           # Agents, priorities, messaging, execution dispatch
+├── fs/                  # Semantic store: tags, embeddings, graph, context loader
+│   ├── embedding/       # EmbeddingProvider (OpenAI-compatible, Ollama, ONNX, stub)
+│   ├── search/          # SemanticSearch (BM25, HNSW)
+│   ├── graph/           # KnowledgeGraph (redb backend, 17 edge types)
+│   ├── semantic_fs/     # Core CRUD + event storage
+│   ├── query_decompose.rs # Query decomposition engine
+│   └── retrieval_router.rs # Intent-routed retrieval
+├── kernel/              # AIKernel — orchestration, tools, hooks, persistence
+│   ├── cognition/       # Soul v3.0 cognitive engine (12 files)
+│   ├── handlers/        # 14 domain handler modules
+│   ├── tools/           # 7 built-in tool handlers
+│   ├── hook.rs          # Hook registry (5 interception points)
+│   ├── event_bus.rs     # Typed pub/sub + persistent event log
+│   └── ops/             # 24 operation modules
+├── api/                 # ApiRequest / ApiResponse + permission + auth
+├── tool/                # Tool trait and registry ("everything is a tool")
+├── temporal/            # Temporal reasoning (NL time → time ranges)
+├── llm/                 # LlmProvider trait (OpenAI-compatible / Ollama / stub)
+├── mcp/                 # MCP client — external tool integration
+├── client.rs            # KernelClient trait (Embedded / UDS / TCP)
 └── bin/
-    ├── plicod.rs       # Daemon (TCP + UDS, start/stop/status lifecycle, PID file)
-    ├── plico_sse.rs    # SSE adapter (A2A protocol)
-    ├── plico_mcp/      # MCP stdio server (JSON-RPC 2.0)
-    └── aicli/          # Semantic CLI (daemon-first, --embedded fallback)
+    ├── plicod.rs        # Daemon (TCP + UDS, start/stop/status lifecycle, PID file)
+    ├── plico_sse.rs     # SSE adapter (A2A protocol)
+    ├── plico_mcp/       # MCP stdio server (JSON-RPC 2.0)
+    └── aicli/           # Semantic CLI (daemon-first, --embedded fallback)
 
-tests/              # 39 integration test files
+tests/                   # 44 integration test files
+benchmarks/              # Custom benchmark framework (Python, uv)
 docs/
-├── genesis-reference.md    # Complete reference document
-├── plico-v*-audit*.md      # Audit reports
-└── design-node*.md         # Design documents
+├── genesis-reference.md # Complete reference document
+├── milestones/          # Milestone documents with template
+├── plans/               # Active plans
+└── design/              # Architecture design documents
 ```
 
-## Design documents
+## Development
+
+This project follows a **milestone-driven development workflow** with strict quality gates:
+
+1. **Milestone planning** — `docs/milestones/TEMPLATE.md`
+2. **Module development** — per-module with tests
+3. **Quality gates** — `cargo test` + `cargo llvm-cov --lib` ≥ 90% + `cargo clippy` zero warnings
+4. **Regression detection** — `tests/perf_regression.rs` (P50/P95 thresholds)
+5. **E2E validation** — benchmark suite (`benchmarks/`)
+
+See `CLAUDE.md` for detailed development workflow rules.
+
+## Design Documents
 
 - `system-v3.md` — Soul 3.0: 10 axioms from AI's first-person perspective (Chinese)
 - `docs/genesis-reference.md` — Complete Genesis reference (Chinese)
-- `AGENTS.md` — Detailed directory map + navigation for AI agents
+- `AGENTS.md` — AI agent navigation (directory map + quick navigation)
+- `CLAUDE.md` — Project-level rules for AI coding assistants
+- `benchmarks/README.md` — Benchmark framework documentation

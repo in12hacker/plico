@@ -299,7 +299,7 @@ mod tests {
             "p1", "agent-a", "run tests",
             vec!["testing".into()],
         );
-        let result = try_distill_for_sharing(&proc, &[proc.clone()], |_| None);
+        let result = try_distill_for_sharing(&proc, std::slice::from_ref(&proc), |_| None);
         assert!(result.is_none());
     }
 }

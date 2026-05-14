@@ -183,7 +183,7 @@ pub fn generate_content_profile(kernel: &AIKernel) -> Value {
         *tag_counts.entry(prefix).or_default() += 1;
     }
     let mut sorted_tags: Vec<_> = tag_counts.into_iter().collect();
-    sorted_tags.sort_by(|a, b| b.1.cmp(&a.1));
+    sorted_tags.sort_by_key(|(_, count)| std::cmp::Reverse(*count));
     sorted_tags.truncate(20);
 
     let agents = kernel.list_agents();

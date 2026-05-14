@@ -1849,4 +1849,584 @@ mod tests {
         let cancelled = prefetcher.cancel(&handle.assembly_id);
         assert!(!cancelled); // Already cancelled
     }
+
+    // ── New coverage tests (2026-05-12) ────────────────────────────────────────
+
+    // ── AllocationCache (B51 fix) ──────────────────────────────────────────────
+
+    #[test]
+    fn test_allocation_cache_insert_and_get() {
+        let cache = AllocationCache::new();
+        let alloc = BudgetAllocation {
+            items: vec![],
+            total_tokens: 50,
+            budget: 100,
+            candidates_considered: 1,
+            candidates_included: 1,
+        };
+        cache.insert("asm-1".to_string(), alloc);
+        let result = cache.get("asm-1");
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().total_tokens, 50);
+    }
+
+    #[test]
+    fn test_allocation_cache_get_missing() {
+        let cache = AllocationCache::new();
+        assert!(cache.get("nonexistent").is_none());
+    }
+
+    #[test]
+    fn test_allocation_cache_overwrite() {
+        let cache = AllocationCache::new();
+        let alloc1 = BudgetAllocation {
+            items: vec![],
+            total_tokens: 50,
+            budget: 100,
+            candidates_considered: 1,
+            candidates_included: 1,
+        };
+        let alloc2 = BudgetAllocation {
+            items: vec![],
+            total_tokens: 200,
+            budget: 300,
+            candidates_considered: 2,
+            candidates_included: 2,
+        };
+        cache.insert("asm-1".to_string(), alloc1);
+        cache.insert("asm-1".to_string(), alloc2);
+        let result = cache.get("asm-1").unwrap();
+        assert_eq!(result.total_tokens, 200);
+    }
+
+    // ── declare_intent ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_declare_intent_returns_assembly_id() {
+        let prefetcher = create_test_prefetcher();
+        let id = prefetcher.declare_intent("agent-1", "fix auth bug", vec![], 1000);
+        assert!(!id.is_empty());
+    }
+
+    #[test]
+    fn test_declare_intent_cache_hit_b51_path() {
+        // Pre-populate intent cache so declare_intent hits it (B51 fix path).
+        // With stub embedding, lookup uses exact string match.
+        let prefetcher = create_test_prefetcher();
+        let alloc = BudgetAllocation {
+            items: vec![],
+            total_tokens: 42,
+            budget: 100,
+            candidates_considered: 1,
+            candidates_included: 1,
+        };
+        prefetcher.intent_cache.store("fix auth".to_string(), None, alloc, vec![]);
+
+        let id = prefetcher.declare_intent("agent-1", "fix auth", vec![], 1000);
+
+        // fetch_assembled_context should return the cached allocation immediately
+        let result = prefetcher.fetch_assembled_context("agent-1", &id);
+        assert!(result.is_some(), "B51: allocation should be in allocation_cache");
+        match result.unwrap() {
+            Ok(a) => assert_eq!(a.total_tokens, 42),
+            Err(e) => panic!("expected Ok, got Err: {}", e),
+        }
+    }
+
+    #[test]
+    fn test_declare_intent_cache_miss_registers_assembly() {
+        let prefetcher = create_test_prefetcher();
+        let id = prefetcher.declare_intent("agent-1", "fix auth bug", vec![], 1000);
+
+        // Assembly should be registered in the assemblies map
+        let assemblies = prefetcher.assemblies.read().unwrap();
+        let assembly = assemblies.get(&id);
+        assert!(assembly.is_some(), "assembly should be registered");
+        let assembly = assembly.unwrap();
+        assert_eq!(assembly.agent_id, "agent-1");
+        assert_eq!(assembly.intent, "fix auth bug");
+        assert_eq!(assembly.budget_tokens, 1000);
+        // State could be Pending or Ready depending on background thread timing
+        assert!(matches!(assembly.state, AssemblyState::Pending | AssemblyState::Ready(_)));
+    }
+
+    // ── fetch_assembled_context ────────────────────────────────────────────────
+
+    #[test]
+    fn test_fetch_assembled_context_unknown_id() {
+        let prefetcher = create_test_prefetcher();
+        let result = prefetcher.fetch_assembled_context("agent-1", "nonexistent-id");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_fetch_assembled_context_wrong_agent() {
+        let prefetcher = create_test_prefetcher();
+        let id = prefetcher.declare_intent("agent-1", "fix auth bug", vec![], 1000);
+        // Different agent should get None
+        let result = prefetcher.fetch_assembled_context("agent-2", &id);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_fetch_assembled_context_pending_returns_err() {
+        let prefetcher = create_test_prefetcher();
+        // Insert a Pending assembly directly to avoid background thread race
+        let assembly = Assembly {
+            assembly_id: "pending-asm".to_string(),
+            agent_id: "agent-1".to_string(),
+            intent: "test".to_string(),
+            budget_tokens: 100,
+            state: AssemblyState::Pending,
+            created_at_ms: now_ms(),
+        };
+        {
+            let mut assemblies = prefetcher.assemblies.write().unwrap();
+            assemblies.insert("pending-asm".to_string(), assembly);
+        }
+
+        let result = prefetcher.fetch_assembled_context("agent-1", "pending-asm");
+        assert!(result.is_some());
+        match result.unwrap() {
+            Ok(_) => panic!("expected Err for Pending state"),
+            Err(e) => assert!(e.contains("still in progress")),
+        }
+    }
+
+    #[test]
+    fn test_fetch_assembly_used_returns_none() {
+        let prefetcher = create_test_prefetcher();
+        // Insert assembly directly with Used state (no allocation_cache entry)
+        let assembly = Assembly {
+            assembly_id: "used-asm".to_string(),
+            agent_id: "agent-1".to_string(),
+            intent: "test".to_string(),
+            budget_tokens: 100,
+            state: AssemblyState::Used,
+            created_at_ms: now_ms(),
+        };
+        {
+            let mut assemblies = prefetcher.assemblies.write().unwrap();
+            assemblies.insert("used-asm".to_string(), assembly);
+        }
+
+        let result = prefetcher.fetch_assembled_context("agent-1", "used-asm");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_fetch_assembly_cancelled_returns_none() {
+        let prefetcher = create_test_prefetcher();
+        let assembly = Assembly {
+            assembly_id: "cancelled-asm".to_string(),
+            agent_id: "agent-1".to_string(),
+            intent: "test".to_string(),
+            budget_tokens: 100,
+            state: AssemblyState::Cancelled,
+            created_at_ms: now_ms(),
+        };
+        {
+            let mut assemblies = prefetcher.assemblies.write().unwrap();
+            assemblies.insert("cancelled-asm".to_string(), assembly);
+        }
+
+        let result = prefetcher.fetch_assembled_context("agent-1", "cancelled-asm");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_fetch_assembly_unused_returns_none() {
+        let prefetcher = create_test_prefetcher();
+        let assembly = Assembly {
+            assembly_id: "unused-asm".to_string(),
+            agent_id: "agent-1".to_string(),
+            intent: "test".to_string(),
+            budget_tokens: 100,
+            state: AssemblyState::Unused,
+            created_at_ms: now_ms(),
+        };
+        {
+            let mut assemblies = prefetcher.assemblies.write().unwrap();
+            assemblies.insert("unused-asm".to_string(), assembly);
+        }
+
+        let result = prefetcher.fetch_assembled_context("agent-1", "unused-asm");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_fetch_assembly_failed_returns_err() {
+        let prefetcher = create_test_prefetcher();
+        let assembly = Assembly {
+            assembly_id: "failed-asm".to_string(),
+            agent_id: "agent-1".to_string(),
+            intent: "test".to_string(),
+            budget_tokens: 100,
+            state: AssemblyState::Failed("embedding error".to_string()),
+            created_at_ms: now_ms(),
+        };
+        {
+            let mut assemblies = prefetcher.assemblies.write().unwrap();
+            assemblies.insert("failed-asm".to_string(), assembly);
+        }
+
+        let result = prefetcher.fetch_assembled_context("agent-1", "failed-asm");
+        assert!(result.is_some());
+        match result.unwrap() {
+            Ok(_) => panic!("expected Err for Failed state"),
+            Err(e) => assert!(e.contains("embedding error")),
+        }
+    }
+
+    // ── evict_stale ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_evict_stale_removes_old_assemblies() {
+        let prefetcher = create_test_prefetcher();
+        let assembly = Assembly {
+            assembly_id: "old-asm".to_string(),
+            agent_id: "agent-1".to_string(),
+            intent: "old intent".to_string(),
+            budget_tokens: 100,
+            state: AssemblyState::Pending,
+            created_at_ms: 0, // Very old timestamp
+        };
+        {
+            let mut assemblies = prefetcher.assemblies.write().unwrap();
+            assemblies.insert("old-asm".to_string(), assembly);
+        }
+
+        prefetcher.evict_stale();
+
+        let assemblies = prefetcher.assemblies.read().unwrap();
+        assert!(assemblies.get("old-asm").is_none(), "old assembly should be evicted");
+    }
+
+    #[test]
+    fn test_evict_stale_keeps_recent_assemblies() {
+        let prefetcher = create_test_prefetcher();
+        let id = prefetcher.declare_intent("agent-1", "recent intent", vec![], 100);
+
+        prefetcher.evict_stale();
+
+        let assemblies = prefetcher.assemblies.read().unwrap();
+        assert!(assemblies.get(&id).is_some(), "recent assembly should be kept");
+    }
+
+    // ── on_intent_complete (F-10) ──────────────────────────────────────────────
+
+    #[test]
+    fn test_on_intent_complete_no_tags() {
+        let prefetcher = create_test_prefetcher();
+        // No known tags => no tag key extracted => no prediction
+        let result = prefetcher.on_intent_complete("agent-1", "fix auth bug", None, &[]);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_on_intent_complete_with_tags_builds_transition() {
+        let prefetcher = create_test_prefetcher();
+        let tags = vec!["auth".to_string(), "deploy".to_string()];
+
+        // Record the same transition multiple times to build confidence above threshold
+        for _ in 0..6 {
+            prefetcher.on_intent_complete("agent-1", "fix auth", Some("deploy auth"), &tags);
+        }
+
+        // After enough repetitions with same pattern, a prediction may be returned
+        // (depends on whether tag extraction produces consistent keys)
+        // At minimum, verify profile was updated
+        let profile = prefetcher.get_agent_profile("agent-1");
+        assert!(!profile.intent_transitions.is_empty() || profile.last_intent.is_some());
+    }
+
+    // ── get_hot_objects ────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_get_hot_objects_empty_initially() {
+        let prefetcher = create_test_prefetcher();
+        let hot = prefetcher.get_hot_objects("agent-1");
+        assert!(hot.is_empty());
+    }
+
+    // ── warm_cache_for_agent (F-3) ─────────────────────────────────────────────
+
+    #[test]
+    fn test_warm_cache_for_agent_no_profile() {
+        let prefetcher = create_test_prefetcher();
+        let warmed = prefetcher.warm_cache_for_agent("agent-new");
+        assert_eq!(warmed, 0, "empty profile should warm nothing");
+    }
+
+    // ── apply_feedback_from_history (F-1) ──────────────────────────────────────
+
+    #[test]
+    fn test_apply_feedback_empty_history() {
+        let prefetcher = create_test_prefetcher();
+        let applied = prefetcher.apply_feedback_from_history("agent-1");
+        assert_eq!(applied, 0);
+    }
+
+    #[test]
+    fn test_apply_feedback_updates_profile_hot_objects() {
+        let prefetcher = create_test_prefetcher();
+
+        // Record feedback with used CIDs
+        prefetcher.record_feedback("fix auth", vec!["cid1".to_string(), "cid2".to_string()], vec![]);
+        prefetcher.record_feedback("test auth", vec!["cid3".to_string()], vec![]);
+
+        let applied = prefetcher.apply_feedback_from_history("agent-1");
+        assert_eq!(applied, 2);
+
+        // Verify hot objects were updated via feedback
+        let hot = prefetcher.get_hot_objects("agent-1");
+        assert!(hot.contains(&"cid1".to_string()), "cid1 should be a hot object");
+        assert!(hot.contains(&"cid2".to_string()), "cid2 should be a hot object");
+        assert!(hot.contains(&"cid3".to_string()), "cid3 should be a hot object");
+    }
+
+    #[test]
+    fn test_apply_feedback_decays_unused_cids() {
+        let prefetcher = create_test_prefetcher();
+
+        // Record feedback: cid1 used, cid2 unused
+        prefetcher.record_feedback("fix auth", vec!["cid1".to_string()], vec!["cid2".to_string()]);
+        prefetcher.apply_feedback_from_history("agent-1");
+
+        let hot = prefetcher.get_hot_objects("agent-1");
+        assert!(hot.contains(&"cid1".to_string()), "cid1 should be hot");
+        // cid2 was never added to hot_objects, so decay is a no-op for it
+
+        // Now record separate feedback marking cid1 as unused (different intent = new entry)
+        // Note: apply_feedback_from_history replays last 10 entries, so both entries
+        // get applied. The first adds cid1 (+1), the second decays cid1 (-1).
+        // Net effect: cid1 count stays at 1, so it remains hot.
+        // This is correct behavior: repeated use outweighs single unused feedback.
+        prefetcher.record_feedback("other task", vec![], vec!["cid1".to_string()]);
+        prefetcher.apply_feedback_from_history("agent-1");
+
+        // cid1 still has count > 0 because first entry re-adds it
+        let hot = prefetcher.get_hot_objects("agent-1");
+        assert!(hot.contains(&"cid1".to_string()), "cid1 survives because replay re-applies positive feedback");
+
+        // Verify the profile_store directly: apply single negative feedback
+        let entry = IntentFeedbackEntry {
+            normalized_intent: "cleanup".to_string(),
+            used_cids: vec![],
+            unused_cids: vec!["cid1".to_string()],
+            recorded_at_ms: crate::util::now_ms(),
+        };
+        prefetcher.profile_store().apply_feedback("agent-2", &entry);
+        // cid1 was never hot for agent-2, so decay is a no-op
+        let hot2 = prefetcher.get_hot_objects("agent-2");
+        assert!(hot2.is_empty(), "agent-2 has no hot objects");
+    }
+
+    // ── prefetch_hit_rate (F-4) ────────────────────────────────────────────────
+
+    #[test]
+    fn test_prefetch_hit_rate_initial_zero() {
+        let prefetcher = create_test_prefetcher();
+        let (lookups, hits, rate) = prefetcher.prefetch_hit_rate();
+        assert_eq!(lookups, 0);
+        assert_eq!(hits, 0);
+        assert_eq!(rate, 0.0);
+    }
+
+    // ── persist / restore ──────────────────────────────────────────────────────
+
+    #[test]
+    fn test_persist_restore_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let cas = Arc::new(crate::cas::CASStorage::new(dir.path().join("cas")).unwrap());
+        let ctx_loader = Arc::new(
+            crate::fs::context_loader::ContextLoader::new(
+                dir.path().join("ctx"), None, cas,
+            ).unwrap()
+        );
+
+        // Create prefetcher, add data, persist
+        {
+            let prefetcher = IntentPrefetcher::new(
+                Arc::new(crate::fs::search::memory::InMemoryBackend::new()),
+                None,
+                Arc::new(crate::memory::LayeredMemory::new()),
+                Arc::new(crate::kernel::event_bus::EventBus::new()),
+                Arc::new(crate::fs::StubEmbeddingProvider::new()),
+                ctx_loader.clone(),
+                dir.path().to_path_buf(),
+            );
+
+            prefetcher.record_feedback("fix auth", vec!["cid1".to_string()], vec![]);
+            let alloc = BudgetAllocation {
+                items: vec![],
+                total_tokens: 50,
+                budget: 100,
+                candidates_considered: 1,
+                candidates_included: 1,
+            };
+            prefetcher.intent_cache.store("fix auth".to_string(), None, alloc, vec!["cid1".to_string()]);
+            prefetcher.profile_store.record_intent_complete("agent-1", Some("auth"), Some("deploy"));
+
+            prefetcher.persist().unwrap();
+        }
+
+        // Create new prefetcher and restore from same directory
+        let cas2 = Arc::new(crate::cas::CASStorage::new(dir.path().join("cas2")).unwrap());
+        let ctx_loader2 = Arc::new(
+            crate::fs::context_loader::ContextLoader::new(
+                dir.path().join("ctx2"), None, cas2,
+            ).unwrap()
+        );
+        let prefetcher2 = IntentPrefetcher::new(
+            Arc::new(crate::fs::search::memory::InMemoryBackend::new()),
+            None,
+            Arc::new(crate::memory::LayeredMemory::new()),
+            Arc::new(crate::kernel::event_bus::EventBus::new()),
+            Arc::new(crate::fs::StubEmbeddingProvider::new()),
+            ctx_loader2,
+            dir.path().to_path_buf(),
+        );
+
+        prefetcher2.restore().unwrap();
+
+        // Verify feedback restored
+        let (used, _) = prefetcher2.get_similar_feedback("fix auth").unwrap();
+        assert_eq!(used, vec!["cid1"]);
+
+        // Verify cache restored
+        let stats = prefetcher2.intent_cache_stats();
+        assert_eq!(stats.entries, 1, "cache entry should be restored");
+
+        // Verify profile restored
+        let profile = prefetcher2.get_agent_profile("agent-1");
+        assert!(!profile.intent_transitions.is_empty(), "profile transitions should be restored");
+    }
+
+    #[test]
+    fn test_restore_missing_directory_is_ok() {
+        let dir = tempfile::tempdir().unwrap();
+        let cas = Arc::new(crate::cas::CASStorage::new(dir.path().join("cas")).unwrap());
+        let ctx_loader = Arc::new(
+            crate::fs::context_loader::ContextLoader::new(
+                dir.path().join("ctx"), None, cas,
+            ).unwrap()
+        );
+        let prefetcher = IntentPrefetcher::new(
+            Arc::new(crate::fs::search::memory::InMemoryBackend::new()),
+            None,
+            Arc::new(crate::memory::LayeredMemory::new()),
+            Arc::new(crate::kernel::event_bus::EventBus::new()),
+            Arc::new(crate::fs::StubEmbeddingProvider::new()),
+            ctx_loader,
+            dir.path().to_path_buf(),
+        );
+
+        // No prefetch dir exists yet — restore should succeed with Ok(())
+        let result = prefetcher.restore();
+        assert!(result.is_ok());
+    }
+
+    // ── get_session_cost ───────────────────────────────────────────────────────
+
+    #[test]
+    fn test_get_session_cost_without_ledger() {
+        let prefetcher = create_test_prefetcher();
+        let (input, output) = prefetcher.get_session_cost("session-1");
+        assert_eq!(input, 0);
+        assert_eq!(output, 0);
+    }
+
+    // ── profile_store accessor ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_profile_store_accessor() {
+        let prefetcher = create_test_prefetcher();
+        let store = prefetcher.profile_store();
+        let profile = store.get_or_create("agent-1");
+        assert_eq!(profile.agent_id, "agent-1");
+    }
+
+    // ── extract_tag_key ────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_extract_tag_key_with_matching_tags() {
+        let prefetcher = create_test_prefetcher();
+        // Default strategy is TagExtraction
+        let tags = vec!["auth".to_string(), "deploy".to_string()];
+        let key = prefetcher.extract_tag_key("fix the auth module", &tags);
+        assert_eq!(key, Some("auth".to_string()));
+    }
+
+    #[test]
+    fn test_extract_tag_key_no_match() {
+        let prefetcher = create_test_prefetcher();
+        let tags = vec!["deploy".to_string()];
+        let key = prefetcher.extract_tag_key("fix auth bug", &tags);
+        assert_eq!(key, None);
+    }
+
+    // ── cancel edge cases ──────────────────────────────────────────────────────
+
+    #[test]
+    fn test_cancel_nonexistent_assembly() {
+        let prefetcher = create_test_prefetcher();
+        assert!(!prefetcher.cancel("nonexistent-id"));
+    }
+
+    #[test]
+    fn test_cancel_already_completed_assembly() {
+        let prefetcher = create_test_prefetcher();
+        // Insert a Ready assembly (terminal-ish state)
+        let assembly = Assembly {
+            assembly_id: "ready-asm".to_string(),
+            agent_id: "agent-1".to_string(),
+            intent: "test".to_string(),
+            budget_tokens: 100,
+            state: AssemblyState::Ready(BudgetAllocation {
+                items: vec![],
+                total_tokens: 50,
+                budget: 100,
+                candidates_considered: 1,
+                candidates_included: 1,
+            }),
+            created_at_ms: now_ms(),
+        };
+        {
+            let mut assemblies = prefetcher.assemblies.write().unwrap();
+            assemblies.insert("ready-asm".to_string(), assembly);
+        }
+
+        // Cancel on a non-Pending assembly should return false
+        assert!(!prefetcher.cancel("ready-asm"));
+    }
+
+    // ── RRF edge cases ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_rrf_fuse_relevance_capped_at_one() {
+        // When a CID appears in all 4 paths with high relevance, score should be capped at 1.0
+        let path = vec![("cid1".to_string(), 1.0_f32)];
+        let result = IntentPrefetcher::rrf_fuse(
+            path.clone(), path.clone(), path.clone(), path.clone(),
+        );
+        assert_eq!(result.len(), 1);
+        assert!(result[0].relevance <= 1.0, "relevance should be capped at 1.0");
+    }
+
+    #[test]
+    fn test_rrf_fuse_many_cids_sorted_by_score() {
+        // Verify that RRF fusion sorts candidates by descending relevance
+        let path_a = vec![
+            ("high".to_string(), 0.99_f32),
+            ("mid".to_string(), 0.5_f32),
+            ("low".to_string(), 0.1_f32),
+        ];
+        let result = IntentPrefetcher::rrf_fuse(path_a, vec![], vec![], vec![]);
+        assert_eq!(result.len(), 3);
+        // Should be sorted highest first
+        assert!(result[0].relevance >= result[1].relevance);
+        assert!(result[1].relevance >= result[2].relevance);
+        assert_eq!(result[0].cid, "high");
+    }
 }

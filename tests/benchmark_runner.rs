@@ -90,6 +90,7 @@ impl Default for TokenEstimator {
 
 /// Raw metrics captured during a benchmark scenario run.
 #[derive(Debug, Clone)]
+#[derive(Default)]
 pub struct BenchmarkMetrics {
     /// Total tokens consumed during the scenario
     pub tokens_consumed: usize,
@@ -109,20 +110,6 @@ pub struct BenchmarkMetrics {
     pub objects_created: usize,
 }
 
-impl Default for BenchmarkMetrics {
-    fn default() -> Self {
-        Self {
-            tokens_consumed: 0,
-            tool_calls_made: 0,
-            wall_time_ms: 0,
-            memory_entries_stored: 0,
-            context_items_assembled: 0,
-            search_ops: 0,
-            recall_ops: 0,
-            objects_created: 0,
-        }
-    }
-}
 
 /// Benchmark result with pass/fail against targets.
 #[derive(Debug, Clone)]
@@ -313,8 +300,8 @@ pub trait Scenario {
 
 /// Helper: create a fresh kernel with stub embedding backend.
 pub fn make_kernel() -> (Arc<AIKernel>, tempfile::TempDir) {
-    let _ = std::env::set_var("EMBEDDING_BACKEND", "stub");
-    let _ = std::env::set_var("LLM_BACKEND", "stub");
+    std::env::set_var("EMBEDDING_BACKEND", "stub");
+    std::env::set_var("LLM_BACKEND", "stub");
     let dir = tempfile::tempdir().unwrap();
     let kernel = AIKernel::new(dir.path().to_path_buf()).expect("kernel init");
     (kernel, dir)
@@ -367,27 +354,22 @@ impl Scenario for FileQAScenario {
                  for thread-safe state management.",
                 i
             );
-            match kernel.semantic_create(
+            if let Ok(cid) = kernel.semantic_create(
                 content.as_bytes().to_vec(),
                 vec!["auth".to_string(), "module".to_string(), format!("file_{}", i)],
                 agent_id,
                 Some(format!("auth_file_{}.rs", i)),
             ) {
-                Ok(cid) => {
-                    created_cids.push(cid);
-                    metrics.objects_created += 1;
-                }
-                Err(_) => {}
+                created_cids.push(cid);
+                metrics.objects_created += 1;
             }
         }
 
         // Phase 2: Agent stores architectural insights as Shared Memory
         // (simulating previous session's findings)
-        let shared_findings = vec![
-            ("auth module uses Arc<Mutex<T>> pattern", vec!["architecture".to_string(), "auth".to_string()]),
+        let shared_findings = [("auth module uses Arc<Mutex<T>> pattern", vec!["architecture".to_string(), "auth".to_string()]),
             ("session management in auth/mod.rs", vec!["navigation".to_string(), "auth".to_string()]),
-            ("access control uses RBAC", vec!["architecture".to_string(), "auth".to_string(), "security".to_string()]),
-        ];
+            ("access control uses RBAC", vec!["architecture".to_string(), "auth".to_string(), "security".to_string()])];
 
         for (content, tags) in shared_findings.iter().take(self.shared_memories) {
             let _ = kernel.remember_long_term_scoped(
@@ -505,22 +487,17 @@ impl Scenario for MultiAgentScenario {
                  This module is referenced by the main scheduler.",
                 i
             );
-            match kernel.semantic_create(
+            if kernel.semantic_create(
                 content.as_bytes().to_vec(),
                 vec!["architecture".to_string(), format!("module_{}", i)],
                 agent_id,
                 None,
-            ) {
-                Ok(_) => metrics.objects_created += 1,
-                Err(_) => {}
-            }
+            ).is_ok() { metrics.objects_created += 1 }
         }
 
         // Agent A stores shared insights
-        let insights = vec![
-            "scheduler uses priority queue with 4 levels",
-            "module structure: core, scheduler, memory layers",
-        ];
+        let insights = ["scheduler uses priority queue with 4 levels",
+            "module structure: core, scheduler, memory layers"];
         for (i, insight) in insights.iter().enumerate().take(self.shared_memories) {
             let _ = kernel.remember_long_term_scoped(
                 agent_id,
@@ -599,17 +576,14 @@ impl Scenario for ContextAssemblyScenario {
                  Contains relevant code patterns and documentation.",
                 i
             );
-            match kernel.semantic_create(
+            if let Ok(cid) = kernel.semantic_create(
                 content.as_bytes().to_vec(),
                 vec!["test".to_string(), format!("obj_{}", i)],
                 agent_id,
                 None,
             ) {
-                Ok(cid) => {
-                    cids.push(cid);
-                    metrics.objects_created += 1;
-                }
-                Err(_) => {}
+                cids.push(cid);
+                metrics.objects_created += 1;
             }
         }
 

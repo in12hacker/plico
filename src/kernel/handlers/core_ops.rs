@@ -223,3 +223,204 @@ impl AIKernel {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::kernel::tests::make_kernel;
+    use crate::api::semantic::ApiRequest;
+
+    #[test]
+    fn test_core_create_and_core_get() {
+        let (kernel, _dir) = make_kernel();
+        let resp = kernel.handle_api_request(ApiRequest::CoreCreate {
+            variant: None,
+            data: serde_json::json!("hello world"),
+            tags: vec!["test".to_string()],
+            agent_id: "test_agent".to_string(),
+        });
+        assert!(resp.ok, "CoreCreate should succeed: {:?}", resp.error);
+        let cid = resp.cid.clone().expect("should return cid");
+
+        let resp = kernel.handle_api_request(ApiRequest::CoreGet {
+            id: cid,
+            variant: None,
+            agent_id: "test_agent".to_string(),
+        });
+        assert!(resp.ok, "CoreGet should succeed: {:?}", resp.error);
+        assert!(resp.data.is_some());
+        assert!(resp.data.unwrap().contains("hello world"));
+    }
+
+    #[test]
+    fn test_core_get_unsupported_variant() {
+        let (kernel, _dir) = make_kernel();
+        let resp = kernel.handle_api_request(ApiRequest::CoreGet {
+            id: "some_id".to_string(),
+            variant: Some("nonexistent".to_string()),
+            agent_id: "test_agent".to_string(),
+        });
+        assert!(!resp.ok, "Unsupported variant should fail");
+        assert!(resp.error.unwrap().contains("Unsupported"));
+    }
+
+    #[test]
+    fn test_core_list_cas_variant() {
+        let (kernel, _dir) = make_kernel();
+        // Create a few objects first
+        for i in 0..3 {
+            kernel.handle_api_request(ApiRequest::CoreCreate {
+                variant: None,
+                data: serde_json::json!(format!("item {}", i)),
+                tags: vec![],
+                agent_id: "test_agent".to_string(),
+            });
+        }
+
+        let resp = kernel.handle_api_request(ApiRequest::CoreList {
+            variant: None,
+            filter: None,
+            limit: Some(10),
+            offset: None,
+            agent_id: "test_agent".to_string(),
+        });
+        assert!(resp.ok, "CoreList should succeed: {:?}", resp.error);
+        let results = resp.results.unwrap();
+        assert_eq!(results.len(), 3);
+    }
+
+    #[test]
+    fn test_core_list_unsupported_variant() {
+        let (kernel, _dir) = make_kernel();
+        let resp = kernel.handle_api_request(ApiRequest::CoreList {
+            variant: Some("bogus".to_string()),
+            filter: None,
+            limit: None,
+            offset: None,
+            agent_id: "test_agent".to_string(),
+        });
+        assert!(!resp.ok);
+    }
+
+    #[test]
+    fn test_core_delete() {
+        use crate::api::permission::PermissionAction;
+        let (kernel, _dir) = make_kernel();
+        kernel.permission_grant("test_agent", PermissionAction::Delete, None, None);
+        let resp = kernel.handle_api_request(ApiRequest::CoreCreate {
+            variant: None,
+            data: serde_json::json!("to be deleted"),
+            tags: vec![],
+            agent_id: "test_agent".to_string(),
+        });
+        let cid = resp.cid.unwrap();
+
+        let resp = kernel.handle_api_request(ApiRequest::CoreDelete {
+            id: cid.clone(),
+            variant: None,
+            agent_id: "test_agent".to_string(),
+        });
+        assert!(resp.ok, "CoreDelete should succeed: {:?}", resp.error);
+
+        // CAS uses soft-delete — object may still be accessible after deletion
+        // Just verify the delete operation itself succeeded
+    }
+
+    #[test]
+    fn test_core_create_with_variant() {
+        let (kernel, _dir) = make_kernel();
+        let resp = kernel.handle_api_request(ApiRequest::CoreCreate {
+            variant: Some("cas".to_string()),
+            data: serde_json::json!("test content"),
+            tags: vec!["tag1".to_string()],
+            agent_id: "test_agent".to_string(),
+        });
+        assert!(resp.ok, "CoreCreate cas variant should succeed: {:?}", resp.error);
+        assert!(resp.cid.is_some());
+    }
+
+    #[test]
+    fn test_core_create_unsupported_variant() {
+        let (kernel, _dir) = make_kernel();
+        let resp = kernel.handle_api_request(ApiRequest::CoreCreate {
+            variant: Some("invalid".to_string()),
+            data: serde_json::json!("test"),
+            tags: vec![],
+            agent_id: "test_agent".to_string(),
+        });
+        assert!(!resp.ok);
+    }
+
+    #[test]
+    fn test_core_observe_diagnostic() {
+        let (kernel, _dir) = make_kernel();
+        let resp = kernel.handle_api_request(ApiRequest::CoreObserve {
+            variant: Some("diagnostic".to_string()),
+            agent_id: "test_agent".to_string(),
+        });
+        assert!(resp.ok, "CoreObserve diagnostic should succeed: {:?}", resp.error);
+    }
+
+    #[test]
+    fn test_core_observe_storage() {
+        let (kernel, _dir) = make_kernel();
+        let resp = kernel.handle_api_request(ApiRequest::CoreObserve {
+            variant: Some("storage".to_string()),
+            agent_id: "test_agent".to_string(),
+        });
+        assert!(resp.ok, "CoreObserve storage should succeed: {:?}", resp.error);
+        assert!(resp.data.is_some());
+    }
+
+    #[test]
+    fn test_core_observe_unsupported_variant() {
+        let (kernel, _dir) = make_kernel();
+        let resp = kernel.handle_api_request(ApiRequest::CoreObserve {
+            variant: Some("bogus".to_string()),
+            agent_id: "test_agent".to_string(),
+        });
+        assert!(!resp.ok);
+    }
+
+    #[test]
+    fn test_core_exec_unsupported_action() {
+        let (kernel, _dir) = make_kernel();
+        let resp = kernel.handle_api_request(ApiRequest::CoreExec {
+            action: "nonexistent_action".to_string(),
+            params: serde_json::json!({}),
+            agent_id: "test_agent".to_string(),
+        });
+        assert!(!resp.ok);
+        assert!(resp.error.unwrap().contains("Unsupported"));
+    }
+
+    #[test]
+    fn test_core_update() {
+        let (kernel, _dir) = make_kernel();
+        let create_resp = kernel.handle_api_request(ApiRequest::CoreCreate {
+            variant: None,
+            data: serde_json::json!("original"),
+            tags: vec![],
+            agent_id: "test_agent".to_string(),
+        });
+        let cid = create_resp.cid.unwrap();
+
+        let resp = kernel.handle_api_request(ApiRequest::CoreUpdate {
+            id: cid.clone(),
+            variant: None,
+            data: serde_json::json!("updated content"),
+            agent_id: "test_agent".to_string(),
+        });
+        assert!(resp.ok, "CoreUpdate should succeed: {:?}", resp.error);
+    }
+
+    #[test]
+    fn test_core_state_unsupported_action() {
+        let (kernel, _dir) = make_kernel();
+        let resp = kernel.handle_api_request(ApiRequest::CoreState {
+            action: Some("invalid_action".to_string()),
+            agent_id: "test_agent".to_string(),
+        });
+        assert!(!resp.ok);
+        assert!(resp.error.unwrap().contains("Unsupported"));
+    }
+}

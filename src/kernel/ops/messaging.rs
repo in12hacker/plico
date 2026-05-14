@@ -81,3 +81,54 @@ impl crate::kernel::AIKernel {
         Ok((intent_id, msg_id))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::kernel::tests::make_kernel;
+    use crate::api::permission::PermissionAction;
+
+    #[test]
+    fn test_send_message() {
+        let (kernel, _tmp) = make_kernel();
+        kernel.register_agent("sender".to_string()).unwrap();
+        kernel.register_agent("receiver".to_string()).unwrap();
+        kernel.permission_grant("sender", PermissionAction::SendMessage, None, None);
+        let msg_id = kernel.send_message("sender", "receiver", serde_json::json!({"text": "hello"})).unwrap();
+        assert!(!msg_id.is_empty());
+    }
+
+    #[test]
+    fn test_read_messages() {
+        let (kernel, _tmp) = make_kernel();
+        kernel.register_agent("reader".to_string()).unwrap();
+        kernel.permission_grant("kernel", PermissionAction::SendMessage, None, None);
+        kernel.send_message("kernel", "reader", serde_json::json!({"text": "msg1"})).unwrap();
+        let msgs = kernel.read_messages("reader", false);
+        assert!(!msgs.is_empty());
+    }
+
+    #[test]
+    fn test_read_messages_unread_only() {
+        let (kernel, _tmp) = make_kernel();
+        kernel.register_agent("r2".to_string()).unwrap();
+        kernel.permission_grant("kernel", PermissionAction::SendMessage, None, None);
+        kernel.send_message("kernel", "r2", serde_json::json!({"text": "msg1"})).unwrap();
+        let unread = kernel.read_messages("r2", true);
+        assert!(!unread.is_empty());
+    }
+
+    #[test]
+    fn test_ack_message() {
+        let (kernel, _tmp) = make_kernel();
+        kernel.register_agent("acker".to_string()).unwrap();
+        kernel.permission_grant("kernel", PermissionAction::SendMessage, None, None);
+        let msg_id = kernel.send_message("kernel", "acker", serde_json::json!({})).unwrap();
+        assert!(kernel.ack_message("acker", &msg_id));
+    }
+
+    #[test]
+    fn test_ack_nonexistent_message() {
+        let (kernel, _tmp) = make_kernel();
+        assert!(!kernel.ack_message("test", "nonexistent-id"));
+    }
+}

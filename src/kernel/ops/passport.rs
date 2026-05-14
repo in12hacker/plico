@@ -159,12 +159,12 @@ impl MemoryPassport {
         use std::hash::{Hash, Hasher};
 
         let mut key = [0u8; 32];
-        for i in 0..32 {
+        for (i, key_byte) in key.iter_mut().enumerate() {
             let mut hasher = DefaultHasher::new();
             passphrase.hash(&mut hasher);
             (i as u64).hash(&mut hasher);
             let hash = hasher.finish();
-            key[i] = (hash & 0xFF) as u8;
+            *key_byte = (hash & 0xFF) as u8;
         }
         key
     }

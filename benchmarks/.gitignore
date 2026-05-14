@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# uv
+.venv/
+
+# Datasets (auto-downloaded to cache)
+datasets/
+
+# Results are kept for latest run only; archive manually
+results/*.json
+!results/.gitkeep
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store

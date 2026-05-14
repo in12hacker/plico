@@ -4,6 +4,126 @@ use crate::api::semantic::{ApiRequest, ApiResponse};
 use crate::scheduler::{AgentId, IntentPriority};
 use crate::DEFAULT_TENANT;
 
+#[cfg(test)]
+mod tests {
+    use crate::kernel::tests::make_kernel;
+    use crate::api::semantic::ApiRequest;
+
+    #[test]
+    fn test_submit_intent_medium() {
+        let (kernel, _tmp) = make_kernel();
+        let resp = kernel.handle_api_request(ApiRequest::SubmitIntent {
+            description: "analyze data".to_string(),
+            priority: "medium".to_string(),
+            action: None,
+            agent_id: "test_agent".to_string(),
+        });
+        assert!(resp.ok, "SubmitIntent should succeed: {:?}", resp.error);
+        assert!(resp.intent_id.is_some(), "should return intent_id");
+    }
+
+    #[test]
+    fn test_submit_intent_critical() {
+        let (kernel, _tmp) = make_kernel();
+        let resp = kernel.handle_api_request(ApiRequest::SubmitIntent {
+            description: "urgent task".to_string(),
+            priority: "critical".to_string(),
+            action: None,
+            agent_id: "test_agent".to_string(),
+        });
+        assert!(resp.ok, "SubmitIntent critical should succeed: {:?}", resp.error);
+        assert!(resp.intent_id.is_some());
+    }
+
+    #[test]
+    fn test_submit_intent_high() {
+        let (kernel, _tmp) = make_kernel();
+        let resp = kernel.handle_api_request(ApiRequest::SubmitIntent {
+            description: "high priority task".to_string(),
+            priority: "high".to_string(),
+            action: None,
+            agent_id: "test_agent".to_string(),
+        });
+        assert!(resp.ok);
+    }
+
+    #[test]
+    fn test_submit_intent_low() {
+        let (kernel, _tmp) = make_kernel();
+        let resp = kernel.handle_api_request(ApiRequest::SubmitIntent {
+            description: "low priority task".to_string(),
+            priority: "low".to_string(),
+            action: None,
+            agent_id: "test_agent".to_string(),
+        });
+        assert!(resp.ok);
+    }
+
+    #[test]
+    fn test_context_assemble() {
+        let (kernel, _tmp) = make_kernel();
+        let resp = kernel.handle_api_request(ApiRequest::ContextAssemble {
+            agent_id: "test_agent".to_string(),
+            cids: vec![],
+            budget_tokens: 4096,
+        });
+        assert!(resp.ok, "ContextAssemble should succeed: {:?}", resp.error);
+        assert!(resp.context_assembly.is_some());
+    }
+
+    #[test]
+    fn test_intent_feedback() {
+        let (kernel, _tmp) = make_kernel();
+        let resp = kernel.handle_api_request(ApiRequest::IntentFeedback {
+            intent_id: "some_intent_id".to_string(),
+            used_cids: vec!["cid1".to_string()],
+            unused_cids: vec!["cid2".to_string()],
+            agent_id: "test_agent".to_string(),
+        });
+        assert!(resp.ok, "IntentFeedback should succeed: {:?}", resp.error);
+    }
+
+    #[test]
+    fn test_batch_submit_intent() {
+        use crate::api::dto::IntentSpec;
+        let (kernel, _tmp) = make_kernel();
+        let resp = kernel.handle_api_request(ApiRequest::BatchSubmitIntent {
+            intents: vec![
+                IntentSpec {
+                    description: "task 1".to_string(),
+                    priority: "high".to_string(),
+                    action: None,
+                },
+                IntentSpec {
+                    description: "task 2".to_string(),
+                    priority: "low".to_string(),
+                    action: None,
+                },
+            ],
+            agent_id: "test_agent".to_string(),
+        });
+        assert!(resp.ok, "BatchSubmitIntent should succeed: {:?}", resp.error);
+        let batch = resp.batch_submit_intent.unwrap();
+        assert_eq!(batch.results.len(), 2);
+        assert_eq!(batch.successful, 2);
+    }
+
+    #[test]
+    fn test_batch_query() {
+        use crate::api::dto::QuerySpec;
+        let (kernel, _tmp) = make_kernel();
+        let resp = kernel.handle_api_request(ApiRequest::BatchQuery {
+            queries: vec![
+                QuerySpec::Recall,
+            ],
+            agent_id: "test_agent".to_string(),
+            tenant_id: None,
+        });
+        assert!(resp.ok, "BatchQuery should succeed: {:?}", resp.error);
+        assert!(resp.batch_query.is_some());
+    }
+}
+
 impl super::super::AIKernel {
     pub(crate) fn handle_intent(&self, req: ApiRequest) -> ApiResponse {
         match req {

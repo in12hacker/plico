@@ -134,7 +134,7 @@ mod tests {
     use tempfile::tempdir;
 
     fn make_test_kernel() -> std::sync::Arc<AIKernel> {
-        let _ = std::env::set_var("EMBEDDING_BACKEND", "stub");
+        std::env::set_var("EMBEDDING_BACKEND", "stub");
         let dir = tempdir().unwrap();
         AIKernel::new(dir.path().to_path_buf()).expect("kernel init")
     }

@@ -313,7 +313,7 @@ mod tests {
         let id = fs.create_event(CreateEventParams {
             label: "timed-event",
             event_type: EventType::Task,
-            start_time: Some(now - 3600_000),
+            start_time: Some(now - 3_600_000),
             end_time: Some(now),
             location: None,
             tags: vec![],
@@ -392,7 +392,7 @@ mod tests {
         assert!(until > since);
         // Should cover roughly 7 days
         let diff = until - since;
-        assert!(diff >= 6 * 86_400_000 && diff <= 8 * 86_400_000);
+        assert!((6 * 86_400_000..=8 * 86_400_000).contains(&diff));
     }
 }
 

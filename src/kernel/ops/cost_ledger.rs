@@ -181,7 +181,7 @@ impl TokenCostLedger {
             .filter(|s| s.agent_id == agent_id)
             .cloned()
             .collect();
-        summaries.sort_by(|a, b| b.timestamp_ms.cmp(&a.timestamp_ms));
+        summaries.sort_by_key(|s| std::cmp::Reverse(s.timestamp_ms));
         summaries.truncate(last_n_sessions);
         summaries
     }

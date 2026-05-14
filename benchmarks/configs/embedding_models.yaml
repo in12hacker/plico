@@ -1,0 +1,46 @@
+models:
+  - name: bge-m3
+    provider: huggingface
+    repo: BAAI/bge-m3
+    dims: 1024
+    supports_sparse: true
+    supports_colbert: true
+    recommended: true
+    priority: 1
+    use_cases: [retrieval, reranking, multilingual]
+    notes: "Zep, Hindsight, RealMem 等竞品的标配。dense + sparse + multi-vector 三合一。"
+
+  - name: bge-large-en-v1.5
+    provider: huggingface
+    repo: BAAI/bge-large-en-v1.5
+    dims: 1024
+    recommended: false
+    priority: 2
+    use_cases: [retrieval]
+
+  - name: jina-embeddings-v5
+    provider: openai-compatible
+    dims: 1024
+    supports_matryoshka: true
+    recommended: false
+    priority: 3
+    use_cases: [retrieval, variable_dim]
+
+  - name: qwen3-embedding-0.6b
+    provider: llama.cpp
+    file: Qwen3-Embedding-0.6B-Q8_0.gguf
+    dims: 1024
+    recommended: false
+    priority: 4
+    use_cases: [local, low_resource]
+    notes: "当前 Plico 默认。调研显示同维度下 BGE-m3 在 MTEB 上全面领先。"
+
+  - name: text-embedding-3-small
+    provider: openai
+    dims: 1536
+    recommended: false
+    priority: 5
+    use_cases: [cloud, mem0_compatible]
+    notes: "Mem0 默认，需联网。仅作云基准对照。"
+
+default: bge-m3

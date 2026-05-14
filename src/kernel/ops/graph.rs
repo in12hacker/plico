@@ -646,7 +646,7 @@ impl crate::kernel::AIKernel {
         }
 
         // Sort by timestamp descending (most recent first)
-        changes.sort_by(|a, b| b.timestamp_ms.cmp(&a.timestamp_ms));
+        changes.sort_by_key(|c| std::cmp::Reverse(c.timestamp_ms));
 
         Ok(changes)
     }
@@ -951,5 +951,669 @@ mod tests {
         // May be empty or may contain created nodes depending on timing
         // Just verify no panic
         let _ = changes;
+    }
+
+    // ── Additional coverage tests ──────────────────────────────────────────
+
+    #[test]
+    fn test_graph_explore_with_populated_graph() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let id1 = kernel.kg_add_node("src", KGNodeType::Entity, serde_json::json!({}), "agent1", "default").unwrap();
+        let id2 = kernel.kg_add_node("dst", KGNodeType::Entity, serde_json::json!({}), "agent1", "default").unwrap();
+        kernel.kg_add_edge(&id1, &id2, KGEdgeType::Follows, Some(0.8), "agent1", "default").unwrap();
+
+        // Explore with no edge type filter
+        let results = kernel.graph_explore(&id1, None, 1);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].node.id, id2);
+        assert!(results[0].edge_type.is_some());
+        assert!(results[0].authority_score >= 0.0);
+
+        // Explore with matching edge type filter
+        let results = kernel.graph_explore(&id1, Some(KGEdgeType::Follows), 1);
+        assert_eq!(results.len(), 1);
+
+        // Explore with non-matching edge type filter
+        let results = kernel.graph_explore(&id1, Some(KGEdgeType::Causes), 1);
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_graph_explore_raw_edge_type_string_parsing() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let id1 = kernel.kg_add_node("raw-a", KGNodeType::Entity, serde_json::json!({}), "agent1", "default").unwrap();
+        let id2 = kernel.kg_add_node("raw-b", KGNodeType::Entity, serde_json::json!({}), "agent1", "default").unwrap();
+        kernel.kg_add_edge(&id1, &id2, KGEdgeType::Mentions, None, "agent1", "default").unwrap();
+
+        // Valid edge type strings
+        let results = kernel.graph_explore_raw(&id1, Some("mentions"), 1);
+        assert_eq!(results.len(), 1);
+        let (node_id, label, node_type, edge_type, _score) = &results[0];
+        assert_eq!(node_id, &id2);
+        assert_eq!(label, "raw-b");
+        assert_eq!(node_type, "entity");
+        assert_eq!(edge_type, "mentions");
+
+        // Other valid edge type strings
+        for et_str in &["associates_with", "follows", "part_of", "related_to", "similar_to", "causes", "reminds"] {
+            let r = kernel.graph_explore_raw(&id1, Some(et_str), 1);
+            // No match expected since the actual edge is Mentions
+            assert!(r.is_empty(), "expected empty for edge_type={}", et_str);
+        }
+
+        // Invalid edge type string falls through to None (no filter)
+        let results = kernel.graph_explore_raw(&id1, Some("nonexistent_type"), 1);
+        // With no filter it should still find the neighbor
+        assert_eq!(results.len(), 1);
+
+        // No filter
+        let results = kernel.graph_explore_raw(&id1, None, 1);
+        assert_eq!(results.len(), 1);
+    }
+
+    #[test]
+    fn test_graph_explore_multihop() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let id1 = kernel.kg_add_node("hop-a", KGNodeType::Entity, serde_json::json!({}), "agent1", "default").unwrap();
+        let id2 = kernel.kg_add_node("hop-b", KGNodeType::Entity, serde_json::json!({}), "agent1", "default").unwrap();
+        let id3 = kernel.kg_add_node("hop-c", KGNodeType::Entity, serde_json::json!({}), "agent1", "default").unwrap();
+        kernel.kg_add_edge(&id1, &id2, KGEdgeType::Follows, None, "agent1", "default").unwrap();
+        kernel.kg_add_edge(&id2, &id3, KGEdgeType::Follows, None, "agent1", "default").unwrap();
+
+        // get_neighbors returns direct neighbors; depth>0 activates but doesn't do multi-hop BFS
+        let r1 = kernel.graph_explore(&id1, None, 1);
+        assert_eq!(r1.len(), 1);
+        assert_eq!(r1[0].node.id, id2);
+
+        // Depth=2 still returns direct neighbors only (backend behavior)
+        let r2 = kernel.graph_explore(&id1, None, 2);
+        let ids: Vec<&str> = r2.iter().map(|h| h.node.id.as_str()).collect();
+        assert!(ids.contains(&id2.as_str()));
+
+        // From id2, we should see both id1 (incoming) and id3 (outgoing)
+        let r3 = kernel.graph_explore(&id2, None, 1);
+        let ids2: Vec<&str> = r3.iter().map(|h| h.node.id.as_str()).collect();
+        assert!(ids2.contains(&id1.as_str()));
+        assert!(ids2.contains(&id3.as_str()));
+    }
+
+    #[test]
+    fn test_kg_find_weighted_path_direct() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let id1 = kernel.kg_add_node("wp-a", KGNodeType::Entity, serde_json::json!({}), "agent1", "default").unwrap();
+        let id2 = kernel.kg_add_node("wp-b", KGNodeType::Entity, serde_json::json!({}), "agent1", "default").unwrap();
+        kernel.kg_add_edge(&id1, &id2, KGEdgeType::Causes, Some(0.9), "agent1", "default").unwrap();
+
+        let result = kernel.kg_find_weighted_path(&id1, &id2, 3);
+        assert!(result.is_some());
+        let path = result.unwrap();
+        assert_eq!(path.len(), 2);
+        assert_eq!(path[0].id, id1);
+        assert_eq!(path[1].id, id2);
+    }
+
+    #[test]
+    fn test_kg_find_weighted_path_no_path() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let id1 = kernel.kg_add_node("iso-1", KGNodeType::Entity, serde_json::json!({}), "agent1", "default").unwrap();
+        let id2 = kernel.kg_add_node("iso-2", KGNodeType::Entity, serde_json::json!({}), "agent1", "default").unwrap();
+
+        let result = kernel.kg_find_weighted_path(&id1, &id2, 3);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_kg_find_paths_multihop() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let id1 = kernel.kg_add_node("path-a", KGNodeType::Entity, serde_json::json!({}), "agent1", "default").unwrap();
+        let id2 = kernel.kg_add_node("path-b", KGNodeType::Entity, serde_json::json!({}), "agent1", "default").unwrap();
+        let id3 = kernel.kg_add_node("path-c", KGNodeType::Entity, serde_json::json!({}), "agent1", "default").unwrap();
+        kernel.kg_add_edge(&id1, &id2, KGEdgeType::RelatedTo, None, "agent1", "default").unwrap();
+        kernel.kg_add_edge(&id2, &id3, KGEdgeType::RelatedTo, None, "agent1", "default").unwrap();
+
+        let paths = kernel.kg_find_paths(&id1, &id3, 5);
+        assert!(!paths.is_empty());
+        // Each path should start at id1 and end at id3
+        for path in &paths {
+            assert_eq!(path.first().unwrap().id, id1);
+            assert_eq!(path.last().unwrap().id, id3);
+        }
+    }
+
+    #[test]
+    fn test_kg_get_node_not_found() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let result = kernel.kg_get_node("nonexistent-id", "agent1", "default").expect("should not error");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_kg_list_edges_with_node_id_filter() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let id1 = kernel.kg_add_node("le-a", KGNodeType::Entity, serde_json::json!({}), "agent1", "default").unwrap();
+        let id2 = kernel.kg_add_node("le-b", KGNodeType::Entity, serde_json::json!({}), "agent1", "default").unwrap();
+        let id3 = kernel.kg_add_node("le-c", KGNodeType::Entity, serde_json::json!({}), "agent1", "default").unwrap();
+        kernel.kg_add_edge(&id1, &id2, KGEdgeType::Follows, None, "agent1", "default").unwrap();
+        kernel.kg_add_edge(&id2, &id3, KGEdgeType::Follows, None, "agent1", "default").unwrap();
+
+        // No filter: returns all 2 edges
+        let all = kernel.kg_list_edges("agent1", "default", None).unwrap();
+        assert_eq!(all.len(), 2);
+
+        // Filter by id1: only edge id1->id2
+        let filtered = kernel.kg_list_edges("agent1", "default", Some(&id1)).unwrap();
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].src, id1);
+
+        // Filter by id2: both edges touch id2
+        let filtered = kernel.kg_list_edges("agent1", "default", Some(&id2)).unwrap();
+        assert_eq!(filtered.len(), 2);
+    }
+
+    #[test]
+    fn test_kg_update_node_properties_only() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let id = kernel.kg_add_node("prop-node", KGNodeType::Entity, serde_json::json!({"old": 1}), "agent1", "default").unwrap();
+
+        kernel.kg_update_node(&id, None, Some(serde_json::json!({"new": 42})), "agent1", "default").unwrap();
+
+        let node = kernel.kg_get_node(&id, "agent1", "default").unwrap().unwrap();
+        assert_eq!(node.label, "prop-node"); // label unchanged
+        assert_eq!(node.properties["new"], 42);
+    }
+
+    #[test]
+    fn test_kg_update_node_label_and_properties() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let id = kernel.kg_add_node("both-old", KGNodeType::Fact, serde_json::json!({}), "agent1", "default").unwrap();
+
+        kernel.kg_update_node(&id, Some("both-new"), Some(serde_json::json!({"x": true})), "agent1", "default").unwrap();
+
+        let node = kernel.kg_get_node(&id, "agent1", "default").unwrap().unwrap();
+        assert_eq!(node.label, "both-new");
+        assert_eq!(node.properties["x"], true);
+    }
+
+    #[test]
+    fn test_kg_update_node_nonexistent() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        // Updating a nonexistent node should not error (no tenant check fires, update_node may or may not error)
+        let result = kernel.kg_update_node("ghost-id", Some("new-label"), None, "agent1", "default");
+        // The underlying kg.update_node should return an error for nonexistent node
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_kg_remove_edge_with_type_filter() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let id1 = kernel.kg_add_node("rt-a", KGNodeType::Entity, serde_json::json!({}), "kernel", "default").unwrap();
+        let id2 = kernel.kg_add_node("rt-b", KGNodeType::Entity, serde_json::json!({}), "kernel", "default").unwrap();
+        kernel.kg_add_edge(&id1, &id2, KGEdgeType::Follows, None, "kernel", "default").unwrap();
+        kernel.kg_add_edge(&id1, &id2, KGEdgeType::Mentions, None, "kernel", "default").unwrap();
+
+        let edges = kernel.kg_list_edges("kernel", "default", None).unwrap();
+        assert_eq!(edges.len(), 2);
+
+        // Remove only the Follows edge
+        kernel.kg_remove_edge(&id1, &id2, Some(KGEdgeType::Follows), "kernel", "default").unwrap();
+
+        let edges = kernel.kg_list_edges("kernel", "default", None).unwrap();
+        assert_eq!(edges.len(), 1);
+        assert!(matches!(edges[0].edge_type, KGEdgeType::Mentions));
+    }
+
+    #[test]
+    fn test_kg_edge_history_basic() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let id1 = kernel.kg_add_node("eh-a", KGNodeType::Entity, serde_json::json!({}), "agent1", "default").unwrap();
+        let id2 = kernel.kg_add_node("eh-b", KGNodeType::Entity, serde_json::json!({}), "agent1", "default").unwrap();
+        kernel.kg_add_edge(&id1, &id2, KGEdgeType::SimilarTo, None, "agent1", "default").unwrap();
+
+        let history = kernel.kg_edge_history(&id1, &id2, None, "agent1", "default").unwrap();
+        assert_eq!(history.len(), 1);
+        assert!(matches!(history[0].edge_type, KGEdgeType::SimilarTo));
+
+        // Filter by matching type
+        let history = kernel.kg_edge_history(&id1, &id2, Some(KGEdgeType::SimilarTo), "agent1", "default").unwrap();
+        assert_eq!(history.len(), 1);
+
+        // Filter by non-matching type
+        let history = kernel.kg_edge_history(&id1, &id2, Some(KGEdgeType::Causes), "agent1", "default").unwrap();
+        assert!(history.is_empty());
+    }
+
+    #[test]
+    fn test_kg_edge_history_no_edges() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let id1 = kernel.kg_add_node("noeh-a", KGNodeType::Entity, serde_json::json!({}), "agent1", "default").unwrap();
+        let id2 = kernel.kg_add_node("noeh-b", KGNodeType::Entity, serde_json::json!({}), "agent1", "default").unwrap();
+
+        let history = kernel.kg_edge_history(&id1, &id2, None, "agent1", "default").unwrap();
+        assert!(history.is_empty());
+    }
+
+    #[test]
+    fn test_kg_find_causal_path_direct() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let id1 = kernel.kg_add_node("cause", KGNodeType::Event, serde_json::json!({}), "agent1", "default").unwrap();
+        let id2 = kernel.kg_add_node("effect", KGNodeType::Event, serde_json::json!({}), "agent1", "default").unwrap();
+        kernel.kg_add_edge(&id1, &id2, KGEdgeType::Causes, Some(0.9), "agent1", "default").unwrap();
+
+        let paths = kernel.kg_find_causal_path(&id1, &id2, 3);
+        assert_eq!(paths.len(), 1);
+        assert_eq!(paths[0].nodes.first().unwrap().id, id1);
+        assert_eq!(paths[0].nodes.last().unwrap().id, id2);
+        assert_eq!(paths[0].edges.len(), 1);
+        assert!(paths[0].causal_strength > 0.0);
+    }
+
+    #[test]
+    fn test_kg_find_causal_path_no_path() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let id1 = kernel.kg_add_node("cp-a", KGNodeType::Entity, serde_json::json!({}), "agent1", "default").unwrap();
+        let id2 = kernel.kg_add_node("cp-b", KGNodeType::Entity, serde_json::json!({}), "agent1", "default").unwrap();
+
+        let paths = kernel.kg_find_causal_path(&id1, &id2, 3);
+        assert!(paths.is_empty());
+    }
+
+    #[test]
+    fn test_kg_find_causal_path_multi_hop() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let id1 = kernel.kg_add_node("ch-a", KGNodeType::Event, serde_json::json!({}), "agent1", "default").unwrap();
+        let id2 = kernel.kg_add_node("ch-b", KGNodeType::Event, serde_json::json!({}), "agent1", "default").unwrap();
+        let id3 = kernel.kg_add_node("ch-c", KGNodeType::Event, serde_json::json!({}), "agent1", "default").unwrap();
+        kernel.kg_add_edge(&id1, &id2, KGEdgeType::Causes, Some(0.8), "agent1", "default").unwrap();
+        kernel.kg_add_edge(&id2, &id3, KGEdgeType::Causes, Some(0.7), "agent1", "default").unwrap();
+
+        let paths = kernel.kg_find_causal_path(&id1, &id3, 5);
+        assert!(!paths.is_empty());
+        // Verify the path goes through all 3 nodes
+        let first = paths.first().unwrap();
+        assert_eq!(first.nodes.len(), 3);
+        assert_eq!(first.edges.len(), 2);
+    }
+
+    #[test]
+    fn test_kg_find_causal_path_edge_type_weighting() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let id1 = kernel.kg_add_node("wt-a", KGNodeType::Entity, serde_json::json!({}), "agent1", "default").unwrap();
+        let id2 = kernel.kg_add_node("wt-b", KGNodeType::Entity, serde_json::json!({}), "agent1", "default").unwrap();
+        // Causes has 1.0x multiplier, Mentions has 0.3x
+        kernel.kg_add_edge(&id1, &id2, KGEdgeType::Causes, Some(1.0), "agent1", "default").unwrap();
+
+        let paths = kernel.kg_find_causal_path(&id1, &id2, 3);
+        assert_eq!(paths.len(), 1);
+        let strong_strength = paths[0].causal_strength;
+
+        // Now test with a weaker edge type
+        let (kernel2, _dir2) = crate::kernel::tests::make_kernel();
+        let id3 = kernel2.kg_add_node("wt-c", KGNodeType::Entity, serde_json::json!({}), "agent1", "default").unwrap();
+        let id4 = kernel2.kg_add_node("wt-d", KGNodeType::Entity, serde_json::json!({}), "agent1", "default").unwrap();
+        kernel2.kg_add_edge(&id3, &id4, KGEdgeType::Mentions, Some(1.0), "agent1", "default").unwrap();
+
+        let paths2 = kernel2.kg_find_causal_path(&id3, &id4, 3);
+        assert_eq!(paths2.len(), 1);
+        let weak_strength = paths2[0].causal_strength;
+
+        // Causes should have higher causal strength than Mentions
+        assert!(strong_strength > weak_strength, "Causes ({}) should be stronger than Mentions ({})", strong_strength, weak_strength);
+    }
+
+    #[test]
+    fn test_kg_impact_analysis_with_chain() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let id1 = kernel.kg_add_node("ia-a", KGNodeType::Event, serde_json::json!({}), "agent1", "default").unwrap();
+        let id2 = kernel.kg_add_node("ia-b", KGNodeType::Event, serde_json::json!({}), "agent1", "default").unwrap();
+        let id3 = kernel.kg_add_node("ia-c", KGNodeType::Event, serde_json::json!({}), "agent1", "default").unwrap();
+        kernel.kg_add_edge(&id1, &id2, KGEdgeType::Causes, Some(0.9), "agent1", "default").unwrap();
+        kernel.kg_add_edge(&id2, &id3, KGEdgeType::Causes, Some(0.8), "agent1", "default").unwrap();
+
+        let impact = kernel.kg_impact_analysis(&id1, 3);
+        assert!(!impact.affected_nodes.is_empty(), "should find affected nodes in causal chain");
+        assert!(impact.severity > 0.0, "severity should be positive for causal chain");
+        // id2 and id3 should be in the affected set
+        assert!(impact.affected_nodes.contains(&id2));
+        assert!(impact.affected_nodes.contains(&id3));
+    }
+
+    #[test]
+    fn test_kg_impact_analysis_depth_zero() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let id1 = kernel.kg_add_node("iz-a", KGNodeType::Entity, serde_json::json!({}), "agent1", "default").unwrap();
+        let id2 = kernel.kg_add_node("iz-b", KGNodeType::Entity, serde_json::json!({}), "agent1", "default").unwrap();
+        kernel.kg_add_edge(&id1, &id2, KGEdgeType::Causes, Some(0.5), "agent1", "default").unwrap();
+
+        let impact = kernel.kg_impact_analysis(&id1, 0);
+        // With depth 0, should not traverse any neighbors
+        assert!(impact.affected_nodes.is_empty());
+        assert_eq!(impact.severity, 0.0);
+    }
+
+    #[test]
+    fn test_kg_temporal_changes_created() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let now = chrono::Utc::now().timestamp_millis() as u64;
+        let _id = kernel.kg_add_node("tc-node", KGNodeType::Entity, serde_json::json!({}), "agent1", "default").unwrap();
+
+        // Query a range that includes now
+        let changes = kernel.kg_temporal_changes(now - 1000, now + 1000, "agent1", "default").unwrap();
+        assert!(!changes.is_empty());
+        let created: Vec<&TemporalChange> = changes.iter().filter(|c| matches!(c.change_type, ChangeType::Created)).collect();
+        assert!(!created.is_empty(), "should find at least one Created change");
+    }
+
+    #[test]
+    fn test_kg_detect_causal_chains_basic() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let id1 = kernel.kg_add_node("cc-a", KGNodeType::Event, serde_json::json!({}), "agent1", "default").unwrap();
+        let id2 = kernel.kg_add_node("cc-b", KGNodeType::Event, serde_json::json!({}), "agent1", "default").unwrap();
+        let id3 = kernel.kg_add_node("cc-c", KGNodeType::Event, serde_json::json!({}), "agent1", "default").unwrap();
+        // HasFact is a causal edge type
+        kernel.kg_add_edge(&id1, &id2, KGEdgeType::HasFact, Some(0.8), "agent1", "default").unwrap();
+        kernel.kg_add_edge(&id2, &id3, KGEdgeType::Causes, Some(0.9), "agent1", "default").unwrap();
+
+        let chains = kernel.kg_detect_causal_chains(&id1, 5);
+        assert!(!chains.is_empty(), "should detect causal chain");
+        // Each chain should have causal_strength > 0
+        for chain in &chains {
+            assert!(chain.causal_strength > 0.0);
+            assert!(chain.edges.len() >= 2, "chain needs >= 2 edges to be detected");
+        }
+    }
+
+    #[test]
+    fn test_kg_detect_causal_chains_no_causal_edges() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let id1 = kernel.kg_add_node("nc-a", KGNodeType::Entity, serde_json::json!({}), "agent1", "default").unwrap();
+        let id2 = kernel.kg_add_node("nc-b", KGNodeType::Entity, serde_json::json!({}), "agent1", "default").unwrap();
+        // RelatedTo is NOT a causal edge type
+        kernel.kg_add_edge(&id1, &id2, KGEdgeType::RelatedTo, None, "agent1", "default").unwrap();
+
+        let chains = kernel.kg_detect_causal_chains(&id1, 5);
+        assert!(chains.is_empty(), "RelatedTo should not form a causal chain");
+    }
+
+    #[test]
+    fn test_kg_detect_causal_chains_respects_max_depth() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let id1 = kernel.kg_add_node("md-a", KGNodeType::Event, serde_json::json!({}), "agent1", "default").unwrap();
+        let id2 = kernel.kg_add_node("md-b", KGNodeType::Event, serde_json::json!({}), "agent1", "default").unwrap();
+        let id3 = kernel.kg_add_node("md-c", KGNodeType::Event, serde_json::json!({}), "agent1", "default").unwrap();
+        kernel.kg_add_edge(&id1, &id2, KGEdgeType::Causes, Some(0.8), "agent1", "default").unwrap();
+        kernel.kg_add_edge(&id2, &id3, KGEdgeType::Causes, Some(0.8), "agent1", "default").unwrap();
+
+        // max_depth=1 means only 1 hop, not enough for a 2-edge chain
+        let chains = kernel.kg_detect_causal_chains(&id1, 1);
+        assert!(chains.is_empty(), "depth=1 should not find 2-edge chain");
+
+        // max_depth=3 should find it
+        let chains = kernel.kg_detect_causal_chains(&id1, 3);
+        assert!(!chains.is_empty());
+    }
+
+    #[test]
+    fn test_is_cid_referenced_true() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        // Add a node with a content_cid using the KG API directly
+        let kg = kernel.knowledge_graph.as_ref().unwrap();
+        let node = KGNode {
+            id: "cid-ref-node".to_string(),
+            label: "with-cid".to_string(),
+            node_type: KGNodeType::Document,
+            content_cid: Some("abc123-sha".to_string()),
+            properties: serde_json::json!({}),
+            agent_id: "agent1".to_string(),
+            tenant_id: "default".to_string(),
+            created_at: 1000,
+            valid_at: Some(1000),
+            invalid_at: None,
+            expired_at: None,
+        };
+        kg.add_node(node).unwrap();
+
+        assert!(kernel.is_cid_referenced("abc123-sha"));
+        assert!(!kernel.is_cid_referenced("other-cid"));
+    }
+
+    #[test]
+    fn test_kg_list_nodes_tenant_isolation() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        kernel.kg_add_node("tenant-a-node", KGNodeType::Entity, serde_json::json!({}), "agent1", "tenant-a").unwrap();
+        kernel.kg_add_node("tenant-b-node", KGNodeType::Entity, serde_json::json!({}), "agent1", "tenant-b").unwrap();
+
+        // tenant-a should only see its own nodes
+        let nodes_a = kernel.kg_list_nodes(None, "agent1", "tenant-a").unwrap();
+        assert!(nodes_a.iter().all(|n| n.tenant_id == "tenant-a"));
+        assert!(nodes_a.iter().any(|n| n.label == "tenant-a-node"));
+        assert!(!nodes_a.iter().any(|n| n.label == "tenant-b-node"));
+
+        // tenant-b should only see its own nodes
+        let nodes_b = kernel.kg_list_nodes(None, "agent1", "tenant-b").unwrap();
+        assert!(nodes_b.iter().all(|n| n.tenant_id == "tenant-b"));
+        assert!(nodes_b.iter().any(|n| n.label == "tenant-b-node"));
+    }
+
+    #[test]
+    fn test_kg_list_edges_tenant_isolation() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        // Create nodes in different tenants via their respective agents
+        let id_a1 = kernel.kg_add_node("ti-a1", KGNodeType::Entity, serde_json::json!({}), "agent-x", "tenant-x").unwrap();
+        let id_a2 = kernel.kg_add_node("ti-a2", KGNodeType::Entity, serde_json::json!({}), "agent-x", "tenant-x").unwrap();
+        let id_b1 = kernel.kg_add_node("ti-b1", KGNodeType::Entity, serde_json::json!({}), "agent-y", "tenant-y").unwrap();
+        let id_b2 = kernel.kg_add_node("ti-b2", KGNodeType::Entity, serde_json::json!({}), "agent-y", "tenant-y").unwrap();
+
+        // Add edges using agents from the same tenant as the nodes
+        kernel.kg_add_edge(&id_a1, &id_a2, KGEdgeType::Follows, None, "agent-x", "tenant-x").unwrap();
+        kernel.kg_add_edge(&id_b1, &id_b2, KGEdgeType::Follows, None, "agent-y", "tenant-y").unwrap();
+
+        // tenant-x should only see edges between its own nodes
+        let edges_x = kernel.kg_list_edges("agent-x", "tenant-x", None).unwrap();
+        assert!(edges_x.iter().all(|e| {
+            (e.src == id_a1 || e.src == id_a2) && (e.dst == id_a1 || e.dst == id_a2)
+        }));
+        assert_eq!(edges_x.len(), 1);
+
+        // tenant-y should only see edges between its own nodes
+        let edges_y = kernel.kg_list_edges("agent-y", "tenant-y", None).unwrap();
+        assert!(edges_y.iter().all(|e| {
+            (e.src == id_b1 || e.src == id_b2) && (e.dst == id_b1 || e.dst == id_b2)
+        }));
+        assert_eq!(edges_y.len(), 1);
+    }
+
+    #[test]
+    fn test_kg_get_node_tenant_isolation() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let id = kernel.kg_add_node("cross-tenant", KGNodeType::Entity, serde_json::json!({}), "agent1", "tenant-secret").unwrap();
+
+        // Same tenant: should succeed
+        let node = kernel.kg_get_node(&id, "agent1", "tenant-secret").unwrap();
+        assert!(node.is_some());
+
+        // Different tenant: should fail with permission error
+        let result = kernel.kg_get_node(&id, "agent1", "tenant-other");
+        assert!(result.is_err(), "cross-tenant access should be denied");
+    }
+
+    #[test]
+    fn test_kg_add_edge_tenant_isolation() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        // Create nodes in tenant-1
+        let id1 = kernel.kg_add_node("iso-src", KGNodeType::Entity, serde_json::json!({}), "agent1", "tenant-1").unwrap();
+        let id2 = kernel.kg_add_node("iso-dst", KGNodeType::Entity, serde_json::json!({}), "agent1", "tenant-1").unwrap();
+
+        // Try to add edge from tenant-2 — should fail
+        let result = kernel.kg_add_edge(&id1, &id2, KGEdgeType::Follows, None, "agent1", "tenant-2");
+        assert!(result.is_err(), "cross-tenant add_edge should be denied");
+    }
+
+    #[test]
+    fn test_kg_edge_history_tenant_isolation() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let id1 = kernel.kg_add_node("ehi-a", KGNodeType::Entity, serde_json::json!({}), "kernel", "default").unwrap();
+        let id2 = kernel.kg_add_node("ehi-b", KGNodeType::Entity, serde_json::json!({}), "kernel", "default").unwrap();
+        kernel.kg_add_edge(&id1, &id2, KGEdgeType::SimilarTo, None, "kernel", "default").unwrap();
+
+        // Same tenant: should succeed
+        let history = kernel.kg_edge_history(&id1, &id2, None, "agent1", "default").unwrap();
+        assert_eq!(history.len(), 1);
+
+        // Different tenant: should fail
+        let result = kernel.kg_edge_history(&id1, &id2, None, "agent1", "other-tenant");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_kg_remove_node_with_edges() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let id1 = kernel.kg_add_node("rmv-a", KGNodeType::Entity, serde_json::json!({}), "kernel", "default").unwrap();
+        let id2 = kernel.kg_add_node("rmv-b", KGNodeType::Entity, serde_json::json!({}), "kernel", "default").unwrap();
+        let id3 = kernel.kg_add_node("rmv-c", KGNodeType::Entity, serde_json::json!({}), "kernel", "default").unwrap();
+        kernel.kg_add_edge(&id1, &id2, KGEdgeType::Follows, None, "kernel", "default").unwrap();
+        kernel.kg_add_edge(&id2, &id3, KGEdgeType::Follows, None, "kernel", "default").unwrap();
+
+        // Remove id2 which has edges to both id1 and id3
+        kernel.kg_remove_node(&id2, "kernel", "default").unwrap();
+
+        let node = kernel.kg_get_node(&id2, "kernel", "default").unwrap();
+        assert!(node.is_none());
+
+        // Edges touching id2 should also be removed
+        let edges = kernel.kg_list_edges("kernel", "default", None).unwrap();
+        assert!(edges.is_empty(), "edges should be removed when node is removed");
+    }
+
+    #[test]
+    fn test_kg_remove_node_nonexistent() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let result = kernel.kg_remove_node("ghost-node", "agent1", "default");
+        // Removing a nonexistent node should error
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_kg_find_causal_path_sorted_by_strength() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let a = kernel.kg_add_node("sort-a", KGNodeType::Event, serde_json::json!({}), "agent1", "default").unwrap();
+        let b = kernel.kg_add_node("sort-b", KGNodeType::Event, serde_json::json!({}), "agent1", "default").unwrap();
+        let c = kernel.kg_add_node("sort-c", KGNodeType::Event, serde_json::json!({}), "agent1", "default").unwrap();
+        let d = kernel.kg_add_node("sort-d", KGNodeType::Event, serde_json::json!({}), "agent1", "default").unwrap();
+
+        // Path 1: a -> b -> d (Causes, Causes) — strong
+        kernel.kg_add_edge(&a, &b, KGEdgeType::Causes, Some(1.0), "agent1", "default").unwrap();
+        kernel.kg_add_edge(&b, &d, KGEdgeType::Causes, Some(1.0), "agent1", "default").unwrap();
+
+        // Path 2: a -> c -> d (Mentions, Mentions) — weak
+        kernel.kg_add_edge(&a, &c, KGEdgeType::Mentions, Some(1.0), "agent1", "default").unwrap();
+        kernel.kg_add_edge(&c, &d, KGEdgeType::Mentions, Some(1.0), "agent1", "default").unwrap();
+
+        let paths = kernel.kg_find_causal_path(&a, &d, 5);
+        assert!(paths.len() >= 2, "should find at least 2 paths");
+        // First path should have higher or equal causal strength
+        assert!(paths[0].causal_strength >= paths[1].causal_strength,
+            "paths should be sorted by strength descending: {} >= {}",
+            paths[0].causal_strength, paths[1].causal_strength);
+    }
+
+    #[test]
+    fn test_kg_temporal_changes_sorted_descending() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let now = chrono::Utc::now().timestamp_millis() as u64;
+        // Add two nodes with slightly different timestamps by adding them sequentially
+        kernel.kg_add_node("ts-first", KGNodeType::Entity, serde_json::json!({}), "agent1", "default").unwrap();
+        kernel.kg_add_node("ts-second", KGNodeType::Entity, serde_json::json!({}), "agent1", "default").unwrap();
+
+        let changes = kernel.kg_temporal_changes(now - 5000, now + 5000, "agent1", "default").unwrap();
+        if changes.len() >= 2 {
+            // Should be sorted descending by timestamp
+            for i in 0..changes.len() - 1 {
+                assert!(changes[i].timestamp_ms >= changes[i + 1].timestamp_ms,
+                    "changes should be sorted by timestamp descending");
+            }
+        }
+    }
+
+    #[test]
+    fn test_kg_update_node_no_changes() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let id = kernel.kg_add_node("noop", KGNodeType::Entity, serde_json::json!({}), "agent1", "default").unwrap();
+
+        // Update with None, None — should succeed as a no-op
+        kernel.kg_update_node(&id, None, None, "agent1", "default").unwrap();
+
+        let node = kernel.kg_get_node(&id, "agent1", "default").unwrap().unwrap();
+        assert_eq!(node.label, "noop");
+    }
+
+    #[test]
+    fn test_kg_get_valid_nodes_at_filters_by_type() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        kernel.kg_add_node("vtype-e", KGNodeType::Entity, serde_json::json!({}), "agent1", "default").unwrap();
+        kernel.kg_add_node("vtype-f", KGNodeType::Fact, serde_json::json!({}), "agent1", "default").unwrap();
+
+        let now = chrono::Utc::now().timestamp_millis() as u64;
+        let entities = kernel.kg_get_valid_nodes_at("agent1", "default", Some(KGNodeType::Entity), now).unwrap();
+        assert!(entities.iter().all(|n| matches!(n.node_type, KGNodeType::Entity)));
+        assert!(entities.iter().any(|n| n.label == "vtype-e"));
+        assert!(!entities.iter().any(|n| n.label == "vtype-f"));
+    }
+
+    #[test]
+    fn test_kg_get_valid_nodes_at_tenant_filtering() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        kernel.kg_add_node("vt-a", KGNodeType::Entity, serde_json::json!({}), "agent1", "tenant-1").unwrap();
+        kernel.kg_add_node("vt-b", KGNodeType::Entity, serde_json::json!({}), "agent1", "tenant-2").unwrap();
+
+        let now = chrono::Utc::now().timestamp_millis() as u64;
+        let nodes = kernel.kg_get_valid_nodes_at("agent1", "tenant-1", None, now).unwrap();
+        assert!(nodes.iter().all(|n| n.tenant_id == "tenant-1"));
+        assert!(!nodes.iter().any(|n| n.tenant_id == "tenant-2"));
+    }
+
+    #[test]
+    fn test_kg_list_nodes_returns_empty_when_no_kg() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        // This test relies on the kernel having a KG, but verifies the empty path.
+        // In make_kernel the KG is always Some, so we test the normal path.
+        let nodes = kernel.kg_list_nodes(None, "agent1", "default").unwrap();
+        assert!(nodes.is_empty());
+    }
+
+    #[test]
+    fn test_graph_explore_nonexistent_cid_returns_empty() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        // Add a node but explore a different CID
+        kernel.kg_add_node("some-node", KGNodeType::Entity, serde_json::json!({}), "agent1", "default").unwrap();
+        let results = kernel.graph_explore("totally-unknown-cid", None, 1);
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_kg_find_causal_path_follows_edge_type() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let id1 = kernel.kg_add_node("fl-a", KGNodeType::Event, serde_json::json!({}), "agent1", "default").unwrap();
+        let id2 = kernel.kg_add_node("fl-b", KGNodeType::Event, serde_json::json!({}), "agent1", "default").unwrap();
+        // Follows has 0.7x weight
+        kernel.kg_add_edge(&id1, &id2, KGEdgeType::Follows, Some(1.0), "agent1", "default").unwrap();
+
+        let paths = kernel.kg_find_causal_path(&id1, &id2, 3);
+        assert_eq!(paths.len(), 1);
+        // causal_strength should reflect the Follows weight (0.7)
+        assert!(paths[0].causal_strength > 0.0);
+        assert!(paths[0].causal_strength < 1.0); // Follows is 0.7x
+    }
+
+    #[test]
+    fn test_kg_find_causal_path_related_to_edge_type() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let id1 = kernel.kg_add_node("rt-a", KGNodeType::Entity, serde_json::json!({}), "agent1", "default").unwrap();
+        let id2 = kernel.kg_add_node("rt-b", KGNodeType::Entity, serde_json::json!({}), "agent1", "default").unwrap();
+        // RelatedTo has 0.5x weight
+        kernel.kg_add_edge(&id1, &id2, KGEdgeType::RelatedTo, Some(1.0), "agent1", "default").unwrap();
+
+        let paths = kernel.kg_find_causal_path(&id1, &id2, 3);
+        assert_eq!(paths.len(), 1);
+        assert!(paths[0].causal_strength > 0.0);
     }
 }

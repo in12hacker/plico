@@ -53,8 +53,8 @@ pub fn safe_truncate(s: &str, max_len: usize) -> &str {
 
 /// Slices a string safely around a given range, ensuring no char boundary panics.
 pub fn safe_range(s: &str, start: usize, end: usize) -> &str {
-    let start_idx = s.char_indices().map(|(i, _)| i).filter(|&i| i <= start).last().unwrap_or(0);
-    let end_idx = s.char_indices().map(|(i, _)| i).filter(|&i| i >= end).next().unwrap_or(s.len());
+    let start_idx = s.char_indices().map(|(i, _)| i).rfind(|&i| i <= start).unwrap_or(0);
+    let end_idx = s.char_indices().map(|(i, _)| i).find(|&i| i >= end).unwrap_or(s.len());
     &s[start_idx..end_idx]
 }
 

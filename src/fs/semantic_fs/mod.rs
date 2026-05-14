@@ -16,7 +16,7 @@ use crate::cas::{AIObject, AIObjectMeta, CASStorage};
 use crate::fs::context_loader::ContextLoader;
 use crate::fs::embedding::EmbeddingProvider;
 use crate::fs::reranker::RerankerProvider;
-use crate::fs::search::{SemanticSearch, SearchFilter, SearchIndexMeta, Bm25Index};
+use crate::fs::search::{SemanticSearch, SearchFilter, SearchHit, SearchIndexMeta, Bm25Index};
 use crate::fs::summarizer::Summarizer;
 use crate::util::case_insensitive_contains;
 use crate::fs::graph::KnowledgeGraph;
@@ -103,6 +103,7 @@ pub struct SemanticFS {
     knowledge_graph: Option<Arc<dyn KnowledgeGraph>>,
     bm25_index: Arc<Bm25Index>,
     reranker: Option<Arc<dyn RerankerProvider>>,
+    search_cache: Arc<crate::kernel::ops::cache::SearchCache>,
     /// F-37: Pass-through chunking mode from unified config
     config_chunking_mode: String,
     // F-5: Soul alignment — unified config controls auto-summarize
@@ -149,6 +150,20 @@ impl SemanticFS {
         knowledge_graph: Option<Arc<dyn KnowledgeGraph>>,
         reranker: Option<Arc<dyn RerankerProvider>>,
     ) -> std::io::Result<Self> {
+        Self::with_reranker_and_cache(root_path, cas, embedding, search_index, summarizer, knowledge_graph, reranker, None)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn with_reranker_and_cache(
+        root_path: std::path::PathBuf,
+        cas: Arc<CASStorage>,
+        embedding: Arc<dyn EmbeddingProvider>,
+        search_index: Arc<dyn SemanticSearch>,
+        summarizer: Option<Arc<dyn Summarizer>>,
+        knowledge_graph: Option<Arc<dyn KnowledgeGraph>>,
+        reranker: Option<Arc<dyn RerankerProvider>>,
+        search_cache: Option<Arc<crate::kernel::ops::cache::SearchCache>>,
+    ) -> std::io::Result<Self> {
         let tag_index_path = root_path.join("tag_index.json");
         let recycle_bin_path = root_path.join("recycle_bin.json");
 
@@ -185,6 +200,7 @@ impl SemanticFS {
             knowledge_graph,
             bm25_index: Arc::new(Bm25Index::new()),
             reranker,
+            search_cache: search_cache.unwrap_or_else(|| Arc::new(crate::kernel::ops::cache::SearchCache::new(256, 300))),
             config_chunking_mode: "none".into(), // Default, will be updated by AIKernel
             config_auto_summarize: false,        // Default, will be updated by AIKernel
             cognitive_pipeline: RwLock::new(None),
@@ -223,10 +239,10 @@ impl SemanticFS {
             embedding_result = Ok(None);
         }
 
-        let _ = embedding_result.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+        let _ = embedding_result.map_err(|e| std::io::Error::other(e.to_string()))?;
 
         // Hierarchical chunking
-        let mut chunking_mode = crate::fs::chunking::ChunkingMode::from_str(&self.config_chunking_mode);
+        let mut chunking_mode = crate::fs::chunking::ChunkingMode::parse(&self.config_chunking_mode);
         if actual_force_chunking && chunking_mode == crate::fs::chunking::ChunkingMode::None {
             chunking_mode = crate::fs::chunking::ChunkingMode::Fixed;
         }
@@ -636,7 +652,7 @@ impl SemanticFS {
     pub fn list_deleted(&self) -> Vec<RecycleEntry> {
         let bin = self.recycle_bin.read().unwrap();
         let mut entries: Vec<_> = bin.values().cloned().collect();
-        entries.sort_by(|a, b| b.deleted_at.cmp(&a.deleted_at));
+        entries.sort_by_key(|e| std::cmp::Reverse(e.deleted_at));
         entries
     }
 
@@ -686,6 +702,14 @@ impl SemanticFS {
     }
 
     pub fn search_with_filter(&self, query: &str, limit: usize, filter: SearchFilter) -> Vec<SearchResult> {
+        // Check search cache (TTL-based, eliminates redundant embedding + HNSW)
+        if let Some(cached) = self.search_cache.get(query, limit, "fs") {
+            if let Ok(results) = serde_json::from_str::<Vec<SearchResult>>(&cached.results_json) {
+                tracing::debug!("Search cache hit for query: {}", &query[..query.len().min(30)]);
+                return results;
+            }
+        }
+
         // Tier 0: Temporal query detection — if the query looks temporal, try KG path first
         if is_temporal_query(query) {
             if let Some(ref kg) = self.knowledge_graph {
@@ -698,8 +722,11 @@ impl SemanticFS {
             }
         }
 
-        // Tier 0.5: PPR multi-hop retrieval — if KG has nodes, try entity-based graph traversal
+        // Tier 0.5: PPR multi-hop retrieval — only for queries that benefit from graph traversal
+        // Skip PPR for simple factual queries ("what is X", "define X") to save 10-30ms
+        let needs_ppr = is_multihop_query(query) || is_temporal_query(query);
         let mut ppr_boost: HashMap<String, f32> = HashMap::new();
+        if needs_ppr {
         if let Some(ref kg) = self.knowledge_graph {
             let query_words: Vec<String> = query.split_whitespace()
                 .filter(|w| w.len() > 2)
@@ -741,13 +768,14 @@ impl SemanticFS {
                 }
             }
         }
+        } // end needs_ppr
 
         let query_emb = self.embedding.embed_query(query).ok().map(|r| r.embedding);
 
-        let vector_hits: HashMap<String, f32> = match &query_emb {
+        let vector_hits: HashMap<String, SearchHit> = match &query_emb {
             Some(emb) => self
                 .search_index.search(emb, limit * 10, &filter)
-                .into_iter().map(|hit| (hit.cid.clone(), hit.score)).collect(),
+                .into_iter().map(|hit| (hit.cid.clone(), hit)).collect(),
             None => HashMap::new(),
         };
 
@@ -763,22 +791,23 @@ impl SemanticFS {
         let mut rrf_scores: HashMap<String, (f32, usize)> = HashMap::new();
 
         let mut sorted_vector: Vec<_> = vector_hits.iter().collect();
-        sorted_vector.sort_by(|a, b| b.1.partial_cmp(a.1).unwrap_or(std::cmp::Ordering::Equal));
-        for (rank, (cid, _score)) in sorted_vector.iter().enumerate() {
+        sorted_vector.sort_by(|a, b| b.1.score.partial_cmp(&a.1.score).unwrap_or(std::cmp::Ordering::Equal));
+        for (rank, (cid, hit)) in sorted_vector.iter().enumerate() {
             let mut rrf = vector_weight / (rrf_k + rank as f32);
-            // F-37: Huge boost for chunks
-            if let Ok(obj) = self.cas.get_raw(cid) {
-                if obj.meta.tags.iter().any(|t| t == "is_chunk:true") {
-                    rrf += 0.2;
-                }
+            if hit.meta.tags.iter().any(|t| t == "is_chunk:true") {
+                rrf += 0.2;
             }
             rrf_scores.insert((*cid).clone(), (rrf, 1usize));
         }
 
         for (rank, (cid, _score)) in bm25_hits.iter().enumerate() {
             let mut rrf = bm25_weight / (rrf_k + rank as f32);
-            // F-37: Huge boost for chunks
-            if let Ok(obj) = self.cas.get_raw(cid) {
+            // F-37: Huge boost for chunks — use vector hit meta if available, else CAS
+            if let Some(vh) = vector_hits.get(cid) {
+                if vh.meta.tags.iter().any(|t| t == "is_chunk:true") {
+                    rrf += 0.2;
+                }
+            } else if let Ok(obj) = self.cas.get_raw(cid) {
                 if obj.meta.tags.iter().any(|t| t == "is_chunk:true") {
                     rrf += 0.2;
                 }
@@ -786,6 +815,9 @@ impl SemanticFS {
             if let Some((existing_rrf, count)) = rrf_scores.get_mut(cid) {
                 *existing_rrf += rrf;
                 *count += 1;
+            } else if vector_hits.contains_key(cid) {
+                // Already filtered by vector search — just insert
+                rrf_scores.insert(cid.clone(), (rrf, 1usize));
             } else {
                 let obj = match self.cas.get_raw(cid) {
                     Ok(o) => o,
@@ -808,7 +840,7 @@ impl SemanticFS {
         // Inject PPR boost and Chunk boost into RRF scores
         for (cid, ppr_score) in &ppr_boost {
             let mut boost = ppr_score * 0.5;
-            
+
             // F-37: Chunk boost
             if let Ok(obj) = self.cas.get_raw(cid) {
                 if obj.meta.tags.iter().any(|t| t == "is_chunk:true") {
@@ -820,6 +852,25 @@ impl SemanticFS {
                 *existing_rrf += boost;
             } else {
                 rrf_scores.insert(cid.clone(), (boost, 1));
+            }
+        }
+
+        // Phase 2.4: Path discovery for multi-hop queries.
+        // Map top-K RRF candidates to KG nodes, find weighted paths between pairs,
+        // and inject path-related CIDs with a boost.
+        if needs_ppr {
+            if let Some(ref kg) = self.knowledge_graph {
+                let kg_ref: &dyn KnowledgeGraph = kg.as_ref();
+                let path_boost = self.discover_and_inject_paths(
+                    query, kg_ref, &rrf_scores, limit,
+                );
+                for (cid, boost) in path_boost {
+                    if let Some((existing, _)) = rrf_scores.get_mut(&cid) {
+                        *existing += boost;
+                    } else {
+                        rrf_scores.insert(cid, (boost, 1usize));
+                    }
+                }
             }
         }
 
@@ -894,7 +945,36 @@ impl SemanticFS {
             })
             .collect();
 
-        self.resolve_parent_chunks(results)
+        let resolved = self.resolve_parent_chunks(results);
+
+        // Phase 3.1: Iterative retrieval for multi-hop queries
+        let resolved = if needs_ppr && resolved.len() < limit {
+            let expanded = self.iterative_retrieve(query, &resolved, limit, &filter);
+            if expanded.len() > resolved.len() {
+                tracing::debug!(
+                    "Iterative retrieval expanded {} → {} results",
+                    resolved.len(),
+                    expanded.len()
+                );
+                expanded
+            } else {
+                resolved
+            }
+        } else {
+            resolved
+        };
+
+        // Populate search cache for repeated queries
+        if let Ok(json) = serde_json::to_string(&resolved) {
+            self.search_cache.put(query, limit, "fs", crate::kernel::ops::cache::SearchCacheEntry {
+                results_json: json,
+                top_k: limit,
+                created_at: std::time::Instant::now(),
+                access_count: 0,
+            });
+        }
+
+        resolved
     }
 
     /// If a search result is a child chunk (has `parent_cid:xxx` tag), resolve the parent
@@ -929,6 +1009,168 @@ impl SemanticFS {
         }
 
         resolved
+    }
+
+    /// Path discovery for multi-hop queries: map top-K RRF candidates to KG nodes,
+    /// find weighted paths between node pairs, and return path-related CIDs with boosts.
+    fn discover_and_inject_paths(
+        &self,
+        _query: &str,
+        kg: &dyn KnowledgeGraph,
+        rrf_scores: &HashMap<String, (f32, usize)>,
+        limit: usize,
+    ) -> Vec<(String, f32)> {
+        // Take top-K candidates to map to KG nodes
+        let mut top_cids: Vec<(&String, &f32)> = rrf_scores
+            .iter()
+            .map(|(cid, (score, _))| (cid, score))
+            .collect();
+        top_cids.sort_by(|a, b| b.1.partial_cmp(a.1).unwrap_or(std::cmp::Ordering::Equal));
+        let top_k = 5.min(top_cids.len());
+
+        // Map CIDs to KG nodes
+        let mut seed_nodes: Vec<String> = Vec::new();
+        for (cid, _) in &top_cids[..top_k] {
+            if let Ok(nodes) = kg.get_nodes_by_cid(cid) {
+                for node in nodes {
+                    if !seed_nodes.contains(&node.id) {
+                        seed_nodes.push(node.id.clone());
+                    }
+                }
+            }
+        }
+
+        if seed_nodes.len() < 2 {
+            return vec![];
+        }
+
+        // Find weighted paths between pairs of seed nodes
+        let mut path_boosts: Vec<(String, f32)> = Vec::new();
+        let max_pairs = 6; // Limit pair exploration to bound latency
+        let mut pair_count = 0;
+        for i in 0..seed_nodes.len() {
+            for j in (i + 1)..seed_nodes.len() {
+                if pair_count >= max_pairs { break; }
+                pair_count += 1;
+
+                if let Ok(Some(path)) = kg.find_weighted_path(&seed_nodes[i], &seed_nodes[j], 4) {
+                    // Extract CIDs from nodes along the path
+                    for node in &path {
+                        // Direct content_cid
+                        if let Some(ref cid) = node.content_cid {
+                            if !rrf_scores.contains_key(cid) {
+                                path_boosts.push((cid.clone(), 0.15));
+                            }
+                        }
+                        // CIDs from properties
+                        if let Some(cids) = node.properties.as_object()
+                            .and_then(|o| o.get("cids"))
+                            .and_then(|v| v.as_array())
+                        {
+                            for v in cids {
+                                if let Some(cid) = v.as_str() {
+                                    if !rrf_scores.contains_key(cid) {
+                                        path_boosts.push((cid.to_string(), 0.1));
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    tracing::debug!(
+                        "Path discovery: {} → {} found path of length {}",
+                        &seed_nodes[i][..seed_nodes[i].len().min(8)],
+                        &seed_nodes[j][..seed_nodes[j].len().min(8)],
+                        path.len(),
+                    );
+                }
+            }
+        }
+
+        // Deduplicate and cap
+        path_boosts.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        path_boosts.truncate(limit);
+        path_boosts
+    }
+
+    /// Iterative retrieval (Phase 3.1): extract key terms from first-pass results,
+    /// do a second retrieval, and merge. Only for multi-hop queries.
+    fn iterative_retrieve(
+        &self,
+        _original_query: &str,
+        first_pass: &[SearchResult],
+        limit: usize,
+        filter: &SearchFilter,
+    ) -> Vec<SearchResult> {
+        // Extract key terms from top-5 snippets
+        let mut key_terms: Vec<String> = Vec::new();
+        for result in first_pass.iter().take(5) {
+            let snippet = &result.snippet;
+            // Extract capitalized words (potential entities)
+            for word in snippet.split_whitespace() {
+                let clean = word.trim_matches(|c: char| !c.is_alphanumeric());
+                if clean.len() >= 3
+                    && clean.chars().next().map(|c| c.is_uppercase()).unwrap_or(false)
+                    && !key_terms.contains(&clean.to_string())
+                {
+                    key_terms.push(clean.to_string());
+                }
+            }
+            // Extract tags that look like entities
+            for tag in &result.meta.tags {
+                if !tag.starts_with("is_") && !tag.starts_with("parent_cid:") && !tag.starts_with("chunk_idx:")
+                    && !key_terms.contains(tag)
+                {
+                    key_terms.push(tag.clone());
+                }
+            }
+        }
+
+        key_terms.truncate(10);
+        if key_terms.is_empty() {
+            return first_pass.to_vec();
+        }
+
+        // Second pass: BM25 search with extracted key terms
+        let expanded_query = key_terms.join(" ");
+        let bm25_hits = self.bm25_index.search(&expanded_query, limit);
+
+        // Merge: keep first-pass results, add new BM25 results
+        let mut seen_cids: std::collections::HashSet<String> = first_pass.iter().map(|r| r.cid.clone()).collect();
+        let mut merged = first_pass.to_vec();
+
+        for (cid, score) in bm25_hits {
+            if seen_cids.contains(&cid) {
+                continue;
+            }
+            if merged.len() >= limit * 2 {
+                break;
+            }
+            if let Ok(obj) = self.cas.get(&cid) {
+                let meta = SearchIndexMeta {
+                    cid: cid.clone(),
+                    tags: obj.meta.tags.clone(),
+                    snippet: String::new(),
+                    content_type: format!("{:?}", obj.meta.content_type).to_lowercase(),
+                    created_at: obj.meta.created_at,
+                    memory_type: None,
+                };
+                if filter.matches(&meta) {
+                    seen_cids.insert(cid.clone());
+                    let snippet = String::from_utf8_lossy(
+                        &obj.data[..std::cmp::min(MAX_SNIPPET_LEN, obj.data.len())],
+                    ).to_string();
+                    merged.push(SearchResult {
+                        cid,
+                        relevance: score * 0.5, // Lower relevance for second-pass results
+                        meta: obj.meta,
+                        snippet,
+                    });
+                }
+            }
+        }
+
+        merged
     }
 
     fn search_by_tags_with_filter(&self, query: &str, filter: &SearchFilter) -> Vec<SearchResult> {
@@ -1098,6 +1340,11 @@ impl SemanticFS {
             text.to_string()
         };
 
+        // BM25 index FIRST — always available for keyword search, even if embedding fails/hangs
+        if !text.trim().is_empty() {
+            self.bm25_index.upsert(cid, &text);
+        }
+
         let is_real_embedding;
         let embedding = if text.trim().is_empty() {
             is_real_embedding = false;
@@ -1130,10 +1377,6 @@ impl SemanticFS {
             created_at: meta.created_at,
             memory_type: None,
         });
-
-        if !text.trim().is_empty() {
-            self.bm25_index.upsert(cid, &text);
-        }
 
         if is_real_embedding { Ok(Some(embedding)) } else { Ok(None) }
     }
@@ -1227,6 +1470,21 @@ fn is_temporal_query(query: &str) -> bool {
         "第一次", "最后", "最近", "最早", "顺序", "时间线", "先后",
     ];
     TEMPORAL_KEYWORDS.iter().any(|kw| q.contains(kw))
+}
+
+/// Detect multi-hop queries that benefit from PPR graph traversal.
+/// Simple factual queries ("what is X", "define X") skip PPR to save 10-30ms.
+fn is_multihop_query(query: &str) -> bool {
+    let q = query.to_lowercase();
+    const MULTI_KEYWORDS: &[&str] = &[
+        "why", "how", "because", "cause", "reason", "connect", "link", "relate",
+        "and then", "after that", "before that", "led to", "resulted in",
+        "what happened", "what caused", "what led", "what connects",
+        "relationship", "between", "among", "influence", "impact",
+        "为什么", "怎么", "因为", "原因", "连接", "关系", "导致", "影响",
+        "之间", "之间有什么", "什么导致", "什么引起",
+    ];
+    MULTI_KEYWORDS.iter().any(|kw| q.contains(kw))
 }
 
 impl SemanticFS {

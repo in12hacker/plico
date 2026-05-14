@@ -193,3 +193,114 @@ fn handle_recall_procedure(kernel: &AIKernel, params: &serde_json::Value, agent_
     }).collect();
     ToolResult::ok(json!({"procedures": data, "count": data.len()}))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::kernel::tests::make_kernel;
+    use crate::kernel::tools::memory::handle;
+
+    #[test]
+    fn test_memory_store_working() {
+        let (kernel, _tmp) = make_kernel();
+        let params = json!({"content": "test memory", "tier": "working", "tags": ["test"]});
+        let result = handle(&*kernel, "memory.store", &params, "test");
+        assert!(result.error.is_none(), "store working should succeed: {:?}", result.error);
+    }
+
+    #[test]
+    fn test_memory_store_long_term() {
+        let (kernel, _tmp) = make_kernel();
+        let params = json!({"content": "important fact", "tier": "long-term", "tags": ["fact"], "importance": 80});
+        let result = handle(&*kernel, "memory.store", &params, "test");
+        assert!(result.error.is_none(), "store long-term should succeed: {:?}", result.error);
+        let data = result.output;
+        assert_eq!(data["tier"], "long-term");
+        assert!(data["id"].as_str().unwrap().len() > 0);
+    }
+
+    #[test]
+    fn test_memory_store_ephemeral() {
+        let (kernel, _tmp) = make_kernel();
+        let params = json!({"content": "temp data", "tier": "ephemeral"});
+        let result = handle(&*kernel, "memory.store", &params, "test");
+        assert!(result.error.is_none(), "store ephemeral should succeed: {:?}", result.error);
+    }
+
+    #[test]
+    fn test_memory_recall() {
+        let (kernel, _tmp) = make_kernel();
+        handle(&*kernel, "memory.store", &json!({"content": "recall me", "tier": "working"}), "test");
+        let result = handle(&*kernel, "memory.recall", &json!({}), "test");
+        assert!(result.error.is_none());
+        let memories = result.output["memories"].as_array().unwrap();
+        assert!(!memories.is_empty());
+    }
+
+    #[test]
+    fn test_memory_recall_with_tier_filter() {
+        let (kernel, _tmp) = make_kernel();
+        handle(&*kernel, "memory.store", &json!({"content": "working mem", "tier": "working"}), "test");
+        handle(&*kernel, "memory.store", &json!({"content": "lt mem", "tier": "long-term"}), "test");
+
+        let result = handle(&*kernel, "memory.recall", &json!({"tier": "long-term"}), "test");
+        assert!(result.error.is_none());
+        let memories = result.output["memories"].as_array().unwrap();
+        for m in memories {
+            assert_eq!(m["tier"], "long_term");
+        }
+    }
+
+    #[test]
+    fn test_memory_recall_invalid_tier() {
+        let (kernel, _tmp) = make_kernel();
+        let result = handle(&*kernel, "memory.recall", &json!({"tier": "nonexistent"}), "test");
+        assert!(result.error.is_some());
+    }
+
+    #[test]
+    fn test_memory_forget() {
+        let (kernel, _tmp) = make_kernel();
+        let result = handle(&*kernel, "memory.forget", &json!({}), "test");
+        assert!(result.error.is_none());
+        assert_eq!(result.output["forgotten"], true);
+    }
+
+    #[test]
+    fn test_memory_store_procedure() {
+        let (kernel, _tmp) = make_kernel();
+        let params = json!({
+            "name": "test_proc",
+            "description": "a test procedure",
+            "steps": [
+                {"description": "step 1", "action": "do thing", "expected_outcome": "done"},
+                {"description": "step 2", "action": "do other", "expected_outcome": "finished"}
+            ],
+            "tags": ["test"]
+        });
+        let result = handle(&*kernel, "memory.store_procedure", &params, "test");
+        assert!(result.error.is_none(), "store_procedure should succeed: {:?}", result.error);
+    }
+
+    #[test]
+    fn test_memory_recall_procedure() {
+        let (kernel, _tmp) = make_kernel();
+        handle(&*kernel, "memory.store_procedure", &json!({
+            "name": "my_proc",
+            "description": "desc",
+            "steps": [{"description": "s1", "action": "a1", "expected_outcome": "o1"}]
+        }), "test");
+
+        let result = handle(&*kernel, "memory.recall_procedure", &json!({}), "test");
+        assert!(result.error.is_none());
+        let procs = result.output["procedures"].as_array().unwrap();
+        assert!(!procs.is_empty());
+    }
+
+    #[test]
+    fn test_memory_unknown_tool() {
+        let (kernel, _tmp) = make_kernel();
+        let result = handle(&*kernel, "memory.nonexistent", &json!({}), "test");
+        assert!(result.error.is_some());
+    }
+}

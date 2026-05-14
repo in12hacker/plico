@@ -69,7 +69,8 @@ pub(crate) fn check_rate_limit() -> Result<(), String> {
 }
 
 
-fn main() {
+#[tokio::main]
+async fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env())
         .with_writer(io::stderr)

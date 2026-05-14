@@ -492,3 +492,251 @@ pub struct FailureLesson {
     pub text: String,
     pub source: String,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    fn make_cognitive_loop() -> CognitiveLoop {
+        let dir = tempfile::tempdir().unwrap();
+        let embedding = Arc::new(crate::fs::StubEmbeddingProvider::new());
+        let search = Arc::new(crate::fs::search::memory::InMemoryBackend::new());
+        let memory = Arc::new(crate::memory::LayeredMemory::new());
+        let cas = Arc::new(crate::cas::CASStorage::new(dir.path().join("cas")).unwrap());
+        let context_analyzer = Arc::new(ContextQualityEngine::new(embedding.clone(), search, memory, cas));
+        let intent_network = Arc::new(IntentSemanticNetwork::new(embedding));
+        let skill_forge = Arc::new(SkillForge::new());
+        CognitiveLoop::new(context_analyzer, intent_network, skill_forge)
+    }
+
+    #[tokio::test]
+    async fn test_new_creates_default_state() {
+        let loop_ = make_cognitive_loop();
+        let stats = loop_.stats().await;
+        assert_eq!(stats.total_optimizations, 0);
+        assert_eq!(stats.total_token_savings, 0);
+    }
+
+    #[tokio::test]
+    async fn test_register_and_end_session() {
+        let loop_ = make_cognitive_loop();
+        loop_.register_session("agent-1", "session-1").await;
+
+        let state = loop_.state.read().await;
+        assert!(state.active_sessions.contains_key("agent-1:session-1"));
+        drop(state);
+
+        loop_.end_session("agent-1", "session-1").await;
+
+        let state = loop_.state.read().await;
+        assert!(!state.active_sessions.contains_key("agent-1:session-1"));
+    }
+
+    #[tokio::test]
+    async fn test_update_context_utilization() {
+        let loop_ = make_cognitive_loop();
+        loop_.register_session("agent-1", "session-1").await;
+        loop_.update_context_utilization("agent-1", "session-1", 0.85).await;
+
+        let state = loop_.state.read().await;
+        let session = state.active_sessions.get("agent-1:session-1").unwrap();
+        assert!((session.context_utilization - 0.85).abs() < 0.01);
+    }
+
+    #[tokio::test]
+    async fn test_update_context_utilization_unknown_session() {
+        let loop_ = make_cognitive_loop();
+        // Should be a no-op, not panic
+        loop_.update_context_utilization("unknown", "unknown", 0.5).await;
+    }
+
+    #[tokio::test]
+    async fn test_end_session_unknown() {
+        let loop_ = make_cognitive_loop();
+        // Should be a no-op, not panic
+        loop_.end_session("unknown", "unknown").await;
+    }
+
+    #[tokio::test]
+    async fn test_run_periodic_check_empty() {
+        let loop_ = make_cognitive_loop();
+        let reports = loop_.run_periodic_check().await.unwrap();
+        assert!(reports.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_run_periodic_check_with_session() {
+        let loop_ = make_cognitive_loop();
+        loop_.register_session("agent-1", "session-1").await;
+        // Set high utilization to trigger check
+        loop_.update_context_utilization("agent-1", "session-1", 0.9).await;
+
+        let reports = loop_.run_periodic_check().await.unwrap();
+        // May or may not produce reports depending on attention_focus
+        // Just verify it doesn't panic
+        let _ = reports;
+    }
+
+    #[tokio::test]
+    async fn test_on_operation_completed_success() {
+        let loop_ = make_cognitive_loop();
+        let result = loop_.on_operation_completed(
+            "agent-1", "test_op", true, &[], &[]
+        ).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_on_operation_completed_failure() {
+        let loop_ = make_cognitive_loop();
+        let result = loop_.on_operation_completed(
+            "agent-1", "test_op", false, &[], &[]
+        ).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_with_config() {
+        let embedding = Arc::new(crate::fs::StubEmbeddingProvider::new());
+        let search = Arc::new(crate::fs::search::memory::InMemoryBackend::new());
+        let memory = Arc::new(crate::memory::LayeredMemory::new());
+        let dir2 = tempfile::tempdir().unwrap();
+        let cas = Arc::new(crate::cas::CASStorage::new(dir2.path().join("cas")).unwrap());
+        let context_analyzer = Arc::new(ContextQualityEngine::new(embedding.clone(), search, memory, cas));
+        let intent_network = Arc::new(IntentSemanticNetwork::new(embedding));
+        let skill_forge = Arc::new(SkillForge::new());
+
+        let config = CognitiveConfig {
+            context_compression_threshold: 0.5,
+            proactive_prefetch_enabled: false,
+            failure_pattern_detection_enabled: false,
+            skill_extraction_enabled: false,
+            report_verbosity: crate::kernel::cognition::ReportVerbosity::Detailed,
+        };
+
+        let loop_ = CognitiveLoop::new(context_analyzer, intent_network, skill_forge)
+            .with_config(config);
+        assert!((loop_.config.context_compression_threshold - 0.5).abs() < 0.01);
+        assert!(!loop_.config.proactive_prefetch_enabled);
+    }
+
+    #[tokio::test]
+    async fn test_with_shared_tracker() {
+        let embedding = Arc::new(crate::fs::StubEmbeddingProvider::new());
+        let search = Arc::new(crate::fs::search::memory::InMemoryBackend::new());
+        let memory = Arc::new(crate::memory::LayeredMemory::new());
+        let dir3 = tempfile::tempdir().unwrap();
+        let cas = Arc::new(crate::cas::CASStorage::new(dir3.path().join("cas")).unwrap());
+        let context_analyzer = Arc::new(ContextQualityEngine::new(embedding.clone(), search, memory, cas));
+        let intent_network = Arc::new(IntentSemanticNetwork::new(embedding));
+        let skill_forge = Arc::new(SkillForge::new());
+        let tracker = Arc::new(TrajectoryTracker::new());
+
+        let loop_ = CognitiveLoop::with_shared_tracker(
+            context_analyzer, intent_network, skill_forge, tracker
+        );
+        let traj = loop_.trajectory_tracker.get_recent_trajectory("agent-1", 10).await;
+        assert_eq!(traj.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_on_intent_declared_empty_context() {
+        let loop_ = make_cognitive_loop();
+        loop_.register_session("agent-1", "session-1").await;
+
+        let report = loop_.on_intent_declared(
+            "agent-1", "session-1", "test intent", &[]
+        ).await.unwrap();
+
+        assert_eq!(report.agent_id, "agent-1");
+        assert_eq!(report.session_id, "session-1");
+        assert!(report.context_before.cid_count == 0);
+    }
+
+    #[tokio::test]
+    async fn test_stats_after_operations() {
+        let loop_ = make_cognitive_loop();
+        loop_.register_session("agent-1", "session-1").await;
+
+        loop_.on_intent_declared(
+            "agent-1", "session-1", "test", &[]
+        ).await.unwrap();
+
+        let stats = loop_.stats().await;
+        assert_eq!(stats.total_optimizations, 1);
+    }
+
+    #[tokio::test]
+    async fn test_on_event_intent_completed() {
+        let loop_arc = Arc::new(make_cognitive_loop());
+        loop_arc.on_event(&KernelEvent::IntentCompleted {
+            intent_id: "i1".into(),
+            success: true,
+        });
+        // Give spawned task a moment
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+
+    #[tokio::test]
+    async fn test_on_event_memory_stored() {
+        let loop_arc = Arc::new(make_cognitive_loop());
+        loop_arc.on_event(&KernelEvent::MemoryStored {
+            agent_id: "a1".into(),
+            tier: "working".into(),
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+
+    #[tokio::test]
+    async fn test_on_event_cognitive_conflict() {
+        let loop_arc = Arc::new(make_cognitive_loop());
+        loop_arc.on_event(&KernelEvent::CognitiveConflictDetected {
+            conflict_id: "c1".into(),
+            conflict_type: "duplicate_entity".into(),
+            description: "test conflict".into(),
+            involved_cids: vec!["cid1".into()],
+            agent_id: "a1".into(),
+            severity: "medium".into(),
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+
+    #[tokio::test]
+    async fn test_on_event_other() {
+        let loop_arc = Arc::new(make_cognitive_loop());
+        // Non-matching event — should be no-op
+        loop_arc.on_event(&KernelEvent::ObjectStored {
+            cid: "c1".into(),
+            agent_id: "a1".into(),
+            tags: vec![],
+        });
+    }
+
+    #[test]
+    fn test_optimization_action_debug_clone() {
+        let action = OptimizationAction::ContextCompressed {
+            original_tokens: 100,
+            compressed_tokens: 50,
+            reason: "redundancy".into(),
+        };
+        let cloned = action.clone();
+        assert!(matches!(cloned, OptimizationAction::ContextCompressed { .. }));
+    }
+
+    #[test]
+    fn test_cognitive_state_default() {
+        let state = CognitiveState::default();
+        assert!(state.active_sessions.is_empty());
+        assert_eq!(state.last_optimization_ms, 0);
+        assert_eq!(state.stats.total_optimizations, 0);
+    }
+
+    #[test]
+    fn test_context_snapshot_default() {
+        let snap = ContextSnapshot::default();
+        assert_eq!(snap.cid_count, 0);
+        assert_eq!(snap.token_count, 0);
+        assert!((snap.quality_score - 0.0).abs() < 0.01);
+    }
+}

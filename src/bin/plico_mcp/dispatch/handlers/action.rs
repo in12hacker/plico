@@ -191,6 +191,9 @@ pub(in crate::dispatch) fn dispatch_plico_action(action: &str, args: &Value, ker
                 .and_then(|t| t.as_array())
                 .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
                 .unwrap_or_default();
+            let intent = args.get("intent")
+                .and_then(|i| i.as_str())
+                .map(|s| s.to_string());
 
             let req = ApiRequest::Search {
                 query: query.to_string(),
@@ -203,7 +206,7 @@ pub(in crate::dispatch) fn dispatch_plico_action(action: &str, args: &Value, ker
                 exclude_tags,
                 since: None,
                 until: None,
-                intent_context: None,
+                intent_context: intent,
             };
             format_plico_response(kernel.handle_api_request(req), args)
         }
@@ -558,7 +561,8 @@ pub(in crate::dispatch) fn dispatch_plico_action_remote(action: &str, args: &Val
         "search" => {
             let query = args.get("query").and_then(|q| q.as_str()).ok_or("search requires query")?;
             let limit = args.get("limit").and_then(|l| l.as_u64()).map(|l| l as usize);
-            ApiRequest::Search { query: query.to_string(), agent_id: agent.to_string(), tenant_id: None, agent_token: None, limit, offset: None, require_tags: vec![], exclude_tags: vec![], since: None, until: None, intent_context: None }
+            let intent = args.get("intent").and_then(|i| i.as_str()).map(|s| s.to_string());
+            ApiRequest::Search { query: query.to_string(), agent_id: agent.to_string(), tenant_id: None, agent_token: None, limit, offset: None, require_tags: vec![], exclude_tags: vec![], since: None, until: None, intent_context: intent }
         }
         "remember" => {
             let content = args.get("content").and_then(|c| c.as_str()).ok_or("remember requires content")?;

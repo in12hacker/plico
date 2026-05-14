@@ -338,4 +338,127 @@ mod tests {
         assert!(msg.contains("Completed"));
         assert!(msg.contains("Running"));
     }
+
+    #[test]
+    fn test_agent_with_description() {
+        let agent = Agent::with_description("test".into(), "a test agent".into());
+        assert_eq!(agent.description(), "a test agent");
+        assert_eq!(agent.name, "test");
+    }
+
+    #[test]
+    fn test_agent_created_at_ms() {
+        let agent = Agent::new("ts-test".into());
+        assert!(agent.created_at_ms() > 0);
+    }
+
+    #[test]
+    fn test_agent_assign_intent() {
+        let mut agent = Agent::new("intent-test".into());
+        assert_eq!(agent.state(), AgentState::Created);
+        let intent = Intent::new(IntentPriority::High, "do something".into());
+        agent.assign_intent(intent);
+        assert_eq!(agent.state(), AgentState::Waiting);
+    }
+
+    #[test]
+    fn test_agent_get_set_resources() {
+        let mut agent = Agent::new("res-test".into());
+        let res = agent.resources().clone();
+        assert_eq!(res.memory_quota, 0);
+        let mut new_res = AgentResources::default();
+        new_res.memory_quota = 100;
+        agent.set_resources(new_res);
+        assert_eq!(agent.resources().memory_quota, 100);
+    }
+
+    #[test]
+    fn test_agent_state_is_terminal() {
+        assert!(!AgentState::Created.is_terminal());
+        assert!(!AgentState::Waiting.is_terminal());
+        assert!(!AgentState::Running.is_terminal());
+        assert!(!AgentState::Suspended.is_terminal());
+        assert!(AgentState::Completed.is_terminal());
+        assert!(AgentState::Failed.is_terminal());
+        assert!(AgentState::Terminated.is_terminal());
+    }
+
+    #[test]
+    fn test_agent_state_is_active() {
+        assert!(!AgentState::Created.is_active());
+        assert!(AgentState::Waiting.is_active());
+        assert!(AgentState::Running.is_active());
+        assert!(!AgentState::Suspended.is_active());
+        assert!(!AgentState::Completed.is_active());
+    }
+
+    #[test]
+    fn test_agent_id_display() {
+        let id = AgentId::new();
+        let s = id.to_string();
+        assert!(!s.is_empty());
+    }
+
+    #[test]
+    fn test_agent_id_default() {
+        let id = AgentId::default();
+        assert!(!id.0.is_empty());
+    }
+
+    #[test]
+    fn test_intent_with_action() {
+        let intent = Intent::new(IntentPriority::High, "test".into())
+            .with_action("{\"type\":\"create\"}".into());
+        assert!(intent.action.is_some());
+    }
+
+    #[test]
+    fn test_intent_with_agent() {
+        let aid = AgentId::new();
+        let intent = Intent::new(IntentPriority::Low, "test".into())
+            .with_agent(aid.clone());
+        assert_eq!(intent.agent_id, Some(aid));
+    }
+
+    #[test]
+    fn test_intent_description() {
+        let intent = Intent::new(IntentPriority::Medium, "my task".into());
+        assert_eq!(intent.description(), "my task");
+    }
+
+    #[test]
+    fn test_intent_id_display() {
+        let id = IntentId::new();
+        let s = id.to_string();
+        assert!(!s.is_empty());
+    }
+
+    #[test]
+    fn test_intent_id_default() {
+        let id = IntentId::default();
+        assert!(!id.0.is_empty());
+    }
+
+    #[test]
+    fn test_intent_priority_ordering() {
+        assert!(IntentPriority::Critical > IntentPriority::High);
+        assert!(IntentPriority::High > IntentPriority::Medium);
+        assert!(IntentPriority::Medium > IntentPriority::Low);
+    }
+
+    #[test]
+    fn test_can_transition_created_to_suspended() {
+        assert!(AgentState::Created.can_transition(AgentState::Suspended));
+    }
+
+    #[test]
+    fn test_can_transition_suspended_to_running() {
+        assert!(AgentState::Suspended.can_transition(AgentState::Running));
+    }
+
+    #[test]
+    fn test_transition_error_is_std_error() {
+        let err = TransitionError { from: AgentState::Completed, to: AgentState::Running };
+        let _: &dyn std::error::Error = &err;
+    }
 }

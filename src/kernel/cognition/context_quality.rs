@@ -65,11 +65,12 @@ pub enum RemovalReason {
 }
 
 /// 上下文质量引擎
-#[allow(dead_code)]
 pub struct ContextQualityEngine {
     embedding: Arc<dyn EmbeddingProvider>,
+    #[allow(dead_code)] // reserved for future semantic search in analysis
     search: Arc<dyn SemanticSearch>,
     kg: Option<Arc<dyn KnowledgeGraph>>,
+    #[allow(dead_code)] // reserved for future memory-aware quality checks
     memory: Arc<LayeredMemory>,
     cas: Arc<CASStorage>,
 }
@@ -421,5 +422,224 @@ impl ContextQualityEngine {
             let lower = tag.to_lowercase();
             TEMPORARY_TAGS.iter().any(|t| lower.contains(t))
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    fn make_engine() -> (ContextQualityEngine, Arc<CASStorage>, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let cas = Arc::new(CASStorage::new(dir.path().join("cas")).unwrap());
+        let embedding = Arc::new(crate::fs::StubEmbeddingProvider::new());
+        let search = Arc::new(crate::fs::search::memory::InMemoryBackend::new());
+        let memory = Arc::new(crate::memory::LayeredMemory::new());
+        let engine = ContextQualityEngine::new(embedding, search, memory, cas.clone());
+        (engine, cas, dir)
+    }
+
+    fn store_text_object(cas: &CASStorage, text: &str, tags: &[&str]) -> String {
+        use crate::cas::{AIObject, AIObjectMeta, ContentType};
+        let meta = AIObjectMeta {
+            content_type: ContentType::Text,
+            tags: tags.iter().map(|s| s.to_string()).collect(),
+            created_by: "test".to_string(),
+            created_at: 1000,
+            intent: None,
+            tenant_id: "default".to_string(),
+        };
+        let obj = AIObject::new(text.as_bytes().to_vec(), meta);
+        let cid = obj.cid.clone();
+        cas.put(&obj).unwrap();
+        cid
+    }
+
+    #[tokio::test]
+    async fn test_analyze_empty_context() {
+        let (engine, _cas, _dir) = make_engine();
+        let quality = engine.analyze("agent-1", &[]).await.unwrap();
+        assert!((quality.score - 1.0).abs() < 0.01);
+        assert_eq!(quality.token_count, 0);
+        assert!(quality.issues.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_analyze_single_object() {
+        let (engine, cas, _dir) = make_engine();
+        let cid = store_text_object(&cas, "hello world test", &["test"]);
+        let quality = engine.analyze("agent-1", &[cid]).await.unwrap();
+        assert!(quality.score > 0.0);
+        assert!(quality.token_count > 0);
+    }
+
+    #[tokio::test]
+    async fn test_analyze_temporary_tags() {
+        let (engine, cas, _dir) = make_engine();
+        let cid = store_text_object(&cas, "debug output", &["debug", "temp"]);
+        let quality = engine.analyze("agent-1", &[cid]).await.unwrap();
+        assert!(quality.breakdown.temporary_data > 0);
+    }
+
+    #[tokio::test]
+    async fn test_analyze_procedural_tags() {
+        let (engine, cas, _dir) = make_engine();
+        let cid = store_text_object(&cas, "skill procedure", &["skill:deploy", "procedural"]);
+        let quality = engine.analyze("agent-1", &[cid]).await.unwrap();
+        assert!(quality.breakdown.procedural_info > 0);
+    }
+
+    #[tokio::test]
+    async fn test_analyze_core_knowledge() {
+        let (engine, cas, _dir) = make_engine();
+        let cid = store_text_object(&cas, "important fact", &["knowledge", "fact"]);
+        let quality = engine.analyze("agent-1", &[cid]).await.unwrap();
+        assert!(quality.breakdown.core_knowledge > 0);
+    }
+
+    #[tokio::test]
+    async fn test_compress_small_context() {
+        let (engine, cas, _dir) = make_engine();
+        let cids: Vec<String> = (0..2)
+            .map(|i| store_text_object(&cas, &format!("item {}", i), &["test"]))
+            .collect();
+        let compressed = engine.compress("agent-1", &cids).await.unwrap();
+        // Context too small to compress (<=3)
+        assert_eq!(compressed.retained_cids.len(), 2);
+        assert!(compressed.removed.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_compress_empty_context() {
+        let (engine, _cas, _dir) = make_engine();
+        let compressed = engine.compress("agent-1", &[]).await.unwrap();
+        assert!(compressed.retained_cids.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_analyze_nonexistent_cid() {
+        let (engine, _cas, _dir) = make_engine();
+        // CID not in CAS → token_count = 0, empty embedding
+        let quality = engine.analyze("agent-1", &["nonexistent".to_string()]).await.unwrap();
+        // Should not panic, just return low quality
+        assert!(quality.score >= 0.0);
+    }
+
+    #[tokio::test]
+    async fn test_compress_with_redundant_content() {
+        let (engine, cas, _dir) = make_engine();
+        // Create many similar objects to trigger compression (need >3)
+        let mut cids = Vec::new();
+        for i in 0..6 {
+            let cid = store_text_object(&cas, &format!("similar content about testing {}", i), &["test"]);
+            cids.push(cid);
+        }
+        let compressed = engine.compress("agent-1", &cids).await.unwrap();
+        // May or may not remove items depending on similarity
+        assert!(compressed.retained_cids.len() <= cids.len());
+    }
+
+    #[tokio::test]
+    async fn test_analyze_high_temporary_ratio() {
+        let (engine, cas, _dir) = make_engine();
+        // Create mostly temporary content
+        let mut cids = Vec::new();
+        for i in 0..5 {
+            let cid = store_text_object(&cas, &format!("debug log entry {}", i), &["debug", "log"]);
+            cids.push(cid);
+        }
+        let quality = engine.analyze("agent-1", &cids).await.unwrap();
+        // Should detect high temporary ratio
+        let has_temp_issue = quality.issues.iter().any(|i| matches!(i, ContextIssue::HighTemporaryRatio { .. }));
+        // With all temp content, ratio should be > 0.2
+        assert!(has_temp_issue || quality.breakdown.temporary_data > 0);
+    }
+
+    #[test]
+    fn test_context_issue_debug_clone() {
+        let issue = ContextIssue::HighRedundancy { redundant_ratio: 0.5 };
+        let cloned = issue.clone();
+        assert!(matches!(cloned, ContextIssue::HighRedundancy { .. }));
+    }
+
+    #[test]
+    fn test_removal_reason_debug_clone() {
+        let reason = RemovalReason::DuplicateOf("cid1".to_string());
+        let cloned = reason.clone();
+        assert!(matches!(cloned, RemovalReason::DuplicateOf(_)));
+    }
+
+    #[test]
+    fn test_compressed_context_debug() {
+        let ctx = CompressedContext {
+            retained_cids: vec!["c1".into()],
+            summary_cids: vec![],
+            token_count: 100,
+            reason: "test".into(),
+            removed: vec![],
+        };
+        let debug = format!("{:?}", ctx);
+        assert!(debug.contains("retained_cids"));
+    }
+
+    #[test]
+    fn test_temporary_tags_list() {
+        assert!(TEMPORARY_TAGS.contains(&"temp"));
+        assert!(TEMPORARY_TAGS.contains(&"debug"));
+        assert!(TEMPORARY_TAGS.contains(&"log"));
+        assert!(TEMPORARY_TAGS.contains(&"ephemeral"));
+    }
+
+    #[tokio::test]
+    async fn test_analyze_mixed_content() {
+        let (engine, cas, _dir) = make_engine();
+        let c1 = store_text_object(&cas, "core knowledge", &["knowledge"]);
+        let c2 = store_text_object(&cas, "debug output", &["debug"]);
+        let c3 = store_text_object(&cas, "skill data", &["skill:build"]);
+        let quality = engine.analyze("agent-1", &[c1, c2, c3]).await.unwrap();
+        assert!(quality.breakdown.core_knowledge > 0);
+        assert!(quality.breakdown.temporary_data > 0);
+        assert!(quality.breakdown.procedural_info > 0);
+    }
+
+    #[tokio::test]
+    async fn test_cid_token_count() {
+        let (engine, cas, _dir) = make_engine();
+        let cid = store_text_object(&cas, "hello", &["test"]);
+        // "hello" = 5 bytes → 5/4 = 1, max(1) = 1
+        assert!(engine.cid_token_count(&cid) >= 1);
+    }
+
+    #[tokio::test]
+    async fn test_cid_tags() {
+        let (engine, cas, _dir) = make_engine();
+        let cid = store_text_object(&cas, "test", &["tag1", "tag2"]);
+        let tags = engine.cid_tags(&cid);
+        assert!(tags.contains(&"tag1".to_string()));
+        assert!(tags.contains(&"tag2".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_cid_tags_nonexistent() {
+        let (engine, _cas, _dir) = make_engine();
+        let tags = engine.cid_tags("nonexistent");
+        assert!(tags.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_cid_token_count_nonexistent() {
+        let (engine, _cas, _dir) = make_engine();
+        assert_eq!(engine.cid_token_count("nonexistent"), 0);
+    }
+
+    #[tokio::test]
+    async fn test_is_temporary() {
+        let (engine, cas, _dir) = make_engine();
+        let cid = store_text_object(&cas, "test", &["debug"]);
+        assert!(engine.is_temporary(&cid).await.unwrap());
+
+        let cid2 = store_text_object(&cas, "test2", &["knowledge"]);
+        assert!(!engine.is_temporary(&cid2).await.unwrap());
     }
 }

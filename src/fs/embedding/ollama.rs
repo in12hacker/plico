@@ -317,7 +317,7 @@ mod tests {
     fn test_ollama_dimension_default() {
         let backend = OllamaBackend::new("http://127.0.0.1:1", "model").unwrap();
         // dimension() calls probe which may fail on unreachable server, returns 0 or cached
-        let dim = backend.dimension();
-        assert!(dim == 0 || dim > 0);
+        let _dim = backend.dimension();
+        // dimension() returns usize (always >= 0), no assert needed
     }
 }

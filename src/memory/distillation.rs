@@ -336,4 +336,218 @@ mod tests {
         assert!(prompt.contains("some memories here"));
         assert!(prompt.contains("Compress") || prompt.contains("Summarize"));
     }
+
+    // --- rule_based_merge: truncation path (text > 2000 chars) ---
+
+    #[test]
+    fn test_rule_based_merge_truncates_long_text() {
+        let long_a = "a".repeat(1500);
+        let long_b = "b".repeat(1500);
+        let entries = vec![
+            make_working_entry("e1", &long_a, MemoryType::Semantic, vec![]),
+            make_working_entry("e2", &long_b, MemoryType::Semantic, vec![]),
+        ];
+        let result = distill_working_memory(&entries, |_| None);
+        assert_eq!(result.len(), 1);
+        // Two unique 1500-char strings joined by " | " = 3003 chars > 2000
+        assert!(result[0].content.len() <= 2003); // 2000 + "..."
+        assert!(result[0].content.ends_with("..."));
+    }
+
+    #[test]
+    fn test_rule_based_merge_no_truncation_under_limit() {
+        let short = "a".repeat(100);
+        let entries = vec![
+            make_working_entry("e1", &short, MemoryType::Semantic, vec![]),
+        ];
+        let result = distill_working_memory(&entries, |_| None);
+        assert!(!result[0].content.ends_with("..."));
+    }
+
+    // --- distill_working_memory_parallel ---
+
+    #[test]
+    fn test_parallel_distill_empty() {
+        let result = distill_working_memory_parallel(&[], |_| None);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_parallel_distill_single_type_delegates() {
+        // When only one memory type, should delegate to non-parallel version
+        let entries = vec![
+            make_working_entry("e1", "fact A", MemoryType::Semantic, vec!["s".to_string()]),
+            make_working_entry("e2", "fact B", MemoryType::Semantic, vec!["s".to_string()]),
+        ];
+        let result = distill_working_memory_parallel(&entries, |_| None);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].memory_type, MemoryType::Semantic);
+        assert!(result[0].content.contains("fact A"));
+        assert!(result[0].content.contains("fact B"));
+    }
+
+    #[test]
+    fn test_parallel_distill_multi_type_with_summarizer() {
+        let entries = vec![
+            make_working_entry("e1", "episodic event", MemoryType::Episodic, vec!["a".to_string()]),
+            make_working_entry("e2", "semantic fact", MemoryType::Semantic, vec!["b".to_string()]),
+        ];
+        let result = distill_working_memory_parallel(&entries, |text| {
+            Some(format!("compressed: {}", text.len()))
+        });
+        assert_eq!(result.len(), 2);
+        for entry in &result {
+            assert!(entry.content.starts_with("compressed:"));
+        }
+        let types: Vec<MemoryType> = result.iter().map(|d| d.memory_type).collect();
+        assert!(types.contains(&MemoryType::Episodic));
+        assert!(types.contains(&MemoryType::Semantic));
+    }
+
+    #[test]
+    fn test_parallel_distill_multi_type_none_summarizer() {
+        // When summarizer returns None, parallel path uses combined_text.clone() (not rule_based_merge)
+        let entries = vec![
+            make_working_entry("e1", "event alpha", MemoryType::Episodic, vec![]),
+            make_working_entry("e2", "fact beta", MemoryType::Semantic, vec![]),
+        ];
+        let result = distill_working_memory_parallel(&entries, |_| None);
+        assert_eq!(result.len(), 2);
+        let contents: Vec<String> = result.iter().map(|d| d.content.clone()).collect();
+        assert!(contents.contains(&"event alpha".to_string()));
+        assert!(contents.contains(&"fact beta".to_string()));
+    }
+
+    #[test]
+    fn test_parallel_distill_preserves_tags_and_importance() {
+        let mut e1 = make_working_entry("e1", "A", MemoryType::Episodic, vec!["t1".to_string()]);
+        e1.importance = 80;
+        let mut e2 = make_working_entry("e2", "B", MemoryType::Semantic, vec!["t2".to_string()]);
+        e2.importance = 40;
+        let result = distill_working_memory_parallel(&[e1, e2], |_| None);
+        assert_eq!(result.len(), 2);
+        for entry in &result {
+            if entry.memory_type == MemoryType::Episodic {
+                assert_eq!(entry.importance, 80);
+                assert!(entry.tags.contains(&"t1".to_string()));
+            } else {
+                assert_eq!(entry.importance, 40);
+                assert!(entry.tags.contains(&"t2".to_string()));
+            }
+        }
+    }
+
+    #[test]
+    fn test_parallel_distill_three_types() {
+        let entries = vec![
+            make_working_entry("e1", "ep A", MemoryType::Episodic, vec![]),
+            make_working_entry("e2", "sem B", MemoryType::Semantic, vec![]),
+            make_working_entry("e3", "proc C", MemoryType::Procedural, vec![]),
+        ];
+        let result = distill_working_memory_parallel(&entries, |text| Some(format!("S:{}", text)));
+        assert_eq!(result.len(), 3);
+        let types: Vec<MemoryType> = result.iter().map(|d| d.memory_type).collect();
+        assert!(types.contains(&MemoryType::Episodic));
+        assert!(types.contains(&MemoryType::Semantic));
+        assert!(types.contains(&MemoryType::Procedural));
+    }
+
+    // --- to_long_term_entry: comprehensive field checks ---
+
+    #[test]
+    fn test_to_long_term_entry_all_fields() {
+        let distilled = DistilledEntry {
+            content: "final summary".to_string(),
+            memory_type: MemoryType::Procedural,
+            tags: vec!["workflow".to_string(), "deploy".to_string()],
+            importance: 95,
+            source_ids: vec!["s1".to_string(), "s2".to_string()],
+        };
+        let entry = to_long_term_entry(&distilled, "agent-x", "tenant-y");
+        assert_eq!(entry.tier, MemoryTier::LongTerm);
+        assert_eq!(entry.agent_id, "agent-x");
+        assert_eq!(entry.tenant_id, "tenant-y");
+        assert_eq!(entry.importance, 95);
+        assert_eq!(entry.memory_type, MemoryType::Procedural);
+        assert_eq!(entry.tags, vec!["workflow".to_string(), "deploy".to_string()]);
+        assert_eq!(entry.access_count, 0);
+        assert_eq!(entry.scope, MemoryScope::Private);
+        assert!(entry.embedding.is_none());
+        assert!(entry.ttl_ms.is_none());
+        assert!(entry.original_ttl_ms.is_none());
+        assert!(entry.causal_parent.is_none());
+        assert!(entry.supersedes.is_none());
+        assert!(!entry.id.is_empty());
+        if let MemoryContent::Text(ref t) = entry.content {
+            assert_eq!(t, "final summary");
+        } else {
+            panic!("Expected Text content");
+        }
+    }
+
+    // --- distill_working_memory: MemoryContent variants ---
+
+    #[test]
+    fn test_distill_with_object_ref_content() {
+        let mut entry = make_working_entry("e1", "ignored", MemoryType::Semantic, vec![]);
+        entry.content = MemoryContent::ObjectRef("abc123cid".to_string());
+        let result = distill_working_memory(&[entry], |_| None);
+        assert_eq!(result.len(), 1);
+        assert!(result[0].content.contains("ObjectRef"));
+        assert!(result[0].content.contains("abc123cid"));
+    }
+
+    #[test]
+    fn test_distill_with_structured_content() {
+        let mut entry = make_working_entry("e1", "", MemoryType::Semantic, vec![]);
+        entry.content = MemoryContent::Structured(serde_json::json!({"key": "value"}));
+        let result = distill_working_memory(&[entry], |_| None);
+        assert_eq!(result.len(), 1);
+        assert!(result[0].content.contains("key"));
+        assert!(result[0].content.contains("value"));
+    }
+
+    // --- distill: edge cases ---
+
+    #[test]
+    fn test_distill_empty_tags() {
+        let entries = vec![
+            make_working_entry("e1", "content", MemoryType::Untyped, vec![]),
+        ];
+        let result = distill_working_memory(&entries, |_| None);
+        assert_eq!(result.len(), 1);
+        assert!(result[0].tags.is_empty());
+        assert_eq!(result[0].memory_type, MemoryType::Untyped);
+    }
+
+    #[test]
+    fn test_distill_duplicate_tags_deduped() {
+        let entries = vec![
+            make_working_entry("e1", "A", MemoryType::Semantic, vec!["shared".to_string()]),
+            make_working_entry("e2", "B", MemoryType::Semantic, vec!["shared".to_string()]),
+        ];
+        let result = distill_working_memory(&entries, |_| None);
+        let tag_count = result[0].tags.iter().filter(|t| *t == "shared").count();
+        assert_eq!(tag_count, 1);
+    }
+
+    #[test]
+    fn test_distill_summarizer_none_falls_back_to_rule_based() {
+        let entries = vec![
+            make_working_entry("e1", "hello world", MemoryType::Semantic, vec![]),
+        ];
+        let result = distill_working_memory(&entries, |_| None);
+        assert!(result[0].content.contains("hello world"));
+    }
+
+    #[test]
+    fn test_distill_procedural_type() {
+        let entries = vec![
+            make_working_entry("e1", "step 1: do thing", MemoryType::Procedural, vec!["workflow".to_string()]),
+        ];
+        let result = distill_working_memory(&entries, |_| None);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].memory_type, MemoryType::Procedural);
+        assert!(result[0].content.contains("step 1"));
+    }
 }

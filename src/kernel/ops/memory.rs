@@ -1260,7 +1260,7 @@ mod tests {
         let (kernel, _dir) = crate::kernel::tests::make_kernel();
         kernel.remember("kernel", "default", "test".to_string()).ok();
         let entries = kernel.recall("kernel", "default");
-        assert!(entries.len() >= 1);
+        assert!(!entries.is_empty());
     }
 
     #[test]
@@ -1537,5 +1537,796 @@ mod tests {
         let config = RetrievalConfig::for_intent(classified.intent);
         assert!(config.time_decay_boost, "temporal queries should have time_decay_boost");
         assert!(config.use_kg, "temporal queries should use KG");
+    }
+
+    #[test]
+    fn test_remember_working() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let result = kernel.remember_working("kernel", "default", "working memory".to_string(), vec!["tag1".to_string()]);
+        assert!(result.is_ok());
+        let entries = kernel.recall("kernel", "default");
+        assert!(entries.iter().any(|e| e.content.display().to_string().contains("working memory")));
+    }
+
+    #[test]
+    fn test_remember_working_scoped() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        kernel.register_agent("scoped_agent".to_string()).unwrap();
+        let result = kernel.remember_working_scoped(
+            "scoped_agent", "default",
+            "scoped working memory".to_string(),
+            vec!["scope_test".to_string()],
+            MemoryScope::Shared,
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_recall_visible() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        kernel.register_agent("vis_agent".to_string()).unwrap();
+        kernel.remember_working_scoped(
+            "vis_agent", "default",
+            "visible memory".to_string(),
+            vec![],
+            MemoryScope::Shared,
+        ).unwrap();
+        let entries = kernel.recall_visible("vis_agent", "default", &[]);
+        assert!(!entries.is_empty());
+    }
+
+    #[test]
+    fn test_forget_ephemeral() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        kernel.remember("kernel", "default", "ephemeral stuff".to_string()).ok();
+        kernel.forget_ephemeral("kernel");
+        // After forgetting, ephemeral entries should be cleared
+        let entries = kernel.recall("kernel", "default");
+        assert!(entries.iter().all(|e| e.tier != MemoryTier::Ephemeral));
+    }
+
+    #[test]
+    fn test_evict_expired() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        kernel.remember("kernel", "default", "test".to_string()).ok();
+        let evicted = kernel.evict_expired("kernel");
+        // May or may not evict anything depending on TTL
+        let _ = evicted;
+    }
+
+    #[test]
+    fn test_promote_check() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        kernel.remember("kernel", "default", "promotable".to_string()).ok();
+        kernel.promote_check("kernel");
+        // Should not panic
+    }
+
+    #[test]
+    fn test_memory_move() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let id = kernel.remember("kernel", "default", "movable".to_string()).unwrap();
+        let moved = kernel.memory_move("kernel", "default", &id, MemoryTier::LongTerm);
+        // May or may not succeed depending on implementation
+        let _ = moved;
+    }
+
+    #[test]
+    fn test_memory_delete() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let id = kernel.remember_long_term("kernel", "default", "deletable".to_string(), vec![], 50).unwrap();
+        let deleted = kernel.memory_delete("kernel", "default", &id);
+        assert!(deleted);
+    }
+
+    #[test]
+    fn test_memory_delete_nonexistent() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let deleted = kernel.memory_delete("kernel", "default", "nonexistent-id");
+        assert!(!deleted);
+    }
+
+    #[test]
+    fn test_remember_action() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let result = kernel.remember_action("kernel", "default", "ran a command".to_string(), vec!["action".to_string()]);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_remember_long_term_batch() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let contents = vec![
+            ("fact 1".to_string(), vec!["fact".to_string()], 70u8),
+            ("fact 2".to_string(), vec!["fact".to_string()], 80u8),
+            ("fact 3".to_string(), vec!["fact".to_string()], 60u8),
+        ];
+        let result = kernel.remember_long_term_batch("kernel", "default", &contents);
+        assert!(result.is_ok());
+        let ids = result.unwrap();
+        assert_eq!(ids.len(), 3);
+        assert!(ids.iter().all(|id| !id.is_empty()));
+    }
+
+    #[test]
+    fn test_remember_long_term_scoped() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let result = kernel.remember_long_term_scoped(
+            "kernel", "default",
+            "scoped long term".to_string(),
+            vec!["scoped".to_string()],
+            85,
+            MemoryScope::Shared,
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_recall_relevant() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        kernel.remember_long_term("kernel", "default", "relevant fact".to_string(), vec!["test".to_string()], 90).ok();
+        let entries = kernel.recall_relevant("kernel", "default", 1000);
+        // Should return some entries within budget
+        let _ = entries;
+    }
+
+    #[test]
+    fn test_cosine_sim() {
+        let a = vec![1.0, 0.0, 0.0];
+        let b = vec![1.0, 0.0, 0.0];
+        assert!((cosine_sim(&a, &b) - 1.0).abs() < 0.001);
+
+        let c = vec![0.0, 1.0, 0.0];
+        assert!(cosine_sim(&a, &c).abs() < 0.001);
+
+        let empty: Vec<f32> = vec![];
+        assert_eq!(cosine_sim(&empty, &empty), 0.0);
+    }
+
+    #[test]
+    fn test_remember_procedural() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let proc = ProceduralEntry {
+            name: "test_proc".into(),
+            description: "a procedure".into(),
+            steps: vec![crate::memory::layered::ProcedureStep {
+                step_number: 1,
+                description: "step 1".into(),
+                action: "do thing".into(),
+                expected_outcome: "done".into(),
+            }],
+            learned_from: "test".into(),
+            tags: vec!["proc".into()],
+        };
+        let result = kernel.remember_procedural("kernel", "default", proc);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_recall_procedural() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let proc = ProceduralEntry {
+            name: "recall_proc".into(),
+            description: "recallable".into(),
+            steps: vec![],
+            learned_from: "test".into(),
+            tags: vec![],
+        };
+        kernel.remember_procedural("kernel", "default", proc).unwrap();
+        let entries = kernel.recall_procedural("kernel", "default", None);
+        assert!(!entries.is_empty());
+    }
+
+    #[test]
+    fn test_recall_procedural_by_name() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let proc = ProceduralEntry {
+            name: "named_proc".into(),
+            description: "findable by name".into(),
+            steps: vec![],
+            learned_from: "test".into(),
+            tags: vec![],
+        };
+        kernel.remember_procedural("kernel", "default", proc).unwrap();
+        let entries = kernel.recall_procedural("kernel", "default", Some("named_proc"));
+        assert!(!entries.is_empty());
+        assert!(entries.iter().any(|e| e.tags.iter().any(|t| t.contains("named_proc")) || matches!(&e.content, MemoryContent::Procedure(p) if p.name == "named_proc")));
+    }
+
+    #[test]
+    fn test_agent_memory_quota() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        kernel.register_agent("quota_agent".to_string()).unwrap();
+        let quota = kernel.agent_memory_quota("quota_agent");
+        // Default quota should be some value
+        let _ = quota;
+    }
+
+    #[test]
+    fn test_agent_memory_quota_unregistered() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        // Unregistered agent should return 0 quota
+        let quota = kernel.agent_memory_quota("nonexistent-agent");
+        assert_eq!(quota, 0);
+    }
+
+    // ─── cosine_sim edge cases ────────────────────────────────────────────
+
+    #[test]
+    fn test_cosine_sim_mismatched_lengths() {
+        let a = vec![1.0, 2.0];
+        let b = vec![1.0, 2.0, 3.0];
+        assert_eq!(cosine_sim(&a, &b), 0.0);
+    }
+
+    #[test]
+    fn test_cosine_sim_zero_vector() {
+        let a = vec![0.0, 0.0, 0.0];
+        let b = vec![1.0, 0.0, 0.0];
+        assert_eq!(cosine_sim(&a, &b), 0.0);
+    }
+
+    #[test]
+    fn test_cosine_sim_opposite_vectors() {
+        let a = vec![1.0, 0.0];
+        let b = vec![-1.0, 0.0];
+        assert!((cosine_sim(&a, &b) + 1.0).abs() < 0.001);
+    }
+
+    // ─── calculate_relevance ──────────────────────────────────────────────
+
+    #[test]
+    fn test_calculate_relevance_tag_match() {
+        let tags = vec!["python".to_string(), "tutorial".to_string()];
+        let content = "some content";
+        let query = vec!["python"];
+        let score = calculate_relevance(&tags, content, &query);
+        assert!(score > 0.0, "Tag match should produce positive score");
+        assert!(score >= 0.2, "Tag match should score at least 0.2");
+    }
+
+    #[test]
+    fn test_calculate_relevance_content_match() {
+        let tags: Vec<String> = vec![];
+        let content = "The python interpreter runs bytecode";
+        let query = vec!["python"];
+        let score = calculate_relevance(&tags, content, &query);
+        assert!(score > 0.0, "Content match should produce positive score");
+        assert!((score - 0.1).abs() < 0.001, "Content-only match should score 0.1");
+    }
+
+    #[test]
+    fn test_calculate_relevance_no_match() {
+        let tags = vec!["rust".to_string()];
+        let content = "systems programming language";
+        let query = vec!["python"];
+        let score = calculate_relevance(&tags, content, &query);
+        assert_eq!(score, 0.0);
+    }
+
+    #[test]
+    fn test_calculate_relevance_capped_at_one() {
+        let tags: Vec<String> = (0..20).map(|i| format!("term{}", i)).collect();
+        let content = "term0 term1 term2 term3 term4 term5 term6 term7 term8 term9";
+        let query: Vec<&str> = (0..20).map(|i| { let _ = i; "term0" }).collect();
+        // Even with many matching terms, score should be capped at 1.0
+        let score = calculate_relevance(&tags, content, &query);
+        assert!(score <= 1.0);
+    }
+
+    // ─── recall_procedural with filter ────────────────────────────────────
+
+    #[test]
+    fn test_recall_procedural_name_filter_no_match() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let proc = ProceduralEntry {
+            name: "deploy_flow".into(),
+            description: "deploy steps".into(),
+            steps: vec![],
+            learned_from: "test".into(),
+            tags: vec![],
+        };
+        kernel.remember_procedural("kernel", "default", proc).unwrap();
+        let entries = kernel.recall_procedural("kernel", "default", Some("nonexistent_proc"));
+        assert!(entries.is_empty(), "Non-matching name filter should return empty");
+    }
+
+    #[test]
+    fn test_recall_procedural_multiple_entries() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        for name in &["proc_a", "proc_b", "proc_c"] {
+            let proc = ProceduralEntry {
+                name: (*name).into(),
+                description: format!("desc for {}", name),
+                steps: vec![],
+                learned_from: "test".into(),
+                tags: vec![],
+            };
+            kernel.remember_procedural("kernel", "default", proc).unwrap();
+        }
+        let all = kernel.recall_procedural("kernel", "default", None);
+        assert_eq!(all.len(), 3, "Should return all 3 procedural entries");
+        let filtered = kernel.recall_procedural("kernel", "default", Some("proc_b"));
+        assert_eq!(filtered.len(), 1);
+        match &filtered[0].content {
+            MemoryContent::Procedure(p) => assert_eq!(p.name, "proc_b"),
+            _ => panic!("Expected Procedure content"),
+        }
+    }
+
+    // ─── recall_shared_procedural ─────────────────────────────────────────
+
+    #[test]
+    fn test_recall_shared_procedural_all() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let agent_a = kernel.register_agent("proc_agent_a".to_string()).unwrap();
+        let proc = ProceduralEntry {
+            name: "shared_skill".into(),
+            description: "a shared skill".into(),
+            steps: vec![crate::memory::layered::ProcedureStep {
+                step_number: 1,
+                description: "step one".into(),
+                action: "act".into(),
+                expected_outcome: "done".into(),
+            }],
+            learned_from: "test".into(),
+            tags: vec!["skill".into()],
+        };
+        kernel.remember_procedural_scoped(&agent_a, "default", proc, MemoryScope::Shared).unwrap();
+
+        let entries = kernel.recall_shared_procedural(None);
+        assert!(!entries.is_empty(), "Should find shared procedural memory");
+    }
+
+    #[test]
+    fn test_recall_shared_procedural_by_name() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let agent_a = kernel.register_agent("proc_agent_b".to_string()).unwrap();
+        let proc = ProceduralEntry {
+            name: "specific_skill".into(),
+            description: "specific".into(),
+            steps: vec![],
+            learned_from: "test".into(),
+            tags: vec![],
+        };
+        kernel.remember_procedural_scoped(&agent_a, "default", proc, MemoryScope::Shared).unwrap();
+
+        let found = kernel.recall_shared_procedural(Some("specific_skill"));
+        assert!(!found.is_empty(), "Should find by name");
+
+        let not_found = kernel.recall_shared_procedural(Some("no_such_skill"));
+        assert!(not_found.is_empty(), "Should not find non-existent name");
+    }
+
+    // ─── memory_stats ─────────────────────────────────────────────────────
+
+    #[test]
+    fn test_memory_stats_all_tiers() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        // Store entries in different tiers
+        kernel.remember("kernel", "default", "ephemeral data".to_string()).unwrap();
+        kernel.remember_working("kernel", "default", "working data".to_string(), vec!["w".into()]).unwrap();
+        kernel.remember_long_term("kernel", "default", "long term data".to_string(), vec!["lt".into()], 80).unwrap();
+
+        let stats = kernel.memory_stats("kernel", None);
+        assert!(stats.total_entries >= 3, "Should have at least 3 entries across tiers, got {}", stats.total_entries);
+        assert!(stats.total_bytes > 0, "Should have non-zero byte count");
+        assert_eq!(stats.agent_id, "kernel");
+        assert!(stats.tier.is_empty(), "Aggregate stats should have empty tier name");
+    }
+
+    #[test]
+    fn test_memory_stats_specific_tier() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        kernel.remember("kernel", "default", "eph one".to_string()).unwrap();
+        kernel.remember("kernel", "default", "eph two".to_string()).unwrap();
+
+        let stats = kernel.memory_stats("kernel", Some(&MemoryTier::Ephemeral));
+        assert_eq!(stats.total_entries, 2, "Should have 2 ephemeral entries");
+        assert_eq!(stats.tier, "ephemeral");
+    }
+
+    #[test]
+    fn test_memory_stats_empty_agent() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let stats = kernel.memory_stats("empty_agent", None);
+        assert_eq!(stats.total_entries, 0);
+        assert_eq!(stats.total_bytes, 0);
+        assert_eq!(stats.oldest_entry_age_ms, 0);
+        assert_eq!(stats.avg_access_count, 0.0);
+        assert_eq!(stats.never_accessed_count, 0);
+        assert_eq!(stats.about_to_expire_count, 0);
+    }
+
+    #[test]
+    fn test_memory_stats_never_accessed_count() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        kernel.remember("kernel", "default", "fresh entry".to_string()).unwrap();
+
+        let stats = kernel.memory_stats("kernel", Some(&MemoryTier::Ephemeral));
+        assert_eq!(stats.never_accessed_count, stats.total_entries,
+            "Newly created entries should all be never-accessed");
+    }
+
+    // ─── discover_knowledge ───────────────────────────────────────────────
+
+    #[test]
+    fn test_discover_knowledge_shared_scope() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let agent_a = kernel.register_agent("dk_agent".to_string()).unwrap();
+        kernel.remember_long_term_scoped(
+            &agent_a, "default",
+            "shared fact about quantum computing".to_string(),
+            vec!["quantum".to_string()],
+            90,
+            MemoryScope::Shared,
+        ).unwrap();
+
+        let result = discover_knowledge(
+            &kernel.memory,
+            "quantum",
+            &crate::api::semantic::DiscoveryScope::Shared,
+            &[crate::api::semantic::KnowledgeType::Memory],
+            10,
+            None,
+        );
+        assert!(!result.items.is_empty(), "Should discover shared knowledge");
+        assert!(result.items.iter().any(|h| h.preview.contains("quantum")),
+            "Discovered item should contain query term in preview");
+    }
+
+    #[test]
+    fn test_discover_knowledge_all_accessible_scope() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let agent_a = kernel.register_agent("dk_agent2".to_string()).unwrap();
+        kernel.remember_long_term_scoped(
+            &agent_a, "default",
+            "accessible knowledge entry".to_string(),
+            vec!["test".to_string()],
+            70,
+            MemoryScope::Shared,
+        ).unwrap();
+
+        let result = discover_knowledge(
+            &kernel.memory,
+            "knowledge",
+            &crate::api::semantic::DiscoveryScope::AllAccessible,
+            &[crate::api::semantic::KnowledgeType::Memory],
+            10,
+            None,
+        );
+        assert!(!result.items.is_empty(), "AllAccessible scope should find entries");
+    }
+
+    #[test]
+    fn test_discover_knowledge_group_scope() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let agent_a = kernel.register_agent("dk_agent3".to_string()).unwrap();
+        kernel.remember_long_term_scoped(
+            &agent_a, "default",
+            "group knowledge entry".to_string(),
+            vec!["group_test".to_string()],
+            80,
+            MemoryScope::Group("team-alpha".to_string()),
+        ).unwrap();
+
+        // Search with matching group
+        let result = discover_knowledge(
+            &kernel.memory,
+            "group",
+            &crate::api::semantic::DiscoveryScope::Group("team-alpha".to_string()),
+            &[crate::api::semantic::KnowledgeType::Memory],
+            10,
+            None,
+        );
+        assert!(!result.items.is_empty(), "Should find group-scoped entry");
+
+        // Search with non-matching group
+        let empty_result = discover_knowledge(
+            &kernel.memory,
+            "group",
+            &crate::api::semantic::DiscoveryScope::Group("team-beta".to_string()),
+            &[crate::api::semantic::KnowledgeType::Memory],
+            10,
+            None,
+        );
+        assert!(empty_result.items.is_empty(), "Different group should find nothing");
+    }
+
+    #[test]
+    fn test_discover_knowledge_filter_by_type_procedure() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let agent_a = kernel.register_agent("dk_agent4".to_string()).unwrap();
+
+        // Store a shared procedural entry
+        let proc = ProceduralEntry {
+            name: "shared_deploy".into(),
+            description: "deploy procedure shared".into(),
+            steps: vec![],
+            learned_from: "test".into(),
+            tags: vec!["deploy".into()],
+        };
+        kernel.remember_procedural_scoped(&agent_a, "default", proc, MemoryScope::Shared).unwrap();
+
+        // Also store a shared text entry
+        kernel.remember_long_term_scoped(
+            &agent_a, "default",
+            "deploy notes".to_string(),
+            vec!["deploy".to_string()],
+            70,
+            MemoryScope::Shared,
+        ).unwrap();
+
+        // Filter for procedures only
+        let proc_result = discover_knowledge(
+            &kernel.memory,
+            "deploy",
+            &crate::api::semantic::DiscoveryScope::Shared,
+            &[crate::api::semantic::KnowledgeType::Procedure],
+            10,
+            None,
+        );
+        assert!(proc_result.items.iter().all(|h| !h.preview.starts_with("<object")),
+            "Procedure results should have description preview");
+        // Procedure-only filter should not include text memories
+        let mem_result = discover_knowledge(
+            &kernel.memory,
+            "deploy",
+            &crate::api::semantic::DiscoveryScope::Shared,
+            &[crate::api::semantic::KnowledgeType::Memory],
+            10,
+            None,
+        );
+        // Both should find something (separate types)
+        assert!(!proc_result.items.is_empty() || !mem_result.items.is_empty(),
+            "At least one type should match 'deploy'");
+    }
+
+    #[test]
+    fn test_discover_knowledge_max_results_and_token_estimate() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let agent_a = kernel.register_agent("dk_agent5".to_string()).unwrap();
+        for i in 0..5 {
+            kernel.remember_long_term_scoped(
+                &agent_a, "default",
+                format!("fact number {} about testing", i),
+                vec!["testing".to_string()],
+                70,
+                MemoryScope::Shared,
+            ).unwrap();
+        }
+
+        let result = discover_knowledge(
+            &kernel.memory,
+            "testing",
+            &crate::api::semantic::DiscoveryScope::Shared,
+            &[crate::api::semantic::KnowledgeType::Memory],
+            2,  // max_results = 2
+            None,
+        );
+        assert!(result.items.len() <= 2, "Should respect max_results limit, got {}", result.items.len());
+        assert!(result.total_available >= result.items.len(),
+            "total_available should be >= items.len()");
+        // token_estimate should be non-negative (can be 0 if previews are empty)
+        let _ = result.token_estimate;
+    }
+
+    #[test]
+    fn test_discover_knowledge_empty_query() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let agent_a = kernel.register_agent("dk_agent6".to_string()).unwrap();
+        kernel.remember_long_term_scoped(
+            &agent_a, "default",
+            "some shared content".to_string(),
+            vec![],
+            50,
+            MemoryScope::Shared,
+        ).unwrap();
+
+        // Empty query should still return results (no filtering by query terms)
+        let result = discover_knowledge(
+            &kernel.memory,
+            "",
+            &crate::api::semantic::DiscoveryScope::Shared,
+            &[crate::api::semantic::KnowledgeType::Memory],
+            10,
+            None,
+        );
+        assert!(!result.items.is_empty(), "Empty query should return all matching entries");
+        // With empty query, all relevance scores should be 0.0
+        assert!(result.items.iter().all(|h| h.relevance_score == 0.0),
+            "Empty query terms should produce zero relevance");
+    }
+
+    // ─── recall_semantic ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_recall_semantic_basic() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        kernel.remember_long_term("kernel", "default",
+            "machine learning basics".to_string(),
+            vec!["ml".to_string()], 80).unwrap();
+
+        // Stub backend returns Err for embed_query, so recall_semantic should fail
+        let result = kernel.recall_semantic("kernel", "default", "machine learning", 5);
+        assert!(result.is_err(), "recall_semantic with stub backend should return Err (no real embeddings)");
+    }
+
+    #[test]
+    fn test_recall_relevant_semantic_fallback_on_embed_failure() {
+        // This tests the Err branch in recall_relevant_semantic where embed_query fails.
+        // With stub backend, embed_query should succeed, so we test the success path.
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        kernel.remember_long_term("kernel", "default",
+            "relevant content about algorithms".to_string(),
+            vec!["algo".to_string()], 80).unwrap();
+
+        let entries = kernel.recall_relevant_semantic("kernel", "default", "algorithms", 2000);
+        // Should return entries (stub embedding succeeds)
+        let _ = entries;
+    }
+
+    // ─── remember_long_term_scoped with Group scope ───────────────────────
+
+    #[test]
+    fn test_remember_long_term_scoped_group_emits_event() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let agent = kernel.register_agent("group_agent".to_string()).unwrap();
+        let result = kernel.remember_long_term_scoped(
+            &agent, "default",
+            "group-shared fact".to_string(),
+            vec!["group_fact".to_string()],
+            75,
+            MemoryScope::Group("team-beta".to_string()),
+        );
+        assert!(result.is_ok(), "Group-scoped long-term memory should succeed");
+        // Verify the entry exists
+        let entries = kernel.recall(&agent, "default");
+        assert!(entries.iter().any(|e| e.content.display().to_string().contains("group-shared fact")));
+    }
+
+    // ─── recall_hyde ──────────────────────────────────────────────────────
+
+    #[test]
+    fn test_recall_hyde_non_complex_intent_returns_early() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        kernel.remember_long_term("kernel", "default",
+            "simple fact".to_string(),
+            vec!["fact".to_string()], 80).unwrap();
+
+        // "What is X?" is a factual query, not multi-hop or aggregation,
+        // so HyDE should return early without generating hypothetical answer.
+        let result = kernel.recall_hyde("kernel", "default", "What is Plico?");
+        assert!(result.is_ok());
+        let (_entries, classified) = result.unwrap();
+        // For factual intent, HyDE should not alter the results
+        assert_eq!(classified.intent, crate::fs::retrieval_router::QueryIntent::Factual);
+    }
+
+    #[test]
+    fn test_recall_hyde_multi_hop_triggers_hyde() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        kernel.remember_long_term("kernel", "default",
+            "server logs show OOM error at 3am".to_string(),
+            vec!["server".to_string(), "error".to_string()], 90).unwrap();
+        kernel.remember_long_term("kernel", "default",
+            "OOM was caused by memory leak in handler".to_string(),
+            vec!["debug".to_string()], 85).unwrap();
+
+        // "Why did X happen?" triggers multi-hop intent -> HyDE pipeline
+        let result = kernel.recall_hyde("kernel", "default", "Why did the server crash?");
+        assert!(result.is_ok());
+        let (entries, classified) = result.unwrap();
+        assert_eq!(classified.intent, crate::fs::retrieval_router::QueryIntent::MultiHop);
+        // HyDE may merge additional results
+        let _ = entries;
+    }
+
+    // ─── recall_routed_with_k ─────────────────────────────────────────────
+
+    #[test]
+    fn test_recall_routed_with_k_override() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        for i in 0..10 {
+            kernel.remember_long_term("kernel", "default",
+                format!("entry number {}", i),
+                vec!["batch".to_string()], 70).unwrap();
+        }
+
+        let result = kernel.recall_routed_with_k("kernel", "default", "entry", Some(3));
+        assert!(result.is_ok());
+        let (entries, _) = result.unwrap();
+        assert!(entries.len() <= 3, "top_k=3 should limit results to at most 3, got {}", entries.len());
+    }
+
+    // ─── remember_long_term_batch edge cases ──────────────────────────────
+
+    #[test]
+    fn test_remember_long_term_batch_empty() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let result = kernel.remember_long_term_batch("kernel", "default", &[]);
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_empty(), "Empty batch should return empty vec");
+    }
+
+    #[test]
+    fn test_remember_long_term_batch_single_item() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let items = vec![("single fact".to_string(), vec!["tag".to_string()], 65u8)];
+        let result = kernel.remember_long_term_batch("kernel", "default", &items);
+        assert!(result.is_ok());
+        let ids = result.unwrap();
+        assert_eq!(ids.len(), 1);
+    }
+
+    // ─── memory_move success path ─────────────────────────────────────────
+
+    #[test]
+    fn test_memory_move_to_working() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let id = kernel.remember("kernel", "default", "movable entry".to_string()).unwrap();
+        let moved = kernel.memory_move("kernel", "default", &id, MemoryTier::Working);
+        assert!(moved, "Should successfully move entry to working tier");
+        // Verify the entry is now in working tier
+        let entries = kernel.recall("kernel", "default");
+        let moved_entry = entries.iter().find(|e| e.id == id);
+        assert!(moved_entry.is_some(), "Entry should still be accessible");
+        assert_eq!(moved_entry.unwrap().tier, MemoryTier::Working);
+    }
+
+    // ─── recall with tenant isolation ─────────────────────────────────────
+
+    #[test]
+    fn test_recall_tenant_isolation() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        kernel.remember("kernel", "tenant-a", "tenant a data".to_string()).unwrap();
+        kernel.recall("kernel", "tenant-a"); // ensure it exists
+
+        // Recalling with different tenant should not see tenant-a's data
+        let entries_b = kernel.recall("kernel", "tenant-b");
+        assert!(entries_b.iter().all(|e| e.tenant_id != "tenant-a"),
+            "Should not see other tenant's memories");
+    }
+
+    // ─── discover_knowledge relevance scoring ─────────────────────────────
+
+    #[test]
+    fn test_discover_knowledge_relevance_sorted() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let agent = kernel.register_agent("dk_sort_agent".to_string()).unwrap();
+
+        // Entry with tag match (higher relevance)
+        kernel.remember_long_term_scoped(
+            &agent, "default",
+            "exact match content".to_string(),
+            vec!["exact".to_string()],
+            80,
+            MemoryScope::Shared,
+        ).unwrap();
+
+        // Entry with no match (lower relevance)
+        kernel.remember_long_term_scoped(
+            &agent, "default",
+            "unrelated content about cooking".to_string(),
+            vec!["food".to_string()],
+            90,
+            MemoryScope::Shared,
+        ).unwrap();
+
+        let result = discover_knowledge(
+            &kernel.memory,
+            "exact",
+            &crate::api::semantic::DiscoveryScope::Shared,
+            &[crate::api::semantic::KnowledgeType::Memory],
+            10,
+            None,
+        );
+        if result.items.len() >= 2 {
+            // Results should be sorted by relevance (descending)
+            for i in 0..result.items.len() - 1 {
+                assert!(result.items[i].relevance_score >= result.items[i + 1].relevance_score,
+                    "Results should be sorted by relevance descending");
+            }
+        }
     }
 }

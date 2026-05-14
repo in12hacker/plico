@@ -44,8 +44,8 @@ impl AdaptiveEmbeddingProvider {
     /// Auto-detects known model families and sets optimal prefixes:
     /// - Qwen3-Embedding: `"Instruct: ...\nQuery: "` for queries, no document prefix
     pub fn from_env(inner: Arc<dyn EmbeddingProvider>) -> Self {
-        let mut query_prefix = std::env::var("EMBEDDING_QUERY_PREFIX").unwrap_or_default();
-        let mut document_prefix = std::env::var("EMBEDDING_DOCUMENT_PREFIX").unwrap_or_default();
+        let query_prefix = std::env::var("EMBEDDING_QUERY_PREFIX").unwrap_or_default();
+        let document_prefix = std::env::var("EMBEDDING_DOCUMENT_PREFIX").unwrap_or_default();
         let target_dim = std::env::var("EMBEDDING_DIM")
             .ok()
             .and_then(|s| s.parse::<usize>().ok());

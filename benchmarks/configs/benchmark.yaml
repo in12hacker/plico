@@ -1,0 +1,60 @@
+suites:
+  conversational_qa:
+    datasets:
+      - locomo
+      - longmemeval
+    default_samples:
+      locomo: 1986
+      longmemeval: 500
+    judge: gemini-3-flash
+    reader: gpt-4o
+    max_tokens: 64
+
+  retrieval:
+    datasets:
+      - beir_scifact
+      - memoryagentbench_ar
+      - dmr
+    default_samples:
+      beir_scifact: 300
+      memoryagentbench_ar: 1000
+      dmr: 500
+    top_k: [5, 10, 20]
+
+  kg_reasoning:
+    datasets:
+      - hotpotqa
+      - kg_multi_hop
+    default_samples:
+      hotpotqa: 100
+      kg_multi_hop: 50
+    max_depth: 4
+
+  performance:
+    operations:
+      - cas_write
+      - search
+      - memory_recall
+      - kg_path
+    default_counts:
+      cas_write: 1000
+      search: 500
+      memory_recall: 500
+      kg_path: 200
+
+  temporal_reasoning:
+    datasets:
+      - longmemeval_temporal
+    default_samples: 100
+
+  memory_crud:
+    operations: [create, read, update, delete, batch]
+    iterations: 100
+
+global:
+  plico_host: "127.0.0.1"
+  plico_port: 7878
+  timeout: 300.0
+  output_dir: "results"
+  n_runs: 1
+  warmup: true

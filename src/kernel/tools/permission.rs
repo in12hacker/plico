@@ -54,3 +54,71 @@ pub(in crate::kernel) fn handle(kernel: &AIKernel, name: &str, params: &serde_js
         _ => ToolResult::error(format!("unknown permission tool: {}", name)),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::kernel::tests::make_kernel;
+    use crate::kernel::tools::permission::handle;
+
+    #[test]
+    fn test_permission_grant() {
+        let (kernel, _tmp) = make_kernel();
+        let result = handle(&*kernel, "permission.grant", &json!({
+            "agent_id": "test_agent", "action": "read"
+        }), "test");
+        assert!(result.error.is_none(), "grant should succeed: {:?}", result.error);
+    }
+
+    #[test]
+    fn test_permission_grant_unknown_action() {
+        let (kernel, _tmp) = make_kernel();
+        let result = handle(&*kernel, "permission.grant", &json!({
+            "agent_id": "test_agent", "action": "nonexistent_action"
+        }), "test");
+        assert!(result.error.is_some());
+    }
+
+    #[test]
+    fn test_permission_check_default() {
+        let (kernel, _tmp) = make_kernel();
+        let result = handle(&*kernel, "permission.check", &json!({
+            "agent_id": "test_agent", "action": "read"
+        }), "test");
+        assert!(result.error.is_none());
+        // Default agents have read permission
+        assert_eq!(result.output["allowed"], true);
+    }
+
+    #[test]
+    fn test_permission_revoke() {
+        let (kernel, _tmp) = make_kernel();
+        handle(&*kernel, "permission.grant", &json!({"agent_id": "a", "action": "write"}), "test");
+        let result = handle(&*kernel, "permission.revoke", &json!({"agent_id": "a", "action": "write"}), "test");
+        assert!(result.error.is_none());
+    }
+
+    #[test]
+    fn test_permission_list() {
+        let (kernel, _tmp) = make_kernel();
+        handle(&*kernel, "permission.grant", &json!({"agent_id": "b", "action": "read"}), "test");
+        let result = handle(&*kernel, "permission.list", &json!({"agent_id": "b"}), "test");
+        assert!(result.error.is_none());
+    }
+
+    #[test]
+    fn test_permission_check_unknown_action() {
+        let (kernel, _tmp) = make_kernel();
+        let result = handle(&*kernel, "permission.check", &json!({
+            "agent_id": "a", "action": "nonexistent"
+        }), "test");
+        assert!(result.error.is_some());
+    }
+
+    #[test]
+    fn test_permission_unknown_tool() {
+        let (kernel, _tmp) = make_kernel();
+        let result = handle(&*kernel, "permission.nonexistent", &json!({}), "test");
+        assert!(result.error.is_some());
+    }
+}

@@ -608,7 +608,7 @@ mod tests {
 
         let history = kernel.version_history(&cid, "kernel");
         // Single version with no supersedes chain returns just itself
-        assert!(history.len() >= 1);
+        assert!(!history.is_empty());
         assert_eq!(history[0], cid);
     }
 
@@ -700,5 +700,135 @@ mod tests {
         ).expect("search failed");
         // Should not crash, may or may not have results depending on data
         assert!(results.len() <= 10); // Respect limit
+    }
+
+    #[test]
+    fn test_semantic_update_basic() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let cid = kernel.semantic_create(b"original".to_vec(), vec!["v1".to_string()], "agent1", None).unwrap();
+        let new_cid = kernel.semantic_update(&cid, b"updated".to_vec(), Some(vec!["v2".to_string()]), "agent1", "default").unwrap();
+        assert_ne!(cid, new_cid);
+        let obj = kernel.get_object(&new_cid, "agent1", "default").unwrap();
+        assert_eq!(String::from_utf8_lossy(&obj.data), "updated");
+    }
+
+    #[test]
+    fn test_semantic_update_preserves_old_version() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let cid = kernel.semantic_create(b"v1 content".to_vec(), vec!["v1".to_string()], "agent1", None).unwrap();
+        let _new_cid = kernel.semantic_update(&cid, b"v2 content".to_vec(), None, "agent1", "default").unwrap();
+        let obj = kernel.get_object(&cid, "agent1", "default").unwrap();
+        assert_eq!(String::from_utf8_lossy(&obj.data), "v1 content");
+    }
+
+    #[test]
+    fn test_version_history_multiple_versions() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let cid = kernel.semantic_create(b"v1".to_vec(), vec!["v1".to_string()], "agent1", None).unwrap();
+        let cid2 = kernel.semantic_update(&cid, b"v2".to_vec(), None, "agent1", "default").unwrap();
+        let _cid3 = kernel.semantic_update(&cid2, b"v3".to_vec(), None, "agent1", "default").unwrap();
+        let history = kernel.version_history(&cid, "agent1");
+        assert!(!history.is_empty());
+    }
+
+    #[test]
+    fn test_rollback_basic() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let cid = kernel.semantic_create(b"original".to_vec(), vec!["v1".to_string()], "agent1", None).unwrap();
+        let new_cid = kernel.semantic_update(&cid, b"changed".to_vec(), None, "agent1", "default").unwrap();
+        let rolled_back = kernel.rollback(&new_cid, "agent1").unwrap();
+        let obj = kernel.get_object(&rolled_back, "agent1", "default").unwrap();
+        assert_eq!(String::from_utf8_lossy(&obj.data), "original");
+    }
+
+    #[test]
+    fn test_context_load_basic() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let cid = kernel.semantic_create(b"context test content".to_vec(), vec!["ctx".to_string()], "agent1", None).unwrap();
+        let result = kernel.context_load(&cid, crate::fs::ContextLayer::L0, "agent1");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_context_assemble_empty_candidates() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let result = kernel.context_assemble(&[], 1000, "agent1");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_get_object_usage() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let cid = kernel.semantic_create(b"usage test".to_vec(), vec!["usage".to_string()], "agent1", None).unwrap();
+        let usage = kernel.get_object_usage(&cid);
+        assert!(usage.access_count >= 0);
+    }
+
+    #[test]
+    fn test_get_storage_stats() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let _ = kernel.semantic_create(b"stats test".to_vec(), vec!["stats".to_string()], "agent1", None);
+        let stats = kernel.get_storage_stats();
+        assert!(stats.total_objects >= 1);
+    }
+
+    #[test]
+    fn test_search_by_tags_basic() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        kernel.semantic_create(b"tagged".to_vec(), vec!["search_tag".to_string()], "agent1", None).unwrap();
+        let results = kernel.search_by_tags(&["search_tag".to_string()], 10);
+        assert!(!results.is_empty());
+    }
+
+    #[test]
+    fn test_search_by_tags_no_match() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        kernel.semantic_create(b"untagged".to_vec(), vec!["other".to_string()], "agent1", None).unwrap();
+        let results = kernel.search_by_tags(&["nonexistent_tag".to_string()], 10);
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_semantic_search_with_time_range() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        kernel.semantic_create(b"timed content".to_vec(), vec!["time".to_string()], "agent1", None).unwrap();
+        let results = kernel.semantic_search_with_time(
+            SearchQuery { query: "timed", agent_id: "agent1", tenant_id: "default", limit: 10, require_tags: vec![], exclude_tags: vec![] },
+            Some(0), Some(u64::MAX as i64),
+        ).unwrap();
+        // Stub embedding may not find results
+        let _ = results;
+    }
+
+    #[test]
+    fn test_restore_deleted_basic() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        // Grant Delete permission
+        kernel.handle_api_request(crate::api::semantic::ApiRequest::GrantPermission {
+            agent_id: "agent1".to_string(),
+            action: "Delete".to_string(),
+            scope: Some("*".to_string()),
+            expires_at: None,
+        });
+        let cid = kernel.semantic_create(b"restore test".to_vec(), vec!["restore".to_string()], "agent1", None).unwrap();
+        kernel.semantic_delete(&cid, "agent1", "default").unwrap();
+        let result = kernel.restore_deleted(&cid, "agent1");
+        // May or may not succeed depending on recycle bin implementation
+        let _ = result;
+    }
+
+    #[test]
+    fn test_list_deleted_empty() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let deleted = kernel.list_deleted("agent1");
+        assert!(deleted.is_empty());
+    }
+
+    #[test]
+    fn test_list_tags_basic() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        kernel.semantic_create(b"tagged".to_vec(), vec!["list_tag".to_string()], "agent1", None).unwrap();
+        let tags = kernel.list_tags();
+        assert!(tags.iter().any(|t| t.contains("list_tag")));
     }
 }

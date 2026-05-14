@@ -12,16 +12,16 @@ use std::sync::Arc;
 use tempfile::tempdir;
 
 fn make_kernel() -> (Arc<AIKernel>, tempfile::TempDir) {
-    let _ = std::env::set_var("EMBEDDING_BACKEND", "stub");
-    let _ = std::env::set_var("LLM_BACKEND", "stub");
+    std::env::set_var("EMBEDDING_BACKEND", "stub");
+    std::env::set_var("LLM_BACKEND", "stub");
     let dir = tempdir().unwrap();
     let kernel = AIKernel::new(dir.path().to_path_buf()).expect("kernel init");
     (kernel, dir)
 }
 
 fn make_kernel_arc() -> (Arc<AIKernel>, tempfile::TempDir) {
-    let _ = std::env::set_var("EMBEDDING_BACKEND", "stub");
-    let _ = std::env::set_var("LLM_BACKEND", "stub");
+    std::env::set_var("EMBEDDING_BACKEND", "stub");
+    std::env::set_var("LLM_BACKEND", "stub");
     let dir = tempdir().unwrap();
     let kernel = AIKernel::new(dir.path().to_path_buf()).expect("kernel init");
     (kernel, dir)
@@ -405,6 +405,12 @@ fn test_kernel_checkpoint_and_restore() {
     let (kernel, _dir) = make_kernel();
 
     let agent_id = kernel.register_agent("checkpoint-agent".to_string()).unwrap();
+
+    use plico::api::permission::PermissionAction;
+    kernel.permission_grant(&agent_id, PermissionAction::Read, None, None);
+    kernel.permission_grant(&agent_id, PermissionAction::Write, None, None);
+    kernel.permission_grant(&agent_id, PermissionAction::ReadAny, None, None);
+
     kernel.remember_working(&agent_id, "default", "before checkpoint".to_string(), vec![]).unwrap();
 
     let cid = kernel.checkpoint_agent(&agent_id).expect("checkpoint should succeed");
@@ -529,8 +535,8 @@ fn test_kernel_agent_lifecycle() {
 
 #[test]
 fn test_kernel_agent_persists_across_restart() {
-    let _ = std::env::set_var("EMBEDDING_BACKEND", "stub");
-    let _ = std::env::set_var("LLM_BACKEND", "stub");
+    std::env::set_var("EMBEDDING_BACKEND", "stub");
+    std::env::set_var("LLM_BACKEND", "stub");
     let dir = tempdir().unwrap();
     let root = dir.path().to_path_buf();
 
@@ -557,8 +563,8 @@ fn test_kernel_intent_persists_across_restart() {
     use plico::scheduler::agent::IntentPriority;
     use plico::api::semantic::{ApiRequest, ContentEncoding};
 
-    let _ = std::env::set_var("EMBEDDING_BACKEND", "stub");
-    let _ = std::env::set_var("LLM_BACKEND", "stub");
+    std::env::set_var("EMBEDDING_BACKEND", "stub");
+    std::env::set_var("LLM_BACKEND", "stub");
     let dir = tempdir().unwrap();
     let root = dir.path().to_path_buf();
 
@@ -765,8 +771,8 @@ fn test_e2e_agent_autonomy_cycle() {
     use plico::api::semantic::{ApiRequest, ApiResponse, ContentEncoding};
     use plico::scheduler::agent::IntentPriority;
 
-    let _ = std::env::set_var("EMBEDDING_BACKEND", "stub");
-    let _ = std::env::set_var("LLM_BACKEND", "stub");
+    std::env::set_var("EMBEDDING_BACKEND", "stub");
+    std::env::set_var("LLM_BACKEND", "stub");
     let dir = tempdir().unwrap();
     let root = dir.path().to_path_buf();
 
@@ -1012,7 +1018,7 @@ fn test_search_index_persistence_roundtrip() {
 
     let backend = InMemoryBackend::new();
 
-    backend.upsert("cid-a", &vec![1.0, 0.0, 0.0], SearchIndexMeta {
+    backend.upsert("cid-a", &[1.0, 0.0, 0.0], SearchIndexMeta {
         cid: "cid-a".into(),
         tags: vec!["tag1".into()],
         snippet: "hello world".into(),
@@ -1020,7 +1026,7 @@ fn test_search_index_persistence_roundtrip() {
         created_at: 1000,
         memory_type: None,
     });
-    backend.upsert("cid-b", &vec![0.0, 1.0, 0.0], SearchIndexMeta {
+    backend.upsert("cid-b", &[0.0, 1.0, 0.0], SearchIndexMeta {
         cid: "cid-b".into(),
         tags: vec!["tag2".into()],
         snippet: "foo bar".into(),
@@ -1049,7 +1055,7 @@ fn test_search_index_persistence_roundtrip() {
 
     // Search should still work
     let hits = backend2.search(
-        &vec![1.0, 0.0, 0.0],
+        &[1.0, 0.0, 0.0],
         1,
         &plico::fs::SearchFilter::default(),
     );
@@ -1301,6 +1307,9 @@ fn test_memory_tier_api_via_handle_request() {
         tenant_id: None,
     });
     assert!(resp.ok);
+
+    use plico::api::permission::PermissionAction;
+    kernel.permission_grant(&id, PermissionAction::Delete, None, None);
 
     let resp = kernel.handle_api_request(ApiRequest::MemoryDeleteEntry {
         agent_id: id.clone(),
@@ -1666,11 +1675,8 @@ fn test_intent_execute_sync_below_threshold_not_executed() {
         false,
     );
 
-    match result {
-        Ok(r) => {
-            assert!(!r.executed, "should not execute below threshold");
-        }
-        Err(_) => {}
+    if let Ok(r) = result {
+        assert!(!r.executed, "should not execute below threshold");
     }
 }
 
@@ -1962,7 +1968,7 @@ fn test_multi_step_intent_execution() {
 
     assert!(result.executed, "multi-step should execute");
     // Should resolve into multiple actions (create + search)
-    assert!(result.resolved.len() >= 1, "should have at least one resolved intent");
+    assert!(!result.resolved.is_empty(), "should have at least one resolved intent");
 }
 
 #[test]
@@ -2410,6 +2416,9 @@ fn test_shared_procedure_appears_as_tool() {
         "tool description should mention the original agent ID"
     );
 
+    // Grant Execute permission so Agent B can invoke the tool
+    kernel.permission_grant(&agent_b, PermissionAction::Execute, None, None);
+
     // Agent B invokes the tool
     let tool_name = &skill_tools[0].name;
     let resp = kernel.handle_api_request(plico::api::semantic::ApiRequest::ToolCall {
@@ -2441,8 +2450,9 @@ fn test_checkpoint_creates_cas_object() {
 
     // Verify CAS object exists
     let obj = kernel.get_object(&cid, &agent_id, "default").expect("should fetch checkpoint object");
-    let entries: Vec<plico::memory::MemoryEntry> = serde_json::from_slice(&obj.data).unwrap();
-    assert_eq!(entries.len(), 2, "checkpoint should contain 2 memory entries");
+    let wrapper: serde_json::Value = serde_json::from_slice(&obj.data).unwrap();
+    let entries_arr = wrapper.get("entries").and_then(|v| v.as_array()).expect("checkpoint should have entries array");
+    assert_eq!(entries_arr.len(), 2, "checkpoint should contain 2 memory entries");
 }
 
 #[test]
@@ -2453,6 +2463,7 @@ fn test_restore_checkpoint_replaces_memory() {
     use plico::api::permission::PermissionAction;
     kernel.permission_grant(&agent_id, PermissionAction::Read, None, None);
     kernel.permission_grant(&agent_id, PermissionAction::Write, None, None);
+    kernel.permission_grant(&agent_id, PermissionAction::ReadAny, None, None);
 
     // Store initial state and checkpoint
     kernel.remember_working(&agent_id, "default", "original note".into(), vec!["v1".into()]).unwrap();
@@ -2528,6 +2539,7 @@ fn test_checkpoint_via_api() {
     use plico::api::permission::PermissionAction;
     kernel.permission_grant(&agent_id, PermissionAction::Read, None, None);
     kernel.permission_grant(&agent_id, PermissionAction::Write, None, None);
+    kernel.permission_grant(&agent_id, PermissionAction::ReadAny, None, None);
 
     kernel.remember_working(&agent_id, "default", "api test data".into(), vec!["api".into()]).unwrap();
 
@@ -2535,7 +2547,7 @@ fn test_checkpoint_via_api() {
         agent_id: agent_id.clone(),
     });
     assert!(resp.ok, "API checkpoint should succeed: {:?}", resp.error);
-    let cid = resp.data.as_ref().map(|s| s.as_str()).unwrap_or("").to_string();
+    let cid = resp.data.as_deref().unwrap_or("").to_string();
     assert!(!cid.is_empty());
 
     // Restore via API
@@ -3381,8 +3393,8 @@ fn test_event_history_monotonic_sequence() {
 #[test]
 fn test_event_log_persists_across_restart() {
     let dir = tempdir().unwrap();
-    let _ = std::env::set_var("EMBEDDING_BACKEND", "stub");
-    let _ = std::env::set_var("LLM_BACKEND", "stub");
+    std::env::set_var("EMBEDDING_BACKEND", "stub");
+    std::env::set_var("LLM_BACKEND", "stub");
 
     let event_count_before;
     {
@@ -3421,8 +3433,8 @@ fn test_event_log_persists_across_restart() {
 #[test]
 fn test_event_log_sequence_continues_after_restore() {
     let dir = tempdir().unwrap();
-    let _ = std::env::set_var("EMBEDDING_BACKEND", "stub");
-    let _ = std::env::set_var("LLM_BACKEND", "stub");
+    std::env::set_var("EMBEDDING_BACKEND", "stub");
+    std::env::set_var("LLM_BACKEND", "stub");
 
     let max_seq_before;
     {
@@ -4280,6 +4292,9 @@ fn test_b52_delete_invalid_cid_returns_not_found() {
     let (kernel, _dir) = make_kernel();
     let agent_id = kernel.register_agent("deleter".into()).unwrap();
 
+    use plico::api::permission::PermissionAction;
+    kernel.permission_grant(&agent_id, PermissionAction::Delete, None, None);
+
     // Use a valid hex CID format that doesn't exist in CAS
     let fake_cid = "aa".repeat(32); // 64 hex chars — valid format, doesn't exist
     let resp = kernel.handle_api_request(ApiRequest::Delete {
@@ -4406,8 +4421,8 @@ fn test_kernel_handle_agent_register_via_api() {
 #[test]
 fn test_kernel_new_creates_valid_instance() {
     // AIKernel::new returns Result, so a successful result means a valid instance
-    let _ = std::env::set_var("EMBEDDING_BACKEND", "stub");
-    let _ = std::env::set_var("LLM_BACKEND", "stub");
+    std::env::set_var("EMBEDDING_BACKEND", "stub");
+    std::env::set_var("LLM_BACKEND", "stub");
     let dir = tempdir().unwrap();
     let kernel = AIKernel::new(dir.path().to_path_buf());
     assert!(kernel.is_ok(), "AIKernel::new should succeed");
@@ -4866,8 +4881,8 @@ fn test_full_ai_os_loop_convergence() {
     use plico::fs::graph::KGEdgeType;
     use plico::memory::MemoryScope;
 
-    let _ = std::env::set_var("EMBEDDING_BACKEND", "stub");
-    let _ = std::env::set_var("RUST_LOG", "off");
+    std::env::set_var("EMBEDDING_BACKEND", "stub");
+    std::env::set_var("RUST_LOG", "off");
     let (kernel, _dir) = make_kernel();
 
     // Step 1: Register agent with permissions
@@ -5003,8 +5018,8 @@ fn test_hook_registry_causal_hook_handler_in_kernel() {
     // the KG should have CausedBy edges from the hook handler.
     use plico::fs::graph::KGEdgeType;
 
-    let _ = std::env::set_var("EMBEDDING_BACKEND", "stub");
-    let _ = std::env::set_var("RUST_LOG", "off");
+    std::env::set_var("EMBEDDING_BACKEND", "stub");
+    std::env::set_var("RUST_LOG", "off");
     let (kernel, _dir) = make_kernel();
 
     let agent_id = kernel.register_agent("causal-hook-test".into()).unwrap();

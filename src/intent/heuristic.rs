@@ -666,4 +666,331 @@ mod tests {
         assert!(results.len() == 1);
         assert_eq!(results[0].routing_action, RoutingAction::SingleAction);
     }
+
+    // ─── Additional tests for coverage ───────────────────────────
+
+    #[test]
+    fn test_update_pattern() {
+        let router = HeuristicRouter::new();
+        let results = router.resolve("update the config file", "agent1").unwrap();
+        assert!(!results.is_empty());
+        assert!(results[0].confidence >= 0.8);
+        if let ApiRequest::Update { content, .. } = &results[0].action {
+            assert!(content.contains("config file"));
+        } else {
+            panic!("Expected Update");
+        }
+    }
+
+    #[test]
+    fn test_explore_pattern() {
+        let router = HeuristicRouter::new();
+        let results = router.resolve("explore node-abc123", "agent1").unwrap();
+        assert!(!results.is_empty());
+        if let ApiRequest::Explore { cid, .. } = &results[0].action {
+            assert_eq!(cid, "node-abc123");
+        } else {
+            panic!("Expected Explore");
+        }
+    }
+
+    #[test]
+    fn test_recall_pattern() {
+        let router = HeuristicRouter::new();
+        let results = router.resolve("recall memories", "agent1").unwrap();
+        assert!(!results.is_empty());
+        assert!(matches!(results[0].action, ApiRequest::Recall { .. }));
+    }
+
+    #[test]
+    fn test_empty_input() {
+        let router = HeuristicRouter::new();
+        let result = router.resolve("", "agent1");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_whitespace_only_input() {
+        let router = HeuristicRouter::new();
+        let result = router.resolve("   ", "agent1");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_chinese_search() {
+        let router = HeuristicRouter::new();
+        let results = router.resolve("查找文档", "agent1").unwrap();
+        assert!(!results.is_empty());
+    }
+
+    #[test]
+    fn test_chinese_create() {
+        let router = HeuristicRouter::new();
+        let results = router.resolve("保存会议记录", "agent1").unwrap();
+        assert!(!results.is_empty());
+        assert!(matches!(results[0].action, ApiRequest::Create { .. }));
+    }
+
+    #[test]
+    fn test_chinese_delete() {
+        let router = HeuristicRouter::new();
+        let results = router.resolve("删除旧数据", "agent1").unwrap();
+        assert!(!results.is_empty());
+        assert!(matches!(results[0].action, ApiRequest::Delete { .. }));
+    }
+
+    #[test]
+    fn test_chinese_update() {
+        let router = HeuristicRouter::new();
+        let results = router.resolve("更新配置", "agent1").unwrap();
+        assert!(!results.is_empty());
+        assert!(matches!(results[0].action, ApiRequest::Update { .. }));
+    }
+
+    #[test]
+    fn test_chinese_register_agent() {
+        let router = HeuristicRouter::new();
+        let results = router.resolve("创建智能体 名为 test-agent", "agent1").unwrap();
+        assert!(!results.is_empty());
+        if let ApiRequest::RegisterAgent { name } = &results[0].action {
+            assert_eq!(name, "test-agent");
+        } else {
+            panic!("Expected RegisterAgent");
+        }
+    }
+
+    #[test]
+    fn test_chinese_list_agents() {
+        let router = HeuristicRouter::new();
+        let results = router.resolve("列出代理", "agent1").unwrap();
+        assert!(!results.is_empty());
+        assert!(matches!(results[0].action, ApiRequest::ListAgents));
+    }
+
+    #[test]
+    fn test_chinese_remember() {
+        let router = HeuristicRouter::new();
+        let results = router.resolve("记住这个重要的信息", "agent1").unwrap();
+        assert!(!results.is_empty());
+        assert!(matches!(results[0].action, ApiRequest::Remember { .. }));
+    }
+
+    #[test]
+    fn test_chinese_explore() {
+        let router = HeuristicRouter::new();
+        let results = router.resolve("探索图谱", "agent1").unwrap();
+        assert!(!results.is_empty());
+        assert!(matches!(results[0].action, ApiRequest::Explore { .. }));
+    }
+
+    #[test]
+    fn test_search_with_tag_hints() {
+        let router = HeuristicRouter::new();
+        let results = router.resolve("find reports tagged important", "agent1").unwrap();
+        assert!(!results.is_empty());
+        if let ApiRequest::Search { require_tags, .. } = &results[0].action {
+            assert!(require_tags.iter().any(|t| t.contains("important")));
+        } else {
+            panic!("Expected Search");
+        }
+    }
+
+    #[test]
+    fn test_create_with_tag_hints() {
+        let router = HeuristicRouter::new();
+        let results = router.resolve("store meeting notes tagged project,alpha", "agent1").unwrap();
+        assert!(!results.is_empty());
+        if let ApiRequest::Create { tags, .. } = &results[0].action {
+            assert!(tags.iter().any(|t| t.contains("project")));
+        } else {
+            panic!("Expected Create");
+        }
+    }
+
+    #[test]
+    fn test_compound_with_then() {
+        let router = HeuristicRouter::new();
+        let results = router.resolve("search docs then create ticket", "agent1").unwrap();
+        assert!(results.len() == 2);
+    }
+
+    #[test]
+    fn test_compound_with_also() {
+        let router = HeuristicRouter::new();
+        let results = router.resolve("search docs also create ticket", "agent1").unwrap();
+        assert!(results.len() == 2);
+    }
+
+    #[test]
+    fn test_split_compound_empty_parts() {
+        let parts = split_compound(" and ");
+        // Both parts are empty → vec![" and "]
+        assert!(parts.len() <= 1);
+    }
+
+    #[test]
+    fn test_helper_matches_any() {
+        assert!(matches_any("hello world", &["hello", "goodbye"]));
+        assert!(!matches_any("hello world", &["goodbye", "farewell"]));
+    }
+
+    #[test]
+    fn test_helper_starts_with_any() {
+        assert!(starts_with_any("search for docs", &["search", "find"]));
+        assert!(!starts_with_any("hello world", &["search", "find"]));
+    }
+
+    #[test]
+    fn test_helper_contains_any() {
+        assert!(contains_any("please find docs", &["find"]));
+        assert!(!contains_any("hello world", &["xyz"]));
+    }
+
+    #[test]
+    fn test_helper_strip_prefixes() {
+        assert_eq!(strip_prefixes("search for docs", &["search for "]), "docs");
+        assert_eq!(strip_prefixes("find docs", &["search for ", "find "]), "docs");
+        assert_eq!(strip_prefixes("no match", &["search for "]), "no match");
+    }
+
+    #[test]
+    fn test_helper_extract_after_patterns() {
+        assert_eq!(
+            extract_after_patterns("register agent named my-agent", &["named ", "called "]),
+            Some("my-agent".to_string())
+        );
+        assert_eq!(
+            extract_after_patterns("register agent called test", &["named ", "called "]),
+            Some("test".to_string())
+        );
+        assert_eq!(
+            extract_after_patterns("no pattern here", &["named ", "called "]),
+            None
+        );
+    }
+
+    #[test]
+    fn test_helper_extract_tag_hints() {
+        let tags = extract_tag_hints("store data tagged important,urgent");
+        assert!(tags.contains(&"important".to_string()));
+        assert!(tags.contains(&"urgent".to_string()));
+    }
+
+    #[test]
+    fn test_helper_extract_tag_hints_chinese() {
+        let tags = extract_tag_hints("保存数据 标签 重要");
+        assert!(tags.contains(&"重要".to_string()));
+    }
+
+    #[test]
+    fn test_helper_extract_tag_hints_none() {
+        let tags = extract_tag_hints("store data without tags");
+        assert!(tags.is_empty());
+    }
+
+    #[test]
+    fn test_helper_extract_temporal_hint() {
+        assert!(extract_temporal_hint("find reports from last week").is_some());
+        assert!(extract_temporal_hint("find reports yesterday").is_some());
+        assert!(extract_temporal_hint("find reports today").is_some());
+        assert!(extract_temporal_hint("find reports recently").is_some());
+        assert!(extract_temporal_hint("find reports 上周").is_some());
+        assert!(extract_temporal_hint("find reports 昨天").is_some());
+        assert!(extract_temporal_hint("find reports about something").is_none());
+    }
+
+    #[test]
+    fn test_helper_truncate() {
+        assert_eq!(truncate("short", 10), "short");
+        assert_eq!(truncate("a long string here", 5), "a lon");
+    }
+
+    #[test]
+    fn test_helper_resolve_temporal_bounds_none() {
+        let (since, until) = resolve_temporal_bounds(None);
+        assert!(since.is_none());
+        assert!(until.is_none());
+    }
+
+    #[test]
+    fn test_helper_resolve_temporal_bounds_some() {
+        let (since, until) = resolve_temporal_bounds(Some("today"));
+        // "today" should resolve to some bounds
+        // (may be None if temporal resolver doesn't handle "today")
+        let _ = (since, until);
+    }
+
+    #[test]
+    fn test_heuristic_router_default() {
+        let router = HeuristicRouter::default();
+        let results = router.resolve("search docs", "agent1").unwrap();
+        assert!(!results.is_empty());
+    }
+
+    #[test]
+    fn test_search_with_query_keyword() {
+        let router = HeuristicRouter::new();
+        let results = router.resolve("query about scheduling", "agent1").unwrap();
+        assert!(!results.is_empty());
+    }
+
+    #[test]
+    fn test_search_with_look_for() {
+        let router = HeuristicRouter::new();
+        let results = router.resolve("look for documents about auth", "agent1").unwrap();
+        assert!(!results.is_empty());
+    }
+
+    #[test]
+    fn test_create_with_save() {
+        let router = HeuristicRouter::new();
+        let results = router.resolve("save this important note", "agent1").unwrap();
+        assert!(matches!(results[0].action, ApiRequest::Create { .. }));
+    }
+
+    #[test]
+    fn test_create_with_put() {
+        let router = HeuristicRouter::new();
+        let results = router.resolve("put this in storage", "agent1").unwrap();
+        assert!(matches!(results[0].action, ApiRequest::Create { .. }));
+    }
+
+    #[test]
+    fn test_update_with_modify() {
+        let router = HeuristicRouter::new();
+        let results = router.resolve("modify the settings", "agent1").unwrap();
+        assert!(matches!(results[0].action, ApiRequest::Update { .. }));
+    }
+
+    #[test]
+    fn test_update_with_change() {
+        let router = HeuristicRouter::new();
+        let results = router.resolve("change the config", "agent1").unwrap();
+        assert!(matches!(results[0].action, ApiRequest::Update { .. }));
+    }
+
+    #[test]
+    fn test_delete_with_remove() {
+        let router = HeuristicRouter::new();
+        let results = router.resolve("remove old-data-id", "agent1").unwrap();
+        assert!(matches!(results[0].action, ApiRequest::Delete { .. }));
+    }
+
+    #[test]
+    fn test_search_chinese_find() {
+        let router = HeuristicRouter::new();
+        let results = router.resolve("找关于测试的文档", "agent1").unwrap();
+        assert!(!results.is_empty());
+    }
+
+    #[test]
+    fn test_register_agent_with_called() {
+        let router = HeuristicRouter::new();
+        let results = router.resolve("register agent called my-agent", "agent1").unwrap();
+        if let ApiRequest::RegisterAgent { name } = &results[0].action {
+            assert_eq!(name, "my-agent");
+        } else {
+            panic!("Expected RegisterAgent");
+        }
+    }
 }

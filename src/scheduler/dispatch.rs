@@ -576,8 +576,10 @@ mod tests {
         let mut agent = Agent::new("quota-test-agent".to_string());
         let agent_id = agent.id().clone();
         {
-            let mut resources = AgentResources::default();
-            resources.cpu_time_quota = 50; // 50ms limit
+            let resources = AgentResources {
+                cpu_time_quota: 50, // 50ms limit
+                ..Default::default()
+            };
             agent.set_resources(resources);
         }
         scheduler.register(agent);

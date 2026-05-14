@@ -351,4 +351,647 @@ mod tests {
         let range = resolver.resolve("最近", None).expect("should resolve");
         assert_eq!(range.granularity, Granularity::Fuzzy);
     }
+
+    // ─── Helper function tests ──────────────────────────────────────────────
+
+    #[test]
+    fn test_start_of_week_monday() {
+        // 2026-05-11 is a Monday
+        let monday = NaiveDate::from_ymd_opt(2026, 5, 11).unwrap();
+        assert_eq!(start_of_week(&monday), monday);
+    }
+
+    #[test]
+    fn test_start_of_week_sunday() {
+        // 2026-05-10 is a Sunday — start_of_week should be Mon 2026-05-04
+        let sunday = NaiveDate::from_ymd_opt(2026, 5, 10).unwrap();
+        let expected = NaiveDate::from_ymd_opt(2026, 5, 4).unwrap();
+        assert_eq!(start_of_week(&sunday), expected);
+    }
+
+    #[test]
+    fn test_start_of_month_mid_month() {
+        let date = NaiveDate::from_ymd_opt(2026, 5, 15).unwrap();
+        let expected = NaiveDate::from_ymd_opt(2026, 5, 1).unwrap();
+        assert_eq!(start_of_month(&date), expected);
+    }
+
+    #[test]
+    fn test_start_of_quarter_q1() {
+        // February is in Q1
+        let date = NaiveDate::from_ymd_opt(2026, 2, 10).unwrap();
+        let expected = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
+        assert_eq!(start_of_quarter(&date), expected);
+    }
+
+    #[test]
+    fn test_start_of_quarter_q2() {
+        // May is in Q2
+        let date = NaiveDate::from_ymd_opt(2026, 5, 10).unwrap();
+        let expected = NaiveDate::from_ymd_opt(2026, 4, 1).unwrap();
+        assert_eq!(start_of_quarter(&date), expected);
+    }
+
+    #[test]
+    fn test_start_of_quarter_q3() {
+        let date = NaiveDate::from_ymd_opt(2026, 8, 1).unwrap();
+        let expected = NaiveDate::from_ymd_opt(2026, 7, 1).unwrap();
+        assert_eq!(start_of_quarter(&date), expected);
+    }
+
+    #[test]
+    fn test_start_of_quarter_q4() {
+        let date = NaiveDate::from_ymd_opt(2026, 11, 30).unwrap();
+        let expected = NaiveDate::from_ymd_opt(2026, 10, 1).unwrap();
+        assert_eq!(start_of_quarter(&date), expected);
+    }
+
+    // ─── Exact date resolution via resolve_heuristic ────────────────────────
+
+    #[test]
+    fn test_resolve_today_exact_dates() {
+        let reference = NaiveDate::from_ymd_opt(2026, 5, 12).unwrap();
+        let (since, until, conf, gran) = resolve_heuristic("今天", &reference).unwrap();
+        assert_eq!(since, reference);
+        assert_eq!(until, reference);
+        assert!((conf - 0.95).abs() < f32::EPSILON);
+        assert_eq!(gran, Granularity::ExactDay);
+    }
+
+    #[test]
+    fn test_resolve_yesterday_exact_dates() {
+        let reference = NaiveDate::from_ymd_opt(2026, 5, 12).unwrap();
+        let (since, until, _, _) = resolve_heuristic("昨天", &reference).unwrap();
+        let expected = NaiveDate::from_ymd_opt(2026, 5, 11).unwrap();
+        assert_eq!(since, expected);
+        assert_eq!(until, expected);
+    }
+
+    #[test]
+    fn test_resolve_day_before_yesterday() {
+        let reference = NaiveDate::from_ymd_opt(2026, 5, 12).unwrap();
+        let (since, until, _, gran) = resolve_heuristic("前天", &reference).unwrap();
+        let expected = NaiveDate::from_ymd_opt(2026, 5, 10).unwrap();
+        assert_eq!(since, expected);
+        assert_eq!(until, expected);
+        assert_eq!(gran, Granularity::ExactDay);
+    }
+
+    #[test]
+    fn test_resolve_tomorrow() {
+        let reference = NaiveDate::from_ymd_opt(2026, 5, 12).unwrap();
+        let (since, until, _, gran) = resolve_heuristic("明天", &reference).unwrap();
+        let expected = NaiveDate::from_ymd_opt(2026, 5, 13).unwrap();
+        assert_eq!(since, expected);
+        assert_eq!(until, expected);
+        assert_eq!(gran, Granularity::ExactDay);
+    }
+
+    #[test]
+    fn test_resolve_day_after_tomorrow() {
+        let reference = NaiveDate::from_ymd_opt(2026, 5, 12).unwrap();
+        let (since, until, conf, gran) = resolve_heuristic("后天", &reference).unwrap();
+        let expected = NaiveDate::from_ymd_opt(2026, 5, 14).unwrap();
+        assert_eq!(since, expected);
+        assert_eq!(until, expected);
+        assert!((conf - 0.90).abs() < f32::EPSILON);
+        assert_eq!(gran, Granularity::ExactDay);
+    }
+
+    #[test]
+    fn test_resolve_few_days_ago_range() {
+        let reference = NaiveDate::from_ymd_opt(2026, 5, 12).unwrap();
+        let (since, until, _, _) = resolve_heuristic("几天前", &reference).unwrap();
+        let expected_since = NaiveDate::from_ymd_opt(2026, 5, 5).unwrap();
+        assert_eq!(since, expected_since);
+        assert_eq!(until, reference);
+    }
+
+    #[test]
+    fn test_resolve_recently_range() {
+        let reference = NaiveDate::from_ymd_opt(2026, 5, 12).unwrap();
+        let (since, until, _, gran) = resolve_heuristic("最近", &reference).unwrap();
+        let expected_since = NaiveDate::from_ymd_opt(2026, 4, 12).unwrap();
+        assert_eq!(since, expected_since);
+        assert_eq!(until, reference);
+        assert_eq!(gran, Granularity::Fuzzy);
+    }
+
+    #[test]
+    fn test_resolve_this_morning() {
+        let reference = NaiveDate::from_ymd_opt(2026, 5, 12).unwrap();
+        let (since, until, conf, gran) = resolve_heuristic("今早", &reference).unwrap();
+        assert_eq!(since, reference);
+        assert_eq!(until, reference);
+        assert!((conf - 0.85).abs() < f32::EPSILON);
+        assert_eq!(gran, Granularity::ExactDay);
+    }
+
+    #[test]
+    fn test_resolve_this_evening() {
+        let reference = NaiveDate::from_ymd_opt(2026, 5, 12).unwrap();
+        let (since, until, _, gran) = resolve_heuristic("今晚", &reference).unwrap();
+        assert_eq!(since, reference);
+        assert_eq!(until, reference);
+        assert_eq!(gran, Granularity::ExactDay);
+    }
+
+    // ─── Week patterns ──────────────────────────────────────────────────────
+
+    #[test]
+    fn test_resolve_last_week_dates() {
+        // 2026-05-12 is a Tuesday; Monday of this week is 2026-05-11
+        let reference = NaiveDate::from_ymd_opt(2026, 5, 12).unwrap();
+        let (since, until, _, gran) = resolve_heuristic("上周", &reference).unwrap();
+        let expected_since = NaiveDate::from_ymd_opt(2026, 5, 4).unwrap(); // Mon
+        let expected_until = NaiveDate::from_ymd_opt(2026, 5, 10).unwrap(); // Sun
+        assert_eq!(since, expected_since);
+        assert_eq!(until, expected_until);
+        assert_eq!(gran, Granularity::Week);
+    }
+
+    #[test]
+    fn test_resolve_week_before_last() {
+        let reference = NaiveDate::from_ymd_opt(2026, 5, 12).unwrap();
+        let (since, until, conf, gran) = resolve_heuristic("上上周", &reference).unwrap();
+        let expected_since = NaiveDate::from_ymd_opt(2026, 4, 27).unwrap();
+        let expected_until = NaiveDate::from_ymd_opt(2026, 5, 3).unwrap();
+        assert_eq!(since, expected_since);
+        assert_eq!(until, expected_until);
+        assert!((conf - 0.80).abs() < f32::EPSILON);
+        assert_eq!(gran, Granularity::Week);
+    }
+
+    // ─── Month patterns ─────────────────────────────────────────────────────
+
+    #[test]
+    fn test_resolve_this_month() {
+        let reference = NaiveDate::from_ymd_opt(2026, 5, 12).unwrap();
+        let (since, until, conf, gran) = resolve_heuristic("本月", &reference).unwrap();
+        let expected_since = NaiveDate::from_ymd_opt(2026, 5, 1).unwrap();
+        assert_eq!(since, expected_since);
+        assert_eq!(until, reference);
+        assert!((conf - 0.90).abs() < f32::EPSILON);
+        assert_eq!(gran, Granularity::Month);
+    }
+
+    #[test]
+    fn test_resolve_last_month_dates() {
+        // May reference → last month is April
+        let reference = NaiveDate::from_ymd_opt(2026, 5, 12).unwrap();
+        let (since, until, _, _) = resolve_heuristic("上个月", &reference).unwrap();
+        let expected_since = NaiveDate::from_ymd_opt(2026, 4, 1).unwrap();
+        let expected_until = NaiveDate::from_ymd_opt(2026, 4, 30).unwrap();
+        assert_eq!(since, expected_since);
+        assert_eq!(until, expected_until);
+    }
+
+    #[test]
+    fn test_resolve_last_month_january_wraps_year() {
+        // January reference → last month is December of previous year
+        let reference = NaiveDate::from_ymd_opt(2026, 1, 15).unwrap();
+        let (since, until, _, _) = resolve_heuristic("上个月", &reference).unwrap();
+        let expected_since = NaiveDate::from_ymd_opt(2025, 12, 1).unwrap();
+        let expected_until = NaiveDate::from_ymd_opt(2025, 12, 31).unwrap();
+        assert_eq!(since, expected_since);
+        assert_eq!(until, expected_until);
+    }
+
+    #[test]
+    fn test_resolve_two_months_ago() {
+        // May reference → two months ago is March
+        let reference = NaiveDate::from_ymd_opt(2026, 5, 12).unwrap();
+        let (since, until, conf, gran) = resolve_heuristic("两个月前", &reference).unwrap();
+        let expected_since = NaiveDate::from_ymd_opt(2026, 3, 1).unwrap();
+        let expected_until = NaiveDate::from_ymd_opt(2026, 4, 30).unwrap();
+        assert_eq!(since, expected_since);
+        assert_eq!(until, expected_until);
+        assert!((conf - 0.80).abs() < f32::EPSILON);
+        assert_eq!(gran, Granularity::Month);
+    }
+
+    #[test]
+    fn test_resolve_two_months_ago_january_wraps_year() {
+        // January reference → two months ago is November of previous year
+        let reference = NaiveDate::from_ymd_opt(2026, 1, 10).unwrap();
+        let (since, until, _, _) = resolve_heuristic("两个月前", &reference).unwrap();
+        let expected_since = NaiveDate::from_ymd_opt(2025, 11, 1).unwrap();
+        let expected_until = NaiveDate::from_ymd_opt(2025, 12, 31).unwrap();
+        assert_eq!(since, expected_since);
+        assert_eq!(until, expected_until);
+    }
+
+    #[test]
+    fn test_resolve_two_months_ago_february_wraps_year() {
+        // February reference → two months ago is December of previous year
+        let reference = NaiveDate::from_ymd_opt(2026, 2, 15).unwrap();
+        let (since, until, _, _) = resolve_heuristic("两个月前", &reference).unwrap();
+        let expected_since = NaiveDate::from_ymd_opt(2025, 12, 1).unwrap();
+        let expected_until = NaiveDate::from_ymd_opt(2026, 1, 31).unwrap();
+        assert_eq!(since, expected_since);
+        assert_eq!(until, expected_until);
+    }
+
+    // ─── Quarter patterns ───────────────────────────────────────────────────
+
+    #[test]
+    fn test_resolve_this_quarter() {
+        // May is in Q2 (Apr–Jun)
+        let reference = NaiveDate::from_ymd_opt(2026, 5, 12).unwrap();
+        let (since, until, conf, gran) = resolve_heuristic("本季度", &reference).unwrap();
+        let expected_since = NaiveDate::from_ymd_opt(2026, 4, 1).unwrap();
+        assert_eq!(since, expected_since);
+        assert_eq!(until, reference);
+        assert!((conf - 0.90).abs() < f32::EPSILON);
+        assert_eq!(gran, Granularity::Quarter);
+    }
+
+    #[test]
+    fn test_resolve_last_quarter_from_q2() {
+        // May (Q2) → last quarter is Q1 (Jan–Mar)
+        let reference = NaiveDate::from_ymd_opt(2026, 5, 12).unwrap();
+        let (since, until, conf, gran) = resolve_heuristic("上季度", &reference).unwrap();
+        let expected_since = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
+        let expected_until = NaiveDate::from_ymd_opt(2026, 3, 31).unwrap();
+        assert_eq!(since, expected_since);
+        assert_eq!(until, expected_until);
+        assert!((conf - 0.85).abs() < f32::EPSILON);
+        assert_eq!(gran, Granularity::Quarter);
+    }
+
+    #[test]
+    fn test_resolve_last_quarter_from_q1_wraps_year() {
+        // February (Q1) → last quarter is Q4 of previous year (Oct–Dec)
+        let reference = NaiveDate::from_ymd_opt(2026, 2, 10).unwrap();
+        let (since, until, _, _) = resolve_heuristic("上季度", &reference).unwrap();
+        let expected_since = NaiveDate::from_ymd_opt(2025, 10, 1).unwrap();
+        let expected_until = NaiveDate::from_ymd_opt(2025, 12, 31).unwrap();
+        assert_eq!(since, expected_since);
+        assert_eq!(until, expected_until);
+    }
+
+    // ─── Year patterns ──────────────────────────────────────────────────────
+
+    #[test]
+    fn test_resolve_last_year() {
+        let reference = NaiveDate::from_ymd_opt(2026, 5, 12).unwrap();
+        let (since, until, conf, gran) = resolve_heuristic("去年", &reference).unwrap();
+        let expected_since = NaiveDate::from_ymd_opt(2025, 1, 1).unwrap();
+        let expected_until = NaiveDate::from_ymd_opt(2025, 12, 31).unwrap();
+        assert_eq!(since, expected_since);
+        assert_eq!(until, expected_until);
+        assert!((conf - 0.95).abs() < f32::EPSILON);
+        assert_eq!(gran, Granularity::Year);
+    }
+
+    #[test]
+    fn test_resolve_this_year_dates() {
+        let reference = NaiveDate::from_ymd_opt(2026, 5, 12).unwrap();
+        let (since, until, _, _) = resolve_heuristic("今年", &reference).unwrap();
+        let expected_since = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
+        assert_eq!(since, expected_since);
+        assert_eq!(until, reference);
+    }
+
+    // ─── Era patterns ───────────────────────────────────────────────────────
+
+    #[test]
+    fn test_resolve_long_ago() {
+        let reference = NaiveDate::from_ymd_opt(2026, 5, 12).unwrap();
+        let (since, until, conf, gran) = resolve_heuristic("很久以前", &reference).unwrap();
+        let expected_since = NaiveDate::from_ymd_opt(2025, 5, 12).unwrap();
+        assert_eq!(since, expected_since);
+        assert_eq!(until, reference);
+        assert!((conf - 0.30).abs() < f32::EPSILON);
+        assert_eq!(gran, Granularity::Fuzzy);
+    }
+
+    // ─── English alternatives ───────────────────────────────────────────────
+
+    #[test]
+    fn test_resolve_english_today() {
+        let reference = NaiveDate::from_ymd_opt(2026, 5, 12).unwrap();
+        let (since, until, _, gran) = resolve_heuristic("today", &reference).unwrap();
+        assert_eq!(since, reference);
+        assert_eq!(until, reference);
+        assert_eq!(gran, Granularity::ExactDay);
+    }
+
+    #[test]
+    fn test_resolve_english_yesterday() {
+        let reference = NaiveDate::from_ymd_opt(2026, 5, 12).unwrap();
+        let (since, until, _, _) = resolve_heuristic("yesterday", &reference).unwrap();
+        let expected = NaiveDate::from_ymd_opt(2026, 5, 11).unwrap();
+        assert_eq!(since, expected);
+        assert_eq!(until, expected);
+    }
+
+    #[test]
+    fn test_resolve_english_tomorrow() {
+        let reference = NaiveDate::from_ymd_opt(2026, 5, 12).unwrap();
+        let (since, until, _, _) = resolve_heuristic("tomorrow", &reference).unwrap();
+        let expected = NaiveDate::from_ymd_opt(2026, 5, 13).unwrap();
+        assert_eq!(since, expected);
+        assert_eq!(until, expected);
+    }
+
+    #[test]
+    fn test_resolve_english_recently() {
+        let reference = NaiveDate::from_ymd_opt(2026, 5, 12).unwrap();
+        let (_, _, conf, gran) = resolve_heuristic("recently", &reference).unwrap();
+        assert!((conf - 0.50).abs() < f32::EPSILON);
+        assert_eq!(gran, Granularity::Fuzzy);
+    }
+
+    #[test]
+    fn test_resolve_english_last_week() {
+        let reference = NaiveDate::from_ymd_opt(2026, 5, 12).unwrap();
+        let (_, _, _, gran) = resolve_heuristic("last week", &reference).unwrap();
+        assert_eq!(gran, Granularity::Week);
+    }
+
+    #[test]
+    fn test_resolve_english_this_month() {
+        let reference = NaiveDate::from_ymd_opt(2026, 5, 12).unwrap();
+        let (since, _, _, gran) = resolve_heuristic("this month", &reference).unwrap();
+        let expected = NaiveDate::from_ymd_opt(2026, 5, 1).unwrap();
+        assert_eq!(since, expected);
+        assert_eq!(gran, Granularity::Month);
+    }
+
+    #[test]
+    fn test_resolve_english_last_month() {
+        let reference = NaiveDate::from_ymd_opt(2026, 5, 12).unwrap();
+        let (since, _, _, _) = resolve_heuristic("last month", &reference).unwrap();
+        let expected = NaiveDate::from_ymd_opt(2026, 4, 1).unwrap();
+        assert_eq!(since, expected);
+    }
+
+    #[test]
+    fn test_resolve_english_this_quarter() {
+        let reference = NaiveDate::from_ymd_opt(2026, 5, 12).unwrap();
+        let (since, _, _, gran) = resolve_heuristic("this quarter", &reference).unwrap();
+        let expected = NaiveDate::from_ymd_opt(2026, 4, 1).unwrap();
+        assert_eq!(since, expected);
+        assert_eq!(gran, Granularity::Quarter);
+    }
+
+    #[test]
+    fn test_resolve_english_last_quarter() {
+        let reference = NaiveDate::from_ymd_opt(2026, 5, 12).unwrap();
+        let (_, _, _, gran) = resolve_heuristic("last quarter", &reference).unwrap();
+        assert_eq!(gran, Granularity::Quarter);
+    }
+
+    #[test]
+    fn test_resolve_english_last_year() {
+        let reference = NaiveDate::from_ymd_opt(2026, 5, 12).unwrap();
+        let (since, until, _, gran) = resolve_heuristic("last year", &reference).unwrap();
+        let expected_since = NaiveDate::from_ymd_opt(2025, 1, 1).unwrap();
+        let expected_until = NaiveDate::from_ymd_opt(2025, 12, 31).unwrap();
+        assert_eq!(since, expected_since);
+        assert_eq!(until, expected_until);
+        assert_eq!(gran, Granularity::Year);
+    }
+
+    #[test]
+    fn test_resolve_english_this_year() {
+        let reference = NaiveDate::from_ymd_opt(2026, 5, 12).unwrap();
+        let (since, _, _, _) = resolve_heuristic("this year", &reference).unwrap();
+        let expected = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
+        assert_eq!(since, expected);
+    }
+
+    #[test]
+    fn test_resolve_english_long_ago() {
+        let reference = NaiveDate::from_ymd_opt(2026, 5, 12).unwrap();
+        let (_, _, conf, gran) = resolve_heuristic("long ago", &reference).unwrap();
+        assert!((conf - 0.30).abs() < f32::EPSILON);
+        assert_eq!(gran, Granularity::Fuzzy);
+    }
+
+    #[test]
+    fn test_resolve_english_this_morning() {
+        let reference = NaiveDate::from_ymd_opt(2026, 5, 12).unwrap();
+        let (since, until, _, gran) = resolve_heuristic("this morning", &reference).unwrap();
+        assert_eq!(since, reference);
+        assert_eq!(until, reference);
+        assert_eq!(gran, Granularity::ExactDay);
+    }
+
+    #[test]
+    fn test_resolve_english_tonight() {
+        let reference = NaiveDate::from_ymd_opt(2026, 5, 12).unwrap();
+        let (since, until, _, gran) = resolve_heuristic("tonight", &reference).unwrap();
+        assert_eq!(since, reference);
+        assert_eq!(until, reference);
+        assert_eq!(gran, Granularity::ExactDay);
+    }
+
+    // ─── Chinese alternatives (今日/本日/昨日/明日/上月) ─────────────────────
+
+    #[test]
+    fn test_resolve_jinri() {
+        let reference = NaiveDate::from_ymd_opt(2026, 5, 12).unwrap();
+        let (since, until, _, _) = resolve_heuristic("今日", &reference).unwrap();
+        assert_eq!(since, reference);
+        assert_eq!(until, reference);
+    }
+
+    #[test]
+    fn test_resolve_benri() {
+        let reference = NaiveDate::from_ymd_opt(2026, 5, 12).unwrap();
+        let (since, until, _, _) = resolve_heuristic("本日", &reference).unwrap();
+        assert_eq!(since, reference);
+        assert_eq!(until, reference);
+    }
+
+    #[test]
+    fn test_resolve_zuori() {
+        let reference = NaiveDate::from_ymd_opt(2026, 5, 12).unwrap();
+        let (since, until, _, _) = resolve_heuristic("昨日", &reference).unwrap();
+        let expected = NaiveDate::from_ymd_opt(2026, 5, 11).unwrap();
+        assert_eq!(since, expected);
+        assert_eq!(until, expected);
+    }
+
+    #[test]
+    fn test_resolve_mingri() {
+        let reference = NaiveDate::from_ymd_opt(2026, 5, 12).unwrap();
+        let (since, until, _, _) = resolve_heuristic("明日", &reference).unwrap();
+        let expected = NaiveDate::from_ymd_opt(2026, 5, 13).unwrap();
+        assert_eq!(since, expected);
+        assert_eq!(until, expected);
+    }
+
+    #[test]
+    fn test_resolve_shang_yue() {
+        let reference = NaiveDate::from_ymd_opt(2026, 5, 12).unwrap();
+        let (since, _, _, gran) = resolve_heuristic("上月", &reference).unwrap();
+        let expected = NaiveDate::from_ymd_opt(2026, 4, 1).unwrap();
+        assert_eq!(since, expected);
+        assert_eq!(gran, Granularity::Month);
+    }
+
+    #[test]
+    fn test_resolve_qiantian_alternative() {
+        // "前几天" alternative pattern
+        let reference = NaiveDate::from_ymd_opt(2026, 5, 12).unwrap();
+        let (since, until, _, gran) = resolve_heuristic("前几天", &reference).unwrap();
+        let expected_since = NaiveDate::from_ymd_opt(2026, 5, 5).unwrap();
+        assert_eq!(since, expected_since);
+        assert_eq!(until, reference);
+        assert_eq!(gran, Granularity::Fuzzy);
+    }
+
+    // ─── Substring scan path ────────────────────────────────────────────────
+
+    #[test]
+    fn test_substring_scan_matches() {
+        // "看看前几天的情况" contains "前几天" as substring
+        let reference = NaiveDate::from_ymd_opt(2026, 5, 12).unwrap();
+        let result = resolve_heuristic("看看前几天的情况", &reference);
+        assert!(result.is_some());
+        let (since, until, conf, gran) = result.unwrap();
+        let expected_since = NaiveDate::from_ymd_opt(2026, 5, 5).unwrap();
+        assert_eq!(since, expected_since);
+        assert_eq!(until, reference);
+        // Substring match uses reduced confidence (0.9x) and Fuzzy granularity
+        assert!((conf - 0.60 * 0.9).abs() < f32::EPSILON);
+        assert_eq!(gran, Granularity::Fuzzy);
+    }
+
+    #[test]
+    fn test_substring_scan_longer_expression() {
+        // "查询最近的记录" contains "最近" as substring
+        let reference = NaiveDate::from_ymd_opt(2026, 5, 12).unwrap();
+        let result = resolve_heuristic("查询最近的记录", &reference);
+        assert!(result.is_some());
+        let (_, _, conf, gran) = result.unwrap();
+        // Substring match: confidence * 0.9, granularity forced to Fuzzy
+        assert!((conf - 0.50 * 0.9).abs() < f32::EPSILON);
+        assert_eq!(gran, Granularity::Fuzzy);
+    }
+
+    // ─── Case insensitivity and trimming ────────────────────────────────────
+
+    #[test]
+    fn test_case_insensitive_matching() {
+        let reference = NaiveDate::from_ymd_opt(2026, 5, 12).unwrap();
+        let (_, _, _, gran) = resolve_heuristic("TODAY", &reference).unwrap();
+        assert_eq!(gran, Granularity::ExactDay);
+    }
+
+    #[test]
+    fn test_whitespace_trimming() {
+        let reference = NaiveDate::from_ymd_opt(2026, 5, 12).unwrap();
+        let result = resolve_heuristic("  today  ", &reference);
+        assert!(result.is_some());
+    }
+
+    // ─── HeuristicTemporalResolver construction ─────────────────────────────
+
+    #[test]
+    fn test_heuristic_resolver_new() {
+        let resolver = HeuristicTemporalResolver::new();
+        let result = resolver.resolve("今天");
+        assert!(result.is_some());
+    }
+
+    #[test]
+    fn test_heuristic_resolver_default() {
+        let resolver = HeuristicTemporalResolver::default();
+        let result = resolver.resolve("今天");
+        assert!(result.is_some());
+    }
+
+    #[test]
+    fn test_resolver_returns_timestamps() {
+        let resolver = HeuristicTemporalResolver::new();
+        let (since, until, conf, gran) = resolver.resolve("昨天").unwrap();
+        // since should be start of day, until should be end of day
+        assert!(since < until);
+        assert!(conf > 0.0);
+        assert_eq!(gran, Granularity::ExactDay);
+        // Verify since < until (since=00:00:00, until=23:59:59)
+        assert!(until - since > 0);
+    }
+
+    // ─── Granularity Debug/Clone/PartialEq ──────────────────────────────────
+
+    #[test]
+    fn test_granularity_debug_format() {
+        assert_eq!(format!("{:?}", Granularity::ExactDay), "ExactDay");
+        assert_eq!(format!("{:?}", Granularity::Week), "Week");
+        assert_eq!(format!("{:?}", Granularity::Month), "Month");
+        assert_eq!(format!("{:?}", Granularity::Quarter), "Quarter");
+        assert_eq!(format!("{:?}", Granularity::HalfYear), "HalfYear");
+        assert_eq!(format!("{:?}", Granularity::Year), "Year");
+        assert_eq!(format!("{:?}", Granularity::Fuzzy), "Fuzzy");
+    }
+
+    #[test]
+    fn test_granularity_clone() {
+        let g = Granularity::Week;
+        let g2 = g;
+        assert_eq!(g, g2);
+    }
+
+    // ─── TemporalRule struct ────────────────────────────────────────────────
+
+    #[test]
+    fn test_temporal_rule_debug() {
+        let rule = TemporalRule {
+            patterns: &["test"],
+            confidence: 0.5,
+            granularity: Granularity::Fuzzy,
+        };
+        let debug = format!("{:?}", rule);
+        assert!(debug.contains("TemporalRule"));
+        assert!(debug.contains("test"));
+    }
+
+    #[test]
+    fn test_temporal_rule_clone() {
+        let rule = TemporalRule {
+            patterns: &["test"],
+            confidence: 0.5,
+            granularity: Granularity::Fuzzy,
+        };
+        let cloned = rule.clone();
+        assert_eq!(cloned.confidence, 0.5);
+        assert_eq!(cloned.granularity, Granularity::Fuzzy);
+    }
+
+    // ─── build_rule_map ─────────────────────────────────────────────────────
+
+    #[test]
+    fn test_build_rule_map_covers_all_patterns() {
+        let map = build_rule_map();
+        // Spot-check key patterns exist
+        assert!(map.contains_key("今天"));
+        assert!(map.contains_key("today"));
+        assert!(map.contains_key("yesterday"));
+        assert!(map.contains_key("tomorrow"));
+        assert!(map.contains_key("最近"));
+        assert!(map.contains_key("recently"));
+        assert!(map.contains_key("this morning"));
+        assert!(map.contains_key("last week"));
+        assert!(map.contains_key("this month"));
+        assert!(map.contains_key("this quarter"));
+        assert!(map.contains_key("this year"));
+    }
+
+    #[test]
+    fn test_rule_map_synonyms_point_to_same_rule() {
+        let map = build_rule_map();
+        // "今天", "today", "今日", "本日" should all map to the same rule
+        let idx1 = map.get("今天").unwrap();
+        let idx2 = map.get("today").unwrap();
+        let idx3 = map.get("今日").unwrap();
+        let idx4 = map.get("本日").unwrap();
+        assert_eq!(idx1, idx2);
+        assert_eq!(idx1, idx3);
+        assert_eq!(idx1, idx4);
+    }
 }

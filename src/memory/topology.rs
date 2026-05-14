@@ -555,4 +555,282 @@ mod tests {
         let merged = cross_agent_merge(&a, &b);
         assert_eq!(merged.scope, MemoryScope::Shared);
     }
+
+    // ─── Additional tests for coverage ───────────────────────────
+
+    #[test]
+    fn test_intent_hit_record_entropy() {
+        let mut record = IntentHitRecord::new("m1");
+        assert_eq!(record.total_hits(), 0);
+        assert_eq!(record.entropy(), 0.0); // no hits = 0 entropy
+
+        record.record_hit(QueryIntent::Factual);
+        assert_eq!(record.total_hits(), 1);
+        assert_eq!(record.entropy(), 0.0); // single intent = 0 entropy
+
+        record.record_hit(QueryIntent::Temporal);
+        assert_eq!(record.total_hits(), 2);
+        assert!(record.entropy() > 0.0); // two intents = positive entropy
+    }
+
+    #[test]
+    fn test_should_split_below_min_hits() {
+        let mut record = IntentHitRecord::new("m1");
+        record.record_hit(QueryIntent::Factual);
+        record.record_hit(QueryIntent::Temporal);
+        record.record_hit(QueryIntent::MultiHop);
+        // 3 hits < SPLIT_MIN_HITS (4), should not split
+        assert!(!should_split(&record));
+    }
+
+    #[test]
+    fn test_split_by_intent_single_type_returns_empty() {
+        let entry = make_entry("m1", "agent-a", "test content", MemoryType::Untyped);
+        let mut record = IntentHitRecord::new("m1");
+        record.record_hit(QueryIntent::Factual);
+        record.record_hit(QueryIntent::Factual);
+        // Only one type → should return empty
+        let splits = split_by_intent(&entry, &record);
+        assert!(splits.is_empty());
+    }
+
+    #[test]
+    fn test_split_with_llm_uses_llm_response() {
+        let entry = make_entry("m1", "agent-a", "user prefers dark mode", MemoryType::Untyped);
+        let mut record = IntentHitRecord::new("m1");
+        record.record_hit(QueryIntent::Factual);
+        record.record_hit(QueryIntent::Temporal);
+
+        let splits = split_with_llm(&entry, &record, |prompt| {
+            assert!(prompt.contains("Split this"));
+            Some("semantic|user prefers dark mode\nepisodic|user joined last week".to_string())
+        });
+        assert_eq!(splits.len(), 2);
+        assert_eq!(splits[0].memory_type, MemoryType::Semantic);
+        assert_eq!(splits[1].memory_type, MemoryType::Episodic);
+    }
+
+    #[test]
+    fn test_split_with_llm_none_falls_back() {
+        let entry = make_entry("m1", "agent-a", "test content", MemoryType::Untyped);
+        let mut record = IntentHitRecord::new("m1");
+        record.record_hit(QueryIntent::Factual);
+        record.record_hit(QueryIntent::Temporal);
+        record.record_hit(QueryIntent::MultiHop);
+        record.record_hit(QueryIntent::Preference);
+
+        let splits = split_with_llm(&entry, &record, |_| None);
+        // Falls back to split_by_intent
+        assert!(!splits.is_empty());
+    }
+
+    #[test]
+    fn test_parse_split_response_empty_falls_back() {
+        let entry = make_entry("m1", "agent-a", "test", MemoryType::Untyped);
+        let splits = parse_split_response(&entry, "");
+        // Empty response → fallback to split_by_intent with empty record
+        assert!(splits.is_empty()); // no hits → single type → empty
+    }
+
+    #[test]
+    fn test_parse_split_response_malformed_lines() {
+        let entry = make_entry("m1", "agent-a", "test", MemoryType::Untyped);
+        let splits = parse_split_response(&entry, "no pipe here\nalso no pipe");
+        // No valid lines → fallback
+        assert!(splits.is_empty());
+    }
+
+    #[test]
+    fn test_should_merge_no_embedding() {
+        let a = make_entry("a", "agent-a", "test", MemoryType::Semantic);
+        let b = make_entry("b", "agent-a", "test", MemoryType::Semantic);
+        // No embeddings → should not merge
+        assert!(!should_merge(&a, &b));
+    }
+
+    #[test]
+    fn test_should_merge_same_id() {
+        let a = make_entry_with_embedding(
+            "a", "agent-a", "test",
+            MemoryType::Semantic, vec![1.0, 0.0],
+        );
+        let b = make_entry_with_embedding(
+            "a", "agent-a", "test", // same id
+            MemoryType::Semantic, vec![1.0, 0.0],
+        );
+        assert!(!should_merge(&a, &b));
+    }
+
+    #[test]
+    fn test_should_merge_low_similarity() {
+        let a = make_entry_with_embedding(
+            "a", "agent-a", "coffee",
+            MemoryType::Semantic, vec![1.0, 0.0, 0.0],
+        );
+        let b = make_entry_with_embedding(
+            "b", "agent-a", "unrelated",
+            MemoryType::Semantic, vec![0.0, 1.0, 0.0],
+        );
+        // Orthogonal → similarity ~0 → should not merge
+        assert!(!should_merge(&a, &b));
+    }
+
+    #[test]
+    fn test_merge_with_llm_uses_response() {
+        let mut a = make_entry_with_embedding(
+            "a", "agent-a", "user likes coffee",
+            MemoryType::Semantic, vec![1.0, 0.0],
+        );
+        a.access_count = 5;
+        let mut b = make_entry_with_embedding(
+            "b", "agent-a", "user enjoys coffee",
+            MemoryType::Semantic, vec![0.99, 0.1],
+        );
+        b.access_count = 3;
+
+        let merged = merge_with_llm(&a, &b, |_| {
+            Some("user is a coffee enthusiast".to_string())
+        });
+        assert!(merged.content.display().contains("enthusiast"));
+    }
+
+    #[test]
+    fn test_merge_with_llm_none_keeps_original() {
+        let mut a = make_entry_with_embedding(
+            "a", "agent-a", "user likes coffee",
+            MemoryType::Semantic, vec![1.0, 0.0],
+        );
+        a.access_count = 5;
+        let mut b = make_entry_with_embedding(
+            "b", "agent-a", "user enjoys coffee",
+            MemoryType::Semantic, vec![0.99, 0.1],
+        );
+        b.access_count = 3;
+
+        let merged = merge_with_llm(&a, &b, |_| None);
+        // Should keep winner's content
+        assert!(merged.content.display().contains("coffee"));
+    }
+
+    #[test]
+    fn test_update_with_llm_none_keeps_new_content() {
+        let old = make_entry("old", "agent-a", "dark mode", MemoryType::Semantic);
+        let new_entry = make_entry("new", "agent-a", "light mode", MemoryType::Semantic);
+
+        let fused = update_with_llm(&old, &new_entry, |_| None);
+        // Keeps new entry's content
+        assert!(fused.content.display().contains("light mode"));
+        assert_eq!(fused.supersedes.as_deref(), Some("old"));
+    }
+
+    #[test]
+    fn test_evolve_topology_split_and_merge() {
+        let entry = make_entry("m1", "agent-a", "multi-purpose memory", MemoryType::Untyped);
+        let mut record = IntentHitRecord::new("m1");
+        record.record_hit(QueryIntent::Factual);
+        record.record_hit(QueryIntent::Temporal);
+        record.record_hit(QueryIntent::MultiHop);
+        record.record_hit(QueryIntent::Preference);
+
+        let mut hit_records = HashMap::new();
+        hit_records.insert("m1".to_string(), record);
+
+        let actions = evolve_topology(&[entry], &hit_records, |_| None);
+        // Should have at least a split action
+        assert!(!actions.is_empty());
+        assert!(actions.iter().any(|a| a.kind == ActionKind::Split));
+    }
+
+    #[test]
+    fn test_evolve_topology_merge_action() {
+        let a = make_entry_with_embedding(
+            "a", "agent-a", "user likes coffee",
+            MemoryType::Semantic, vec![1.0, 0.0],
+        );
+        let b = make_entry_with_embedding(
+            "b", "agent-a", "user enjoys coffee",
+            MemoryType::Semantic, vec![0.99, 0.1],
+        );
+
+        let actions = evolve_topology(&[a, b], &HashMap::new(), |_| None);
+        assert!(!actions.is_empty());
+        assert!(actions.iter().any(|a| a.kind == ActionKind::Merge));
+    }
+
+    #[test]
+    fn test_split_prompt_format() {
+        let entry = make_entry("m1", "agent-a", "test content", MemoryType::Untyped);
+        let mut record = IntentHitRecord::new("m1");
+        record.record_hit(QueryIntent::Factual);
+        record.record_hit(QueryIntent::Temporal);
+
+        let prompt = split_prompt(&entry, &record);
+        assert!(prompt.contains("Split this"));
+        assert!(prompt.contains("test content"));
+        assert!(prompt.contains("Factual"));
+        assert!(prompt.contains("Temporal"));
+    }
+
+    #[test]
+    fn test_merge_prompt_format() {
+        let a = make_entry("a", "agent-a", "memory A", MemoryType::Semantic);
+        let b = make_entry("b", "agent-a", "memory B", MemoryType::Semantic);
+
+        let prompt = merge_prompt(&a, &b);
+        assert!(prompt.contains("Merge"));
+        assert!(prompt.contains("memory A"));
+        assert!(prompt.contains("memory B"));
+    }
+
+    #[test]
+    fn test_update_prompt_format() {
+        let old = make_entry("old", "agent-a", "old info", MemoryType::Semantic);
+        let new_entry = make_entry("new", "agent-a", "new info", MemoryType::Semantic);
+
+        let prompt = update_prompt(&old, &new_entry);
+        assert!(prompt.contains("contradictory"));
+        assert!(prompt.contains("old info"));
+        assert!(prompt.contains("new info"));
+    }
+
+    #[test]
+    fn test_cross_agent_merge_no_candidates_same_agent() {
+        let a = make_entry_with_embedding(
+            "a", "agent-a", "deploy uses CI pipeline",
+            MemoryType::Procedural, vec![1.0, 0.0, 0.0],
+        );
+        let b = make_entry_with_embedding(
+            "b", "agent-a", "deployment through CI", // same agent
+            MemoryType::Procedural, vec![0.99, 0.1, 0.0],
+        );
+
+        let entries = [a, b];
+        let candidates = find_cross_agent_merge_candidates(&entries);
+        assert!(candidates.is_empty()); // same agent → not cross-agent
+    }
+
+    #[test]
+    fn test_merge_entries_winner_has_higher_access() {
+        let mut a = make_entry_with_embedding(
+            "a", "agent-a", "test A",
+            MemoryType::Semantic, vec![1.0, 0.0],
+        );
+        a.access_count = 2;
+        a.importance = 60;
+
+        let mut b = make_entry_with_embedding(
+            "b", "agent-a", "test B",
+            MemoryType::Semantic, vec![0.99, 0.1],
+        );
+        b.access_count = 10;
+        b.importance = 40;
+
+        let merged = merge_entries(&a, &b);
+        // b has higher access_count → winner
+        assert_eq!(merged.causal_parent.as_deref(), Some("b"));
+        assert_eq!(merged.supersedes.as_deref(), Some("a"));
+        // importance = max(60, 40) = 60
+        assert_eq!(merged.importance, 60);
+        assert_eq!(merged.access_count, 12);
+    }
 }

@@ -64,3 +64,83 @@ impl crate::kernel::AIKernel {
             .map_err(|e| std::io::Error::other(e.to_string()))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::kernel::tests::make_kernel;
+    use crate::fs::semantic_fs::events::CreateEventParams;
+
+    #[test]
+    fn test_create_event() {
+        let (kernel, _dir) = make_kernel();
+        let params = CreateEventParams {
+            label: "test-event",
+            event_type: EventType::Work,
+            start_time: Some(1000),
+            end_time: Some(2000),
+            location: Some("test-location"),
+            tags: vec!["test".to_string()],
+            agent_id: "kernel",
+        };
+        let event_id = kernel.create_event(params).unwrap();
+        assert!(!event_id.is_empty());
+        assert!(event_id.starts_with("evt:"));
+    }
+
+    #[test]
+    fn test_list_events_by_time_range_and_tags() {
+        let (kernel, _dir) = make_kernel();
+        let params = CreateEventParams {
+            label: "listable-event",
+            event_type: EventType::Task,
+            start_time: Some(1000),
+            end_time: Some(2000),
+            location: None,
+            tags: vec!["alpha".to_string(), "beta".to_string()],
+            agent_id: "kernel",
+        };
+        let _event_id = kernel.create_event(params).unwrap();
+
+        // List by time range
+        let events = kernel.list_events(Some(500), Some(3000), &[], None, None);
+        assert!(!events.is_empty());
+
+        // List by tags
+        let events = kernel.list_events(None, None, &["alpha".to_string()], None, None);
+        assert!(!events.is_empty());
+
+        // List with non-matching tag should return empty
+        let events = kernel.list_events(None, None, &["nonexistent".to_string()], None, None);
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn test_event_attach() {
+        let (kernel, _dir) = make_kernel();
+
+        // Create an event
+        let params = CreateEventParams {
+            label: "attach-event",
+            event_type: EventType::Report,
+            start_time: Some(1000),
+            end_time: None,
+            location: None,
+            tags: vec!["attach".to_string()],
+            agent_id: "kernel",
+        };
+        let event_id = kernel.create_event(params).unwrap();
+
+        // Create a CAS object to use as target
+        let cid = kernel.semantic_create(
+            b"target content".to_vec(),
+            vec!["target".to_string()],
+            "kernel",
+            None,
+        ).unwrap();
+
+        // Attach
+        let result = kernel.event_attach(&event_id, &cid, EventRelation::Artifact, "kernel");
+        assert!(result.is_ok());
+    }
+}

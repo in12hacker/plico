@@ -34,8 +34,8 @@ fn now_ms() -> u64 {
 }
 
 fn make_kernel() -> (std::sync::Arc<AIKernel>, tempfile::TempDir) {
-    let _ = std::env::set_var("EMBEDDING_BACKEND", "stub");
-    let _ = std::env::set_var("LLM_BACKEND", "stub");
+    std::env::set_var("EMBEDDING_BACKEND", "stub");
+    std::env::set_var("LLM_BACKEND", "stub");
     let dir = tempdir().unwrap();
     let kernel = AIKernel::new(dir.path().to_path_buf()).expect("kernel init");
     (kernel, dir)
@@ -171,7 +171,7 @@ fn pamb_s2_memory_access_count_tracks_usage() {
     // Access count may or may not increment depending on recall impl,
     // but the operation should not panic.
     let _ = kernel.recall(&agent, "default");
-    assert!(true, "Multiple recalls should not panic");
+    // Test reaches here without panic = success
 
     let _ = initial_access;
 }
@@ -459,16 +459,14 @@ fn pamb_s5_temporal_causal_root_trace() {
 #[test]
 fn pamb_s6_eviction_priority_correct_ordering() {
     let now = 1000000;
-    let entries = vec![
-        { let mut e = MemoryEntry::ephemeral("a", "temp"); e.id = "e1".into();
+    let entries = [{ let mut e = MemoryEntry::ephemeral("a", "temp"); e.id = "e1".into();
           e.memory_type = MemoryType::Untyped; e },
         { let mut e = MemoryEntry::ephemeral("a", "fact"); e.id = "e2".into();
           e.tier = MemoryTier::LongTerm; e.memory_type = MemoryType::Semantic;
           e.access_count = 5; e },
         { let mut e = MemoryEntry::ephemeral("a", "skill"); e.id = "e3".into();
           e.tier = MemoryTier::Procedural; e.memory_type = MemoryType::Procedural;
-          e.access_count = 10; e },
-    ];
+          e.access_count = 10; e }];
     let p1 = eviction_priority(&entries[0], now);
     let p2 = eviction_priority(&entries[1], now);
     let p3 = eviction_priority(&entries[2], now);

@@ -246,7 +246,7 @@ impl PetgraphBackend {
 
     /// Persist a new edge + all invalidated predecessors in one ACID transaction.
     fn persist_add_edge_atomic(&self, new_edge: &KGEdge, invalidated: &[KGEdge]) {
-        let Some(ref mtx) = self.db else { return };
+        let Some(ref mtx) = self.db else { return; };
         let db = mtx.lock().unwrap();
         let res = (|| -> Result<(), Box<dyn std::error::Error>> {
             let write_txn = db.begin_write()?;
@@ -375,7 +375,6 @@ impl PetgraphBackend {
                 }
             }
         }
-
         if let Ok(table) = read_txn.open_table(KG_EDGES) {
             if let Ok(iter) = table.range::<&str>(..) {
                 for (key, value) in iter.flatten() {
@@ -656,11 +655,16 @@ impl KnowledgeGraph for PetgraphBackend {
         let nodes = self.nodes.read().unwrap();
         let out = self.out_edges.read().unwrap();
         let in_e = self.in_edges.read().unwrap();
-        let mut visited = HashSet::new();
-        let mut stack: Vec<(String, Vec<String>)> = vec![(src.into(), vec![src.into()])];
+        // Per-path visited set — allows different paths through the same node
+        let mut stack: Vec<(String, Vec<String>, HashSet<String>)> =
+            vec![(src.into(), vec![src.into()], HashSet::from([src.into()]))];
         let mut results = Vec::new();
+        const MAX_RESULTS: usize = 20;
 
-        while let Some((current, path)) = stack.pop() {
+        while let Some((current, path, path_visited)) = stack.pop() {
+            if results.len() >= MAX_RESULTS {
+                break;
+            }
             if current == dst {
                 let node_path: Vec<KGNode> = path
                     .iter()
@@ -672,23 +676,25 @@ impl KnowledgeGraph for PetgraphBackend {
             if path.len() >= max_depth as usize {
                 continue;
             }
-            if visited.contains(&current) {
-                continue;
-            }
-            visited.insert(current.clone());
             if let Some(edges) = out.get(&current) {
                 for (next_dst, _) in edges {
-                    let mut new_path = path.clone();
-                    new_path.push(next_dst.clone());
-                    stack.push((next_dst.clone(), new_path));
+                    if !path_visited.contains(next_dst) {
+                        let mut new_path = path.clone();
+                        new_path.push(next_dst.clone());
+                        let mut new_visited = path_visited.clone();
+                        new_visited.insert(next_dst.clone());
+                        stack.push((next_dst.clone(), new_path, new_visited));
+                    }
                 }
             }
             if let Some(edges) = in_e.get(&current) {
                 for (next_src, _) in edges {
-                    if !path.contains(next_src) {
+                    if !path_visited.contains(next_src) {
                         let mut new_path = path.clone();
                         new_path.push(next_src.clone());
-                        stack.push((next_src.clone(), new_path));
+                        let mut new_visited = path_visited.clone();
+                        new_visited.insert(next_src.clone());
+                        stack.push((next_src.clone(), new_path, new_visited));
                     }
                 }
             }
@@ -704,6 +710,7 @@ impl KnowledgeGraph for PetgraphBackend {
     ) -> Result<Option<Vec<KGNode>>, KGError> {
         let nodes = self.nodes.read().unwrap();
         let out = self.out_edges.read().unwrap();
+        let in_e = self.in_edges.read().unwrap();
 
         let mut heap: BinaryHeap<PathState> = BinaryHeap::new();
         heap.push(PathState {
@@ -735,6 +742,7 @@ impl KnowledgeGraph for PetgraphBackend {
                 }
             }
 
+            // Traverse outgoing edges
             if let Some(edges) = out.get(&state.node) {
                 let mut sorted_edges: Vec<_> = edges.clone();
                 sorted_edges.sort_by(|a, b| b.1.weight.partial_cmp(&a.1.weight).unwrap_or(std::cmp::Ordering::Equal));
@@ -757,6 +765,31 @@ impl KnowledgeGraph for PetgraphBackend {
                     heap.push(PathState {
                         cost: new_cost,
                         node: next_dst.clone(),
+                        path: new_path,
+                    });
+                }
+            }
+
+            // Traverse incoming edges (reverse direction)
+            if let Some(edges) = in_e.get(&state.node) {
+                for (next_src, edge) in edges {
+                    if state.path.contains(next_src) {
+                        continue;
+                    }
+                    let new_cost = state.cost + edge.weight;
+
+                    if let Some(&best) = best_cost.get(next_src) {
+                        if new_cost <= best {
+                            continue;
+                        }
+                    }
+                    best_cost.insert(next_src.clone(), new_cost);
+
+                    let mut new_path = state.path.clone();
+                    new_path.push(next_src.clone());
+                    heap.push(PathState {
+                        cost: new_cost,
+                        node: next_src.clone(),
                         path: new_path,
                     });
                 }
@@ -1087,6 +1120,16 @@ impl KnowledgeGraph for PetgraphBackend {
         Ok(refs.get(cid).is_some_and(|s| !s.is_empty()))
     }
 
+    fn get_nodes_by_cid(&self, cid: &str) -> Result<Vec<KGNode>, KGError> {
+        let refs = self.cid_refs.read().unwrap();
+        let node_ids = match refs.get(cid) {
+            Some(ids) => ids.iter().cloned().collect::<Vec<_>>(),
+            None => return Ok(vec![]),
+        };
+        let nodes = self.nodes.read().unwrap();
+        Ok(node_ids.iter().filter_map(|id| nodes.get(id).cloned()).collect())
+    }
+
     fn personalized_pagerank(
         &self,
         seed_nodes: &[String],
@@ -1164,5 +1207,213 @@ impl KnowledgeGraph for PetgraphBackend {
         ranked.truncate(top_k);
 
         Ok(ranked)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::fs::graph::KnowledgeGraph;
+
+    fn make_backend() -> PetgraphBackend {
+        PetgraphBackend::new()
+    }
+
+    fn make_node(id: &str, label: &str, agent_id: &str) -> KGNode {
+        KGNode {
+            id: id.to_string(),
+            label: label.to_string(),
+            node_type: KGNodeType::Entity,
+            content_cid: None,
+            properties: serde_json::Value::Null,
+            agent_id: agent_id.to_string(),
+            tenant_id: "default".to_string(),
+            created_at: now_ms(),
+            valid_at: None,
+            invalid_at: None,
+            expired_at: None,
+        }
+    }
+
+    fn make_edge(src: &str, dst: &str, edge_type: KGEdgeType) -> KGEdge {
+        KGEdge {
+            src: src.to_string(),
+            dst: dst.to_string(),
+            edge_type,
+            weight: 1.0,
+            evidence_cid: None,
+            created_at: now_ms(),
+            valid_at: None,
+            invalid_at: None,
+            expired_at: None,
+            episode: None,
+        }
+    }
+
+    #[test]
+    fn test_add_and_get_node() {
+        let kg = make_backend();
+        let node = make_node("n1", "Node One", "test");
+        kg.add_node(node.clone()).unwrap();
+        let retrieved = kg.get_node("n1").unwrap().unwrap();
+        assert_eq!(retrieved.id, "n1");
+        assert_eq!(retrieved.label, "Node One");
+    }
+
+    #[test]
+    fn test_get_node_not_found() {
+        let kg = make_backend();
+        assert!(kg.get_node("nonexistent").unwrap().is_none());
+    }
+
+    #[test]
+    fn test_add_and_get_edge() {
+        let kg = make_backend();
+        kg.add_node(make_node("a", "A", "test")).unwrap();
+        kg.add_node(make_node("b", "B", "test")).unwrap();
+        kg.add_edge(make_edge("a", "b", KGEdgeType::RelatedTo)).unwrap();
+
+        let neighbors = kg.get_neighbors("a", None, 1).unwrap();
+        assert_eq!(neighbors.len(), 1);
+        assert_eq!(neighbors[0].0.id, "b");
+    }
+
+    #[test]
+    fn test_get_neighbors_with_edge_type() {
+        let kg = make_backend();
+        kg.add_node(make_node("x", "X", "test")).unwrap();
+        kg.add_node(make_node("y", "Y", "test")).unwrap();
+        kg.add_node(make_node("z", "Z", "test")).unwrap();
+        kg.add_edge(make_edge("x", "y", KGEdgeType::Causes)).unwrap();
+        kg.add_edge(make_edge("x", "z", KGEdgeType::RelatedTo)).unwrap();
+
+        let causes = kg.get_neighbors("x", Some(KGEdgeType::Causes), 1).unwrap();
+        assert_eq!(causes.len(), 1);
+        assert_eq!(causes[0].0.id, "y");
+
+        let all = kg.get_neighbors("x", None, 1).unwrap();
+        assert_eq!(all.len(), 2);
+    }
+
+    #[test]
+    fn test_remove_node() {
+        let kg = make_backend();
+        kg.add_node(make_node("rm", "Remove Me", "test")).unwrap();
+        kg.remove_node("rm").unwrap();
+        assert!(kg.get_node("rm").unwrap().is_none());
+    }
+
+    #[test]
+    fn test_remove_edge() {
+        let kg = make_backend();
+        kg.add_node(make_node("e1", "E1", "test")).unwrap();
+        kg.add_node(make_node("e2", "E2", "test")).unwrap();
+        kg.add_edge(make_edge("e1", "e2", KGEdgeType::RelatedTo)).unwrap();
+        kg.remove_edge("e1", "e2", Some(KGEdgeType::RelatedTo)).unwrap();
+
+        let neighbors = kg.get_neighbors("e1", None, 1).unwrap();
+        assert!(neighbors.is_empty());
+    }
+
+    #[test]
+    fn test_update_node() {
+        let kg = make_backend();
+        kg.add_node(make_node("upd", "Original", "test")).unwrap();
+        kg.update_node("upd", Some("Updated"), None).unwrap();
+        let node = kg.get_node("upd").unwrap().unwrap();
+        assert_eq!(node.label, "Updated");
+    }
+
+    #[test]
+    fn test_list_nodes() {
+        let kg = make_backend();
+        kg.add_node(make_node("l1", "L1", "agent_a")).unwrap();
+        kg.add_node(make_node("l2", "L2", "agent_a")).unwrap();
+        kg.add_node(make_node("l3", "L3", "agent_b")).unwrap();
+
+        let a_nodes = kg.list_nodes("agent_a", None).unwrap();
+        assert_eq!(a_nodes.len(), 2);
+        let b_nodes = kg.list_nodes("agent_b", None).unwrap();
+        assert_eq!(b_nodes.len(), 1);
+    }
+
+    #[test]
+    fn test_list_edges() {
+        let kg = make_backend();
+        kg.add_node(make_node("le1", "LE1", "test")).unwrap();
+        kg.add_node(make_node("le2", "LE2", "test")).unwrap();
+        kg.add_edge(make_edge("le1", "le2", KGEdgeType::RelatedTo)).unwrap();
+
+        let edges = kg.list_edges("test").unwrap();
+        assert_eq!(edges.len(), 1);
+    }
+
+    #[test]
+    fn test_node_and_edge_count() {
+        let kg = make_backend();
+        assert_eq!(kg.node_count().unwrap(), 0);
+        assert_eq!(kg.edge_count().unwrap(), 0);
+
+        kg.add_node(make_node("c1", "C1", "test")).unwrap();
+        kg.add_node(make_node("c2", "C2", "test")).unwrap();
+        kg.add_edge(make_edge("c1", "c2", KGEdgeType::RelatedTo)).unwrap();
+
+        assert_eq!(kg.node_count().unwrap(), 2);
+        assert_eq!(kg.edge_count().unwrap(), 1);
+    }
+
+    #[test]
+    fn test_find_paths() {
+        let kg = make_backend();
+        kg.add_node(make_node("p1", "P1", "test")).unwrap();
+        kg.add_node(make_node("p2", "P2", "test")).unwrap();
+        kg.add_node(make_node("p3", "P3", "test")).unwrap();
+        kg.add_edge(make_edge("p1", "p2", KGEdgeType::RelatedTo)).unwrap();
+        kg.add_edge(make_edge("p2", "p3", KGEdgeType::RelatedTo)).unwrap();
+
+        let paths = kg.find_paths("p1", "p3", 3).unwrap();
+        assert!(!paths.is_empty());
+        assert_eq!(paths[0].first().unwrap().id, "p1");
+        assert_eq!(paths[0].last().unwrap().id, "p3");
+    }
+
+    #[test]
+    fn test_all_node_ids() {
+        let kg = make_backend();
+        kg.add_node(make_node("a1", "A1", "test")).unwrap();
+        kg.add_node(make_node("a2", "A2", "test")).unwrap();
+        let ids = kg.all_node_ids();
+        assert_eq!(ids.len(), 2);
+        assert!(ids.contains(&"a1".to_string()));
+        assert!(ids.contains(&"a2".to_string()));
+    }
+
+    #[test]
+    fn test_upsert_document() {
+        let kg = make_backend();
+        kg.upsert_document("cid123", &["tag1".to_string()], "test").unwrap();
+        let ids = kg.all_node_ids();
+        assert!(!ids.is_empty());
+    }
+
+    #[test]
+    fn test_authority_score() {
+        let kg = make_backend();
+        kg.add_node(make_node("auth", "Auth", "test")).unwrap();
+        let score = kg.authority_score("auth").unwrap();
+        assert!(score >= 0.0);
+    }
+
+    #[test]
+    fn test_degree() {
+        let kg = make_backend();
+        kg.add_node(make_node("d1", "D1", "test")).unwrap();
+        kg.add_node(make_node("d2", "D2", "test")).unwrap();
+        kg.add_node(make_node("d3", "D3", "test")).unwrap();
+        kg.add_edge(make_edge("d1", "d2", KGEdgeType::RelatedTo)).unwrap();
+        kg.add_edge(make_edge("d1", "d3", KGEdgeType::RelatedTo)).unwrap();
+
+        assert_eq!(kg.degree("d1"), 2);
+        assert_eq!(kg.degree("d2"), 1);
     }
 }

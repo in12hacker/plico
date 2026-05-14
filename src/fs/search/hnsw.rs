@@ -24,7 +24,7 @@ const INITIAL_CAPACITY: usize = 10_000;
 /// Each f32 → 1 bit: positive → 1, negative/zero → 0.
 /// 768D f32 → 96 bytes binary.
 fn f32_to_binary(emb: &[f32]) -> Vec<u8> {
-    let nbytes = (emb.len() + 7) / 8;
+    let nbytes = emb.len().div_ceil(8);
     let mut binary = vec![0u8; nbytes];
     for (i, &v) in emb.iter().enumerate() {
         if v > 0.0 {
@@ -212,8 +212,8 @@ impl SemanticSearch for HnswBackend {
         // Two-stage search when binary index is available and dataset is large enough.
         // Stage 1: Hamming distance on binary vectors for coarse top-K*10 recall.
         // Stage 2: Exact cosine re-rank on f32 embeddings for final top-K.
-        // For small datasets (<100), skip binary stage — linear cosine is fast enough.
-        if !binary_index.is_empty() && entries.len() >= 100 {
+        // For small datasets (<1000), use usearch HNSW directly — O(log n) is fast.
+        if !binary_index.is_empty() && entries.len() >= 1000 {
             let query_binary = f32_to_binary(query);
             let recall_k = k * 10;
 
@@ -258,7 +258,7 @@ impl SemanticSearch for HnswBackend {
             return results;
         }
 
-        // Fallback: usearch HNSW for small datasets or when binary index is empty
+        // Default: usearch HNSW for O(log n) ANN search
         let key_to_cid = self.key_to_cid.read().unwrap();
 
         let results = if has_filter {
@@ -556,7 +556,7 @@ mod tests {
     #[test]
     fn test_hnsw_empty_search() {
         let backend = HnswBackend::with_dim(32);
-        let results = backend.search(&vec![1.0; 32], 5, &SearchFilter::default());
+        let results = backend.search(&[1.0; 32], 5, &SearchFilter::default());
         assert!(results.is_empty());
     }
 

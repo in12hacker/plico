@@ -1,6 +1,6 @@
 use std::sync::Arc;
 use plico::kernel::AIKernel;
-use plico::api::semantic::{ApiRequest, ApiResponse};
+use plico::api::semantic::ApiRequest;
 use plico::fs::embedding::StubEmbeddingProvider;
 use plico::llm::StubProvider;
 use tempfile::tempdir;

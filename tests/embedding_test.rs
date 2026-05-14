@@ -44,7 +44,9 @@ struct JsonRpcError {
 
 // ─── Protocol helpers ────────────────────────────────────────────────────────
 
-fn spawn_embed_server() -> std::io::Result<(std::process::Child, mpsc::Sender<String>, mpsc::Receiver<Result<String, std::io::Error>>)> {
+type EmbedServerHandle = (std::process::Child, mpsc::Sender<String>, mpsc::Receiver<Result<String, std::io::Error>>);
+
+fn spawn_embed_server() -> std::io::Result<EmbedServerHandle> {
     let manifest_dir = std::env!("CARGO_MANIFEST_DIR");
     let script_path = format!("{}/tests/e2e/embed_server.py", manifest_dir);
     let script = std::fs::read_to_string(&script_path)?;

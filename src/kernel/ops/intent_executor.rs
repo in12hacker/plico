@@ -207,7 +207,11 @@ impl AutonomousExecutor {
             self.stats.record(op_type.to_string(), duration_ms);
 
             // Soul v3.0: Notify CognitiveLoop of step completion for trajectory tracking
-            if let Some(ref cognitive_loop) = *self.kernel.cognitive_loop.read().unwrap() {
+            let cognitive_loop_opt = {
+                let guard = self.kernel.cognitive_loop.read().unwrap();
+                guard.as_ref().cloned()
+            };
+            if let Some(cognitive_loop) = cognitive_loop_opt {
                 let step_desc = format!("{}:{}", op_type, step.step_id);
                 let _ = cognitive_loop.on_operation_completed(
                     agent_id,
@@ -515,8 +519,8 @@ mod tests {
 
     /// Helper to create a kernel for async tests.
     fn make_test_kernel() -> (std::sync::Arc<AIKernel>, std::path::PathBuf) {
-        let _ = std::env::set_var("EMBEDDING_BACKEND", "stub");
-        let _ = std::env::set_var("LLM_BACKEND", "stub");
+        std::env::set_var("EMBEDDING_BACKEND", "stub");
+        std::env::set_var("LLM_BACKEND", "stub");
         let dir = std::env::temp_dir().join(format!("plico_test_{}_{}", std::process::id(), rand::random::<u32>()));
         std::fs::create_dir_all(&dir).expect("temp dir");
         let kernel = AIKernel::new(dir.clone()).expect("kernel init");
@@ -901,8 +905,8 @@ async fn test_learning_loop_methods_called() {
     /// the profile directly to test the full learning loop.
     #[tokio::test(flavor = "multi_thread")]
     async fn test_execution_writes_to_profile() {
-        let _ = std::env::set_var("EMBEDDING_BACKEND", "stub");
-        let _ = std::env::set_var("LLM_BACKEND", "stub");
+        std::env::set_var("EMBEDDING_BACKEND", "stub");
+        std::env::set_var("LLM_BACKEND", "stub");
         let dir = std::env::temp_dir().join(format!("plico_test_{}_{}", std::process::id(), rand::random::<u32>()));
         std::fs::create_dir_all(&dir).expect("temp dir");
         let kernel = AIKernel::new(dir.clone()).expect("kernel init");
@@ -946,8 +950,8 @@ async fn test_learning_loop_methods_called() {
     /// Verifies F-4: trigger_predictive_prefetch is called after execution.
     #[tokio::test(flavor = "multi_thread")]
     async fn test_predictive_prefetch_triggered() {
-        let _ = std::env::set_var("EMBEDDING_BACKEND", "stub");
-        let _ = std::env::set_var("LLM_BACKEND", "stub");
+        std::env::set_var("EMBEDDING_BACKEND", "stub");
+        std::env::set_var("LLM_BACKEND", "stub");
         let dir = std::env::temp_dir().join(format!("plico_test_{}_{}", std::process::id(), rand::random::<u32>()));
         std::fs::create_dir_all(&dir).expect("temp dir");
         let kernel = AIKernel::new(dir.clone()).expect("kernel init");
@@ -992,8 +996,8 @@ async fn test_learning_loop_methods_called() {
     /// Verifies F-1: record_cid_usage updated hot objects after execution.
     #[tokio::test(flavor = "multi_thread")]
     async fn test_hot_objects_updated_after_execution() {
-        let _ = std::env::set_var("EMBEDDING_BACKEND", "stub");
-        let _ = std::env::set_var("LLM_BACKEND", "stub");
+        std::env::set_var("EMBEDDING_BACKEND", "stub");
+        std::env::set_var("LLM_BACKEND", "stub");
         let dir = std::env::temp_dir().join(format!("plico_test_{}_{}", std::process::id(), rand::random::<u32>()));
         std::fs::create_dir_all(&dir).expect("temp dir");
         let kernel = AIKernel::new(dir.clone()).expect("kernel init");
@@ -1030,8 +1034,8 @@ async fn test_learning_loop_methods_called() {
     /// Verifies the complete Node 22 "行" cycle.
     #[tokio::test(flavor = "multi_thread")]
     async fn test_learning_loop_closure() {
-        let _ = std::env::set_var("EMBEDDING_BACKEND", "stub");
-        let _ = std::env::set_var("LLM_BACKEND", "stub");
+        std::env::set_var("EMBEDDING_BACKEND", "stub");
+        std::env::set_var("LLM_BACKEND", "stub");
         let dir = std::env::temp_dir().join(format!("plico_test_{}_{}", std::process::id(), rand::random::<u32>()));
         std::fs::create_dir_all(&dir).expect("temp dir");
         let kernel = AIKernel::new(dir.clone()).expect("kernel init");
@@ -1076,6 +1080,693 @@ async fn test_learning_loop_methods_called() {
 
         // Leak to avoid tokio blocking shutdown errors
         std::mem::forget(kernel);
+        std::mem::forget(dir);
+    }
+
+    // ── ExecutionStats unit tests ────────────────────────────────────────────────
+
+    #[test]
+    fn test_execution_stats_record_and_get_avg() {
+        let mut stats = ExecutionStats::new();
+
+        // Record two "read" operations: 100ms and 200ms
+        stats.record("read".to_string(), 100);
+        assert_eq!(stats.get_avg_time("read"), Some(100));
+
+        stats.record("read".to_string(), 200);
+        // Average of 100 and 200 = 150
+        assert_eq!(stats.get_avg_time("read"), Some(150));
+
+        // Nonexistent type returns None
+        assert_eq!(stats.get_avg_time("search"), None);
+    }
+
+    #[test]
+    fn test_execution_stats_operation_types() {
+        let mut stats = ExecutionStats::new();
+        stats.record("read".to_string(), 100);
+        stats.record("search".to_string(), 200);
+        stats.record("create".to_string(), 50);
+
+        let mut types = stats.operation_types();
+        types.sort();
+        assert_eq!(types, vec!["create", "read", "search"]);
+    }
+
+    #[test]
+    fn test_execution_stats_get_avg_times_map() {
+        let mut stats = ExecutionStats::new();
+        stats.record("read".to_string(), 100);
+        stats.record("read".to_string(), 300);
+        stats.record("call".to_string(), 500);
+
+        let map = stats.get_avg_times_map();
+        assert_eq!(map.get("read"), Some(&200)); // avg of 100, 300
+        assert_eq!(map.get("call"), Some(&500));
+        assert_eq!(map.get("search"), None);
+    }
+
+    #[test]
+    fn test_execution_stats_record_multiple_types() {
+        let mut stats = ExecutionStats::new();
+        stats.record("read".to_string(), 100);
+        stats.record("search".to_string(), 500);
+        stats.record("read".to_string(), 200);
+        stats.record("search".to_string(), 1000);
+
+        // read: avg(100, 200) = 150
+        assert_eq!(stats.get_avg_time("read"), Some(150));
+        // search: avg(500, 1000) = 750
+        assert_eq!(stats.get_avg_time("search"), Some(750));
+    }
+
+    // ── get_stats() method test ──────────────────────────────────────────────────
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_get_stats_after_execution() {
+        let (kernel, dir) = make_test_kernel();
+        let kernel_leak = kernel.clone();
+        let mut executor = AutonomousExecutor::new(kernel);
+
+        let mut plan = IntentPlan::new("stats:test".to_string());
+        plan.add_step(IntentStep::new(
+            "create-step".to_string(),
+            IntentOperation::Create {
+                content: b"stats-content".to_vec(),
+                tags: vec!["stats".to_string()],
+            },
+            100,
+        ));
+
+        let _result = executor.execute_plan(&plan, "test-agent").await;
+
+        let stats = executor.get_stats();
+        // After executing a "create" operation, stats should have "create" recorded
+        assert!(stats.get_avg_time("create").is_some(), "should have recorded create operation time");
+        let types = stats.operation_types();
+        assert!(types.contains(&"create".to_string()));
+
+        std::mem::forget(kernel_leak);
+        std::mem::forget(dir);
+    }
+
+    // ── execute_read success path ────────────────────────────────────────────────
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_execute_read_success() {
+        let (kernel, dir) = make_test_kernel();
+        let kernel_leak = kernel.clone();
+
+        // First create an object to get a valid CID
+        let cid = kernel.semantic_create(
+            b"read-me-content".to_vec(),
+            vec!["readable".to_string()],
+            "system",
+            None,
+        ).expect("create should succeed");
+
+        let mut executor = AutonomousExecutor::new(kernel);
+
+        let mut plan = IntentPlan::new("read:test".to_string());
+        plan.add_step(IntentStep::new(
+            "read-step".to_string(),
+            IntentOperation::Read { cid: cid.clone() },
+            100,
+        ));
+
+        let result = executor.execute_plan(&plan, "test-agent").await;
+
+        assert!(result.success, "read should succeed for existing CID");
+        assert_eq!(result.steps_completed, 1);
+        assert_eq!(result.steps_failed, 0);
+
+        let step_result = result.results.get("read-step").unwrap();
+        assert!(step_result.success);
+        assert!(step_result.output_cids.contains(&cid));
+        assert!(step_result.error.is_none());
+
+        std::mem::forget(kernel_leak);
+        std::mem::forget(dir);
+    }
+
+    // ── execute_search path ──────────────────────────────────────────────────────
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_execute_search() {
+        let (kernel, dir) = make_test_kernel();
+        let kernel_leak = kernel.clone();
+
+        // Create some objects first so search has data
+        kernel.semantic_create(
+            b"searchable content alpha".to_vec(),
+            vec!["search-test".to_string()],
+            "system",
+            None,
+        ).expect("create should succeed");
+
+        let mut executor = AutonomousExecutor::new(kernel);
+
+        let mut plan = IntentPlan::new("search:test".to_string());
+        plan.add_step(IntentStep::new(
+            "search-step".to_string(),
+            IntentOperation::Search {
+                query: "searchable content".to_string(),
+                tags: vec!["search-test".to_string()],
+            },
+            100,
+        ));
+
+        let result = executor.execute_plan(&plan, "test-agent").await;
+
+        // Search should succeed (even if no results found — the operation itself doesn't fail)
+        assert!(result.success, "search operation should succeed");
+        assert_eq!(result.steps_completed, 1);
+
+        let step_result = result.results.get("search-step").unwrap();
+        assert!(step_result.success);
+        assert!(step_result.error.is_none());
+
+        std::mem::forget(kernel_leak);
+        std::mem::forget(dir);
+    }
+
+    // ── execute_call path (not yet implemented) ─────────────────────────────────
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_execute_call_not_implemented() {
+        let (kernel, dir) = make_test_kernel();
+        let kernel_leak = kernel.clone();
+        let mut executor = AutonomousExecutor::new(kernel);
+
+        let mut plan = IntentPlan::new("call:test".to_string());
+        plan.add_step(IntentStep::new(
+            "call-step".to_string(),
+            IntentOperation::Call {
+                tool: "some-tool".to_string(),
+                params: serde_json::json!({"key": "value"}),
+            },
+            100,
+        ));
+
+        let result = executor.execute_plan(&plan, "test-agent").await;
+
+        // Tool call is not yet implemented — should fail
+        assert!(!result.success, "tool call should fail (not implemented)");
+        assert_eq!(result.steps_failed, 1);
+
+        let step_result = result.results.get("call-step").unwrap();
+        assert!(!step_result.success);
+        assert!(step_result.error.is_some());
+        assert!(step_result.error.as_ref().unwrap().contains("not yet implemented"));
+
+        std::mem::forget(kernel_leak);
+        std::mem::forget(dir);
+    }
+
+    // ── execute_read_batch path ──────────────────────────────────────────────────
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_execute_read_batch() {
+        let (kernel, dir) = make_test_kernel();
+        let kernel_leak = kernel.clone();
+
+        // Create multiple objects
+        let cid1 = kernel.semantic_create(
+            b"batch-content-1".to_vec(),
+            vec!["batch".to_string()],
+            "system",
+            None,
+        ).expect("create should succeed");
+
+        let cid2 = kernel.semantic_create(
+            b"batch-content-2".to_vec(),
+            vec!["batch".to_string()],
+            "system",
+            None,
+        ).expect("create should succeed");
+
+        let mut executor = AutonomousExecutor::new(kernel);
+
+        let mut plan = IntentPlan::new("batch:test".to_string());
+        plan.add_step(IntentStep::new(
+            "batch-step".to_string(),
+            IntentOperation::ReadBatch {
+                cids: vec![cid1.clone(), cid2.clone()],
+            },
+            100,
+        ));
+
+        let result = executor.execute_plan(&plan, "test-agent").await;
+
+        assert!(result.success, "batch read should succeed");
+        assert_eq!(result.steps_completed, 1);
+
+        let step_result = result.results.get("batch-step").unwrap();
+        assert!(step_result.success);
+        assert!(step_result.output_cids.contains(&cid1));
+        assert!(step_result.output_cids.contains(&cid2));
+        assert!(step_result.tokens_used > 0, "should report tokens for batch read content");
+        assert!(step_result.error.is_none());
+
+        std::mem::forget(kernel_leak);
+        std::mem::forget(dir);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_execute_read_batch_partial_failure() {
+        let (kernel, dir) = make_test_kernel();
+        let kernel_leak = kernel.clone();
+
+        // Create one valid object
+        let valid_cid = kernel.semantic_create(
+            b"valid-batch".to_vec(),
+            vec!["batch".to_string()],
+            "system",
+            None,
+        ).expect("create should succeed");
+
+        let mut executor = AutonomousExecutor::new(kernel);
+
+        // Batch with one valid and one nonexistent CID
+        let mut plan = IntentPlan::new("batch:partial".to_string());
+        plan.add_step(IntentStep::new(
+            "batch-step".to_string(),
+            IntentOperation::ReadBatch {
+                cids: vec![valid_cid.clone(), "nonexistent-cid-batch".to_string()],
+            },
+            100,
+        ));
+
+        let result = executor.execute_plan(&plan, "test-agent").await;
+
+        // Should succeed because at least one CID was read successfully
+        assert!(result.success, "batch read should succeed with partial results");
+        let step_result = result.results.get("batch-step").unwrap();
+        assert!(step_result.success);
+        assert!(step_result.output_cids.contains(&valid_cid));
+        // Only the valid CID should be in output
+        assert_eq!(step_result.output_cids.len(), 1);
+
+        std::mem::forget(kernel_leak);
+        std::mem::forget(dir);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_execute_read_batch_all_missing() {
+        let (kernel, dir) = make_test_kernel();
+        let kernel_leak = kernel.clone();
+        let mut executor = AutonomousExecutor::new(kernel);
+
+        let mut plan = IntentPlan::new("batch:empty".to_string());
+        plan.add_step(IntentStep::new(
+            "batch-step".to_string(),
+            IntentOperation::ReadBatch {
+                cids: vec!["nonexistent-1".to_string(), "nonexistent-2".to_string()],
+            },
+            100,
+        ));
+
+        let result = executor.execute_plan(&plan, "test-agent").await;
+
+        // Should fail because no CIDs could be read
+        assert!(!result.success, "batch read should fail when no CIDs exist");
+        let step_result = result.results.get("batch-step").unwrap();
+        assert!(!step_result.success);
+        assert!(step_result.output_cids.is_empty());
+
+        std::mem::forget(kernel_leak);
+        std::mem::forget(dir);
+    }
+
+    // ── optimized_sort error path via execute_plan (circular dependency) ─────────
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_execute_plan_circular_dependency_returns_failure() {
+        let (kernel, dir) = make_test_kernel();
+        let kernel_leak = kernel.clone();
+        let mut executor = AutonomousExecutor::new(kernel);
+
+        // Create a plan with circular dependencies
+        let mut plan = IntentPlan::new("circular:test".to_string());
+        plan.add_step(
+            IntentStep::new(
+                "step-a".to_string(),
+                IntentOperation::Create {
+                    content: b"a".to_vec(),
+                    tags: vec![],
+                },
+                100,
+            )
+            .with_dependency("step-b".to_string()),
+        );
+        plan.add_step(
+            IntentStep::new(
+                "step-b".to_string(),
+                IntentOperation::Create {
+                    content: b"b".to_vec(),
+                    tags: vec![],
+                },
+                100,
+            )
+            .with_dependency("step-a".to_string()),
+        );
+
+        let result = executor.execute_plan(&plan, "test-agent").await;
+
+        // Circular dependency causes optimized_sort to fail, which returns early
+        assert!(!result.success, "circular dependency should cause failure");
+        assert_eq!(result.steps_completed, 0);
+        assert_eq!(result.steps_failed, 0); // No steps even attempted
+        assert!(result.results.is_empty());
+        assert_eq!(result.tokens_used, 0);
+
+        std::mem::forget(kernel_leak);
+        std::mem::forget(dir);
+    }
+
+    // ── Empty plan ───────────────────────────────────────────────────────────────
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_execute_empty_plan() {
+        let (kernel, dir) = make_test_kernel();
+        let kernel_leak = kernel.clone();
+        let mut executor = AutonomousExecutor::new(kernel);
+
+        let plan = IntentPlan::new("empty:plan".to_string());
+
+        let result = executor.execute_plan(&plan, "test-agent").await;
+
+        // Empty plan should succeed with zero steps
+        assert!(result.success, "empty plan should succeed");
+        assert_eq!(result.steps_completed, 0);
+        assert_eq!(result.steps_failed, 0);
+        assert!(result.results.is_empty());
+
+        std::mem::forget(kernel_leak);
+        std::mem::forget(dir);
+    }
+
+    // ── Stats recording across multiple operation types ──────────────────────────
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_stats_recorded_across_operation_types() {
+        let (kernel, dir) = make_test_kernel();
+        let kernel_leak = kernel.clone();
+
+        // Create an object first for read
+        let cid = kernel.semantic_create(
+            b"stats-read-target".to_vec(),
+            vec!["stats".to_string()],
+            "system",
+            None,
+        ).expect("create should succeed");
+
+        let mut executor = AutonomousExecutor::new(kernel);
+
+        // Plan with mixed operation types: create + read
+        let mut plan = IntentPlan::new("stats:mixed".to_string());
+        plan.add_step(IntentStep::new(
+            "create-step".to_string(),
+            IntentOperation::Create {
+                content: b"stats-content".to_vec(),
+                tags: vec!["stats".to_string()],
+            },
+            100,
+        ));
+        plan.add_step(IntentStep::new(
+            "read-step".to_string(),
+            IntentOperation::Read { cid },
+            100,
+        ));
+
+        let result = executor.execute_plan(&plan, "test-agent").await;
+        assert!(result.success);
+
+        let stats = executor.get_stats();
+        // Both "create" and "read" should have been recorded
+        assert!(stats.get_avg_time("create").is_some(), "create should be in stats");
+        assert!(stats.get_avg_time("read").is_some(), "read should be in stats");
+
+        let mut types = stats.operation_types();
+        types.sort();
+        assert_eq!(types, vec!["create", "read"]);
+
+        std::mem::forget(kernel_leak);
+        std::mem::forget(dir);
+    }
+
+    // ── Mixed success/failure plan with dependency blocking ──────────────────────
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_mixed_success_failure_plan() {
+        let (kernel, dir) = make_test_kernel();
+        let kernel_leak = kernel.clone();
+        let mut executor = AutonomousExecutor::new(kernel);
+
+        let mut plan = IntentPlan::new("mixed:test".to_string());
+        // Step 1: will succeed (create)
+        plan.add_step(IntentStep::new(
+            "good-step".to_string(),
+            IntentOperation::Create {
+                content: b"good-content".to_vec(),
+                tags: vec!["good".to_string()],
+            },
+            100,
+        ));
+        // Step 2: will fail (read nonexistent)
+        plan.add_step(IntentStep::new(
+            "bad-step".to_string(),
+            IntentOperation::Read {
+                cid: "this-cid-does-not-exist".to_string(),
+            },
+            100,
+        ));
+        // Step 3: depends on bad-step, should be blocked
+        plan.add_step(
+            IntentStep::new(
+                "blocked-step".to_string(),
+                IntentOperation::Create {
+                    content: b"blocked-content".to_vec(),
+                    tags: vec![],
+                },
+                100,
+            )
+            .with_dependency("bad-step".to_string()),
+        );
+
+        let result = executor.execute_plan(&plan, "test-agent").await;
+
+        // Plan fails because at least one step failed
+        assert!(!result.success);
+        assert_eq!(result.steps_completed, 1);
+        assert!(result.steps_failed >= 1);
+
+        let good = result.results.get("good-step").unwrap();
+        assert!(good.success);
+        assert!(!good.output_cids.is_empty());
+
+        let bad = result.results.get("bad-step").unwrap();
+        assert!(!bad.success);
+        assert!(bad.error.is_some());
+
+        // blocked-step should have been blocked (dependency on bad-step not satisfied)
+        let blocked = result.results.get("blocked-step").unwrap();
+        assert!(!blocked.success);
+        assert!(blocked.error.as_ref().unwrap().contains("dependency not satisfied"));
+
+        std::mem::forget(kernel_leak);
+        std::mem::forget(dir);
+    }
+
+    // ── can_execute_step via executor method ─────────────────────────────────────
+
+    #[test]
+    fn test_executor_can_execute_step_no_deps() {
+        // Create a minimal executor just to test can_execute_step logic
+        // We use a fake kernel — can_execute_step doesn't use it
+        std::env::set_var("EMBEDDING_BACKEND", "stub");
+        std::env::set_var("LLM_BACKEND", "stub");
+        let dir = std::env::temp_dir().join(format!("plico_test_{}_{}", std::process::id(), rand::random::<u32>()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let kernel = AIKernel::new(dir.clone()).expect("kernel init");
+        let executor = AutonomousExecutor::new(kernel.clone());
+
+        let step = IntentStep::new(
+            "s1".to_string(),
+            IntentOperation::Read { cid: "c1".to_string() },
+            100,
+        );
+        let completed = std::collections::HashSet::new();
+        assert!(executor.can_execute_step(&step, &completed));
+
+        std::mem::forget(kernel);
+        std::mem::forget(dir);
+    }
+
+    #[test]
+    fn test_executor_can_execute_step_deps_met() {
+        std::env::set_var("EMBEDDING_BACKEND", "stub");
+        std::env::set_var("LLM_BACKEND", "stub");
+        let dir = std::env::temp_dir().join(format!("plico_test_{}_{}", std::process::id(), rand::random::<u32>()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let kernel = AIKernel::new(dir.clone()).expect("kernel init");
+        let executor = AutonomousExecutor::new(kernel.clone());
+
+        let step = IntentStep::new(
+            "s2".to_string(),
+            IntentOperation::Read { cid: "c2".to_string() },
+            100,
+        )
+        .with_dependency("s1".to_string());
+
+        let mut completed = std::collections::HashSet::new();
+        completed.insert("s1".to_string());
+        assert!(executor.can_execute_step(&step, &completed));
+
+        std::mem::forget(kernel);
+        std::mem::forget(dir);
+    }
+
+    #[test]
+    fn test_executor_can_execute_step_deps_not_met() {
+        std::env::set_var("EMBEDDING_BACKEND", "stub");
+        std::env::set_var("LLM_BACKEND", "stub");
+        let dir = std::env::temp_dir().join(format!("plico_test_{}_{}", std::process::id(), rand::random::<u32>()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let kernel = AIKernel::new(dir.clone()).expect("kernel init");
+        let executor = AutonomousExecutor::new(kernel.clone());
+
+        let step = IntentStep::new(
+            "s2".to_string(),
+            IntentOperation::Read { cid: "c2".to_string() },
+            100,
+        )
+        .with_dependency("s1".to_string());
+
+        let completed = std::collections::HashSet::new();
+        assert!(!executor.can_execute_step(&step, &completed));
+
+        std::mem::forget(kernel);
+        std::mem::forget(dir);
+    }
+
+    #[test]
+    fn test_executor_can_execute_step_multiple_deps() {
+        std::env::set_var("EMBEDDING_BACKEND", "stub");
+        std::env::set_var("LLM_BACKEND", "stub");
+        let dir = std::env::temp_dir().join(format!("plico_test_{}_{}", std::process::id(), rand::random::<u32>()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let kernel = AIKernel::new(dir.clone()).expect("kernel init");
+        let executor = AutonomousExecutor::new(kernel.clone());
+
+        let step = IntentStep::new(
+            "s3".to_string(),
+            IntentOperation::Create {
+                content: b"c".to_vec(),
+                tags: vec![],
+            },
+            100,
+        )
+        .with_dependency("s1".to_string())
+        .with_dependency("s2".to_string());
+
+        // Only s1 completed — s2 still missing
+        let mut completed = std::collections::HashSet::new();
+        completed.insert("s1".to_string());
+        assert!(!executor.can_execute_step(&step, &completed));
+
+        // Both completed
+        completed.insert("s2".to_string());
+        assert!(executor.can_execute_step(&step, &completed));
+
+        std::mem::forget(kernel);
+        std::mem::forget(dir);
+    }
+
+    // ── StepErrorType variant tests ─────────────────────────────────────────────
+
+    #[test]
+    fn test_step_error_type_variants() {
+        let err_perm = StepError {
+            step_id: "s".to_string(),
+            error_type: StepErrorType::PermissionDenied,
+            message: "no perm".to_string(),
+        };
+        assert!(matches!(err_perm.error_type, StepErrorType::PermissionDenied));
+
+        let err_res = StepError {
+            step_id: "s".to_string(),
+            error_type: StepErrorType::ResourceExhausted,
+            message: "oom".to_string(),
+        };
+        assert!(matches!(err_res.error_type, StepErrorType::ResourceExhausted));
+
+        let err_tool = StepError {
+            step_id: "s".to_string(),
+            error_type: StepErrorType::ToolNotFound,
+            message: "missing tool".to_string(),
+        };
+        assert!(matches!(err_tool.error_type, StepErrorType::ToolNotFound));
+
+        let err_exec = StepError {
+            step_id: "s".to_string(),
+            error_type: StepErrorType::ExecutionFailed,
+            message: "failed".to_string(),
+        };
+        assert!(matches!(err_exec.error_type, StepErrorType::ExecutionFailed));
+
+        let err_dep = StepError {
+            step_id: "s".to_string(),
+            error_type: StepErrorType::DependencyBlocked,
+            message: "blocked".to_string(),
+        };
+        assert!(matches!(err_dep.error_type, StepErrorType::DependencyBlocked));
+    }
+
+    // ── ExecutionStats edge cases ────────────────────────────────────────────────
+
+    #[test]
+    fn test_execution_stats_empty() {
+        let stats = ExecutionStats::new();
+        assert!(stats.operation_types().is_empty());
+        assert!(stats.get_avg_times_map().is_empty());
+        assert_eq!(stats.get_avg_time("anything"), None);
+    }
+
+    #[test]
+    fn test_execution_stats_single_record() {
+        let mut stats = ExecutionStats::new();
+        stats.record("call".to_string(), 42);
+        assert_eq!(stats.get_avg_time("call"), Some(42));
+        assert_eq!(stats.operation_types().len(), 1);
+    }
+
+    // ── ReadBatch with empty CID list ────────────────────────────────────────────
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_execute_read_batch_empty_cids() {
+        let (kernel, dir) = make_test_kernel();
+        let kernel_leak = kernel.clone();
+        let mut executor = AutonomousExecutor::new(kernel);
+
+        let mut plan = IntentPlan::new("batch:empty-cids".to_string());
+        plan.add_step(IntentStep::new(
+            "batch-step".to_string(),
+            IntentOperation::ReadBatch {
+                cids: vec![],
+            },
+            100,
+        ));
+
+        let result = executor.execute_plan(&plan, "test-agent").await;
+
+        // Empty CID list means no successful reads → failure
+        assert!(!result.success, "empty batch should fail");
+        let step_result = result.results.get("batch-step").unwrap();
+        assert!(!step_result.success);
+        assert!(step_result.output_cids.is_empty());
+
+        std::mem::forget(kernel_leak);
         std::mem::forget(dir);
     }
 }
