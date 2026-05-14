@@ -226,11 +226,32 @@ impl SkillForge {
         let interpreter = self.dsl_interpreter.as_ref()
             .ok_or(CognitiveError::DslExecutionFailed("DSL interpreter not available".to_string()))?;
 
+        // Infer inputs from parameter mappings
+        let dsl_inputs: Vec<super::dsl_interpreter::DslInput> = skill.parameter_mappings.iter().map(|m| {
+            super::dsl_interpreter::DslInput {
+                name: m.from.clone(),
+                dtype: "any".to_string(),
+                required: true,
+                default: None,
+            }
+        }).collect();
+
+        // Infer outputs from tool chain output_as fields
+        let dsl_outputs: Vec<super::dsl_interpreter::DslOutput> = skill.tool_chain.iter()
+            .filter_map(|step| {
+                if step.output_as.is_empty() { return None; }
+                Some(super::dsl_interpreter::DslOutput {
+                    name: step.output_as.clone(),
+                    dtype: "any".to_string(),
+                })
+            })
+            .collect();
+
         let dsl = DslSkill {
             version: "1.0".to_string(),
             name: skill.name,
             description: skill.description,
-            inputs: Vec::new(), // TODO
+            inputs: dsl_inputs,
             steps: skill.tool_chain.into_iter().map(|step| {
                 super::dsl_interpreter::DslStep::ToolCall {
                     tool: step.tool_name,
@@ -238,7 +259,7 @@ impl SkillForge {
                     output_as: Some(step.output_as),
                 }
             }).collect(),
-            outputs: Vec::new(), // TODO
+            outputs: dsl_outputs,
         };
 
         let outputs = interpreter.execute(&dsl, inputs)

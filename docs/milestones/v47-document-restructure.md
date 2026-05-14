@@ -265,13 +265,36 @@ Plico/
 
 ## 5. 验收标准
 
-- [ ] CLAUDE.md < 300 行，全中文，通过 Litmus Test
-- [ ] AGENTS.md < 200 行，全中文，无 Benchmark 细节
-- [ ] `.claude/rules/` 包含 3 个规则文件
-- [ ] `docs/milestones/` 包含所有历史里程碑文档
-- [ ] `benchmarks/README.md` 包含完整的 Benchmark 文档
-- [ ] MEMORY.md 仅保留索引，无历史进度数据
-- [ ] 无断链（所有引用的文件都存在）
-- [ ] 无重复内容（同一信息只出现在一个位置）
-- [ ] 开发流程规范已写入 CLAUDE.md 作为永久规则
-- [ ] 版本快照存储规则已写入 CLAUDE.md
+- [x] CLAUDE.md < 300 行（278 行），全中文，通过 Litmus Test
+- [x] AGENTS.md < 200 行（126 行），全中文，无 Benchmark 细节
+- [x] `.claude/rules/` 包含 3 个规则文件（benchmark.md, coding-principles.md, development-workflow.md）
+- [x] `docs/milestones/` 包含所有历史里程碑文档（v34, v35, v41, v43, v46）
+- [x] `benchmarks/README.md` 包含完整的 Benchmark 文档（161 行）
+- [x] MEMORY.md 仅保留索引，无历史进度数据（文件不存在，历史已清理）
+- [x] 无断链（所有引用的文件都存在）
+- [x] 无重复内容（同一信息只出现在一个位置）
+- [x] 开发流程规范已写入 CLAUDE.md 作为永久规则
+- [x] 版本快照存储规则已写入 CLAUDE.md
+
+---
+
+## 6. 版本快照
+
+### 质量基线
+- 测试：无变更（纯文档里程碑，无代码修改）
+- 覆盖率：无变更
+- Clippy：无变更
+- 性能回归：无变更
+
+### 关键变更
+- CLAUDE.md 从 589 行精简至 278 行，全中文，按 Litmus Test 编写
+- AGENTS.md 精简至 126 行，移除 Benchmark 细节
+- 新增 `.claude/rules/` 目录，3 个按需加载规则文件
+- 新增 `docs/milestones/` 统一管理里程碑文档
+- Benchmark 文档合并到 `benchmarks/README.md`（161 行）
+- 全局行为准则迁移至 `~/.claude/CLAUDE.md`
+- 版本快照数据从 CLAUDE.md 中清除，引导至 `docs/milestones/`
+
+### 遗留问题
+- `docs/plans/` 中仍有 3 个早期计划文件（非 v47 范围，可后续归档）
+- v41 文件命名为 `v41-async-cognitive.md` 而非 `v41-summary.md`（功能正常，命名风格不一致）

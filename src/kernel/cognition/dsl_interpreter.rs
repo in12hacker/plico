@@ -109,25 +109,49 @@ impl DslInterpreter {
                 }
             }
             DslStep::Parallel { branches } => {
-                // TODO: 并行执行分支
+                // Each branch runs with its own cloned context; results merge back
+                let mut branch_keys = Vec::new();
                 for branch in branches {
+                    let mut branch_ctx = context.clone();
                     for step in branch {
-                        self.execute_step(step, context)?;
+                        self.execute_step(step, &mut branch_ctx)?;
+                    }
+                    // Merge branch variables back into main context
+                    for (k, v) in branch_ctx.variables {
+                        branch_keys.push(k.clone());
+                        context.set_variable(&k, v);
                     }
                 }
+                // Record which keys came from parallel branches
+                context.set_variable("__parallel_keys", serde_json::json!(branch_keys));
             }
             DslStep::Recall { query, filter, output_as } => {
-                // TODO: 调用记忆系统查询
-                let result = serde_json::json!({
+                // Search context variables for matching values
+                let query_lower = query.to_lowercase();
+                let mut results = Vec::new();
+                for (key, value) in &context.variables {
+                    let value_str = value.to_string().to_lowercase();
+                    if key.to_lowercase().contains(&query_lower) || value_str.contains(&query_lower) {
+                        if let Some(f) = filter {
+                            // Apply simple equality filter
+                            if let (Some(filter_key), Some(filter_val)) = (f.get("key"), f.get("value")) {
+                                if let (Some(fk), Some(fv)) = (filter_key.as_str(), filter_val.as_str()) {
+                                    if key != fk || !value_str.contains(fv) {
+                                        continue;
+                                    }
+                                }
+                            }
+                        }
+                        results.push(serde_json::json!({"key": key, "value": value}));
+                    }
+                }
+                context.set_variable(output_as, serde_json::json!({
                     "query": query,
-                    "filter": filter,
-                    "results": []
-                });
-                context.set_variable(output_as, result);
+                    "results": results
+                }));
             }
             DslStep::Store { key, value, tags } => {
                 let resolved_value = context.resolve_params(value);
-                // TODO: 存储到记忆系统
                 context.set_variable(key, serde_json::json!({
                     "stored": true,
                     "value": resolved_value,
@@ -156,6 +180,7 @@ impl DslInterpreter {
 }
 
 /// 执行上下文
+#[derive(Clone)]
 struct ExecutionContext {
     variables: HashMap<String, serde_json::Value>,
 }
@@ -180,8 +205,62 @@ impl ExecutionContext {
     }
 
     fn resolve_params(&self, params: &serde_json::Value) -> serde_json::Value {
-        // TODO: 实现模板变量替换，如 {"path": "{{input.file}}"}
-        params.clone()
+        match params {
+            serde_json::Value::String(s) => {
+                // Template substitution: replace ${var} and {{var}} with context values
+                let mut result = s.clone();
+                let mut changed = true;
+                // Iterate to handle nested substitutions (max 10 passes to prevent infinite loops)
+                for _ in 0..10 {
+                    if !changed { break; }
+                    changed = false;
+                    // Handle ${var} syntax
+                    while let Some(start) = result.find("${") {
+                        if let Some(end) = result[start + 2..].find('}') {
+                            let var_name = &result[start + 2..start + 2 + end];
+                            let value = self.resolve_variable(var_name);
+                            let replacement = match &value {
+                                serde_json::Value::String(s) => s.clone(),
+                                other => other.to_string(),
+                            };
+                            result = format!("{}{}{}", &result[..start], replacement, &result[start + 2 + end + 1..]);
+                            changed = true;
+                        } else {
+                            break;
+                        }
+                    }
+                    // Handle {{var}} syntax
+                    while let Some(start) = result.find("{{") {
+                        if let Some(end) = result[start + 2..].find("}}") {
+                            let var_name = &result[start + 2..start + 2 + end].trim();
+                            let value = self.resolve_variable(var_name);
+                            let replacement = match &value {
+                                serde_json::Value::String(s) => s.clone(),
+                                other => other.to_string(),
+                            };
+                            result = format!("{}{}{}", &result[..start], replacement, &result[start + 2 + end + 2..]);
+                            changed = true;
+                        } else {
+                            break;
+                        }
+                    }
+                }
+                serde_json::Value::String(result)
+            }
+            serde_json::Value::Object(map) => {
+                let resolved: serde_json::Map<String, serde_json::Value> = map.iter()
+                    .map(|(k, v)| (k.clone(), self.resolve_params(v)))
+                    .collect();
+                serde_json::Value::Object(resolved)
+            }
+            serde_json::Value::Array(arr) => {
+                let resolved: Vec<serde_json::Value> = arr.iter()
+                    .map(|v| self.resolve_params(v))
+                    .collect();
+                serde_json::Value::Array(resolved)
+            }
+            other => other.clone(),
+        }
     }
 
     fn get_array(&self, name: &str) -> Result<Vec<serde_json::Value>, String> {
@@ -358,5 +437,161 @@ mod tests {
         let result = interpreter.execute(&dsl, serde_json::Value::Null);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Unknown tool"));
+    }
+
+    #[test]
+    fn test_template_substitution_dollar_brace() {
+        let dsl = DslSkill {
+            version: "1.0".to_string(),
+            name: "test".to_string(),
+            description: "test".to_string(),
+            inputs: vec![],
+            steps: vec![
+                DslStep::Store {
+                    key: "greeting".to_string(),
+                    value: serde_json::json!("Hello ${name}!"),
+                    tags: vec![],
+                },
+            ],
+            outputs: vec![
+                DslOutput { name: "greeting".to_string(), dtype: "string".to_string() },
+            ],
+        };
+        let interpreter = DslInterpreter::new();
+        let inputs = serde_json::json!({"name": "World"});
+        let result = interpreter.execute(&dsl, inputs).unwrap();
+        let stored = result.get("greeting").unwrap();
+        assert_eq!(stored.get("value").unwrap().as_str().unwrap(), "Hello World!");
+    }
+
+    #[test]
+    fn test_template_substitution_double_brace() {
+        let dsl = DslSkill {
+            version: "1.0".to_string(),
+            name: "test".to_string(),
+            description: "test".to_string(),
+            inputs: vec![],
+            steps: vec![
+                DslStep::Store {
+                    key: "path".to_string(),
+                    value: serde_json::json!("{{base}}/file.txt"),
+                    tags: vec![],
+                },
+            ],
+            outputs: vec![
+                DslOutput { name: "path".to_string(), dtype: "string".to_string() },
+            ],
+        };
+        let interpreter = DslInterpreter::new();
+        let inputs = serde_json::json!({"base": "/tmp"});
+        let result = interpreter.execute(&dsl, inputs).unwrap();
+        let stored = result.get("path").unwrap();
+        assert_eq!(stored.get("value").unwrap().as_str().unwrap(), "/tmp/file.txt");
+    }
+
+    #[test]
+    fn test_template_substitution_in_object() {
+        let interpreter = DslInterpreter::new();
+        let ctx = ExecutionContext::new(serde_json::json!({"host": "localhost", "port": 8080}));
+        let params = serde_json::json!({"url": "http://${host}:${port}/api"});
+        let resolved = ctx.resolve_params(&params);
+        assert_eq!(resolved.get("url").unwrap().as_str().unwrap(), "http://localhost:8080/api");
+    }
+
+    #[test]
+    fn test_recall_step_finds_matching_context() {
+        let dsl = DslSkill {
+            version: "1.0".to_string(),
+            name: "test".to_string(),
+            description: "test".to_string(),
+            inputs: vec![],
+            steps: vec![
+                DslStep::Store {
+                    key: "user_name".to_string(),
+                    value: serde_json::json!("Alice"),
+                    tags: vec![],
+                },
+                DslStep::Recall {
+                    query: "user".to_string(),
+                    filter: None,
+                    output_as: "found".to_string(),
+                },
+            ],
+            outputs: vec![
+                DslOutput { name: "found".to_string(), dtype: "object".to_string() },
+            ],
+        };
+        let interpreter = DslInterpreter::new();
+        let result = interpreter.execute(&dsl, serde_json::json!({})).unwrap();
+        let found = result.get("found").unwrap();
+        let results = found.get("results").unwrap().as_array().unwrap();
+        assert!(!results.is_empty());
+        assert!(results.iter().any(|r| r.get("key").unwrap().as_str().unwrap() == "user_name"));
+    }
+
+    #[test]
+    fn test_recall_step_with_filter() {
+        let dsl = DslSkill {
+            version: "1.0".to_string(),
+            name: "test".to_string(),
+            description: "test".to_string(),
+            inputs: vec![],
+            steps: vec![
+                DslStep::Store {
+                    key: "config_debug".to_string(),
+                    value: serde_json::json!(true),
+                    tags: vec![],
+                },
+                DslStep::Recall {
+                    query: "config".to_string(),
+                    filter: Some(serde_json::json!({"key": "config_debug", "value": "true"})),
+                    output_as: "found".to_string(),
+                },
+            ],
+            outputs: vec![
+                DslOutput { name: "found".to_string(), dtype: "object".to_string() },
+            ],
+        };
+        let interpreter = DslInterpreter::new();
+        let result = interpreter.execute(&dsl, serde_json::json!({})).unwrap();
+        let found = result.get("found").unwrap();
+        let results = found.get("results").unwrap().as_array().unwrap();
+        assert_eq!(results.len(), 1);
+    }
+
+    #[test]
+    fn test_parallel_step_merges_results() {
+        let dsl = DslSkill {
+            version: "1.0".to_string(),
+            name: "test".to_string(),
+            description: "test".to_string(),
+            inputs: vec![],
+            steps: vec![
+                DslStep::Parallel {
+                    branches: vec![
+                        vec![DslStep::Store {
+                            key: "branch_a".to_string(),
+                            value: serde_json::json!("result_a"),
+                            tags: vec![],
+                        }],
+                        vec![DslStep::Store {
+                            key: "branch_b".to_string(),
+                            value: serde_json::json!("result_b"),
+                            tags: vec![],
+                        }],
+                    ],
+                },
+            ],
+            outputs: vec![
+                DslOutput { name: "branch_a".to_string(), dtype: "string".to_string() },
+                DslOutput { name: "branch_b".to_string(), dtype: "string".to_string() },
+            ],
+        };
+        let interpreter = DslInterpreter::new();
+        let result = interpreter.execute(&dsl, serde_json::json!({})).unwrap();
+        let a = result.get("branch_a").unwrap();
+        assert_eq!(a.get("value").unwrap().as_str().unwrap(), "result_a");
+        let b = result.get("branch_b").unwrap();
+        assert_eq!(b.get("value").unwrap().as_str().unwrap(), "result_b");
     }
 }

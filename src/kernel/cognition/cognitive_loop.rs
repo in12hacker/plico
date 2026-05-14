@@ -131,7 +131,7 @@ impl CognitiveLoop {
             quality_delta: 0.0,
             context_before: ContextSnapshot {
                 cid_count: current_context.len(),
-                token_count: 0, // TODO: compute
+                token_count: 0,
                 quality_score: 0.0,
             },
             context_after: ContextSnapshot::default(),
@@ -244,7 +244,6 @@ impl CognitiveLoop {
             let agent_id = agent_id.to_string();
             let operation = operation.to_string();
             tokio::spawn(async move {
-                // TODO: extract skill candidate from recent trajectory
                 let _ = forge.extract_candidate(&agent_id, &operation).await;
             });
         }
@@ -302,6 +301,7 @@ impl CognitiveLoop {
 
     /// 注册新会话
     pub async fn register_session(&self, agent_id: &str, session_id: &str) {
+        self.trajectory_tracker.set_session(agent_id, session_id).await;
         let mut state = self.state.write().await;
         let key = format!("{}:{}", agent_id, session_id);
         state.active_sessions.insert(key, SessionCognitiveState {
@@ -317,6 +317,7 @@ impl CognitiveLoop {
 
     /// 结束会话
     pub async fn end_session(&self, agent_id: &str, session_id: &str) {
+        self.trajectory_tracker.clear_session(agent_id).await;
         let key = format!("{}:{}", agent_id, session_id);
         let mut state = self.state.write().await;
         if let Some(session_state) = state.active_sessions.remove(&key) {

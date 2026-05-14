@@ -109,3 +109,41 @@ PREPROCESS_TIMEOUT=600 ./scripts/run_full_benchmark.sh --skip-jina-v5  # 仅 Qwe
 ## Benchmark 数据
 
 `benchmarks/results/` 下的 JSON 文件，版本号如 `v44`, `v45`, `v46`。
+
+## 触发时机
+
+| 场景 | 触发方式 | 依赖 |
+|------|---------|------|
+| **里程碑验收** | 必须运行 perf_regression 测试 | 无外部依赖（stub 后端） |
+| **里程碑验收** | 建议运行端到端 benchmark suite | 需要 llama-server + plicod |
+| **PR 合并前** | CI 自动运行 perf_regression | 无外部依赖 |
+| **版本发布前** | 必须运行全量 benchmark + 生成报告 | 需要 llama-server + plicod |
+
+### 无外部服务时（CI / 快速验证）
+
+```bash
+EMBEDDING_BACKEND=stub LLM_BACKEND=stub cargo test --test perf_regression
+```
+
+结果直接输出到终端，无需存储文件。
+
+### 有外部服务时（完整 benchmark）
+
+```bash
+cd benchmarks
+PREPROCESS_TIMEOUT=600 ./scripts/run_full_benchmark.sh
+```
+
+结果存储：
+- **JSON 结果**：`benchmarks/results/<suite>_<version>.json`
+- **Markdown 报告**：`benchmarks/docs/benchmark_report_<version>.md`
+- **里程碑快照**：`docs/milestones/vXX-summary.md` 中引用 benchmark 结果
+
+## 报告存储规则
+
+| 文件类型 | 路径 | 命名规则 |
+|---------|------|---------|
+| Perf regression 结果 | 终端输出 | 无需存储（CI 自动判断） |
+| Benchmark JSON | `benchmarks/results/` | `<suite>_v<XX>.json` |
+| Benchmark 报告 | `benchmarks/docs/` | `benchmark_report_v<XX>.md` |
+| 里程碑快照 | `docs/milestones/` | `vXX-summary.md`（引用 benchmark 数据） |

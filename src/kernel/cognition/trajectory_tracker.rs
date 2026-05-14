@@ -21,13 +21,16 @@ pub struct FailureRecord {
 pub struct TrajectoryTracker {
     /// Agent ID -> 轨迹点列表
     trajectories: RwLock<HashMap<String, Vec<TrajectoryPoint>>>,
-    
+
     /// Agent ID -> 失败记录列表
     failures: RwLock<HashMap<String, Vec<FailureRecord>>>,
-    
+
+    /// Agent ID -> 当前 session_id
+    current_sessions: RwLock<HashMap<String, String>>,
+
     /// 最大保留轨迹长度（防止内存无限增长）
     max_trajectory_len: usize,
-    
+
     /// 最大保留失败记录数
     max_failure_records: usize,
 }
@@ -43,9 +46,22 @@ impl TrajectoryTracker {
         Self {
             trajectories: RwLock::new(HashMap::new()),
             failures: RwLock::new(HashMap::new()),
+            current_sessions: RwLock::new(HashMap::new()),
             max_trajectory_len: 10000,
             max_failure_records: 1000,
         }
+    }
+
+    /// 设置 Agent 的当前会话
+    pub async fn set_session(&self, agent_id: &str, session_id: &str) {
+        let mut sessions = self.current_sessions.write().await;
+        sessions.insert(agent_id.to_string(), session_id.to_string());
+    }
+
+    /// 清除 Agent 的当前会话
+    pub async fn clear_session(&self, agent_id: &str) {
+        let mut sessions = self.current_sessions.write().await;
+        sessions.remove(agent_id);
     }
 
     /// 记录意图声明
@@ -91,8 +107,12 @@ impl TrajectoryTracker {
 
     /// 记录失败
     pub async fn record_failure(&self, agent_id: &str, operation: &str) {
+        let session_id = {
+            let sessions = self.current_sessions.read().await;
+            sessions.get(agent_id).cloned().unwrap_or_default()
+        };
         let record = FailureRecord {
-            session_id: "unknown".to_string(), // TODO: track session
+            session_id,
             intent: String::new(),
             operation: operation.to_string(),
             timestamp_ms: now_ms(),
@@ -162,6 +182,8 @@ impl TrajectoryTracker {
         trajectories.remove(agent_id);
         let mut failures = self.failures.write().await;
         failures.remove(agent_id);
+        let mut sessions = self.current_sessions.write().await;
+        sessions.remove(agent_id);
     }
 }
 
@@ -288,5 +310,36 @@ mod tests {
         assert!(tracker.get_recent_failures("agent1", 10).await.is_empty());
         let stats = tracker.get_failure_stats("agent1").await;
         assert_eq!(stats.total_failures, 0);
+    }
+
+    #[tokio::test]
+    async fn set_session_tracks_session_id() {
+        let tracker = TrajectoryTracker::new();
+        tracker.set_session("agent1", "session-42").await;
+        tracker.record_failure("agent1", "fail1").await;
+
+        let failures = tracker.get_recent_failures("agent1", 10).await;
+        assert_eq!(failures.len(), 1);
+        assert_eq!(failures[0].session_id, "session-42");
+    }
+
+    #[tokio::test]
+    async fn failure_without_session_uses_empty() {
+        let tracker = TrajectoryTracker::new();
+        tracker.record_failure("agent1", "fail1").await;
+
+        let failures = tracker.get_recent_failures("agent1", 10).await;
+        assert_eq!(failures[0].session_id, "");
+    }
+
+    #[tokio::test]
+    async fn clear_session_stops_tracking() {
+        let tracker = TrajectoryTracker::new();
+        tracker.set_session("agent1", "session-1").await;
+        tracker.clear_session("agent1").await;
+        tracker.record_failure("agent1", "fail1").await;
+
+        let failures = tracker.get_recent_failures("agent1", 10).await;
+        assert_eq!(failures[0].session_id, "");
     }
 }

@@ -12,7 +12,8 @@
 | [v41](v41-async-cognitive.md) | 异步认知共生体 | 2026-05 | ✅ 完成 |
 | [v43](v43-extreme-recall.md) | Extreme Recall & Memory Fusion | 2026-05 | ✅ 完成 |
 | [v46](v46-summary.md) | 性能优化 + 多跳推理 + 端到端质量 | 2026-05-13 | ✅ 完成 |
-| [v47](v47-document-restructure.md) | 文档体系重构 | 2026-05-14 | 🚧 进行中 |
+| [v47](v47-document-restructure.md) | 文档体系重构 | 2026-05-14 | ✅ 完成 |
+| [v48](v48-cognitive-deepening.md) | 认知引擎深化 | 2026-05-14 | ✅ 完成 |
 
 ## 模板
 
