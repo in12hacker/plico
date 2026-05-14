@@ -4,6 +4,25 @@ Kernel operation groups — keeps `kernel/mod.rs` manageable by splitting domain
 
 Status: active | Fan-in: 1 | Fan-out: 0
 
+## Public API
+
+All ops are `impl AIKernel` extension blocks — no standalone exports. Key operation groups:
+
+| Group | File | Key Methods |
+|-------|------|-------------|
+| Storage | `fs.rs` | `search()`, `storage_stats()`, `cold_evict()` |
+| Agent | `agent.rs` | `register_agent()`, `ensure_registered()`, `discover_agents()` |
+| Memory | `memory.rs` | `memory_recall()`, `memory_store()`, `promote_memory()` |
+| Session | `session.rs` | `start_session()`, `end_session()`, `compound_response()` |
+| Graph | `graph.rs` | `kg_add_node()`, `kg_traverse()`, `kg_impact()`, `causal_path()` |
+| Checkpoint | `checkpoint.rs` | `checkpoint_save()`, `checkpoint_restore()` |
+| Observability | `observability.rs` | `metrics_snapshot()`, `health_indicators()` |
+| Prefetch | `prefetch.rs` | `prefetch_for_intent()`, `feedback_score()` |
+
+## Dependencies (Fan-out: 0)
+
+All ops depend on `AIKernel` fields (self-referencing). No external module dependencies — ops are the leaf layer.
+
 ## Dependents (Fan-in: 1)
 
 - `src/kernel/mod.rs` → all ops are `impl AIKernel` extension blocks, called from `handle_api_request` dispatch

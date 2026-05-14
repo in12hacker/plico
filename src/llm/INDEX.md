@@ -47,6 +47,16 @@ None — depends only on external crates (reqwest, serde, serde_json).
 - `StubProvider`: returns pre-configured response, no network calls
 - Thread safety: all providers are `Send + Sync`
 
+## Task Routing
+
+| Task | File |
+|------|------|
+| Fix Ollama connection/response | `ollama.rs` |
+| Fix OpenAI-compatible endpoint | `openai.rs` |
+| Change chat interface | `mod.rs` (LlmProvider trait) |
+| Add new provider backend | new file + register in kernel |
+| Fix stub test responses | `stub.rs` |
+
 ## Tests
 
 - Unit: co-located in each provider file

@@ -58,6 +58,16 @@ v3+（正确）:    用户 NL → aicli IntentRouter → ApiRequest → 内核
 | `llm.rs` | LlmRouter Ollama integration | ~130 |
 | `execution.rs` | execute_sync — NL→execute→learn loop | ~265 |
 
+## Task Routing
+
+| Task | File |
+|------|------|
+| Add keyword/pattern match | `heuristic.rs` |
+| Change LLM prompt for intent | `llm.rs` |
+| Fix NL→execute loop | `execution.rs` |
+| Add new intent type | `mod.rs` (add to ResolvedIntent) |
+| Change confidence thresholds | `heuristic.rs` / `llm.rs` |
+
 ## Tests
 
 - Unit: `src/intent/heuristic.rs` mod tests
