@@ -1,0 +1,35 @@
+# Plico (太初) — Project Rules for Cline
+
+## Project
+Rust (edition 2021). AI-native OS kernel. Inference-framework-agnostic.
+
+## Build & Test
+```bash
+cargo build
+EMBEDDING_BACKEND=stub LLM_BACKEND=stub cargo test --lib    # fast unit tests
+cargo clippy -- -D warnings                                  # zero warnings
+```
+
+## Coding Standards
+- `snake_case.rs` files, one concept per file, < 300 lines
+- `snake_case` functions, `PascalCase` types
+- No `#[allow(clippy::...)]` — fix the issue
+- No `unsafe` without `# Safety` comment
+- `thiserror` typed errors, no panics in lib code
+- `#[cfg(test)] mod tests` inline in source files
+
+## Architecture Constraints
+- Dependency: `api/bin → kernel → tool/fs/intent → cas/memory/scheduler/temporal/llm`
+- `kernel/` is the only module importing all others
+- CAS is the only module touching the host filesystem
+- All persistence uses `atomic_write_json()` — never `std::fs::write()`
+
+## Testing
+- Always use stub backends: `EMBEDDING_BACKEND=stub LLM_BACKEND=stub`
+- Kernel test helper: `crate::kernel::tests::make_kernel()` → `(Arc<AIKernel>, TempDir)`
+- Stub embedding returns empty vectors — don't assert search result counts
+
+## Security
+- Reserved agent names: `kernel`, `system`, `root`, `admin`
+- Max content: 10 MB per object
+- No hardcoded API keys

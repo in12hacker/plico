@@ -1,5 +1,10 @@
 # 太初 (Plico) — AI-Native Operating System Kernel
 
+[![CI](https://github.com/in12hacker/plico/actions/workflows/ci.yml/badge.svg)](https://github.com/in12hacker/plico/actions/workflows/ci.yml)
+[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](LICENSE)
+[![Rust](https://img.shields.io/badge/rust-2021-edition.svg)](https://www.rust-lang.org)
+[![Tests](https://img.shields.io/badge/tests-2%2C075-brightgreen.svg)](#status)
+
 **Languages / 语言：** [English](README.md) · [简体中文](README_zh.md)
 
 An operating system kernel designed **entirely from an AI perspective**. No human-first CLI/GUI, no path-centric filesystem. Upper-layer agents interact through **semantic APIs** (content, tags, intents, graphs). The stack is **inference-framework-agnostic**: both embedding and LLM backends support any server exposing an OpenAI-compatible API (llama.cpp, vLLM, SGLang, TensorRT-LLM, Ollama, etc.), plus local ONNX or stubs for tests.

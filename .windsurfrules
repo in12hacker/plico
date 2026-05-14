@@ -1,0 +1,33 @@
+# Plico (太初) — Project Rules for Windsurf
+
+## Overview
+Rust (edition 2021) AI-native OS kernel. Semantic APIs, no human CLI/GUI.
+
+## Commands
+```bash
+cargo build                                              # build
+EMBEDDING_BACKEND=stub LLM_BACKEND=stub cargo test --lib # unit tests
+cargo clippy -- -D warnings                              # lint
+cargo fmt --check                                        # format
+```
+
+## Rules
+- Files: `snake_case.rs`, < 300 lines, one concept per file
+- Naming: `snake_case` fns, `PascalCase` types, `SCREAMING_SNAKE` consts
+- No `#[allow(clippy::...)]` — fix issues, don't suppress
+- No `unsafe` without `# Safety` comment
+- Errors: `thiserror` only, no panics in lib code
+- Tests: `#[cfg(test)] mod tests` inline
+- Always use stub backends for tests
+
+## Architecture
+- `api/bin → kernel → tool/fs/intent → cas/memory/scheduler/temporal/llm`
+- `kernel/` is the sole module importing all others
+- CAS is the only module touching host filesystem
+- JSON is the only kernel interface
+- All persistence: `atomic_write_json()`, never `std::fs::write()`
+
+## Security
+- Reserved agents: `kernel`, `system`, `root`, `admin`
+- Max content: 10 MB
+- No hardcoded API keys

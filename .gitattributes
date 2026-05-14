@@ -1,0 +1,47 @@
+# .gitattributes — Plico project file attribute rules
+
+# Auto detect text files and normalize line endings
+* text=auto
+
+# Rust
+*.rs text diff=rust
+*.toml text
+
+# Python
+*.py text diff=python
+
+# Markdown
+*.md text diff=markdown
+
+# Shell scripts
+*.sh text eol=lf
+
+# JSON
+*.json text
+
+# YAML
+*.yml text
+*.yaml text
+
+# Binary files
+*.gguf binary
+*.onnx binary
+*.bin binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+
+# Lock files
+Cargo.lock text -diff
+uv.lock text -diff
+
+# Generated files
+*.egg-info/** linguist-generated
+src/plico_benchmarks.egg-info/** linguist-generated
+
+# Benchmark results (large JSON)
+benchmarks/results/*.json linguist-generated
+
+# Test fixtures
+tests/fixtures/** binary

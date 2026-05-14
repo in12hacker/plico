@@ -1,0 +1,11 @@
+# clippy.toml — Plico project clippy configuration
+# See: https://doc.rust-lang.org/clippy/configuration.html
+
+# Maximum number of function arguments before warning
+too-many-arguments-threshold = 8
+
+# Maximum lines in a single function body
+too-many-lines-threshold = 200
+
+# Cognitive complexity threshold
+cognitive-complexity-threshold = 25

@@ -1,5 +1,10 @@
 # 太初 (Plico) — AI 原生操作系统内核
 
+[![CI](https://github.com/in12hacker/plico/actions/workflows/ci.yml/badge.svg)](https://github.com/in12hacker/plico/actions/workflows/ci.yml)
+[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](LICENSE)
+[![Rust](https://img.shields.io/badge/rust-2021-edition.svg)](https://www.rust-lang.org)
+[![Tests](https://img.shields.io/badge/tests-2%2C075-brightgreen.svg)](#状态)
+
 **语言：** [简体中文](README_zh.md) · [English](README.md)
 
 从 **AI 视角** 设计的操作系统内核——不以人类优先的 CLI/GUI 为中心，也不把「路径型文件系统」当作主要抽象。上层智能体通过 **语义 API**（内容、标签、意图、图）与系统交互。实现 **推理框架无关**：Embedding 和 LLM 后端均支持任何 OpenAI-compatible API 的推理服务（llama.cpp、vLLM、SGLang、TensorRT-LLM、Ollama 等），也可使用本地 ONNX 或 stub 测试。
