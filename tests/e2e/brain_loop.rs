@@ -50,6 +50,7 @@ mod cognitive_loop_tests {
                 vec!["security".to_string(), "vulnerability".to_string()],
                 &agent_id,
                 None,
+                plico::cas::ObjectScope::default()
             ).ok();
         }
 

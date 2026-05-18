@@ -442,7 +442,7 @@ mod tests {
     #[test]
     fn test_hybrid_retrieve_no_kg() {
         let (kernel, _dir) = make_kernel();
-        let _ = kernel.semantic_create(b"test content".to_vec(), vec!["test".to_string()], "kernel", None);
+        let _ = kernel.semantic_create(b"test content".to_vec(), vec!["test".to_string()], "kernel", None, crate::cas::ObjectScope::default());
         let result = kernel.hybrid_retrieve("test", &[], 1, &[], 10, None);
         // With stub embedding, vector search returns empty, but BM25 may find something
         let _ = result.token_estimate; // just verify it's accessible
@@ -451,7 +451,7 @@ mod tests {
     #[test]
     fn test_hybrid_retrieve_with_token_budget() {
         let (kernel, _dir) = make_kernel();
-        let _ = kernel.semantic_create(b"budget test content".to_vec(), vec!["test".to_string()], "kernel", None);
+        let _ = kernel.semantic_create(b"budget test content".to_vec(), vec!["test".to_string()], "kernel", None, crate::cas::ObjectScope::default());
         let result = kernel.hybrid_retrieve("budget test", &[], 1, &[], 100, Some(100));
         // Should prune results to fit budget
         assert!(result.token_estimate <= 100 || result.items.is_empty());
@@ -466,6 +466,7 @@ mod tests {
                 vec!["test".to_string()],
                 "kernel",
                 None,
+                crate::cas::ObjectScope::default(),
             );
         }
         let result = kernel.hybrid_retrieve("content", &[], 1, &[], 2, None);
@@ -496,6 +497,7 @@ mod tests {
             vec!["test".to_string()],
             "kernel",
             None,
+            crate::cas::ObjectScope::default(),
         ).unwrap();
         let preview = kernel.get_content_preview(&cid);
         assert!(preview.contains("preview content"));

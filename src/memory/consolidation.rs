@@ -305,6 +305,8 @@ mod tests {
             memory_type: MemoryType::Semantic,
             causal_parent: None,
             supersedes: None,
+            superseded_by: None,
+            deleted_at: None,
         }
     }
 

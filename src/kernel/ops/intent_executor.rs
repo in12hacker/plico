@@ -445,6 +445,7 @@ impl AutonomousExecutor {
                 tags_owned,
                 "system",
                 None,
+                crate::cas::ObjectScope::default(),
             )
         })
         .await;
@@ -1183,6 +1184,7 @@ async fn test_learning_loop_methods_called() {
             vec!["readable".to_string()],
             "system",
             None,
+            crate::cas::ObjectScope::default(),
         ).expect("create should succeed");
 
         let mut executor = AutonomousExecutor::new(kernel);
@@ -1222,6 +1224,7 @@ async fn test_learning_loop_methods_called() {
             vec!["search-test".to_string()],
             "system",
             None,
+            crate::cas::ObjectScope::default(),
         ).expect("create should succeed");
 
         let mut executor = AutonomousExecutor::new(kernel);
@@ -1296,6 +1299,7 @@ async fn test_learning_loop_methods_called() {
             vec!["batch".to_string()],
             "system",
             None,
+            crate::cas::ObjectScope::default(),
         ).expect("create should succeed");
 
         let cid2 = kernel.semantic_create(
@@ -1303,6 +1307,7 @@ async fn test_learning_loop_methods_called() {
             vec!["batch".to_string()],
             "system",
             None,
+            crate::cas::ObjectScope::default(),
         ).expect("create should succeed");
 
         let mut executor = AutonomousExecutor::new(kernel);
@@ -1343,6 +1348,7 @@ async fn test_learning_loop_methods_called() {
             vec!["batch".to_string()],
             "system",
             None,
+            crate::cas::ObjectScope::default(),
         ).expect("create should succeed");
 
         let mut executor = AutonomousExecutor::new(kernel);
@@ -1479,6 +1485,7 @@ async fn test_learning_loop_methods_called() {
             vec!["stats".to_string()],
             "system",
             None,
+            crate::cas::ObjectScope::default(),
         ).expect("create should succeed");
 
         let mut executor = AutonomousExecutor::new(kernel);

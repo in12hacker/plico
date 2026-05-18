@@ -34,7 +34,8 @@ fn axiom4_cross_agent_object_visibility() {
         tenant_id: None,
         agent_token: None,
         intent: None,
-    });
+            scope: None,
+});
     assert!(create_resp.ok, "Agent A create failed: {:?}", create_resp.error);
     let cid = create_resp.cid.expect("should have CID");
 
@@ -65,7 +66,8 @@ fn axiom4_cross_agent_search_visibility() {
         tenant_id: None,
         agent_token: None,
         intent: None,
-    });
+            scope: None,
+});
 
     let search_resp = kernel.handle_api_request(ApiRequest::Search {
         query: "quantum".to_string(),
@@ -129,7 +131,8 @@ fn axiom4_tag_based_object_sharing() {
         tenant_id: None,
         agent_token: None,
         intent: None,
-    });
+            scope: None,
+});
 
     // Agent B searches by tag — should find agent A's content
     let search_resp = kernel.handle_api_request(ApiRequest::Search {

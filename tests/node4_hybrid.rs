@@ -103,6 +103,7 @@ fn test_g1_ingest_agent_10_articles_to_cas_and_kg() {
             article.tags.clone(),
             &agent_id,
             Some(article.title.to_string()),
+            plico::cas::ObjectScope::default()
         ).expect("semantic_create should succeed");
         cids.push(cid);
     }
@@ -223,6 +224,7 @@ fn test_g2_knowledge_agent_hybrid_retrieve_with_token_estimate() {
             article.tags.clone(),
             &agent_id,
             Some(article.title.to_string()),
+            plico::cas::ObjectScope::default()
         ).expect("semantic_create should succeed");
         cids.push(cid);
     }
@@ -322,6 +324,7 @@ fn test_g2_hybrid_retrieve_token_budget_pruning() {
             article.tags.clone(),
             &agent_id,
             Some(article.title.to_string()),
+            plico::cas::ObjectScope::default()
         ).expect("semantic_create should succeed");
     }
 
@@ -380,6 +383,7 @@ fn test_hybrid_retrieve_via_api() {
         vec!["security".into(), "sql-injection".into()],
         &agent_id,
         Some("SQL Injection Prevention".into()),
+        plico::cas::ObjectScope::default()
     ).expect("semantic_create should succeed");
 
     // Call HybridRetrieve via API

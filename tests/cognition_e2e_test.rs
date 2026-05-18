@@ -266,7 +266,7 @@ async fn test_dsl_template_substitution_e2e() {
     let result = interpreter.execute(&dsl, serde_json::json!({
         "host": "localhost",
         "port": 8080
-    })).unwrap();
+    }), None).unwrap();
 
     let url_entry = result.get("url").unwrap();
     let url_value = url_entry.get("value").unwrap().as_str().unwrap();

@@ -19,6 +19,10 @@ impl super::AIKernel {
         let _guard = span.enter();
         let _corr_id = correlation_id;
 
+        // Trace: record start time and extract tool name
+        let trace_start = std::time::Instant::now();
+        let trace_tool_name = Self::api_request_tool_name(&req);
+
         // --- UNIFIED SECURITY GUARDRAIL (Soul 3.0 Red Lines) ---
         if let Err(e) = self.validate_security(&req) {
             tracing::warn!("Security validation failed: {}", e);
@@ -131,6 +135,10 @@ impl super::AIKernel {
             req @ (ApiRequest::SwitchEmbeddingModel { .. } | ApiRequest::SwitchLlmModel { .. } |
                    ApiRequest::CheckModelHealth { .. }) => self.handle_model(req),
 
+            // ── Trace (v52) ──
+            req @ (ApiRequest::TraceList { .. } | ApiRequest::TraceShow { .. } |
+                   ApiRequest::TraceFailures { .. }) => self.handle_trace(req),
+
             // ── Storage ──
             req @ (ApiRequest::HybridRetrieve { .. } | ApiRequest::ObjectUsage { .. } |
                    ApiRequest::StorageStats { .. } | ApiRequest::EvictCold { .. }) => self.handle_storage(req),
@@ -165,6 +173,53 @@ impl super::AIKernel {
             self.persist_usage();
         }
         response.token_estimate = Some(token_est);
+
+        // Trace: record span asynchronously
+        if let Some(tool_name) = trace_tool_name {
+            let latency_ms = trace_start.elapsed().as_millis() as u64;
+            let agent_id = request_agent_id.clone().unwrap_or_else(|| "unknown".into());
+            let status = if response.ok { super::trace::SpanStatus::Success } else { super::trace::SpanStatus::Error };
+            let span = super::trace::Span {
+                trace_id: super::trace::new_id(),
+                parent_id: None,
+                span_id: super::trace::new_id(),
+                agent_id,
+                tool_name,
+                input: serde_json::json!({}),
+                output: serde_json::json!({"ok": response.ok}),
+                status,
+                latency_ms,
+                timestamp: super::trace::today_str(),
+                session_id: None,
+                intent_id: None,
+            };
+            self.trace_writer.record(span);
+        }
+
         response
+    }
+
+    fn api_request_tool_name(req: &ApiRequest) -> Option<String> {
+        let name = match req {
+            ApiRequest::Create { .. } => "create",
+            ApiRequest::Read { .. } => "read",
+            ApiRequest::Search { .. } => "search",
+            ApiRequest::Update { .. } => "update",
+            ApiRequest::Delete { .. } => "delete",
+            ApiRequest::Remember { .. } => "remember",
+            ApiRequest::Recall { .. } => "recall",
+            ApiRequest::RememberLongTerm { .. } => "remember_long_term",
+            ApiRequest::RecallSemantic { .. } => "recall_semantic",
+            ApiRequest::RecallRouted { .. } => "recall_routed",
+            ApiRequest::SubmitIntent { .. } => "submit_intent",
+            ApiRequest::ContextAssemble { .. } => "context_assemble",
+            ApiRequest::StartSession { .. } => "start_session",
+            ApiRequest::EndSession { .. } => "end_session",
+            ApiRequest::RegisterAgent { .. } => "register_agent",
+            ApiRequest::SendMessage { .. } => "send_message",
+            ApiRequest::ReadMessages { .. } => "read_messages",
+            _ => return None,
+        };
+        Some(name.into())
     }
 }

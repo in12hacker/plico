@@ -27,7 +27,7 @@ fn test_soft_delete_excluded_from_search_after_rebuild() {
         None,
     ).unwrap();
 
-    let cid = fs.create(b"secret content".to_vec(), vec!["secret".to_string()], "test".to_string(), None).unwrap();
+    let cid = fs.create(b"secret content".to_vec(), vec!["secret".to_string()], "test".to_string(), None, plico::cas::ObjectScope::default()).unwrap();
     fs.delete(&cid, "test".to_string()).unwrap();
 
     // Simulate restart with new SemanticFS

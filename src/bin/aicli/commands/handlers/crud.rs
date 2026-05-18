@@ -38,6 +38,7 @@ pub fn cmd_create(kernel: &AIKernel, args: &[String]) -> ApiResponse {
         tenant_id: None,
         agent_token: None,
         intent,
+        scope: None,
     })
 }
 

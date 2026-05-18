@@ -10,8 +10,9 @@ pub mod event_bus;
 pub mod hook;
 pub mod persistence;
 pub mod ops;
+pub mod trace;
 mod tools;
-pub mod tests; 
+pub mod tests;
 
 use ops::checkpoint::CheckpointStore;
 use ops::prefetch::IntentPrefetcher;
@@ -74,6 +75,7 @@ pub struct AIKernel {
     pub(crate) cognitive_pipeline: Arc<RwLock<Option<ops::cognitive_pipeline::CognitivePipelineHandle>>>,
     pub(crate) diagnostic_store: Arc<ops::diagnostic::DiagnosticStore>,
     pub(crate) intelligent_skill_forge: Arc<ops::skill_forge::IntelligentSkillForge>,
+    pub(crate) trace_writer: trace::writer::TraceWriter,
 }
 
 fn check_embedding_meta(root: &std::path::Path, model_name: &str, dim: usize) -> bool {
@@ -127,6 +129,7 @@ impl AIKernel {
         let search_index = search_backend.clone();
         let knowledge_graph: Option<Arc<dyn KnowledgeGraph>> = Some(Arc::new(PetgraphBackend::open(root.clone())));
         let memory = Arc::new(LayeredMemory::new());
+        let memory_for_observer = memory.clone();
         let scheduler = Arc::new(AgentScheduler::new());
         let reranker = crate::fs::reranker::create_reranker_provider();
 
@@ -206,9 +209,13 @@ impl AIKernel {
             cognitive_pipeline: Arc::new(RwLock::new(None)),
             diagnostic_store,
             intelligent_skill_forge: Arc::new(ops::skill_forge::IntelligentSkillForge::new()),
+            trace_writer: trace::writer::TraceWriter::new(root.clone()),
         };
 
         let kernel_arc = Arc::new(kernel);
+
+        // Initialize global Observer+Reflector for async memory pattern detection
+        ops::observer::init_observer(memory_for_observer);
 
         Ok(kernel_arc)
     }
@@ -260,6 +267,7 @@ impl AIKernel {
         let search_index = search_backend.clone();
         let knowledge_graph: Option<Arc<dyn KnowledgeGraph>> = Some(Arc::new(PetgraphBackend::open(root.clone())));
         let memory = Arc::new(LayeredMemory::new());
+        let memory_for_observer = memory.clone();
         let scheduler = Arc::new(AgentScheduler::new());
         let reranker = crate::fs::reranker::create_reranker_provider();
 
@@ -381,6 +389,8 @@ impl AIKernel {
             Some(arc)
         };
 
+        let trace_writer = trace::writer::TraceWriter::new(root.clone());
+
         let kernel = Self {
             config, root, cas, memory, scheduler, fs: fs_arc, permissions, memory_persister: persister,
             embedding, llm_provider, knowledge_graph, search_backend, search_op_count: Arc::new(AtomicU64::new(0)),
@@ -392,9 +402,11 @@ impl AIKernel {
             cognitive_pipeline: Arc::new(RwLock::new(None)),
             diagnostic_store: Arc::new(ops::diagnostic::DiagnosticStore::new()),
             intelligent_skill_forge: Arc::new(ops::skill_forge::IntelligentSkillForge::new()),
+            trace_writer,
         };
 
         let kernel_arc = Arc::new(kernel);
+        ops::observer::init_observer(memory_for_observer);
         kernel_arc.register_builtin_tools();
         kernel_arc.restore_agents();
         kernel_arc.restore_intents();
@@ -514,6 +526,17 @@ impl AIKernel {
     pub fn prompt_registry(&self) -> &crate::prompt::PromptRegistry { &self.prompt_registry }
 }
 
+impl crate::kernel::cognition::ToolExecutor for AIKernel {
+    fn execute_tool(&self, name: &str, params: &serde_json::Value, agent_id: &str) -> Result<serde_json::Value, String> {
+        let result = AIKernel::execute_tool(self, name, params, agent_id);
+        if result.success {
+            Ok(result.output)
+        } else {
+            Err(result.error.unwrap_or_else(|| format!("Tool '{}' failed", name)))
+        }
+    }
+}
+
 mod api_dispatch;
 mod handlers;
 mod memory_link;
@@ -545,7 +568,7 @@ mod kernel_mod_tests {
         let (kernel, _dir) = make_kernel();
         let req = ApiRequest::Create {
             api_version: None, content: "hello".into(), content_encoding: Default::default(),
-            tags: vec!["test".into()], agent_id: "a1".into(), tenant_id: None, agent_token: None, intent: None,
+            tags: vec!["test".into()], agent_id: "a1".into(), tenant_id: None, agent_token: None, intent: None, scope: None,
         };
         let resp = kernel.handle_api_request(req);
         assert!(resp.cid.is_some());

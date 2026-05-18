@@ -13,7 +13,7 @@ pub(in crate::kernel) fn handle(kernel: &AIKernel, name: &str, params: &serde_js
                 .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
                 .unwrap_or_default();
             let intent = params.get("intent").and_then(|v| v.as_str()).map(String::from);
-            match kernel.semantic_create(content.as_bytes().to_vec(), tags, agent_id, intent) {
+            match kernel.semantic_create(content.as_bytes().to_vec(), tags, agent_id, intent, crate::cas::ObjectScope::default()) {
                 Ok(cid) => ToolResult::ok(json!({"cid": cid})),
                 Err(e) => ToolResult::error(e.to_string()),
             }

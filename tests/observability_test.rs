@@ -146,6 +146,7 @@ fn test_kernel_metrics_integration() {
             vec!["test".to_string()],
             "TestAgent",
             None,
+            plico::cas::ObjectScope::default()
         )
         .expect("create failed");
 
@@ -177,6 +178,7 @@ fn test_kernel_metrics_multiple_operations() {
             vec![format!("tag{}", i)],
             "TestAgent",
             None,
+            plico::cas::ObjectScope::default()
         );
     }
 

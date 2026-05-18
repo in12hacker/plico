@@ -397,7 +397,8 @@ fn bench_b5_kernel_store_recall() {
             tenant_id: None,
             agent_token: None,
             intent: None,
-        });
+            scope: None,
+});
         store_ms_total += t0.elapsed().as_millis();
         assert!(resp.ok, "Store failed: {:?}", resp.error);
     }
@@ -713,7 +714,8 @@ fn bench_b9_scale_store_search() {
             tenant_id: None,
             agent_token: None,
             intent: None,
-        });
+            scope: None,
+});
         store_latencies.push(t0.elapsed().as_millis());
         assert!(resp.ok, "Store failed at entry: {:?}", resp.error);
     }
@@ -2849,6 +2851,8 @@ fn make_entry(id: &str, content: &str, mem_type: MemoryType, tags: &[&str]) -> M
         memory_type: mem_type,
         causal_parent: None,
         supersedes: None,
+        deleted_at: None,
+        superseded_by: None,
     }
 }
 
@@ -2874,5 +2878,7 @@ fn make_entry_ts(
         memory_type: MemoryType::Episodic,
         causal_parent,
         supersedes,
+        deleted_at: None,
+        superseded_by: None,
     }
 }

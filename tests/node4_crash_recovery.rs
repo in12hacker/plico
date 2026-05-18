@@ -52,6 +52,7 @@ fn test_crash_recovery_cas_data_persists() {
             tags,
             &agent_id,
             Some(title.to_string()),
+            plico::cas::ObjectScope::default()
         ).expect("semantic_create should succeed");
         cids.push(cid);
     }
@@ -271,6 +272,7 @@ fn test_full_ingest_kg_query_sequence() {
             tags,
             &agent_id,
             Some(title.to_string()),
+            plico::cas::ObjectScope::default()
         ).expect("semantic_create should succeed");
         cids.push(cid);
     }

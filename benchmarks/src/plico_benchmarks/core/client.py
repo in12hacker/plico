@@ -133,16 +133,18 @@ class PlicoClient:
         )
 
     def create(
-        self, content: str, tags: list[str], agent_id: str = "bench"
+        self, content: str, tags: list[str], agent_id: str = "bench",
+        scope: str | None = None,
     ) -> dict[str, Any]:
-        return self.request(
-            {
-                "method": "create",
-                "content": content,
-                "tags": tags,
-                "agent_id": agent_id,
-            }
-        )
+        req: dict[str, Any] = {
+            "method": "create",
+            "content": content,
+            "tags": tags,
+            "agent_id": agent_id,
+        }
+        if scope:
+            req["scope"] = scope
+        return self.request(req)
 
     def batch_create(
         self, items: list[dict[str, Any]], agent_id: str = "bench"
@@ -154,6 +156,9 @@ class PlicoClient:
     def read(self, cid: str, agent_id: str = "bench") -> dict[str, Any]:
         return self.request({"method": "read", "cid": cid, "agent_id": agent_id})
 
+    def delete(self, cid: str, agent_id: str = "bench") -> dict[str, Any]:
+        return self.request({"method": "delete", "cid": cid, "agent_id": agent_id})
+
     def search(
         self,
         query: str,
@@ -161,6 +166,7 @@ class PlicoClient:
         limit: int = 10,
         require_tags: list[str] | None = None,
         intent: str | None = None,
+        scope: str | None = None,
     ) -> dict[str, Any]:
         req: dict[str, Any] = {
             "method": "search",
@@ -172,6 +178,8 @@ class PlicoClient:
             req["require_tags"] = require_tags
         if intent:
             req["intent"] = intent
+        if scope:
+            req["scope"] = scope
         return self.request(req)
 
     def remember(self, agent_id: str, content: str) -> dict[str, Any]:
@@ -275,8 +283,16 @@ class PlicoClient:
             req["goals"] = goals
         return self.request(req)
 
-    def end_session(self, agent_id: str) -> dict[str, Any]:
-        return self.request({"method": "end_session", "agent_id": agent_id})
+    def end_session(
+        self, agent_id: str, session_id: str = "", auto_checkpoint: bool = True
+    ) -> dict[str, Any]:
+        req: dict[str, Any] = {
+            "method": "end_session",
+            "agent_id": agent_id,
+            "session_id": session_id,
+            "auto_checkpoint": auto_checkpoint,
+        }
+        return self.request(req)
 
     def remember_long_term(
         self,

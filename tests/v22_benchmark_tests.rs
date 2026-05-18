@@ -132,6 +132,7 @@ fn benchmark_delta_savings() {
                 vec!["auth".to_string(), "module".to_string(), format!("file_{}", i)],
                 &agent_id,
                 Some(format!("auth_file_{}.rs", i)),
+                plico::cas::ObjectScope::default()
             )
             .expect("should create doc");
         cids.push(cid);
@@ -281,6 +282,7 @@ fn benchmark_intent_cache_hit_rate() {
             vec!["test".to_string()],
             &agent_id,
             None,
+            plico::cas::ObjectScope::default()
         )
         .expect("should create doc");
 
@@ -434,6 +436,7 @@ fn benchmark_change_awareness_latency() {
                 vec!["test".to_string(), format!("obj_{}", i)],
                 &agent_id,
                 None,
+                plico::cas::ObjectScope::default()
             )
             .expect("should create doc");
         cids.push(cid);
@@ -543,6 +546,7 @@ fn benchmark_token_cost_transparency() {
             vec!["test".to_string()],
             &agent_id,
             None,
+            plico::cas::ObjectScope::default()
         )
         .expect("should create doc");
 
@@ -749,6 +753,7 @@ fn benchmark_full_session_cycle() {
             vec!["auth".to_string(), "module".to_string()],
             &agent_id,
             Some("auth.rs".to_string()),
+            plico::cas::ObjectScope::default()
         )
         .expect("create doc 1");
 
@@ -758,6 +763,7 @@ fn benchmark_full_session_cycle() {
             vec!["session".to_string(), "module".to_string()],
             &agent_id,
             Some("session.rs".to_string()),
+            plico::cas::ObjectScope::default()
         )
         .expect("create doc 2");
 

@@ -144,6 +144,7 @@ impl CASPersister {
             created_at: now_ms(),
             intent: Some(format!("Persisted {} memory for agent {}", Self::tier_name(tier), agent_id)),
             tenant_id: crate::DEFAULT_TENANT.to_string(),
+            scope: crate::cas::ObjectScope::default(),
         }
     }
 }

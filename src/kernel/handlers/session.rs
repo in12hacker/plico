@@ -173,6 +173,7 @@ impl super::super::AIKernel {
                     &agent_id, &session_id, auto_checkpoint,
                     &self.session_store, &self.memory, &self.root,
                     Some(&self.prefetch),
+                    Some(&self.event_bus),
                 ) {
                     Ok(result) => {
                         self.prefetch.apply_feedback_from_history(&agent_id);

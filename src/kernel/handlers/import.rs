@@ -67,6 +67,7 @@ impl crate::kernel::AIKernel {
                 tenant_id: tenant_id.clone(),
                 agent_token: None,
                 intent: None,
+                scope: None,
             });
 
             let cid = create_resp.cid.clone();
@@ -89,6 +90,7 @@ impl crate::kernel::AIKernel {
                         tenant_id: tenant_id.clone(),
                         agent_token: None,
                         intent: None,
+                        scope: None,
                     });
                 }
                 chunks.len()

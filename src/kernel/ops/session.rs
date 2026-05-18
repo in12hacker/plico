@@ -12,7 +12,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 use crate::api::semantic::{ChangeEntry, CheckpointSummaryDto, ConsolidationReport};
-use crate::kernel::event_bus::EventBus;
+use crate::kernel::event_bus::{EventBus, KernelEvent};
 use crate::kernel::ops::delta::handle_delta_since;
 use crate::kernel::ops::tier_maintenance::TierMaintenance;
 use crate::memory::layered::{LayeredMemory, MemoryTier};
@@ -289,6 +289,9 @@ pub struct CompletedSession {
     /// Lightweight session summary: top tags + object count.
     #[serde(default)]
     pub summary: Option<SessionSummary>,
+    /// CIDs created during this session (for cross-session delta).
+    #[serde(default)]
+    pub created_cids: Vec<String>,
 }
 
 /// Lightweight session summary generated at EndSession for cross-session recall.
@@ -329,7 +332,7 @@ impl SessionStore {
     /// End a session and return it for cleanup.
     /// Optionally record completion with token usage and session summary.
     pub fn end_session(&self, session_id: &str, tokens_used: Option<usize>) -> Option<ActiveSession> {
-        self.end_session_with_summary(session_id, tokens_used, None)
+        self.end_session_with_summary(session_id, tokens_used, None, Vec::new())
     }
 
     /// End a session with an optional summary for cross-session recall.
@@ -338,6 +341,7 @@ impl SessionStore {
         session_id: &str,
         tokens_used: Option<usize>,
         summary: Option<SessionSummary>,
+        created_cids: Vec<String>,
     ) -> Option<ActiveSession> {
         let session = {
             let mut sessions = self.sessions.write().unwrap();
@@ -346,7 +350,7 @@ impl SessionStore {
 
         if let Some(ref session) = session {
             if let Some(tokens) = tokens_used {
-                self.record_completion(session.clone(), tokens, summary);
+                self.record_completion(session.clone(), tokens, summary, created_cids);
             }
         }
 
@@ -354,7 +358,7 @@ impl SessionStore {
     }
 
     /// Record a completed session for an agent.
-    fn record_completion(&self, session: ActiveSession, tokens_used: usize, summary: Option<SessionSummary>) {
+    fn record_completion(&self, session: ActiveSession, tokens_used: usize, summary: Option<SessionSummary>, created_cids: Vec<String>) {
         let completed = CompletedSession {
             session_id: session.session_id,
             agent_id: session.agent_id.clone(),
@@ -362,6 +366,7 @@ impl SessionStore {
             ended_at_ms: now_ms(),
             tokens_used,
             summary,
+            created_cids,
         };
 
         let mut completed_map = self.completed_sessions.write().unwrap();
@@ -651,7 +656,7 @@ pub fn start_session_orchestrate(params: SessionStartParams<'_>) -> Result<Start
                 // Assembly is ready (from cache hit), serialize and store in CAS
                 let content = serde_json::to_vec(&allocation).unwrap_or_default();
                 if !content.is_empty() {
-                    match fs.create(content, vec!["warm-context".into()], agent_id.to_string(), Some(hint.clone())) {
+                    match fs.create(content, vec!["warm-context".into()], agent_id.to_string(), Some(hint.clone()), crate::cas::ObjectScope::default()) {
                         Ok(cid) => Some(cid),
                         Err(e) => {
                             tracing::warn!("Failed to store warm_context in CAS: {}, falling back to assembly_id", e);
@@ -673,7 +678,7 @@ pub fn start_session_orchestrate(params: SessionStartParams<'_>) -> Result<Start
                     "assembly_id": assembly_id,
                 });
                 let content = serde_json::to_vec(&placeholder).unwrap_or_default();
-                match fs.create(content, vec!["warm-context".into(), "pending".into()], agent_id.to_string(), Some(hint.clone())) {
+                match fs.create(content, vec!["warm-context".into(), "pending".into()], agent_id.to_string(), Some(hint.clone()), crate::cas::ObjectScope::default()) {
                     Ok(cid) => Some(cid),
                     Err(e) => {
                         tracing::warn!("Failed to store warm_context placeholder in CAS: {}, falling back to assembly_id", e);
@@ -691,12 +696,20 @@ pub fn start_session_orchestrate(params: SessionStartParams<'_>) -> Result<Start
         .map(|c| crate::api::semantic::estimate_tokens(&c.summary))
         .sum::<usize>();
 
+    // 9. Get CIDs from the most recent completed session (cross-session delta)
+    let previous_session_cids = session_store
+        .get_completed_sessions(agent_id, None)
+        .last()
+        .map(|cs| cs.created_cids.clone())
+        .unwrap_or_default();
+
     Ok(StartSessionResult {
         session_id,
         restored_checkpoint,
         warm_context,
         changes_since_last,
         token_estimate,
+        previous_session_cids,
     })
 }
 
@@ -709,6 +722,7 @@ pub fn end_session_orchestrate(
     memory: &Arc<LayeredMemory>,
     root: &Path,
     prefetch: Option<&crate::kernel::ops::prefetch::IntentPrefetcher>,
+    event_bus: Option<&Arc<EventBus>>,
 ) -> Result<EndSessionResult, String> {
     // 1. Validate session exists
     let session = session_store.get(session_id)
@@ -721,7 +735,21 @@ pub fn end_session_orchestrate(
         ));
     }
 
-    // 2. Auto-checkpoint if requested
+    // 2. Collect CIDs created during this session for cross-session delta
+    let created_cids: Vec<String> = if let Some(bus) = event_bus {
+        let events = bus.events_by_agent(agent_id);
+        events.iter()
+            .filter(|e| e.timestamp_ms >= session.created_at_ms)
+            .filter_map(|e| match &e.event {
+                KernelEvent::ObjectStored { cid, .. } => Some(cid.clone()),
+                _ => None,
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    // 3. Auto-checkpoint if requested
     let checkpoint_id = if auto_checkpoint {
         // Use memory.get_all to collect current state
         // Then store via the existing checkpoint mechanism
@@ -793,7 +821,7 @@ pub fn end_session_orchestrate(
     };
 
     // 5. Remove session from store with actual token cost and summary
-    session_store.end_session_with_summary(session_id, Some(total_tokens), Some(session_summary));
+    session_store.end_session_with_summary(session_id, Some(total_tokens), Some(session_summary), created_cids);
 
     // 6. Persist immediately (A-1)
     if let Err(e) = session_store.persist(root) {
@@ -832,6 +860,8 @@ pub struct StartSessionResult {
     pub warm_context: Option<String>, // assembly_id for FetchAssembledContext
     pub changes_since_last: Vec<ChangeEntry>,
     pub token_estimate: usize,
+    /// CIDs created in the previous session (cross-session delta).
+    pub previous_session_cids: Vec<String>,
 }
 
 /// Result of EndSession orchestration.
@@ -872,6 +902,7 @@ pub fn spawn_session_timeout_scanner(
                     &memory,
                     &root_clone,
                     None, // no prefetch in timeout scanner
+                    None, // no event_bus in timeout scanner
                 );
             }
         }
@@ -1244,6 +1275,7 @@ mod tests {
             vec!["warm-context".to_string()],
             "test-agent".to_string(),
             Some("audit".to_string()),
+            crate::cas::ObjectScope::default(),
         ).unwrap();
 
         // Now simulate what start_session_orchestrate does when prefetch returns a ready allocation
@@ -1513,7 +1545,7 @@ mod tests {
             summary_cid: None,
         };
 
-        let removed = store.end_session_with_summary("s1", Some(100), Some(summary));
+        let removed = store.end_session_with_summary("s1", Some(100), Some(summary), Vec::new());
         assert!(removed.is_some());
 
         let completed = store.get_completed_sessions("a1", None);
@@ -1733,6 +1765,7 @@ mod tests {
                     intent: None,
                     summary_cid: None,
                 }),
+                Vec::new(),
             );
         }
 
@@ -1756,6 +1789,7 @@ mod tests {
                     intent: None,
                     summary_cid: None,
                 }),
+                Vec::new(),
             );
         }
 
@@ -1813,6 +1847,7 @@ mod tests {
                 intent: Some("fix".into()),
                 summary_cid: None,
             }),
+            Vec::new(),
         );
 
         store.persist(dir.path()).unwrap();
@@ -1892,6 +1927,7 @@ mod tests {
             &memory,
             dir.path(),
             None,
+            None,
         );
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Session not found"));
@@ -1912,6 +1948,7 @@ mod tests {
             &memory,
             dir.path(),
             None,
+            None,
         );
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("does not belong to agent"));
@@ -1931,6 +1968,7 @@ mod tests {
             &store,
             &memory,
             dir.path(),
+            None,
             None,
         );
         assert!(result.is_ok());
@@ -1958,6 +1996,7 @@ mod tests {
             &memory,
             dir.path(),
             None,
+            None,
         );
         assert!(result.is_ok());
         // checkpoint_id is currently None even with auto_checkpoint=true
@@ -1974,7 +2013,7 @@ mod tests {
         let memory = Arc::new(crate::memory::LayeredMemory::new());
         let dir = tempfile::tempdir().unwrap();
 
-        end_session_orchestrate("a1", "s1", false, &store, &memory, dir.path(), None).unwrap();
+        end_session_orchestrate("a1", "s1", false, &store, &memory, dir.path(), None, None).unwrap();
 
         let completed = store.get_completed_sessions("a1", None);
         assert_eq!(completed.len(), 1);

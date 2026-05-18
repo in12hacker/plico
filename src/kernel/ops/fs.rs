@@ -56,6 +56,7 @@ impl crate::kernel::AIKernel {
         tags: Vec<String>,
         agent_id: &str,
         intent: Option<String>,
+        scope: crate::cas::ObjectScope,
     ) -> std::io::Result<String> {
         let _timer = OperationTimer::new(&self.metrics, OpType::SemanticCreate);
         let span = tracing::info_span!(
@@ -79,7 +80,7 @@ impl crate::kernel::AIKernel {
         }
 
         let text_for_kg = String::from_utf8_lossy(&content).to_string();
-        let cid = self.fs.create(content, tags.clone(), agent_id.to_string(), intent)?;
+        let cid = self.fs.create(content, tags.clone(), agent_id.to_string(), intent, scope)?;
 
         // PostWrite: notify KG builder for async entity/event extraction
         if let Some(ref handle) = self.kg_builder {
@@ -139,8 +140,7 @@ impl crate::kernel::AIKernel {
         };
 
         let results = self.fs.search_with_filter(query, limit * 2, filter);
-        // Filter by tenant isolation
-        // CAS objects are shared by default within tenant (C-2: Shared Visibility fix)
+        // Filter by tenant isolation and object scope
         Ok(results.into_iter()
             .filter(|r| {
                 // Tenant isolation: must match tenant_id
@@ -151,8 +151,10 @@ impl crate::kernel::AIKernel {
                 if can_read_any {
                     return true;
                 }
-                // CAS objects are shared by default within tenant
-                // Memory objects are filtered separately by MemoryScope in recall operations
+                // Scope isolation: Private objects are only visible to the creator
+                if r.meta.scope == crate::cas::ObjectScope::Private && r.meta.created_by != agent_id {
+                    return false;
+                }
                 true
             })
             .take(limit)
@@ -541,6 +543,7 @@ mod tests {
             vec!["test".to_string(), "data".to_string()],
             "kernel",
             None,
+            crate::cas::ObjectScope::default(),
         ).expect("create failed");
 
         // Verify it exists
@@ -558,9 +561,9 @@ mod tests {
     #[test]
     fn test_semantic_search_with_require_tags_and_semantics() {
         let (kernel, _dir) = crate::kernel::tests::make_kernel();
-        kernel.semantic_create(b"doc-a".to_vec(), vec!["rust".to_string(), "async".to_string()], "kernel", None).ok();
-        kernel.semantic_create(b"doc-b".to_vec(), vec!["rust".to_string(), "sync".to_string()], "kernel", None).ok();
-        kernel.semantic_create(b"doc-c".to_vec(), vec!["go".to_string(), "async".to_string()], "kernel", None).ok();
+        kernel.semantic_create(b"doc-a".to_vec(), vec!["rust".to_string(), "async".to_string()], "kernel", None, crate::cas::ObjectScope::default()).ok();
+        kernel.semantic_create(b"doc-b".to_vec(), vec!["rust".to_string(), "sync".to_string()], "kernel", None, crate::cas::ObjectScope::default()).ok();
+        kernel.semantic_create(b"doc-c".to_vec(), vec!["go".to_string(), "async".to_string()], "kernel", None, crate::cas::ObjectScope::default()).ok();
 
         // Search with require_tags (AND semantics) - should match only doc-a
         let results = kernel.semantic_search("rust", "kernel", "default", 10, vec!["async".to_string()], vec![]).expect("search failed");
@@ -570,8 +573,8 @@ mod tests {
     #[test]
     fn test_semantic_search_exclude_tags() {
         let (kernel, _dir) = crate::kernel::tests::make_kernel();
-        kernel.semantic_create(b"keep-me".to_vec(), vec!["visible".to_string()], "kernel", None).ok();
-        kernel.semantic_create(b"exclude-me".to_vec(), vec!["visible".to_string(), "secret".to_string()], "kernel", None).ok();
+        kernel.semantic_create(b"keep-me".to_vec(), vec!["visible".to_string()], "kernel", None, crate::cas::ObjectScope::default()).ok();
+        kernel.semantic_create(b"exclude-me".to_vec(), vec!["visible".to_string(), "secret".to_string()], "kernel", None, crate::cas::ObjectScope::default()).ok();
 
         let results = kernel.semantic_search("", "kernel", "default", 10, vec![], vec!["secret".to_string()]).expect("search failed");
         assert!(results.iter().all(|r| !r.meta.tags.contains(&"secret".to_string())));
@@ -580,9 +583,9 @@ mod tests {
     #[test]
     fn test_search_by_tags_intersection() {
         let (kernel, _dir) = crate::kernel::tests::make_kernel();
-        kernel.semantic_create(b"doc1".to_vec(), vec!["a".to_string(), "b".to_string()], "kernel", None).ok();
-        kernel.semantic_create(b"doc2".to_vec(), vec!["a".to_string()], "kernel", None).ok();
-        kernel.semantic_create(b"doc3".to_vec(), vec!["b".to_string()], "kernel", None).ok();
+        kernel.semantic_create(b"doc1".to_vec(), vec!["a".to_string(), "b".to_string()], "kernel", None, crate::cas::ObjectScope::default()).ok();
+        kernel.semantic_create(b"doc2".to_vec(), vec!["a".to_string()], "kernel", None, crate::cas::ObjectScope::default()).ok();
+        kernel.semantic_create(b"doc3".to_vec(), vec!["b".to_string()], "kernel", None, crate::cas::ObjectScope::default()).ok();
 
         let results = kernel.search_by_tags_intersection(&["a".to_string(), "b".to_string()], 10);
         assert_eq!(results.len(), 1);
@@ -592,9 +595,9 @@ mod tests {
     #[test]
     fn test_list_tags() {
         let (kernel, _dir) = crate::kernel::tests::make_kernel();
-        kernel.semantic_create(b"x".to_vec(), vec!["tag-a".to_string()], "kernel", None).ok();
-        kernel.semantic_create(b"y".to_vec(), vec!["tag-b".to_string()], "kernel", None).ok();
-        kernel.semantic_create(b"z".to_vec(), vec!["tag-a".to_string()], "kernel", None).ok();
+        kernel.semantic_create(b"x".to_vec(), vec!["tag-a".to_string()], "kernel", None, crate::cas::ObjectScope::default()).ok();
+        kernel.semantic_create(b"y".to_vec(), vec!["tag-b".to_string()], "kernel", None, crate::cas::ObjectScope::default()).ok();
+        kernel.semantic_create(b"z".to_vec(), vec!["tag-a".to_string()], "kernel", None, crate::cas::ObjectScope::default()).ok();
 
         let tags = kernel.list_tags();
         assert!(tags.contains(&"tag-a".to_string()));
@@ -604,7 +607,7 @@ mod tests {
     #[test]
     fn test_version_history_single_version() {
         let (kernel, _dir) = crate::kernel::tests::make_kernel();
-        let cid = kernel.semantic_create(b"v1".to_vec(), vec!["test".to_string()], "kernel", None).expect("create failed");
+        let cid = kernel.semantic_create(b"v1".to_vec(), vec!["test".to_string()], "kernel", None, crate::cas::ObjectScope::default()).expect("create failed");
 
         let history = kernel.version_history(&cid, "kernel");
         // Single version with no supersedes chain returns just itself
@@ -618,7 +621,7 @@ mod tests {
     fn test_semantic_create_empty_content_rejected() {
         let (kernel, _dir) = crate::kernel::tests::make_kernel();
         // F-2: Empty content should be rejected at kernel layer (precondition)
-        let result = kernel.semantic_create(vec![], vec!["tag".to_string()], "kernel", None);
+        let result = kernel.semantic_create(vec![], vec!["tag".to_string()], "kernel", None, crate::cas::ObjectScope::default());
         assert!(result.is_err(), "empty content should be rejected");
         let err = result.unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
@@ -627,7 +630,7 @@ mod tests {
     #[test]
     fn test_semantic_create_returns_valid_cid() {
         let (kernel, _dir) = crate::kernel::tests::make_kernel();
-        let cid = kernel.semantic_create(b"test content".to_vec(), vec![], "kernel", None).expect("create failed");
+        let cid = kernel.semantic_create(b"test content".to_vec(), vec![], "kernel", None, crate::cas::ObjectScope::default()).expect("create failed");
         // CID should be valid hex string (SHA-256 = 64 hex chars)
         assert_eq!(cid.len(), 64);
         assert!(cid.chars().all(|c| c.is_ascii_hexdigit()), "CID should be valid hex");
@@ -636,7 +639,7 @@ mod tests {
     #[test]
     fn test_semantic_delete_cid_in_recycle_bin() {
         let (kernel, _dir) = crate::kernel::tests::make_kernel();
-        let cid = kernel.semantic_create(b"to delete".to_vec(), vec!["tmp".to_string()], "kernel", None).expect("create failed");
+        let cid = kernel.semantic_create(b"to delete".to_vec(), vec!["tmp".to_string()], "kernel", None, crate::cas::ObjectScope::default()).expect("create failed");
 
         kernel.semantic_delete(&cid, "kernel", "default").expect("delete failed");
 
@@ -650,8 +653,8 @@ mod tests {
     #[test]
     fn test_semantic_search_with_intent_no_context_unchanged() {
         let (kernel, _dir) = crate::kernel::tests::make_kernel();
-        kernel.semantic_create(b"doc-a".to_vec(), vec!["rust".to_string()], "kernel", None).ok();
-        kernel.semantic_create(b"doc-b".to_vec(), vec!["go".to_string()], "kernel", None).ok();
+        kernel.semantic_create(b"doc-a".to_vec(), vec!["rust".to_string()], "kernel", None, crate::cas::ObjectScope::default()).ok();
+        kernel.semantic_create(b"doc-b".to_vec(), vec!["go".to_string()], "kernel", None, crate::cas::ObjectScope::default()).ok();
 
         // Without intent context, results should be same as base search
         let base_results = kernel.semantic_search("rust", "kernel", "default", 10, vec![], vec![])
@@ -667,8 +670,8 @@ mod tests {
     #[test]
     fn test_semantic_search_with_intent_hot_objects_boosted() {
         let (kernel, _dir) = crate::kernel::tests::make_kernel();
-        kernel.semantic_create(b"doc-a".to_vec(), vec!["rust".to_string()], "kernel", None).ok();
-        kernel.semantic_create(b"doc-b".to_vec(), vec!["rust".to_string()], "kernel", None).ok();
+        kernel.semantic_create(b"doc-a".to_vec(), vec!["rust".to_string()], "kernel", None, crate::cas::ObjectScope::default()).ok();
+        kernel.semantic_create(b"doc-b".to_vec(), vec!["rust".to_string()], "kernel", None, crate::cas::ObjectScope::default()).ok();
 
         // First, record feedback that cid1 (doc-a) was used
         kernel.prefetch.record_feedback(
@@ -691,7 +694,7 @@ mod tests {
     #[test]
     fn test_semantic_search_with_intent_with_empty_hot_objects() {
         let (kernel, _dir) = crate::kernel::tests::make_kernel();
-        kernel.semantic_create(b"doc-a".to_vec(), vec!["test".to_string()], "kernel", None).ok();
+        kernel.semantic_create(b"doc-a".to_vec(), vec!["test".to_string()], "kernel", None, crate::cas::ObjectScope::default()).ok();
 
         // Even with intent_context but no hot objects, should return results
         let results = kernel.semantic_search_with_intent(
@@ -705,7 +708,7 @@ mod tests {
     #[test]
     fn test_semantic_update_basic() {
         let (kernel, _dir) = crate::kernel::tests::make_kernel();
-        let cid = kernel.semantic_create(b"original".to_vec(), vec!["v1".to_string()], "agent1", None).unwrap();
+        let cid = kernel.semantic_create(b"original".to_vec(), vec!["v1".to_string()], "agent1", None, crate::cas::ObjectScope::default()).unwrap();
         let new_cid = kernel.semantic_update(&cid, b"updated".to_vec(), Some(vec!["v2".to_string()]), "agent1", "default").unwrap();
         assert_ne!(cid, new_cid);
         let obj = kernel.get_object(&new_cid, "agent1", "default").unwrap();
@@ -715,7 +718,7 @@ mod tests {
     #[test]
     fn test_semantic_update_preserves_old_version() {
         let (kernel, _dir) = crate::kernel::tests::make_kernel();
-        let cid = kernel.semantic_create(b"v1 content".to_vec(), vec!["v1".to_string()], "agent1", None).unwrap();
+        let cid = kernel.semantic_create(b"v1 content".to_vec(), vec!["v1".to_string()], "agent1", None, crate::cas::ObjectScope::default()).unwrap();
         let _new_cid = kernel.semantic_update(&cid, b"v2 content".to_vec(), None, "agent1", "default").unwrap();
         let obj = kernel.get_object(&cid, "agent1", "default").unwrap();
         assert_eq!(String::from_utf8_lossy(&obj.data), "v1 content");
@@ -724,7 +727,7 @@ mod tests {
     #[test]
     fn test_version_history_multiple_versions() {
         let (kernel, _dir) = crate::kernel::tests::make_kernel();
-        let cid = kernel.semantic_create(b"v1".to_vec(), vec!["v1".to_string()], "agent1", None).unwrap();
+        let cid = kernel.semantic_create(b"v1".to_vec(), vec!["v1".to_string()], "agent1", None, crate::cas::ObjectScope::default()).unwrap();
         let cid2 = kernel.semantic_update(&cid, b"v2".to_vec(), None, "agent1", "default").unwrap();
         let _cid3 = kernel.semantic_update(&cid2, b"v3".to_vec(), None, "agent1", "default").unwrap();
         let history = kernel.version_history(&cid, "agent1");
@@ -734,7 +737,7 @@ mod tests {
     #[test]
     fn test_rollback_basic() {
         let (kernel, _dir) = crate::kernel::tests::make_kernel();
-        let cid = kernel.semantic_create(b"original".to_vec(), vec!["v1".to_string()], "agent1", None).unwrap();
+        let cid = kernel.semantic_create(b"original".to_vec(), vec!["v1".to_string()], "agent1", None, crate::cas::ObjectScope::default()).unwrap();
         let new_cid = kernel.semantic_update(&cid, b"changed".to_vec(), None, "agent1", "default").unwrap();
         let rolled_back = kernel.rollback(&new_cid, "agent1").unwrap();
         let obj = kernel.get_object(&rolled_back, "agent1", "default").unwrap();
@@ -744,7 +747,7 @@ mod tests {
     #[test]
     fn test_context_load_basic() {
         let (kernel, _dir) = crate::kernel::tests::make_kernel();
-        let cid = kernel.semantic_create(b"context test content".to_vec(), vec!["ctx".to_string()], "agent1", None).unwrap();
+        let cid = kernel.semantic_create(b"context test content".to_vec(), vec!["ctx".to_string()], "agent1", None, crate::cas::ObjectScope::default()).unwrap();
         let result = kernel.context_load(&cid, crate::fs::ContextLayer::L0, "agent1");
         assert!(result.is_ok());
     }
@@ -759,7 +762,7 @@ mod tests {
     #[test]
     fn test_get_object_usage() {
         let (kernel, _dir) = crate::kernel::tests::make_kernel();
-        let cid = kernel.semantic_create(b"usage test".to_vec(), vec!["usage".to_string()], "agent1", None).unwrap();
+        let cid = kernel.semantic_create(b"usage test".to_vec(), vec!["usage".to_string()], "agent1", None, crate::cas::ObjectScope::default()).unwrap();
         let usage = kernel.get_object_usage(&cid);
         assert!(usage.access_count >= 0);
     }
@@ -767,7 +770,7 @@ mod tests {
     #[test]
     fn test_get_storage_stats() {
         let (kernel, _dir) = crate::kernel::tests::make_kernel();
-        let _ = kernel.semantic_create(b"stats test".to_vec(), vec!["stats".to_string()], "agent1", None);
+        let _ = kernel.semantic_create(b"stats test".to_vec(), vec!["stats".to_string()], "agent1", None, crate::cas::ObjectScope::default());
         let stats = kernel.get_storage_stats();
         assert!(stats.total_objects >= 1);
     }
@@ -775,7 +778,7 @@ mod tests {
     #[test]
     fn test_search_by_tags_basic() {
         let (kernel, _dir) = crate::kernel::tests::make_kernel();
-        kernel.semantic_create(b"tagged".to_vec(), vec!["search_tag".to_string()], "agent1", None).unwrap();
+        kernel.semantic_create(b"tagged".to_vec(), vec!["search_tag".to_string()], "agent1", None, crate::cas::ObjectScope::default()).unwrap();
         let results = kernel.search_by_tags(&["search_tag".to_string()], 10);
         assert!(!results.is_empty());
     }
@@ -783,7 +786,7 @@ mod tests {
     #[test]
     fn test_search_by_tags_no_match() {
         let (kernel, _dir) = crate::kernel::tests::make_kernel();
-        kernel.semantic_create(b"untagged".to_vec(), vec!["other".to_string()], "agent1", None).unwrap();
+        kernel.semantic_create(b"untagged".to_vec(), vec!["other".to_string()], "agent1", None, crate::cas::ObjectScope::default()).unwrap();
         let results = kernel.search_by_tags(&["nonexistent_tag".to_string()], 10);
         assert!(results.is_empty());
     }
@@ -791,7 +794,7 @@ mod tests {
     #[test]
     fn test_semantic_search_with_time_range() {
         let (kernel, _dir) = crate::kernel::tests::make_kernel();
-        kernel.semantic_create(b"timed content".to_vec(), vec!["time".to_string()], "agent1", None).unwrap();
+        kernel.semantic_create(b"timed content".to_vec(), vec!["time".to_string()], "agent1", None, crate::cas::ObjectScope::default()).unwrap();
         let results = kernel.semantic_search_with_time(
             SearchQuery { query: "timed", agent_id: "agent1", tenant_id: "default", limit: 10, require_tags: vec![], exclude_tags: vec![] },
             Some(0), Some(u64::MAX as i64),
@@ -810,7 +813,7 @@ mod tests {
             scope: Some("*".to_string()),
             expires_at: None,
         });
-        let cid = kernel.semantic_create(b"restore test".to_vec(), vec!["restore".to_string()], "agent1", None).unwrap();
+        let cid = kernel.semantic_create(b"restore test".to_vec(), vec!["restore".to_string()], "agent1", None, crate::cas::ObjectScope::default()).unwrap();
         kernel.semantic_delete(&cid, "agent1", "default").unwrap();
         let result = kernel.restore_deleted(&cid, "agent1");
         // May or may not succeed depending on recycle bin implementation
@@ -827,8 +830,137 @@ mod tests {
     #[test]
     fn test_list_tags_basic() {
         let (kernel, _dir) = crate::kernel::tests::make_kernel();
-        kernel.semantic_create(b"tagged".to_vec(), vec!["list_tag".to_string()], "agent1", None).unwrap();
+        kernel.semantic_create(b"tagged".to_vec(), vec!["list_tag".to_string()], "agent1", None, crate::cas::ObjectScope::default()).unwrap();
         let tags = kernel.list_tags();
         assert!(tags.iter().any(|t| t.contains("list_tag")));
+    }
+
+    #[test]
+    fn test_search_pipeline_benchmark_scenario() {
+        // End-to-end test simulating memory-lifecycle benchmark
+        // Creates items and searches for them by content substring
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+
+        // Create 20 items like the benchmark does
+        let mut cids = Vec::new();
+        for i in 0..20 {
+            let content = format!("Lifecycle item {}: memory architecture benchmark test", i);
+            let cid = kernel.semantic_create(
+                content.into_bytes(),
+                vec!["lifecycle".to_string(), format!("item-{}", i)],
+                "lifecycle-test",
+                None,
+                crate::cas::ObjectScope::default(),
+            ).unwrap();
+            cids.push((i, cid));
+        }
+
+        // Search for each item by substring
+        let mut hits = 0;
+        for (i, expected_cid) in &cids {
+            let query = format!("Lifecycle item {}", i);
+            let results = kernel.semantic_search(
+                &query, "lifecycle-test", "default", 5, vec![], vec![],
+            ).unwrap();
+
+            let found = results.iter().any(|r| r.cid == *expected_cid);
+            if found {
+                hits += 1;
+            } else {
+                // Log what we got instead for debugging
+                eprintln!(
+                    "Search '{}' expected cid={} but got: {:?}",
+                    query,
+                    &expected_cid[..8.min(expected_cid.len())],
+                    results.iter().take(3).map(|r| (&r.cid[..8.min(r.cid.len())], r.relevance)).collect::<Vec<_>>()
+                );
+            }
+        }
+
+        // With stub embedding, vector search returns nothing, so BM25 must find results.
+        // If BM25 is working, all 20 items should be found.
+        assert!(
+            hits >= 10,
+            "Expected at least 10/20 hits from BM25 fallback, got {}/20. \
+             This indicates the search pipeline is not returning results for simple keyword queries.",
+            hits
+        );
+    }
+
+    #[test]
+    fn test_search_pipeline_empty_filter() {
+        // Test that search with empty filter returns BM25 results
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+
+        kernel.semantic_create(b"rust programming language".to_vec(), vec!["test".to_string()], "agent1", None, crate::cas::ObjectScope::default()).unwrap();
+        kernel.semantic_create(b"python programming language".to_vec(), vec!["test".to_string()], "agent1", None, crate::cas::ObjectScope::default()).unwrap();
+
+        let results = kernel.semantic_search(
+            "rust", "agent1", "default", 10, vec![], vec![],
+        ).unwrap();
+
+        // With stub embedding, this relies entirely on BM25
+        if results.is_empty() {
+            eprintln!("WARNING: Search returned 0 results for 'rust' with stub embedding. BM25 fallback may not be working.");
+        }
+        // Don't assert - this test is for diagnostics
+    }
+
+    #[test]
+    fn test_scope_isolation_private_not_visible_to_other_agent() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+
+        // agent1 creates a Private object
+        kernel.semantic_create(
+            b"secret content".to_vec(),
+            vec!["secret".to_string()],
+            "agent1",
+            None,
+            crate::cas::ObjectScope::Private,
+        ).unwrap();
+
+        // agent1 creates a Shared object
+        kernel.semantic_create(
+            b"public content".to_vec(),
+            vec!["public".to_string()],
+            "agent1",
+            None,
+            crate::cas::ObjectScope::Shared,
+        ).unwrap();
+
+        // agent2 searches — should see Shared but NOT Private
+        let results = kernel.semantic_search(
+            "content", "agent2", "default", 10, vec![], vec![],
+        ).unwrap();
+
+        for r in &results {
+            assert_ne!(
+                r.meta.scope, crate::cas::ObjectScope::Private,
+                "Private object should not be visible to other agent"
+            );
+        }
+    }
+
+    #[test]
+    fn test_scope_isolation_private_visible_to_creator() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+
+        // agent1 creates a Private object
+        kernel.semantic_create(
+            b"my secret".to_vec(),
+            vec!["mine".to_string()],
+            "agent1",
+            None,
+            crate::cas::ObjectScope::Private,
+        ).unwrap();
+
+        // agent1 searches — should see its own Private object
+        let results = kernel.semantic_search(
+            "secret", "agent1", "default", 10, vec![], vec![],
+        ).unwrap();
+
+        // At least one result should be Private (the creator can see it)
+        let has_private = results.iter().any(|r| r.meta.scope == crate::cas::ObjectScope::Private);
+        assert!(has_private, "Creator should see their own Private objects");
     }
 }

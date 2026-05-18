@@ -56,20 +56,37 @@ else
 fi
 
 if lsof -i:18926 >/dev/null 2>&1; then
-    echo "[WARN] Reranker server already on port 18926"
-else
+    # Check if existing reranker actually supports /v1/rerank (not just port open)
+    rerank_code=$(curl -sf -o /dev/null -w "%{http_code}" -X POST "http://127.0.0.1:18926/v1/rerank" \
+        -H "Content-Type: application/json" \
+        -d '{"model":"test","query":"test","documents":["test"],"top_n":1}' 2>/dev/null || echo "000")
+    if [[ "$rerank_code" == "501" ]]; then
+        echo "[FIX] Reranker missing --reranking flag (got 501), restarting..."
+        kill -TERM $(lsof -ti :18926) 2>/dev/null || true
+        sleep 2
+    else
+        echo "[WARN] Reranker server already on port 18926 (health: $rerank_code)"
+    fi
+fi
+if ! lsof -i:18926 >/dev/null 2>&1; then
     echo "[START] Reranker (bge-reranker-v2-m3) -> port 18926..."
     nohup "$LLAMA_BIN" \
         -m "$MODEL_DIR/bge-reranker-v2-m3-q4_k_m.gguf" \
         --port 18926 \
+        --reranking \
         -ngl 99 \
         --host 127.0.0.1 \
         > "$LOG_DIR/reranker_18926.log" 2>&1 &
-    sleep 3
-    if lsof -i:18926 >/dev/null 2>&1; then
-        echo "[OK] Reranker server ready on 18926"
+    sleep 5
+    # Verify reranking endpoint works (not just port open)
+    rerank_code=$(curl -sf -o /dev/null -w "%{http_code}" -X POST "http://127.0.0.1:18926/v1/rerank" \
+        -H "Content-Type: application/json" \
+        -d '{"model":"test","query":"test","documents":["test"],"top_n":1}' 2>/dev/null || echo "000")
+    if [[ "$rerank_code" == "200" ]]; then
+        echo "[OK] Reranker server ready on 18926 (reranking enabled)"
     else
-        echo "[FAIL] Reranker server failed to start, check $LOG_DIR/reranker_18926.log"
+        echo "[FAIL] Reranker server on 18926 but /v1/rerank returned $rerank_code"
+        echo "  Check: tail -20 $LOG_DIR/reranker_18926.log"
         exit 1
     fi
 fi
@@ -80,3 +97,5 @@ echo "  LLM:       http://127.0.0.1:18920  (Gemma 4 26B)"
 echo "  Embedding: http://127.0.0.1:18921  (Qwen3-0.6B)"
 echo "  Reranker:  http://127.0.0.1:18926  (bge-reranker-v2-m3)"
 echo "  Logs:      $LOG_DIR"
+echo ""
+echo "Tip: Use scripts/model_manager.sh for status/health/restart"

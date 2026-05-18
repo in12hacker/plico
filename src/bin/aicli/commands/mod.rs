@@ -97,6 +97,7 @@ fn execute_local_inner(kernel: &AIKernel, args: &[String]) -> ApiResponse {
         Some("permission") | Some("perm") => cmd_permission(kernel, args),
         Some("hook") => cmd_hook(kernel, args),
         Some("cost") => cmd_cost(kernel, args),
+        Some("trace") => cmd_trace(kernel, args),
         Some("system-status") => {
             kernel.handle_api_request(plico::api::semantic::ApiRequest::SystemStatus)
         }
@@ -495,6 +496,54 @@ if let Some(se) = &response.session_ended {
             println!("  Degradations:");
             for d in &hr.degradations {
                 println!("    ⚠ [{}] {} — {}", d.component, d.severity, d.message);
+            }
+        }
+    }
+
+    // Trace output (v52)
+    if let Some(tl) = &response.trace_list {
+        if let Some(spans) = tl.get("spans").and_then(|s| s.as_array()) {
+            if spans.is_empty() {
+                println!("No traces found.");
+            } else {
+                println!("Traces ({} total):", spans.len());
+                for s in spans {
+                    let tool = s.get("tool_name").and_then(|v| v.as_str()).unwrap_or("?");
+                    let agent = s.get("agent_id").and_then(|v| v.as_str()).unwrap_or("?");
+                    let status = s.get("status").and_then(|v| v.as_str()).unwrap_or("?");
+                    let ts = s.get("timestamp").and_then(|v| v.as_str()).unwrap_or("?");
+                    let lat = s.get("latency_ms").and_then(|v| v.as_u64()).unwrap_or(0);
+                    println!("  [{}] {} by {} — {} ({}ms)", ts, tool, agent, status, lat);
+                }
+            }
+        }
+    }
+    if let Some(ts) = &response.trace_show {
+        if let Some(spans) = ts.get("spans").and_then(|s| s.as_array()) {
+            let trace_id = ts.get("trace_id").and_then(|v| v.as_str()).unwrap_or("?");
+            println!("Trace {} ({} spans):", trace_id, spans.len());
+            for s in spans {
+                let tool = s.get("tool_name").and_then(|v| v.as_str()).unwrap_or("?");
+                let agent = s.get("agent_id").and_then(|v| v.as_str()).unwrap_or("?");
+                let status = s.get("status").and_then(|v| v.as_str()).unwrap_or("?");
+                let ts_val = s.get("timestamp").and_then(|v| v.as_str()).unwrap_or("?");
+                let lat = s.get("latency_ms").and_then(|v| v.as_u64()).unwrap_or(0);
+                println!("  [{}] {} by {} — {} ({}ms)", ts_val, tool, agent, status, lat);
+            }
+        }
+    }
+    if let Some(tf) = &response.trace_failures {
+        if let Some(spans) = tf.get("spans").and_then(|s| s.as_array()) {
+            if spans.is_empty() {
+                println!("No failures found.");
+            } else {
+                println!("Failures ({} total):", spans.len());
+                for s in spans {
+                    let tool = s.get("tool_name").and_then(|v| v.as_str()).unwrap_or("?");
+                    let agent = s.get("agent_id").and_then(|v| v.as_str()).unwrap_or("?");
+                    let ts = s.get("timestamp").and_then(|v| v.as_str()).unwrap_or("?");
+                    println!("  [{}] {} by {}", ts, tool, agent);
+                }
             }
         }
     }

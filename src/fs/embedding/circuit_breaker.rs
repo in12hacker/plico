@@ -105,11 +105,16 @@ impl EmbeddingProvider for EmbeddingCircuitBreaker {
                     Ok(result)
                 }
                 Err(e) => {
-                    let count = self.failure_count.fetch_add(1, Ordering::Relaxed) + 1;
-                    if count >= self.failure_threshold {
-                        self.state.store(STATE_OPEN, Ordering::Relaxed);
-                        self.last_failure_ms.store(Self::now_ms(), Ordering::Relaxed);
-                        tracing::warn!("Embedding circuit breaker OPEN after {count} failures: {e}");
+                    // Don't count InputTooLarge as a transient failure — the server is fine,
+                    // the document is just too big. Tripping the breaker would block all
+                    // subsequent (normal-sized) requests for the cooldown period.
+                    if !matches!(e, EmbedError::InputTooLarge(_)) {
+                        let count = self.failure_count.fetch_add(1, Ordering::Relaxed) + 1;
+                        if count >= self.failure_threshold {
+                            self.state.store(STATE_OPEN, Ordering::Relaxed);
+                            self.last_failure_ms.store(Self::now_ms(), Ordering::Relaxed);
+                            tracing::warn!("Embedding circuit breaker OPEN after {count} failures: {e}");
+                        }
                     }
                     Err(e)
                 }
@@ -147,10 +152,12 @@ impl EmbeddingProvider for EmbeddingCircuitBreaker {
                     Ok(results)
                 }
                 Err(e) => {
-                    let count = self.failure_count.fetch_add(1, Ordering::Relaxed) + 1;
-                    if count >= self.failure_threshold {
-                        self.state.store(STATE_OPEN, Ordering::Relaxed);
-                        self.last_failure_ms.store(Self::now_ms(), Ordering::Relaxed);
+                    if !matches!(e, EmbedError::InputTooLarge(_)) {
+                        let count = self.failure_count.fetch_add(1, Ordering::Relaxed) + 1;
+                        if count >= self.failure_threshold {
+                            self.state.store(STATE_OPEN, Ordering::Relaxed);
+                            self.last_failure_ms.store(Self::now_ms(), Ordering::Relaxed);
+                        }
                     }
                     Err(e)
                 }
@@ -314,6 +321,36 @@ mod tests {
         let cb = EmbeddingCircuitBreaker::new(inner, 3, 100);
         assert!(cb.embed_query("test").is_ok());
         assert!(cb.embed_document("test").is_ok());
+    }
+
+    #[test]
+    fn test_circuit_breaker_ignores_input_too_large() {
+        struct TooLargeProvider;
+        impl EmbeddingProvider for TooLargeProvider {
+            fn embed(&self, _text: &str) -> Result<EmbedResult, EmbedError> {
+                Err(EmbedError::InputTooLarge("2855 tokens > 2048 limit".into()))
+            }
+            fn embed_batch(&self, texts: &[&str]) -> Result<Vec<EmbedResult>, EmbedError> {
+                Err(EmbedError::InputTooLarge("batch too large".into()))
+            }
+            fn dimension(&self) -> usize { 384 }
+            fn model_name(&self) -> &str { "too-large" }
+        }
+
+        let inner = Arc::new(TooLargeProvider);
+        let cb = EmbeddingCircuitBreaker::new(inner, 1, 100); // threshold=1, would trip on any real failure
+
+        // InputTooLarge should NOT trip the breaker even with threshold=1
+        for _ in 0..5 {
+            let _ = cb.embed("huge document");
+        }
+        assert_eq!(cb.state(), STATE_CLOSED, "InputTooLarge must not trip circuit breaker");
+
+        // Same for batch
+        for _ in 0..5 {
+            let _ = cb.embed_batch(&["huge document"]);
+        }
+        assert_eq!(cb.state(), STATE_CLOSED, "InputTooLarge in batch must not trip circuit breaker");
     }
 
     #[test]

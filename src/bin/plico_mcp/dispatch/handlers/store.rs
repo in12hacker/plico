@@ -36,6 +36,7 @@ pub(in crate::dispatch) fn dispatch_plico_store(args: &Value, kernel: &AIKernel)
                 tenant_id: None,
                 agent_token: None,
                 intent: None,
+                scope: None,
             };
             format_response(kernel.handle_api_request(req))
         }
@@ -68,7 +69,7 @@ pub(in crate::dispatch) fn dispatch_plico_store_remote(args: &Value, client: &dy
                 .and_then(|t| t.as_array())
                 .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
                 .unwrap_or_default();
-            ApiRequest::Create { api_version: None, content: content.to_string(), content_encoding: Default::default(), tags, agent_id: agent.to_string(), tenant_id: None, agent_token: None, intent: None }
+            ApiRequest::Create { api_version: None, content: content.to_string(), content_encoding: Default::default(), tags, agent_id: agent.to_string(), tenant_id: None, agent_token: None, intent: None, scope: None }
         }
         "read" => {
             let cid = args.get("cid").and_then(|c| c.as_str()).ok_or("read requires cid")?;

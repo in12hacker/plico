@@ -23,22 +23,29 @@ fn transition_err(e: TransitionError) -> std::io::Error {
 }
 
 impl crate::kernel::AIKernel {
-    /// Ensure an agent is registered, creating a minimal registration if needed.
+    /// Ensure an agent is registered, creating a full registration if needed.
     /// This enables lazy agent registration on first API call.
     /// Checks both UUID and name-based resolution before creating a new agent.
+    /// Full registration: scheduler + KG anchor + event + persistence.
     pub(crate) fn ensure_agent_registered(&self, agent_id: &str) {
         if self.scheduler.resolve(agent_id).is_some() {
             return;
         }
-        let _ = self.register_agent_internal(agent_id);
-    }
-
-    /// Internal agent registration (used for lazy registration).
-    fn register_agent_internal(&self, name: &str) -> String {
-        let agent = Agent::new(name.to_string());
+        let agent = Agent::new(agent_id.to_string());
         let id = agent.id().to_string();
         self.scheduler.register(agent);
-        id
+
+        // Create KG Entity anchor for this agent (enables skill linking)
+        use crate::fs::KGNodeType;
+        let props = serde_json::json!({ "kind": "agent", "name": agent_id });
+        let _ = self.kg_add_node(&id, KGNodeType::Entity, props, &id, "default");
+
+        self.event_bus.emit(KernelEvent::AgentStateChanged {
+            agent_id: id.clone(),
+            old_state: "None".into(),
+            new_state: "Waiting".into(),
+        });
+        self.persist_agents();
     }
 
     pub fn register_agent(&self, name: String) -> std::io::Result<String> {
@@ -332,6 +339,7 @@ impl crate::kernel::AIKernel {
             ],
             agent_id,
             None,
+            crate::cas::ObjectScope::default(),
         ).map_err(|e| format!("Failed to store checkpoint: {}", e))?;
 
         tracing::info!(

@@ -112,6 +112,32 @@ def latency_percentiles(latencies_ms: list[float]) -> dict[str, float]:
     }
 
 
+def estimate_tokens(text: str) -> int:
+    """Estimate token count. ~4 chars per token for English, ~2 for CJK."""
+    if not text:
+        return 0
+    # Count CJK characters (roughly 1 token each)
+    cjk = sum(1 for c in text if '\u4e00' <= c <= '\u9fff')
+    remaining = len(text) - cjk
+    return cjk + max(1, remaining // 4)
+
+
+def accuracy_pct(scores: list[int], threshold: int = 4) -> float:
+    """Percentage of LLM-as-judge scores >= threshold (LongMemEval/LoCoMo convention).
+
+    Args:
+        scores: List of integer scores (typically 1-5 from LLM judge).
+        threshold: Minimum score to count as "correct" (default 4).
+
+    Returns:
+        Percentage rounded to 1 decimal, e.g. 72.3.
+    """
+    if not scores:
+        return 0.0
+    correct = sum(1 for s in scores if s >= threshold)
+    return round(correct / len(scores) * 100, 1)
+
+
 def aggregate_category(
     results: list[dict[str, Any]], category_key: str
 ) -> dict[str, dict[str, Any]]:
@@ -124,10 +150,12 @@ def aggregate_category(
         by_cat[cat].append(r)
     summary: dict[str, dict[str, Any]] = {}
     for cat, items in by_cat.items():
+        llm_scores = [r["llm_score"] for r in items if "llm_score" in r]
         summary[cat] = {
             "count": len(items),
             "f1": statistics.mean([r["f1"] for r in items]) if any("f1" in r for r in items) else None,
             "em": statistics.mean([r["em"] for r in items]) if any("em" in r for r in items) else None,
-            "llm_score": statistics.mean([r["llm_score"] for r in items]) if any("llm_score" in r for r in items) else None,
+            "llm_score": statistics.mean(llm_scores) if llm_scores else None,
+            "accuracy_pct": accuracy_pct(llm_scores) if llm_scores else None,
         }
     return summary

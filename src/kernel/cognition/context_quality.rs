@@ -429,6 +429,8 @@ impl ContextQualityEngine {
 mod tests {
     use super::*;
     use std::sync::Arc;
+    use crate::fs::graph::backend::PetgraphBackend;
+    use crate::fs::graph::types::{KGEdge, KGNode, KGNodeType};
 
     fn make_engine() -> (ContextQualityEngine, Arc<CASStorage>, tempfile::TempDir) {
         let dir = tempfile::tempdir().unwrap();
@@ -449,6 +451,7 @@ mod tests {
             created_at: 1000,
             intent: None,
             tenant_id: "default".to_string(),
+            scope: crate::cas::ObjectScope::default(),
         };
         let obj = AIObject::new(text.as_bytes().to_vec(), meta);
         let cid = obj.cid.clone();
@@ -641,5 +644,170 @@ mod tests {
 
         let cid2 = store_text_object(&cas, "test2", &["knowledge"]);
         assert!(!engine.is_temporary(&cid2).await.unwrap());
+    }
+
+    fn make_engine_with_kg() -> (ContextQualityEngine, Arc<CASStorage>, Arc<PetgraphBackend>, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let cas = Arc::new(CASStorage::new(dir.path().join("cas")).unwrap());
+        let embedding = Arc::new(crate::fs::StubEmbeddingProvider::new());
+        let search = Arc::new(crate::fs::search::memory::InMemoryBackend::new());
+        let memory = Arc::new(crate::memory::LayeredMemory::new());
+        let kg = Arc::new(PetgraphBackend::new());
+        let engine = ContextQualityEngine::new(embedding, search, memory, cas.clone())
+            .with_kg(kg.clone() as Arc<dyn KnowledgeGraph>);
+        (engine, cas, kg, dir)
+    }
+
+    #[tokio::test]
+    async fn test_find_superseder_via_kg() {
+        let (engine, cas, kg, _dir) = make_engine_with_kg();
+        let old_cid = store_text_object(&cas, "old version of doc", &["knowledge"]);
+        let new_cid = store_text_object(&cas, "new version of doc", &["knowledge"]);
+
+        // KGNode::new(label, ...) generates random UUID as id.
+        // We need stable IDs matching the CIDs for the edge/query to work.
+        let mut old_node = KGNode::new("old_doc".into(), KGNodeType::Document, "test".into(), "default".into());
+        old_node.id = old_cid.clone();
+        old_node.content_cid = Some(old_cid.clone());
+        let mut new_node = KGNode::new("new_doc".into(), KGNodeType::Document, "test".into(), "default".into());
+        new_node.id = new_cid.clone();
+        new_node.content_cid = Some(new_cid.clone());
+        kg.add_node(old_node).unwrap();
+        kg.add_node(new_node).unwrap();
+        // Supersedes edge: new --Supersedes--> old
+        let edge = KGEdge::new(new_cid.clone(), old_cid.clone(), KGEdgeType::Supersedes, 1.0);
+        kg.add_edge(edge).unwrap();
+
+        // find_superseder(old_cid) should return Some(new_cid)
+        let kg_dyn: Arc<dyn KnowledgeGraph> = kg.clone();
+        let result = engine.find_superseder(&kg_dyn, &old_cid).await.unwrap();
+        assert!(result.is_some(), "expected superseder for old_cid={}", old_cid);
+        assert_eq!(result.unwrap(), new_cid);
+    }
+
+    #[tokio::test]
+    async fn test_find_superseder_no_kg_edge() {
+        let (engine, cas, kg, _dir) = make_engine_with_kg();
+        let cid = store_text_object(&cas, "standalone doc", &["knowledge"]);
+        let mut node = KGNode::new("standalone".into(), KGNodeType::Document, "test".into(), "default".into());
+        node.id = cid.clone();
+        node.content_cid = Some(cid.clone());
+        kg.add_node(node).unwrap();
+
+        let kg_dyn: Arc<dyn KnowledgeGraph> = kg.clone();
+        let result = engine.find_superseder(&kg_dyn, &cid).await.unwrap();
+        assert!(result.is_none());
+    }
+
+    fn add_supersedes_edge(kg: &Arc<PetgraphBackend>, new_cid: &str, old_cid: &str) {
+        let mut old_node = KGNode::new("old".into(), KGNodeType::Document, "test".into(), "default".into());
+        old_node.id = old_cid.to_string();
+        old_node.content_cid = Some(old_cid.to_string());
+        let mut new_node = KGNode::new("new".into(), KGNodeType::Document, "test".into(), "default".into());
+        new_node.id = new_cid.to_string();
+        new_node.content_cid = Some(new_cid.to_string());
+        kg.add_node(old_node).unwrap();
+        kg.add_node(new_node).unwrap();
+        let edge = KGEdge::new(new_cid.to_string(), old_cid.to_string(), KGEdgeType::Supersedes, 1.0);
+        kg.add_edge(edge).unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_identify_removable_with_kg_supersedes() {
+        let (engine, cas, kg, _dir) = make_engine_with_kg();
+        let old_cid = store_text_object(&cas, "outdated information", &["knowledge"]);
+        let new_cid = store_text_object(&cas, "updated information", &["knowledge"]);
+        add_supersedes_edge(&kg, &new_cid, &old_cid);
+
+        // Need >3 items to trigger identify_removable via compress
+        let extra1 = store_text_object(&cas, "extra 1", &["knowledge"]);
+        let extra2 = store_text_object(&cas, "extra 2", &["knowledge"]);
+        let cids = vec![old_cid.clone(), new_cid, extra1, extra2];
+
+        let compressed = engine.compress("agent-1", &cids).await.unwrap();
+        let old_removed = compressed.removed.iter().any(|r| r.cid == old_cid);
+        assert!(old_removed, "old_cid should be removed as superseded");
+    }
+
+    #[tokio::test]
+    async fn test_analyze_stale_info_detected_via_kg() {
+        let (engine, cas, kg, _dir) = make_engine_with_kg();
+        let old_cid = store_text_object(&cas, "stale doc", &["knowledge"]);
+        let new_cid = store_text_object(&cas, "fresh doc", &["knowledge"]);
+        add_supersedes_edge(&kg, &new_cid, &old_cid);
+
+        let quality = engine.analyze("agent-1", &[old_cid]).await.unwrap();
+        let has_stale = quality.issues.iter().any(|i| matches!(i, ContextIssue::ContainsStaleInfo { .. }));
+        assert!(has_stale, "should detect stale info via KG");
+        assert!(quality.breakdown.stale_info > 0);
+    }
+
+    #[tokio::test]
+    async fn test_compress_triggers_generate_summaries() {
+        let (engine, cas, _dir) = make_engine();
+        // Create 6 items where 4 are temporary — after removal, retained=2 < 6/2=3
+        let mut cids = Vec::new();
+        for i in 0..4 {
+            cids.push(store_text_object(&cas, &format!("debug log {}", i), &["debug"]));
+        }
+        cids.push(store_text_object(&cas, "important knowledge A", &["knowledge"]));
+        cids.push(store_text_object(&cas, "important knowledge B", &["knowledge"]));
+
+        let compressed = engine.compress("agent-1", &cids).await.unwrap();
+        // Should have removed at least 4 temporary items
+        assert!(compressed.removed.len() >= 4, "expected >= 4 removed, got {}", compressed.removed.len());
+        // retained < 6/2 = 3 → should generate summaries
+        assert!(compressed.retained_cids.len() < 3, "expected < 3 retained, got {}", compressed.retained_cids.len());
+        // generate_summaries should have been called
+        assert!(!compressed.summary_cids.is_empty(), "expected summary CIDs to be generated");
+    }
+
+    #[tokio::test]
+    async fn test_high_redundancy_issue_detected() {
+        use crate::fs::embedding::{EmbedResult, EmbedError};
+
+        // Create a custom embedding that returns identical vectors for similar text
+        struct RedundantEmbedding;
+        impl crate::fs::embedding::EmbeddingProvider for RedundantEmbedding {
+            fn embed(&self, text: &str) -> Result<EmbedResult, EmbedError> {
+                // Return the same vector for any text containing "duplicate"
+                let mut vec = if text.contains("duplicate") {
+                    vec![1.0, 0.0, 0.0, 0.0]
+                } else {
+                    let mut v = vec![0.0f32; 4];
+                    for (i, b) in text.bytes().enumerate() {
+                        v[i % 4] += b as f32;
+                    }
+                    v
+                };
+                let norm = vec.iter().map(|x| x * x).sum::<f32>().sqrt();
+                if norm > 0.0 { for v in &mut vec { *v /= norm; } }
+                Ok(EmbedResult::new(vec, text.len() as u32 / 4))
+            }
+            fn embed_batch(&self, texts: &[&str]) -> Result<Vec<EmbedResult>, EmbedError> {
+                texts.iter().map(|t| self.embed(t)).collect()
+            }
+            fn dimension(&self) -> usize { 4 }
+            fn model_name(&self) -> &str { "redundant" }
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let cas = Arc::new(CASStorage::new(dir.path().join("cas")).unwrap());
+        let embedding = Arc::new(RedundantEmbedding);
+        let search = Arc::new(crate::fs::search::memory::InMemoryBackend::new());
+        let memory = Arc::new(crate::memory::LayeredMemory::new());
+        let engine = ContextQualityEngine::new(embedding, search, memory, cas.clone());
+
+        // Create items with "duplicate" text to trigger high similarity
+        let mut cids = Vec::new();
+        for i in 0..5 {
+            cids.push(store_text_object(&cas, &format!("duplicate content {}", i), &["knowledge"]));
+        }
+        // Add one unique item
+        cids.push(store_text_object(&cas, "unique content xyz", &["knowledge"]));
+
+        let quality = engine.analyze("agent-1", &cids).await.unwrap();
+        let has_redundancy = quality.issues.iter().any(|i| matches!(i, ContextIssue::HighRedundancy { .. }));
+        assert!(has_redundancy, "should detect high redundancy with identical embeddings");
     }
 }

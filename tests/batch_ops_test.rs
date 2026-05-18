@@ -229,6 +229,7 @@ fn test_batch_query() {
             vec!["rust".to_string(), "programming".to_string()],
             "QueryAgent",
             None,
+            plico::cas::ObjectScope::default()
         )
         .expect("create should succeed");
 
@@ -238,6 +239,7 @@ fn test_batch_query() {
             vec!["python".to_string(), "programming".to_string()],
             "QueryAgent",
             None,
+            plico::cas::ObjectScope::default()
         )
         .expect("create should succeed");
 
@@ -247,6 +249,7 @@ fn test_batch_query() {
             vec!["web".to_string(), "development".to_string()],
             "QueryAgent",
             None,
+            plico::cas::ObjectScope::default()
         )
         .expect("create should succeed");
 

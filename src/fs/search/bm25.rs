@@ -152,4 +152,57 @@ mod tests {
         idx.upsert("doc2", "another document");
         assert_eq!(idx.len(), 2);
     }
+
+    #[test]
+    fn test_benchmark_scenario_lifecycle() {
+        // Simulate memory-lifecycle benchmark: create items, search by substring
+        let idx = Bm25Index::new();
+        for i in 0..20 {
+            let content = format!("Lifecycle item {}: memory architecture benchmark test", i);
+            idx.upsert(&format!("cid-{}", i), &content);
+        }
+
+        for i in 0..20 {
+            let query = format!("Lifecycle item {}", i);
+            let results = idx.search(&query, 5);
+            let expected_cid = format!("cid-{}", i);
+            let found = results.iter().any(|(cid, _)| *cid == expected_cid);
+            assert!(found, "BM25 should find '{}' for query '{}'", expected_cid, query);
+        }
+    }
+
+    #[test]
+    fn test_benchmark_scenario_checkpoint() {
+        // Simulate checkpoint-restore benchmark
+        let idx = Bm25Index::new();
+        for i in 0..10 {
+            let content = format!("Checkpoint-1 item {}: initial knowledge base entry", i);
+            idx.upsert(&format!("cp1-{}", i), &content);
+        }
+        for i in 0..10 {
+            let content = format!("Checkpoint-2 item {}: additional knowledge after session", i);
+            idx.upsert(&format!("cp2-{}", i), &content);
+        }
+
+        for i in 0..10 {
+            let query = format!("Checkpoint-1 item {}", i);
+            let results = idx.search(&query, 5);
+            let expected_cid = format!("cp1-{}", i);
+            let found = results.iter().any(|(cid, _)| *cid == expected_cid);
+            assert!(found, "BM25 should find '{}' for query '{}'", expected_cid, query);
+        }
+    }
+
+    #[test]
+    fn test_benchmark_scenario_retrieval() {
+        // Simulate BEIR retrieval: scientific text with specific terms
+        let idx = Bm25Index::new();
+        idx.upsert("doc-1", "COVID-19 vaccine efficacy in clinical trials");
+        idx.upsert("doc-2", "Machine learning for drug discovery");
+        idx.upsert("doc-3", "Quantum computing advances in 2026");
+
+        let results = idx.search("COVID-19 vaccine", 5);
+        assert!(!results.is_empty(), "BM25 should find results for 'COVID-19 vaccine'");
+        assert_eq!(results[0].0, "doc-1", "Top result should be doc-1");
+    }
 }

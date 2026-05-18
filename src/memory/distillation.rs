@@ -185,6 +185,8 @@ pub fn to_long_term_entry(
         memory_type: distilled.memory_type,
         causal_parent: None,
         supersedes: None,
+            superseded_by: None,
+            deleted_at: None,
     }
 }
 
@@ -223,6 +225,8 @@ mod tests {
             memory_type: mem_type,
             causal_parent: None,
             supersedes: None,
+            superseded_by: None,
+            deleted_at: None,
         }
     }
 

@@ -269,6 +269,7 @@ impl SemanticFS {
                             created_at: obj.meta.created_at,
                             intent: None,
                             tenant_id: obj.meta.tenant_id.clone(),
+                            scope: obj.meta.scope.clone(),
                         };
                         let child_obj = AIObject::new(chunk.text.as_bytes().to_vec(), child_meta);
                         if let Ok(child_cid) = self.cas.put(&child_obj) {
@@ -366,6 +367,7 @@ impl SemanticFS {
         tags: Vec<String>,
         created_by: String,
         intent: Option<String>,
+        scope: crate::cas::ObjectScope,
     ) -> std::io::Result<String> {
         let content_type = if std::str::from_utf8(&content).is_ok() {
             crate::cas::ContentType::Text
@@ -380,6 +382,7 @@ impl SemanticFS {
             created_at: now_ms(),
             intent,
             tenant_id: crate::DEFAULT_TENANT.to_string(),
+            scope,
         };
 
         let obj = AIObject::new(content.clone(), meta.clone());
@@ -434,6 +437,7 @@ impl SemanticFS {
         tags: Vec<String>,
         created_by: String,
         intent: Option<String>,
+        scope: crate::cas::ObjectScope,
         precomputed_embedding: Vec<f32>,
         skip_kg_edges: bool,
     ) -> std::io::Result<String> {
@@ -450,6 +454,7 @@ impl SemanticFS {
             created_at: now_ms(),
             intent,
             tenant_id: crate::DEFAULT_TENANT.to_string(),
+            scope,
         };
 
         let obj = AIObject::new(content.clone(), meta.clone());
@@ -592,6 +597,7 @@ impl SemanticFS {
             created_at: now_ms(),
             intent: old_obj.meta.intent.clone(),
             tenant_id: old_obj.meta.tenant_id.clone(),
+            scope: old_obj.meta.scope.clone(),
         };
 
         let new_obj = AIObject::new(new_content.clone(), new_meta.clone());
@@ -773,13 +779,31 @@ impl SemanticFS {
         let query_emb = self.embedding.embed_query(query).ok().map(|r| r.embedding);
 
         let vector_hits: HashMap<String, SearchHit> = match &query_emb {
-            Some(emb) => self
-                .search_index.search(emb, limit * 10, &filter)
-                .into_iter().map(|hit| (hit.cid.clone(), hit)).collect(),
-            None => HashMap::new(),
+            Some(emb) => {
+                let hits = self.search_index.search(emb, limit * 10, &filter);
+                tracing::debug!(
+                    query = %crate::util::safe_truncate(query, 50),
+                    vector_count = hits.len(),
+                    "Search pipeline: vector search returned results"
+                );
+                hits.into_iter().map(|hit| (hit.cid.clone(), hit)).collect()
+            }
+            None => {
+                tracing::debug!(
+                    query = %crate::util::safe_truncate(query, 50),
+                    "Search pipeline: embedding failed, no vector results"
+                );
+                HashMap::new()
+            }
         };
 
         let bm25_hits: Vec<(String, f32)> = self.bm25_index.search(query, 1000);
+        tracing::debug!(
+            query = %crate::util::safe_truncate(query, 50),
+            bm25_count = bm25_hits.len(),
+            bm25_top3 = ?bm25_hits.iter().take(3).map(|(cid, score)| (crate::util::safe_truncate(cid, 8), score)).collect::<Vec<_>>(),
+            "Search pipeline: BM25 search results"
+        );
 
         if vector_hits.is_empty() && bm25_hits.is_empty() {
             return self.search_by_tags_with_filter(query, &filter);
@@ -821,7 +845,13 @@ impl SemanticFS {
             } else {
                 let obj = match self.cas.get_raw(cid) {
                     Ok(o) => o,
-                    Err(_) => continue,
+                    Err(_) => {
+                        tracing::debug!(
+                            cid = %crate::util::safe_truncate(cid, 8),
+                            "Search pipeline: BM25 hit not in CAS, skipping"
+                        );
+                        continue;
+                    }
                 };
                 let meta_for_filter = SearchIndexMeta {
                     cid: cid.clone(),
@@ -833,6 +863,12 @@ impl SemanticFS {
                 };
                 if filter.matches(&meta_for_filter) {
                     rrf_scores.insert(cid.clone(), (rrf, 1usize));
+                } else {
+                    tracing::debug!(
+                        cid = %crate::util::safe_truncate(cid, 8),
+                        tags = ?obj.meta.tags,
+                        "Search pipeline: BM25 hit rejected by filter"
+                    );
                 }
             }
         }
@@ -874,11 +910,44 @@ impl SemanticFS {
             }
         }
 
+        // Phase 2.5: Causal-aware boost — if two candidates have a Causes edge in KG,
+        // boost both to preserve cause-effect chains in results.
+        if let Some(ref kg) = self.knowledge_graph {
+            let mut sorted_cids: Vec<(&String, &(f32, usize))> = rrf_scores.iter().collect();
+            sorted_cids.sort_by(|a, b| b.1.0.partial_cmp(&a.1.0).unwrap_or(std::cmp::Ordering::Equal));
+            let top_cids: Vec<String> = sorted_cids.iter()
+                .take(limit * 2)
+                .map(|(cid, _)| (*cid).clone())
+                .collect();
+            let causal_boost = 0.1;
+            for cid in &top_cids {
+                if let Ok(neighbors) = kg.get_neighbors(cid, Some(KGEdgeType::Causes), 1) {
+                    for (node, _edge) in &neighbors {
+                        if top_cids.contains(&node.id) {
+                            if let Some((score, _)) = rrf_scores.get_mut(cid) {
+                                *score += causal_boost;
+                            }
+                            if let Some((score, _)) = rrf_scores.get_mut(&node.id) {
+                                *score += causal_boost;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         let mut sorted: Vec<(String, f32)> = rrf_scores
             .into_iter()
             .map(|(cid, (score, _))| (cid, score))
             .collect();
         sorted.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        tracing::debug!(
+            query = %crate::util::safe_truncate(query, 50),
+            rrf_count = sorted.len(),
+            rrf_top5 = ?sorted.iter().take(5).map(|(cid, score)| (crate::util::safe_truncate(cid, 8), format!("{:.4}", score))).collect::<Vec<_>>(),
+            "Search pipeline: RRF fusion complete"
+        );
 
         // Reranker stage: if available, apply cross-encoder reranking on top-N RRF candidates
         if let Some(ref reranker) = self.reranker {
@@ -1345,12 +1414,20 @@ impl SemanticFS {
             self.bm25_index.upsert(cid, &text);
         }
 
+        // Truncate to ~1500 tokens (6000 chars) to avoid InputTooLarge from embedding server.
+        // Most embedding models have 512-2048 token context; 6000 chars is conservative.
+        let embed_text: &str = if text.len() > 6000 {
+            crate::util::safe_truncate(&text, 6000)
+        } else {
+            &text
+        };
+
         let is_real_embedding;
-        let embedding = if text.trim().is_empty() {
+        let embedding = if embed_text.trim().is_empty() {
             is_real_embedding = false;
             vec![0.0f32; self.embedding.dimension()]
         } else {
-            match self.embedding.embed_document(&text) {
+            match self.embedding.embed_document(embed_text) {
                 Ok(result) => {
                     is_real_embedding = true;
                     if let Some(ledger) = crate::kernel::ops::cost_ledger::get_global_cost_ledger() {

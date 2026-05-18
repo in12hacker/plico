@@ -336,6 +336,7 @@ fn test_prefetch_overhead() {
             vec!["test".to_string()],
             &agent_id,
             None,
+            plico::cas::ObjectScope::default()
         ).expect("should create object");
         cids.push(cid);
     }
@@ -437,6 +438,7 @@ fn test_end_to_end_scenario_with_metrics() {
         vec!["auth".to_string(), "documentation".to_string()],
         &agent_id,
         Some("auth_readme.txt".to_string()),
+        plico::cas::ObjectScope::default()
     ).expect("should create object");
     tool_calls += 1;
 

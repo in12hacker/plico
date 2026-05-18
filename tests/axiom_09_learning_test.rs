@@ -120,7 +120,8 @@ fn axiom9_growth_report_after_session() {
         tenant_id: None,
         agent_token: None,
         intent: None,
-    });
+            scope: None,
+});
 
     let end_resp = kernel.handle_api_request(ApiRequest::EndSession {
         agent_id: agent_id.clone(),

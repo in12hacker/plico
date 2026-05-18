@@ -46,6 +46,8 @@ impl ContextSnapshot {
             memory_type: crate::memory::layered::MemoryType::Episodic,
             causal_parent: None,
             supersedes: None,
+            superseded_by: None,
+            deleted_at: None,
         }
     }
 

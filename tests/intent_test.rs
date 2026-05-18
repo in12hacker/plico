@@ -116,6 +116,8 @@ fn test_procedural_memory_roundtrip() {
         memory_type: plico::memory::MemoryType::default(),
         causal_parent: None,
         supersedes: None,
+        deleted_at: None,
+        superseded_by: None,
     };
 
     memory.store(entry);

@@ -364,6 +364,7 @@ mod tests {
                 tenant_id: None,
                 agent_token: None,
                 intent: None,
+                scope: None,
             },
             ApiRequest::Create {
                 api_version: None,
@@ -374,6 +375,7 @@ mod tests {
                 tenant_id: None,
                 agent_token: None,
                 intent: None,
+                scope: None,
             },
         ];
 

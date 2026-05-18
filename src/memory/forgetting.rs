@@ -202,6 +202,8 @@ mod tests {
             memory_type: mem_type,
             causal_parent: None,
             supersedes: None,
+            superseded_by: None,
+            deleted_at: None,
         }
     }
 

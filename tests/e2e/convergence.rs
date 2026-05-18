@@ -133,6 +133,7 @@ mod tests {
             vec!["auth".to_string(), "login".to_string(), "bug".to_string()],
             &agent_id,
             None,
+            plico::cas::ObjectScope::default()
         ).expect("create auth doc failed");
 
         kernel.semantic_create(
@@ -140,6 +141,7 @@ mod tests {
             vec!["deploy".to_string(), "api".to_string(), "production".to_string()],
             &agent_id,
             None,
+            plico::cas::ObjectScope::default()
         ).expect("create deploy doc failed");
 
         // Add KG nodes

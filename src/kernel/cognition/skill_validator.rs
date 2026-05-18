@@ -215,7 +215,16 @@ impl SkillValidator {
             issues.push("Code skill has empty signature".to_string());
         }
 
-        // TODO: 尝试编译/验证WASM模块
+        // Try to compile WASM bytecode if runtime is available
+        if !skill.wasm_bytes.is_empty() {
+            if let Ok(runtime) = super::WasmRuntime::new() {
+                if runtime.is_available() {
+                    if let Err(super::CognitiveError::WasmInitFailed(msg)) = runtime.compile_only(&skill.wasm_bytes) {
+                        issues.push(format!("WASM compilation failed: {}", msg));
+                    }
+                }
+            }
+        }
 
         Ok(ValidationResult {
             passed: issues.is_empty(),
@@ -432,5 +441,300 @@ mod tests {
         let r2 = validator.validate(&many_ops).await.unwrap();
         assert!(r2.test_pass_rate > r1.test_pass_rate,
             "more ops should yield higher pass rate: {} vs {}", r2.test_pass_rate, r1.test_pass_rate);
+    }
+
+    // --- Config skill validation ---
+
+    #[tokio::test]
+    async fn validate_config_skill_passes() {
+        let validator = SkillValidator::new();
+        let skill = Skill::Config(crate::kernel::cognition::ConfigSkill {
+            id: "c1".into(),
+            name: "Echo".into(),
+            description: "echoes input".into(),
+            tool_chain: vec![crate::kernel::cognition::ToolCallStep {
+                step_id: "s1".into(),
+                tool_name: "echo".into(),
+                parameters: serde_json::json!({}),
+                output_as: "result".into(),
+            }],
+            parameter_mappings: vec![],
+            conditional_branches: vec![],
+        });
+        let result = validator.validate_skill(&skill).await.unwrap();
+        assert!(result.passed);
+        assert!(result.issues.is_empty());
+    }
+
+    #[tokio::test]
+    async fn validate_config_skill_rejects_empty_tool_chain() {
+        let validator = SkillValidator::new();
+        let skill = Skill::Config(crate::kernel::cognition::ConfigSkill {
+            id: "c1".into(),
+            name: "Empty".into(),
+            description: "no steps".into(),
+            tool_chain: vec![],
+            parameter_mappings: vec![],
+            conditional_branches: vec![],
+        });
+        let result = validator.validate_skill(&skill).await.unwrap();
+        assert!(!result.passed);
+        assert!(result.issues.iter().any(|i| i.contains("empty tool chain")));
+    }
+
+    #[tokio::test]
+    async fn validate_config_skill_rejects_empty_step_id() {
+        let validator = SkillValidator::new();
+        let skill = Skill::Config(crate::kernel::cognition::ConfigSkill {
+            id: "c1".into(),
+            name: "Bad".into(),
+            description: "step with no id".into(),
+            tool_chain: vec![crate::kernel::cognition::ToolCallStep {
+                step_id: "".into(),
+                tool_name: "echo".into(),
+                parameters: serde_json::json!({}),
+                output_as: "r".into(),
+            }],
+            parameter_mappings: vec![],
+            conditional_branches: vec![],
+        });
+        let result = validator.validate_skill(&skill).await.unwrap();
+        assert!(!result.passed);
+        assert!(result.issues.iter().any(|i| i.contains("empty step ID")));
+    }
+
+    // --- Code skill validation ---
+
+    #[tokio::test]
+    async fn validate_code_skill_rejects_empty_wasm_bytes() {
+        let validator = SkillValidator::new();
+        let skill = Skill::Code(crate::kernel::cognition::CodeSkill {
+            id: "c1".into(),
+            name: "Empty".into(),
+            description: "no wasm".into(),
+            wasm_bytes: vec![],
+            signature: crate::kernel::cognition::FunctionSignature {
+                inputs: vec![],
+                outputs: vec![],
+            },
+            resource_limits: crate::kernel::cognition::ResourceLimits::default(),
+        });
+        let result = validator.validate_skill(&skill).await.unwrap();
+        assert!(!result.passed);
+        assert!(result.issues.iter().any(|i| i.contains("empty WASM bytes")));
+    }
+
+    #[tokio::test]
+    async fn validate_code_skill_rejects_empty_signature() {
+        let validator = SkillValidator::new();
+        let skill = Skill::Code(crate::kernel::cognition::CodeSkill {
+            id: "c1".into(),
+            name: "NoSig".into(),
+            description: "empty signature".into(),
+            wasm_bytes: vec![0x00, 0x61, 0x73, 0x6d], // valid magic bytes
+            signature: crate::kernel::cognition::FunctionSignature {
+                inputs: vec![],
+                outputs: vec![],
+            },
+            resource_limits: crate::kernel::cognition::ResourceLimits::default(),
+        });
+        let result = validator.validate_skill(&skill).await.unwrap();
+        assert!(!result.passed);
+        assert!(result.issues.iter().any(|i| i.contains("empty signature")));
+    }
+
+    // --- Knowledge item types ---
+
+    #[tokio::test]
+    async fn validate_knowledge_checklist_passes() {
+        let validator = SkillValidator::new();
+        let skill = Skill::Knowledge(KnowledgeSkill {
+            id: "k1".into(),
+            name: "Checklist Skill".into(),
+            description: "has checklist".into(),
+            trigger_conditions: vec![],
+            knowledge: vec![KnowledgeItem::Checklist {
+                items: vec!["step 1".into(), "step 2".into()],
+            }],
+            sources: vec![],
+            validation: ValidationStatus::Pending,
+            usage_stats: SkillUsageStats::default(),
+        });
+        let result = validator.validate_skill(&skill).await.unwrap();
+        assert!(result.passed);
+    }
+
+    #[tokio::test]
+    async fn validate_knowledge_checklist_rejects_empty() {
+        let validator = SkillValidator::new();
+        let skill = Skill::Knowledge(KnowledgeSkill {
+            id: "k1".into(),
+            name: "Empty Checklist".into(),
+            description: "empty".into(),
+            trigger_conditions: vec![],
+            knowledge: vec![KnowledgeItem::Checklist { items: vec![] }],
+            sources: vec![],
+            validation: ValidationStatus::Pending,
+            usage_stats: SkillUsageStats::default(),
+        });
+        let result = validator.validate_skill(&skill).await.unwrap();
+        assert!(!result.passed);
+        assert!(result.issues.iter().any(|i| i.contains("Checklist 0 is empty")));
+    }
+
+    #[tokio::test]
+    async fn validate_knowledge_lesson_passes() {
+        let validator = SkillValidator::new();
+        let skill = Skill::Knowledge(KnowledgeSkill {
+            id: "k1".into(),
+            name: "Lesson Skill".into(),
+            description: "has lesson".into(),
+            trigger_conditions: vec![],
+            knowledge: vec![KnowledgeItem::Lesson {
+                situation: "when X happens".into(),
+                insight: "do Y".into(),
+            }],
+            sources: vec![],
+            validation: ValidationStatus::Pending,
+            usage_stats: SkillUsageStats::default(),
+        });
+        let result = validator.validate_skill(&skill).await.unwrap();
+        assert!(result.passed);
+    }
+
+    #[tokio::test]
+    async fn validate_knowledge_lesson_rejects_empty_situation() {
+        let validator = SkillValidator::new();
+        let skill = Skill::Knowledge(KnowledgeSkill {
+            id: "k1".into(),
+            name: "Bad Lesson".into(),
+            description: "empty situation".into(),
+            trigger_conditions: vec![],
+            knowledge: vec![KnowledgeItem::Lesson {
+                situation: "".into(),
+                insight: "do Y".into(),
+            }],
+            sources: vec![],
+            validation: ValidationStatus::Pending,
+            usage_stats: SkillUsageStats::default(),
+        });
+        let result = validator.validate_skill(&skill).await.unwrap();
+        assert!(!result.passed);
+        assert!(result.issues.iter().any(|i| i.contains("empty situation")));
+    }
+
+    #[tokio::test]
+    async fn validate_knowledge_warning_passes() {
+        let validator = SkillValidator::new();
+        let skill = Skill::Knowledge(KnowledgeSkill {
+            id: "k1".into(),
+            name: "Warning Skill".into(),
+            description: "has warning".into(),
+            trigger_conditions: vec![],
+            knowledge: vec![KnowledgeItem::Warning {
+                pattern: "doing X".into(),
+                consequence: "leads to Y".into(),
+            }],
+            sources: vec![],
+            validation: ValidationStatus::Pending,
+            usage_stats: SkillUsageStats::default(),
+        });
+        let result = validator.validate_skill(&skill).await.unwrap();
+        assert!(result.passed);
+    }
+
+    #[tokio::test]
+    async fn validate_knowledge_warning_rejects_empty_consequence() {
+        let validator = SkillValidator::new();
+        let skill = Skill::Knowledge(KnowledgeSkill {
+            id: "k1".into(),
+            name: "Bad Warning".into(),
+            description: "empty consequence".into(),
+            trigger_conditions: vec![],
+            knowledge: vec![KnowledgeItem::Warning {
+                pattern: "doing X".into(),
+                consequence: "".into(),
+            }],
+            sources: vec![],
+            validation: ValidationStatus::Pending,
+            usage_stats: SkillUsageStats::default(),
+        });
+        let result = validator.validate_skill(&skill).await.unwrap();
+        assert!(!result.passed);
+        assert!(result.issues.iter().any(|i| i.contains("empty consequence")));
+    }
+
+    // --- Config/Code conflict detection ---
+
+    #[tokio::test]
+    async fn conflict_detection_finds_config_name_conflict() {
+        let validator = SkillValidator::new();
+        let candidate = SkillCandidate {
+            id: "c1".into(),
+            name: "My Config".into(),
+            description: "new config skill".into(),
+            skill_type: SkillType::Config,
+            source_operations: vec!["op1".into()],
+            confidence: 0.8,
+        };
+        let existing = Skill::Config(crate::kernel::cognition::ConfigSkill {
+            id: "e1".into(),
+            name: "My Config".into(),
+            description: "old config skill".into(),
+            tool_chain: vec![],
+            parameter_mappings: vec![],
+            conditional_branches: vec![],
+        });
+        let result = validator.validate_with_conflict_check(&candidate, &[&existing]).await.unwrap();
+        assert!(!result.passed);
+        assert!(result.issues.iter().any(|i| i.contains("Name conflict")));
+    }
+
+    #[tokio::test]
+    async fn conflict_detection_finds_code_name_conflict() {
+        let validator = SkillValidator::new();
+        let candidate = SkillCandidate {
+            id: "c1".into(),
+            name: "My Code".into(),
+            description: "new code skill".into(),
+            skill_type: SkillType::Code,
+            source_operations: vec!["op1".into()],
+            confidence: 0.8,
+        };
+        let existing = Skill::Code(crate::kernel::cognition::CodeSkill {
+            id: "e1".into(),
+            name: "My Code".into(),
+            description: "old code skill".into(),
+            wasm_bytes: vec![],
+            signature: crate::kernel::cognition::FunctionSignature { inputs: vec![], outputs: vec![] },
+            resource_limits: crate::kernel::cognition::ResourceLimits::default(),
+        });
+        let result = validator.validate_with_conflict_check(&candidate, &[&existing]).await.unwrap();
+        assert!(!result.passed);
+        assert!(result.issues.iter().any(|i| i.contains("Name conflict")));
+    }
+
+    #[tokio::test]
+    async fn conflict_detection_mixed_type_no_false_positive() {
+        let validator = SkillValidator::new();
+        let candidate = SkillCandidate {
+            id: "c1".into(),
+            name: "Search Skill".into(),
+            description: "searches files".into(),
+            skill_type: SkillType::Knowledge,
+            source_operations: vec!["op1".into()],
+            confidence: 0.8,
+        };
+        let existing = Skill::Config(crate::kernel::cognition::ConfigSkill {
+            id: "e1".into(),
+            name: "Deploy Skill".into(),
+            description: "deploys services".into(),
+            tool_chain: vec![],
+            parameter_mappings: vec![],
+            conditional_branches: vec![],
+        });
+        let result = validator.validate_with_conflict_check(&candidate, &[&existing]).await.unwrap();
+        assert!(result.passed);
+        assert!(!result.issues.iter().any(|i| i.contains("conflict") || i.contains("overlap")));
     }
 }

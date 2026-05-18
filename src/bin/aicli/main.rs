@@ -337,7 +337,7 @@ fn build_remote_request(args: &[String]) -> Option<ApiRequest> {
                     .or_else(|| args.get(1).cloned().filter(|a| !a.starts_with("--")))
                     .unwrap_or_default();
                 let tags = commands::extract_tags(args, "--tags");
-                Some(ApiRequest::Create { api_version: None, content, content_encoding: Default::default(), tags, agent_id: agent_id(), tenant_id: None, agent_token: None, intent: commands::extract_arg(args, "--intent") })
+                Some(ApiRequest::Create { api_version: None, content, content_encoding: Default::default(), tags, agent_id: agent_id(), tenant_id: None, agent_token: None, intent: commands::extract_arg(args, "--intent"), scope: None })
             }
         }
         Some("read") => {
@@ -737,6 +737,29 @@ fn build_remote_request(args: &[String]) -> Option<ApiRequest> {
                 Some("anomaly") => {
                     let agent_id = commands::extract_arg(args, "--agent").unwrap_or_default();
                     Some(ApiRequest::CostAnomalyCheck { agent_id })
+                }
+                _ => None,
+            }
+        }
+        Some("trace") => {
+            match args.get(1).map(|s| s.as_str()) {
+                Some("list") => {
+                    let agent_id = commands::extract_arg(args, "--agent");
+                    let since = commands::extract_arg(args, "--since");
+                    let until = commands::extract_arg(args, "--until");
+                    let tool_name = commands::extract_arg(args, "--tool");
+                    let status = commands::extract_arg(args, "--status");
+                    let limit = commands::extract_arg(args, "--limit").and_then(|s| s.parse().ok());
+                    Some(ApiRequest::TraceList { agent_id, since, until, tool_name, status, limit })
+                }
+                Some("show") => {
+                    let trace_id = args.get(2).cloned().unwrap_or_default();
+                    Some(ApiRequest::TraceShow { trace_id })
+                }
+                Some("failures") => {
+                    let agent_id = commands::extract_arg(args, "--agent");
+                    let since = commands::extract_arg(args, "--since");
+                    Some(ApiRequest::TraceFailures { agent_id, since })
                 }
                 _ => None,
             }

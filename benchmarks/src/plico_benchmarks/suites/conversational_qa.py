@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import json
+import os
+import random
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
-from plico_benchmarks.core.metrics import bleu1, compute_statistics, token_level_f1
+from plico_benchmarks.core.metrics import accuracy_pct, bleu1, compute_statistics, token_level_f1
 from plico_benchmarks.core.reporter import Report
 from plico_benchmarks.datasets.locomo import LoCoMoDataset
 from plico_benchmarks.datasets.longmemeval import LongMemEvalDataset
@@ -27,8 +30,9 @@ Rules:
 - Be concise — maximum 15 words
 - Do NOT start with "Based on" or "The text says"
 
-Thought: Let me find the relevant information in the context.
-Answer:"""
+<|think|>
+Let me find the relevant information in the context.
+</think>"""
 
 # Intent-specific reader prompts (incorporating HippoRAG CoT + 0gmem techniques)
 READER_PROMPT_FACTUAL = """Answer the factual question using ONLY the context below.
@@ -47,8 +51,9 @@ Rules:
 - For numbers: output ONLY the number
 - For yes/no questions: start with "Yes" or "No"
 
-Thought: Let me find the specific fact asked about.
-Answer:"""
+<|think|>
+Let me find the specific fact asked about.
+</think>"""
 
 READER_PROMPT_MULTI_HOP = """Answer the question by connecting information from MULTIPLE parts of the context.
 
@@ -70,8 +75,9 @@ Rules:
 - If the context has partial info, give the best answer you can infer
 - Only say "I don't know" if the entities in the question are not mentioned at all
 
-Thought: Let me connect the relevant pieces of information.
-Answer:"""
+<|think|>
+Let me connect the relevant pieces of information.
+</think>"""
 
 READER_PROMPT_TEMPORAL = """Answer the time-related question using ONLY the context below.
 
@@ -95,8 +101,9 @@ Rules:
 - Only say "I don't know" if no date information exists at all
 - Do NOT use relative words like "yesterday" or "last week" in your final answer
 
-Thought: Let me find the event and its session date in the context.
-Answer:"""
+<|think|>
+Let me find the event and its session date in the context.
+</think>"""
 
 READER_PROMPT_ADVERSARIAL = """Answer the question using ONLY the context below. The question may contain false premises.
 
@@ -117,8 +124,9 @@ Rules:
 - If the question asks about something not in the context, say "I don't know"
 - Be concise — maximum 15 words
 
-Thought: Let me verify the question's assumptions against the context.
-Answer:"""
+<|think|>
+Let me verify the question's assumptions against the context.
+</think>"""
 
 CATEGORY_PROMPTS = {
     "single_hop": READER_PROMPT_FACTUAL,
@@ -131,14 +139,33 @@ CATEGORY_PROMPTS = {
 
 
 def _extract_answer(raw: str) -> str:
-    """Extract the final answer from CoT-style 'Thought: ... Answer: ...' response."""
-    # Try to find "Answer:" marker (case-insensitive)
-    lower = raw.lower()
-    idx = lower.rfind("answer:")
-    if idx >= 0:
-        return raw[idx + 7:].strip()
-    # If no marker, return the raw response (trimmed)
-    return raw.strip()
+    """Extract the final answer from CoT-style response.
+
+    Handles: Gemma 4 `</think>` tag, "Answer:" marker, "Final Answer:" marker,
+    "A:" marker, JSON-formatted responses, and plain text fallback.
+    """
+    if not raw or not raw.strip():
+        return ""
+    stripped = raw.strip()
+    # Try JSON parse — LLM may return {"answer": "..."} or just "..."
+    if stripped.startswith("{"):
+        try:
+            obj = json.loads(stripped)
+            for key in ("answer", "final_answer", "result", "response"):
+                if key in obj:
+                    return str(obj[key]).strip()
+        except (json.JSONDecodeError, ValueError):
+            pass
+    # Gemma 4 native thinking: extract text after </think>
+    think_close = stripped.lower().rfind("</think>")
+    if think_close >= 0:
+        return stripped[think_close + len("</think>"):].strip()
+    # Try markers in priority order (longest first to avoid "A:" matching inside "Answer:")
+    for marker in ("final answer:", "answer:", "a:"):
+        idx = stripped.lower().rfind(marker)
+        if idx >= 0:
+            return stripped[idx + len(marker):].strip()
+    return stripped
 
 
 # Relative time expressions that should never appear in temporal answers
@@ -203,6 +230,11 @@ class ConversationalQASuite(SuiteBase):
         locomo_budget = max_total // 2
         longmemeval_budget = max_total - locomo_budget
 
+        # Deterministic random sampling if seed provided
+        self._seed = os.environ.get("PLICO_SEED")
+        if self._seed is not None:
+            random.seed(int(self._seed))
+
         # Phase 1: Ingest all data
         self._ingest_locomo(locomo_budget)
         self._ingest_longmemeval(longmemeval_budget)
@@ -225,39 +257,76 @@ class ConversationalQASuite(SuiteBase):
             cat = r.get("category", "unknown")
             by_cat[cat].append(r)
 
+        # Accuracy threshold: LLM score >= 4 means "correct" (on 1-5 scale)
+        ACCURACY_THRESHOLD = 4
+
         per_category = {}
         for cat, items in by_cat.items():
             f1s = [r["f1"] for r in items if r.get("f1") is not None]
             bleus = [r["bleu1"] for r in items if r.get("bleu1") is not None]
             llms = [r.get("llm_score", 0) for r in items]
+            correct = sum(1 for s in llms if s >= ACCURACY_THRESHOLD)
             per_category[cat] = {
                 "count": len(items),
                 "f1": sum(f1s) / len(f1s) if f1s else 0.0,
                 "bleu1": sum(bleus) / len(bleus) if bleus else 0.0,
                 "llm_score": sum(llms) / len(llms) if llms else 0.0,
+                "accuracy_pct": round(correct / len(items) * 100, 1) if items else 0.0,
                 "context_hit_rate": sum(1 for r in items if r.get("has_context")) / len(items) if items else 0.0,
             }
 
         all_f1 = [r["f1"] for r in raw if r.get("f1") is not None]
+        all_bleus = [r["bleu1"] for r in raw if r.get("bleu1") is not None]
+        all_llms = [r.get("llm_score", 0) for r in raw]
         overall = {
             "count": len(raw),
             "f1": sum(all_f1) / len(all_f1) if all_f1 else 0.0,
-            "bleu1": sum(r["bleu1"] for r in raw if r.get("bleu1") is not None) / len(raw) if raw else 0.0,
-            "llm_score": sum(r.get("llm_score", 0) for r in raw) / len(raw) if raw else 0.0,
+            "bleu1": sum(all_bleus) / len(all_bleus) if all_bleus else 0.0,
+            "llm_score": sum(all_llms) / len(all_llms) if all_llms else 0.0,
+            "accuracy_pct": accuracy_pct(all_llms),
             "context_hit_rate": sum(1 for r in raw if r.get("has_context")) / len(raw) if raw else 0.0,
             **compute_statistics(all_f1),
         }
-        return {"overall": overall, "per_category": per_category}
+
+        # RAGAS evaluation on 20-item sample
+        ragas_sample = random.sample(raw, min(20, len(raw))) if raw else []
+        ragas_scores = {"faithfulness": [], "answer_relevancy": [], "context_precision": [], "context_recall": []}
+        for item in ragas_sample:
+            ctx = item.get("context", "")
+            if not ctx:
+                continue
+            scores = self.judge.evaluate_ragas(
+                question=item["question"],
+                answer=item["predicted"],
+                context=ctx,
+                ground_truth=item["expected"],
+            )
+            for k, v in scores.items():
+                ragas_scores[k].append(v)
+        ragas_metrics = {}
+        for k, vals in ragas_scores.items():
+            ragas_metrics[k] = round(sum(vals) / len(vals), 3) if vals else 0.0
+
+        return {"overall": overall, "per_category": per_category, "ragas": ragas_metrics}
 
     def report(self, metrics: dict[str, Any]) -> Report:
+        from plico_benchmarks.core.competitors import get_memory_competitors
+
+        # Load competitor baselines for comparison
+        competitors = {
+            "longmemeval": get_memory_competitors("longmemeval"),
+            "locomo": get_memory_competitors("locomo"),
+        }
+
         report_data = {
             "metadata": {
                 "suite": self.name,
-                "version": "v44",
+                "version": os.environ.get("PLICO_BENCH_VERSION", "dev"),
                 "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ"),
             },
             "config": {"samples": self.samples},
             "metrics": metrics,
+            "competitors": competitors,
             "costs": {},
             "raw_results": self._raw_results,
         }
@@ -296,6 +365,9 @@ class ConversationalQASuite(SuiteBase):
         if not self.locomo or budget <= 0:
             return []
         conversations = self.locomo if isinstance(self.locomo, list) else self.locomo.get("data", [])
+        # Random sampling if seed is set
+        if getattr(self, '_seed', None) is not None:
+            random.shuffle(conversations)
         results = []
         q_count = 0
         for conv in conversations:
@@ -336,6 +408,7 @@ class ConversationalQASuite(SuiteBase):
                     "question": question,
                     "expected": answer,
                     "predicted": pred,
+                    "context": context,
                     "f1": token_level_f1(pred, answer),
                     "bleu1": bleu1(pred, answer),
                     "llm_score": score,
@@ -366,6 +439,9 @@ class ConversationalQASuite(SuiteBase):
         if not self.longmemeval or budget <= 0:
             return []
         data = self.longmemeval if isinstance(self.longmemeval, list) else []
+        # Random sampling if seed is set
+        if getattr(self, '_seed', None) is not None:
+            random.shuffle(data)
         results = []
         for item in data[:budget]:
             question = str(item.get("question", ""))
@@ -388,6 +464,7 @@ class ConversationalQASuite(SuiteBase):
                 "question": question,
                 "expected": answer,
                 "predicted": pred,
+                "context": context,
                 "f1": token_level_f1(pred, answer),
                 "bleu1": bleu1(pred, answer),
                 "llm_score": score,

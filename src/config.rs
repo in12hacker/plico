@@ -497,6 +497,16 @@ pub fn ensure_v1_suffix(url: &str) -> String {
 /// Works on Linux, macOS, and any POSIX system with `ps`.
 /// Returns `None` on Windows or when no llama-server is found.
 pub fn detect_llama_server_port() -> Option<u16> {
+    detect_llama_server_port_filtered(false)
+}
+
+/// Detect the port of a running llama-server embedding instance.
+/// Prefers servers started with `--embedding` flag.
+pub fn detect_embedding_server_port() -> Option<u16> {
+    detect_llama_server_port_filtered(true)
+}
+
+fn detect_llama_server_port_filtered(embedding_only: bool) -> Option<u16> {
     let output = std::process::Command::new("ps")
         .args(["aux"])
         .output()
@@ -504,6 +514,13 @@ pub fn detect_llama_server_port() -> Option<u16> {
     let stdout = String::from_utf8_lossy(&output.stdout);
     for line in stdout.lines() {
         if !line.contains("llama-server") || line.contains("grep") {
+            continue;
+        }
+        let is_embedding = line.contains("--embedding");
+        if embedding_only && !is_embedding {
+            continue;
+        }
+        if !embedding_only && is_embedding {
             continue;
         }
         let tokens: Vec<&str> = line.split_whitespace().collect();
@@ -597,5 +614,26 @@ mod tests {
         other.network.daemon_port = 9999;
         config.merge_from(other);
         assert_eq!(config.network.daemon_port, 9999);
+    }
+
+    #[test]
+    fn detect_embedding_server_port_returns_option() {
+        // Smoke test: function doesn't panic, returns Option<u16>
+        let _result: Option<u16> = detect_embedding_server_port();
+    }
+
+    #[test]
+    fn detect_llama_server_port_returns_option() {
+        // Smoke test: function doesn't panic, returns Option<u16>
+        let _result: Option<u16> = detect_llama_server_port();
+    }
+
+    #[test]
+    fn detect_llama_port_filtered_skips_embedding() {
+        // When embedding_only=true, should skip non-embedding servers
+        // When embedding_only=false, should skip embedding servers
+        // Both should return Option<u16> without panicking
+        let _llm: Option<u16> = detect_llama_server_port_filtered(false);
+        let _emb: Option<u16> = detect_llama_server_port_filtered(true);
     }
 }

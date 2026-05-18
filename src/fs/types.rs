@@ -316,6 +316,7 @@ mod tests {
                 created_at: 500,
                 intent: None,
                 tenant_id: "default".into(),
+                scope: crate::cas::ObjectScope::default(),
             },
         };
         let json = serde_json::to_string(&entry).unwrap();

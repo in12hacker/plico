@@ -43,3 +43,4 @@ pub mod ingest;
 pub mod cognitive_pipeline;
 pub mod diagnostic;
 pub mod skill_forge;
+pub mod observer;

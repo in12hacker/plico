@@ -33,6 +33,68 @@ Scoring:
 
 Reply with ONLY a single digit 1-5."""
 
+# ── RAGAS prompt templates (0-10 integer scale, normalized to 0.0-1.0) ──
+
+RAGAS_FAITHFULNESS_PROMPT = """Rate how faithful the answer is to the given context (0-10 scale).
+
+Question: {question}
+Context: {context}
+Answer: {answer}
+
+Scoring:
+0 = Answer contains claims completely unsupported by context
+5 = Answer is partially grounded but has some unsupported claims
+10 = Every claim in the answer is directly supported by the context
+
+Reply with ONLY a single integer 0-10."""
+
+RAGAS_ANSWER_RELEVANCY_PROMPT = """Rate how relevant the answer is to the question asked (0-10 scale).
+
+Question: {question}
+Context: {context}
+Answer: {answer}
+
+Scoring:
+0 = Answer is completely irrelevant to the question
+5 = Answer is partially relevant but misses key aspects
+10 = Answer directly and completely addresses the question
+
+Reply with ONLY a single integer 0-10."""
+
+RAGAS_CONTEXT_PRECISION_PROMPT = """Rate how precisely the context addresses the question (0-10 scale).
+
+Question: {question}
+Context: {context}
+
+Scoring:
+0 = Context is completely irrelevant to the question
+5 = Context has some relevant information mixed with irrelevant content
+10 = All context items are directly relevant and well-ranked for the question
+
+Reply with ONLY a single integer 0-10."""
+
+RAGAS_CONTEXT_RECALL_PROMPT = """Rate how well the context covers the ground truth answer (0-10 scale).
+
+Context: {context}
+Ground truth: {ground_truth}
+
+Scoring:
+0 = Context contains none of the information needed for the ground truth
+5 = Context covers about half of the ground truth claims
+10 = Context fully covers all claims in the ground truth
+
+Reply with ONLY a single integer 0-10."""
+
+
+def _parse_ragas_score(raw: str) -> float:
+    """Parse RAGAS score from LLM response. Expects 0-10, returns 0.0-1.0."""
+    import re
+    match = re.search(r"\d+", raw.strip())
+    if match:
+        score = int(match.group())
+        return min(score, 10) / 10.0
+    return 0.0
+
 
 @dataclass
 class JudgeResult:
@@ -151,3 +213,49 @@ class Judge:
 
     def describe(self) -> str:
         return f"Judge(model={getattr(self.llm, 'model', 'unknown')}, max_workers={self.max_workers})"
+
+    # ── RAGAS evaluation ────────────────────────────────────────────
+
+    def evaluate_ragas(
+        self,
+        question: str,
+        answer: str,
+        context: str,
+        ground_truth: str | None = None,
+    ) -> dict[str, float]:
+        """Evaluate RAGAS metrics: faithfulness, answer_relevancy, context_precision, context_recall.
+
+        Returns dict with keys: faithfulness, answer_relevancy, context_precision, context_recall.
+        Each value is 0.0-1.0.
+        """
+        results = {}
+        prompts = [
+            ("faithfulness", RAGAS_FAITHFULNESS_PROMPT.format(question=question, answer=answer, context=context)),
+            ("answer_relevancy", RAGAS_ANSWER_RELEVANCY_PROMPT.format(question=question, answer=answer, context=context)),
+            ("context_precision", RAGAS_CONTEXT_PRECISION_PROMPT.format(question=question, context=context)),
+        ]
+        if ground_truth:
+            prompts.append(
+                ("context_recall", RAGAS_CONTEXT_RECALL_PROMPT.format(context=context, ground_truth=ground_truth))
+            )
+        for metric_name, prompt in prompts:
+            results[metric_name] = self._score_ragas(prompt)
+        if not ground_truth:
+            results["context_recall"] = 0.0
+        return results
+
+    def _score_ragas(self, prompt: str) -> float:
+        """Score a single RAGAS metric (0-10 scale, normalized to 0.0-1.0)."""
+        for attempt in range(self.retries):
+            try:
+                raw = self.llm.chat(
+                    [{"role": "user", "content": prompt}],
+                    max_tokens=4,
+                    temperature=0.0,
+                )
+                return _parse_ragas_score(raw)
+            except Exception:
+                if attempt == self.retries - 1:
+                    return 0.0
+                time.sleep(0.5 * (attempt + 1))
+        return 0.0

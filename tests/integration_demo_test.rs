@@ -45,6 +45,7 @@ fn test_file_qa_agent_full_lifecycle() {
         vec!["report".to_string(), "finance".to_string(), "Q1".to_string()],
         &agent_id,
         Some("financial reporting".to_string()),
+        plico::cas::ObjectScope::default()
     ).unwrap();
 
     let doc2 = kernel.semantic_create(
@@ -52,6 +53,7 @@ fn test_file_qa_agent_full_lifecycle() {
         vec!["report".to_string(), "engineering".to_string(), "headcount".to_string()],
         &agent_id,
         None,
+        plico::cas::ObjectScope::default()
     ).unwrap();
 
     let doc3 = kernel.semantic_create(
@@ -59,6 +61,7 @@ fn test_file_qa_agent_full_lifecycle() {
         vec!["roadmap".to_string(), "product".to_string(), "Q2".to_string()],
         &agent_id,
         None,
+        plico::cas::ObjectScope::default()
     ).unwrap();
 
     // ── Phase 3: Memory operations ──────────────────────────────

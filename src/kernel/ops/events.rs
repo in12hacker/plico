@@ -137,6 +137,7 @@ mod tests {
             vec!["target".to_string()],
             "kernel",
             None,
+            crate::cas::ObjectScope::default(),
         ).unwrap();
 
         // Attach

@@ -358,4 +358,73 @@ mod tests {
         assert_eq!(stats.invocations, 1);
         assert_eq!(stats.successes, 1);
     }
+
+    #[tokio::test]
+    async fn get_record_returns_full_record() {
+        let mut registry = SkillRegistry::new();
+        let skill = test_skill();
+        let id = registry.register("agent1", skill).await.unwrap();
+
+        let record = registry.get_record(&id).await.unwrap();
+        assert_eq!(record.version, 1);
+        assert!(matches!(record.validation, ValidationStatus::Pending));
+        assert!(record.created_at_ms > 0);
+        assert!(record.updated_at_ms >= record.created_at_ms);
+        assert_eq!(record.stats.invocations, 0);
+    }
+
+    #[tokio::test]
+    async fn get_record_returns_none_for_unknown() {
+        let registry = SkillRegistry::new();
+        assert!(registry.get_record("nonexistent").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn update_returns_error_for_unknown_skill() {
+        let mut registry = SkillRegistry::new();
+        let skill = test_skill();
+        let result = registry.update("nonexistent", skill).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn remove_returns_false_for_unknown_skill() {
+        let mut registry = SkillRegistry::new();
+        assert!(!registry.remove("nonexistent").await);
+    }
+
+    #[tokio::test]
+    async fn persistence_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+
+        // Register a skill in a persistence-backed registry
+        {
+            let mut registry = SkillRegistry::with_persistence(root.clone());
+            assert!(registry.index_path.is_some());
+            let skill = test_skill();
+            registry.register("agent1", skill).await.unwrap();
+        }
+
+        // Verify the index file was written
+        let index_path = root.join("skill_index.json");
+        assert!(index_path.exists(), "skill_index.json should be persisted");
+
+        // Open a new registry from the same root — restore should parse the file
+        let registry2 = SkillRegistry::with_persistence(root.clone());
+        // Note: restore only parses metadata; skills are re-discovered from session history.
+        // The registry itself should be usable after restore.
+        assert_eq!(registry2.count_for_agent("agent1").await, 0); // skills not re-loaded
+    }
+
+    #[tokio::test]
+    async fn with_persistence_creates_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("subdir");
+        // with_persistence should not crash even if root doesn't exist yet
+        // (it just sets the path; persist is called on register)
+        let registry = SkillRegistry::with_persistence(root.clone());
+        assert!(registry.index_path.is_some());
+        assert_eq!(registry.index_path.as_ref().unwrap(), &root.join("skill_index.json"));
+    }
 }

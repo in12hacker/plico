@@ -45,6 +45,32 @@ plicod 写入数据后**不会立即可搜索**。必须显式等待后台完成
 | BEIR | `corpus` 是 dict(id → doc)，`queries` 是 list of dicts，`qrels` 是 dict(qid → list of doc_ids) |
 | MemoryAgentBench | `answers` 可能是 list 或 str，不能假设 `.lower()` 可用 |
 
+## 共享工具（core/）
+
+| 模块 | 函数/类 | 用途 | 使用者 |
+|------|---------|------|--------|
+| `core/metrics.py` | `accuracy_pct(scores, threshold=4)` | LLM score ≥ 4 的百分比 | conversational-qa, memory-lifecycle, intent-routing, causal-reasoning |
+| `core/metrics.py` | `token_level_f1()`, `bleu1()`, `exact_match()` | Token 级别文本相似度 | conversational-qa |
+| `core/metrics.py` | `recall_at_k()`, `ndcg_at_k()`, `mrr()` | 检索质量指标 | retrieval |
+| `core/metrics.py` | `compute_statistics()`, `latency_percentiles()` | 统计汇总（mean/std/CI/p50/p95/p99） | 全部 suite |
+| `core/metrics.py` | `estimate_tokens()` | Token 数估算（英文 ~4 chars/token，CJK ~1 token/char） | token-efficiency, proactive-optimization |
+| `core/metrics.py` | `aggregate_category()` | 按 category 聚合结果（含 accuracy_pct） | 需要分组统计的 suite |
+| `core/judge.py` | `Judge.evaluate()` | 二元判断（correct/incorrect） | 通用 |
+| `core/judge.py` | `Judge.evaluate_scored()` | 1-5 分制评分 | conversational-qa, memory-lifecycle, intent-routing, causal-reasoning |
+| `core/judge.py` | `Judge.evaluate_ragas()` | RAGAS 4 指标（faithfulness/relevancy/precision/recall），0-10→0.0-1.0 | conversational-qa（20 项样本） |
+| `core/judge.py` | `Judge.evaluate_batch()` | ThreadPoolExecutor 并发评估 | 高吞吐场景 |
+| `core/competitors.py` | `get_memory_competitors()` | LongMemEval/LoCoMo/PersonaMem 基线 | conversational-qa, memory-lifecycle, causal-reasoning, intent-routing |
+| `core/competitors.py` | `get_agent_frameworks()` | Agent 框架特性矩阵 | session-lifecycle, memory-lifecycle |
+| `core/competitors.py` | `get_ragas_baselines()` | RAGAS 生产基线 | memory-lifecycle, intent-routing |
+| `core/competitors.py` | `get_cross_benchmarks()` | HotpotQA/AgentBench/BigBench-Hard | kg-reasoning, causal-reasoning |
+| `core/reporter.py` | `Report` | 6 节报告渲染 | 全部 suite |
+
+**新增 suite 指标（v50）**：
+- `accuracy_pct` 扩展到 4 个 suite（原来仅 conversational-qa）
+- RAGAS 评估集成到 conversational-qa（20 项随机样本）
+- bleu1 计算 bug 修复（`len(raw)` → `len(bleus)`）
+- raw results 新增 `"context"` 字段用于 RAGAS 评估
+
 ## 进程与脚本规范
 
 - **禁止多次 `nohup` 无序启动**。使用 PID 变量 + `trap cleanup EXIT`。
@@ -105,10 +131,64 @@ PREPROCESS_TIMEOUT=600 ./scripts/run_full_benchmark.sh --skip-jina-v5  # 仅 Qwe
 - **Intent-specific prompts**: temporal/multi-hop questions need specialized prompts, not generic ones
 - **F1 vs LLM Score**: F1 measures token overlap (low for paraphrased answers), LLM Score measures semantic correctness (better metric)
 - **Context hit rate is the ceiling**: if search doesn't find the right content, no reader prompt can fix it
+- **accuracy_pct 是对标标准**: LongMemEval/LoCoMo 竞争对手均使用 accuracy（score ≥ threshold），而非 F1/BLEU。4 个 suite 统一使用 `accuracy_pct()`
+- **RAGAS 是 RAG 质量的正交维度**: accuracy_pct 测答案正确性，RAGAS 测答案忠实度/相关性/上下文质量。两者互补，不可替代
+- **CID 优于关键词匹配**: 搜索结果用 CID 验证比 snippet 关键词匹配更可靠（proactive-optimization 已修复）
+- **bleu1 分母陷阱**: `sum(bleus) / len(raw)` 会把 None 项拉低，必须用 `len(bleus)`（已修复）
+
+## Benchmark Suite 矩阵（11 suites → 10 条公理全覆盖）
+
+| Suite | 公理 | 关键指标 | 竞争对手基线 |
+|-------|------|---------|-------------|
+| conversational-qa | A2 | `accuracy_pct`, `ragas_faithfulness`, `ragas_answer_relevancy`, `ragas_context_precision`, `ragas_context_recall` | LongMemEval: Mem0 93.4%, OMEGA 95.4%, Mastra 94.87% / LoCoMo: EverMind 92.73%, Mem0 91.6%, Memori 81.95% / PersonaMem: Tencent 76.1% |
+| retrieval | A6 | `recall@5`, `recall@10` | MTEB: Harrier #1, KaLM-12B #1, Qwen3-8B 70.58 |
+| kg-reasoning | A8 | `avg_latency_ms`, `paths_found`, `path_validity_rate` | HotpotQA: Youtu-GraphRAG ~72%, IRRR 72.4% |
+| performance | A5 | `p50_ms`, `p95_ms`（search/cas_write/recall/kg_path） | 自身历史基线 + Letta ~10ms recall |
+| memory-lifecycle | A3, A9 | CRUD `success_rate`, `cross_layer_hit_rate`, `accuracy_pct`（layer migration）, `cp1_persistence_rate` | LongMemEval + LoCoMo + PersonaMem 全量竞争对手 |
+| token-efficiency | A1 | `avg_tokens_per_query`, `cost_per_query_usd` | Memori 1294 tok, Zep 3911 tok, Mem0 1764 tok, TencentDB 61% reduction |
+| scope-isolation | A4 | `leak_rate`（Private）, `cross_agent_access_rate`（Shared） | Agent 框架均无原生 scope 隔离 |
+| session-lifecycle | A10 | `success_rate`, `search_persistence_rate` | LoCoMo 跨 session 持久化 + Agent 框架 session_mgmt 对比 |
+| causal-reasoning | A8 | `bidirectional_rate`, `accuracy_pct`（causal retrieval） | LoCoMo temporal/multi-hop + HotpotQA + BigBench-Hard |
+| intent-routing | A2 | `hit_rate` + `accuracy_pct` per intent type, `improvement_pct` vs no-intent | LoCoMo per-category + RAGAS Context Precision/Recall |
+| proactive-optimization | A7 | L0/L1/L2 `avg_tokens_per_query`, `speedup_pct`, `search_recall_rate` | Token efficiency competitors + Mastra prompt-caching |
+
+**accuracy_pct**：`core/metrics.py::accuracy_pct(scores, threshold=4)` — LLM-as-Judge 1-5 分制，score ≥ 4 = 正确。4 个 suite 使用（conversational-qa, memory-lifecycle, intent-routing, causal-reasoning）。
+
+**RAGAS 评估**：`core/judge.py::Judge.evaluate_ragas()` — 4 个指标（faithfulness, answer_relevancy, context_precision, context_recall），0-10 整数归一化到 0.0-1.0。conversational-qa 在 20 项样本上运行。生产基线：Faithfulness 0.85+, Answer Relevancy 0.80+, Context Precision 0.65+, Context Recall 0.75+。
+
+## 竞争对手基线（2026-05 更新）
+
+硬编码在 `benchmarks/configs/competitor_baselines.yaml`，通过 `core/competitors.py` 加载。
+每次 benchmark 运行自动渲染到报告中，包含：
+- 分数对比表（含 notes、source、date）
+- 架构分析摘要（每个竞争对手的关键技术和 Plico 可学习之处）
+- Agent 框架特性对比矩阵（Memory Layers / Scope / KG / WASM 等）
+- Key Learnings 可操作表（含优先级）
+
+**竞争格局（2026-05 最新）**：
+- LongMemEval: Supermemory ~99% (experimental), Mem0 93.4% (新算法), OMEGA 95.4%, Mastra 94.87%
+- LoCoMo: EverMind HyperMem 92.73%, Mem0 91.6% (新算法, 从62.47%跃升), Memori 81.95%, Zep 79.09%
+- PersonaMem: Tencent 76.1%, EverMind #2
+- MTEB: Microsoft Harrier #1 multilingual, Tencent KaLM-12B #1 multilingual (2026-05)
+- Agent 框架 (新增): TencentDB Agent Memory (L0-L3, 61% token reduction), agentmemory (6.2K stars, BM25+vector+KG), NevaMind memU (13.1K stars), EverMind/EverOS (ACL 2026, Skills Evolution Engine)
+- 极端规模: BEAM benchmark (1M/10M tokens), MSA (100M token context, NeurIPS 2026)
+- RAGAS 生产基线: Faithfulness 0.85+, Answer Relevancy 0.80+, Context Precision 0.65+, Context Recall 0.75+
+- 跨领域参考: HotpotQA (multi-hop), AgentBench (agent capabilities), BigBench-Hard (reasoning), MemoryBench (latency+quality+cost)
+
+**更新基线**：编辑 YAML 文件，格式见文件内注释。
+
+## 报告格式（6 节）
+
+1. **Summary** — 每 suite 一行：Key Metric / Value / Competitor Best / Gap
+2. **Suite Results** — 每 suite 详细指标 + 竞争对手对比表 + 版本 delta
+3. **Competitor Analysis** — 每个竞争对手的架构分析摘要
+4. **Agent Framework Comparison** — LangChain/CrewAI/AutoGen/Letta/AIOS vs Plico 特性矩阵
+5. **Soul Alignment Score** — 10 条公理每条 0-2 分，总计 /20
+6. **Key Learnings** — 可操作的学习表（From Memory Specialists / Embedding Models / Agent Frameworks / RAGAS Targets / Cross-Benchmarks）
 
 ## Benchmark 数据
 
-`benchmarks/results/` 下的 JSON 文件，版本号如 `v44`, `v45`, `v46`。
+`benchmarks/results/` 下的 JSON 文件，版本号如 `v44`, `v48`, `v49`。
 
 ## 触发时机
 

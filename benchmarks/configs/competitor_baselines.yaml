@@ -1,0 +1,758 @@
+# Competitor Baselines — Hardcoded Reference Data
+# Updated: 2026-05-15 from verified sources
+#
+# Sources:
+# - LongMemEval: hindsight-benchmarks (vectorize-io), OMEGA whitepaper
+# - LoCoMo: Memori Labs benchmark page
+# - MTEB: awesomeagents.ai leaderboard April 2026
+# - Memori token stats: Memori Labs docs
+#
+# Each entry: score, source URL, date, methodology notes
+
+memory:
+  longmemeval:
+    description: "LongMemEval (ICLR 2025) — 500 questions, 5 capability areas"
+    metric: "overall_accuracy_pct"
+    source: "https://github.com/vectorize-io/hindsight-benchmarks"
+    categories:
+      - single_session_user
+      - single_session_assistant
+      - preference_application
+      - knowledge_update
+      - temporal_reasoning
+    competitors:
+      - name: "Full-context GPT-4o (ceiling)"
+        overall: 60.2
+        single_session_user: 81.4
+        single_session_assistant: 94.6
+        preference_application: 20.0
+        knowledge_update: 78.2
+        temporal_reasoning: 45.1
+        notes: "Passes entire conversation to GPT-4o. Impractical at scale."
+        source: "hindsight-benchmarks README"
+        date: "2026-02"
+        analysis:
+          architecture: "Brute-force: passes entire conversation history to GPT-4o"
+          key_insight: "Even with unlimited context, 60% is the ceiling — retrieval is necessary"
+          what_we_learn: "Full-context is not the answer; smart retrieval beats brute force"
+          plico_gap: "Our retrieval-based approach is correct in principle; the gap is in retrieval quality"
+      - name: "Hindsight (Gemini-3)"
+        overall: 91.4
+        single_session_user: 97.1
+        single_session_assistant: 96.4
+        preference_application: 80.0
+        knowledge_update: 94.9
+        temporal_reasoning: 87.2
+        notes: "Best overall. Local PostgreSQL, no cloud. Memory architecture drives performance."
+        source: "hindsight-benchmarks README"
+        date: "2026-02"
+        analysis:
+          architecture: "Local PostgreSQL + structured memory with explicit capability areas"
+          key_insight: "Per-capability scoring reveals where memory systems excel vs struggle"
+          what_we_learn: "Track temporal/multi-hop/preference accuracy separately; preference (80%) and temporal (87%) are hardest"
+          plico_gap: "We don't track per-capability accuracy; F1 metric masks category-specific weaknesses"
+      - name: "Hindsight (OSS-20B)"
+        overall: 83.6
+        single_session_user: 92.9
+        single_session_assistant: 80.4
+        preference_application: 56.7
+        knowledge_update: 83.3
+        temporal_reasoning: 62.4
+        notes: "+44.6pp vs full-context OSS-20B baseline (39.0%). Architecture > model size."
+        source: "hindsight-benchmarks README"
+        date: "2026-02"
+        analysis:
+          architecture: "Same Hindsight architecture with smaller 20B model"
+          key_insight: "+44.6pp improvement over full-context baseline proves architecture > model size"
+          what_we_learn: "Invest in memory architecture, not just bigger models"
+          plico_gap: "Our Qwen3-0.6B is even smaller; architecture quality is the lever"
+      - name: "OMEGA"
+        overall: 95.4
+        single_session_user: 99.2
+        single_session_assistant: 99.2
+        preference_application: 100.0
+        knowledge_update: 96.2
+        temporal_reasoning: 94.0
+        notes: "466/500 raw. bge-small ONNX, local M1 MacBook. 6-stage search pipeline. Hardest: multi-session reasoning (83.5%)."
+        source: "https://omegamax.co/benchmarks"
+        date: "2026-02"
+        analysis:
+          architecture: "6-stage search pipeline (retrieve → rerank → filter → merge → deduplicate → answer), bge-small ONNX"
+          key_insight: "Multi-stage search dramatically outperforms single-pass retrieval"
+          what_we_learn: "Add reranking stage to search; multi-session reasoning (83.5%) is the hardest category"
+          plico_gap: "Our single-pass BM25+HNSW lacks reranking and multi-stage refinement"
+      - name: "Supermemory (Gemini-3)"
+        overall: 85.2
+        notes: "Per-category breakdown not published. GPT-4o variant: 73% multi-session."
+        source: "hindsight-benchmarks README"
+        date: "2026-02"
+        analysis:
+          architecture: "Experimental pipeline, cloud-dependent"
+          key_insight: "85% with Gemini-3 shows cloud models can compensate for architecture gaps"
+          what_we_learn: "Cloud API quality can partially offset architecture limitations"
+          plico_gap: "We are self-hosted; need architecture quality to compensate for smaller models"
+      - name: "Supermemory (GPT-4o)"
+        overall: 81.6
+        notes: "Per-category breakdown not published."
+        source: "hindsight-benchmarks README"
+        date: "2026-02"
+        analysis:
+          architecture: "Experimental pipeline with GPT-4o"
+          key_insight: "4pp drop from Gemini-3 to GPT-4o shows model quality matters within same architecture"
+          what_we_learn: "Model choice affects accuracy even with identical pipeline"
+          plico_gap: "Our LLM (Gemma 4 26B) is smaller; need architecture to compensate"
+      - name: "Mastra Observational Memory"
+        overall: 94.87
+        notes: "Observer + Reflector background agents, stable context window (prompt-cacheable). Open-source."
+        source: "Mastra AI blog"
+        date: "2026-02"
+        analysis:
+          architecture: "Two background agents (Observer + Reflector) maintain dense observation log; stable context window enables prompt caching"
+          key_insight: "94.87% with gpt-5-mini — observation-based memory achieves near-OMEGA scores with simpler architecture"
+          what_we_learn: "Background observation agents can replace complex retrieval pipelines; stable context enables prompt caching"
+          plico_gap: "Our skill forge is conceptually similar but not benchmarked for memory quality"
+      - name: "Supermemory (experimental)"
+        overall: 99.0
+        notes: "Claimed 'agent memory frontier breakthrough'. Methodology details pending."
+        source: "Supermemory blog"
+        date: "2026-03"
+        analysis:
+          architecture: "Experimental pipeline, details not fully disclosed"
+          key_insight: "99% suggests near-perfect memory is achievable with sufficient engineering"
+          what_we_learn: "The ceiling for memory systems is higher than OMEGA's 95.4% suggested"
+          plico_gap: "Gap is enormous; need systematic improvement across all capability areas"
+      - name: "Mem0 (new algorithm)"
+        overall: 93.4
+        notes: "April 2026 algorithm update. Jumped from 67.8%. 6.8K tokens, 1.09s latency."
+        source: "https://github.com/mem0ai/mem0/"
+        date: "2026-04"
+        analysis:
+          architecture: "New memory algorithm with structured extraction, 6.8K tokens/query"
+          key_insight: "93.4% — now competitive with OMEGA (95.4%) and Mastra (94.87%)"
+          what_we_learn: "Mem0's dramatic improvement shows the memory algorithm space is still rapidly evolving"
+          plico_gap: "93.4% vs our F1-based metrics — need to adopt accuracy_pct evaluation to compare"
+
+  personamem:
+    description: "PersonaMem (Tencent, 2026) — 20 user profiles, 6462 context items, 589 hard reasoning questions"
+    metric: "accuracy_pct"
+    source: "Tencent Cloud Agent Memory evaluation"
+    date: "2026-04"
+    categories:
+      - user_fact_recall
+      - hard_reasoning
+    competitors:
+      - name: "Tencent AgentMemory"
+        overall: 76.10
+        notes: "Top1. +59% over native OpenClaw. 79%+ user fact recall (from <30%)."
+        source: "Tencent Cloud"
+        date: "2026-04"
+        analysis:
+          architecture: "Production-grade agent memory with structured user profiles"
+          key_insight: "76.10% on realistic multi-profile scenario — production memory is harder than single-benchmark"
+          what_we_learn: "Multi-profile scenarios expose weaknesses that single-profile benchmarks miss"
+          plico_gap: "We haven't tested multi-profile scenarios; scope isolation tests are basic"
+      - name: "EverMind (EverOS)"
+        overall: null
+        notes: "#2 on PersonaMem. Open-source memory layer for AI agents."
+        source: "EverOS GitHub"
+        date: "2026-04"
+        analysis:
+          architecture: "Open-source memory layer, hierarchical storage"
+          key_insight: "Open-source competitor to Tencent's proprietary solution"
+          what_we_learn: "Open-source memory layers are competitive; ecosystem is maturing"
+          plico_gap: "Our 4-layer memory is more granular; need to benchmark on PersonaMem"
+
+  locomo:
+    description: "LoCoMo — long conversational memory, LLM-as-Judge accuracy %"
+    metric: "overall_accuracy_pct"
+    source: "https://memorilabs.ai/docs/memori-cloud/benchmark/results/"
+    categories:
+      - single_hop
+      - multi_hop
+      - open_domain
+      - temporal
+    competitors:
+      - name: "Full-Context (ceiling)"
+        overall: 87.52
+        single_hop: 88.53
+        multi_hop: 77.70
+        open_domain: 71.88
+        temporal: 92.70
+        notes: "Impractical: 26,031 tokens/query average."
+        source: "Memori Labs"
+        date: "2026-02"
+        analysis:
+          architecture: "Brute-force: passes entire conversation history to LLM"
+          key_insight: "87.52% ceiling with 26K tokens/query — retrieval systems can approach this at 5% token cost"
+          what_we_learn: "The gap between full-context (87.52%) and best retrieval (81.95%) is only 5.57pp — retrieval is viable"
+          plico_gap: "Our accuracy_pct needs to reach ~82% to match Memori; current F1-based metrics aren't comparable"
+      - name: "Memori"
+        overall: 81.95
+        single_hop: 87.87
+        multi_hop: 72.70
+        open_domain: 63.54
+        temporal: 80.37
+        notes: "Best retrieval-based. 1,294 tokens/query (4.97% of full context)."
+        source: "Memori Labs"
+        date: "2026-02"
+        analysis:
+          architecture: "Structured memory extraction + semantic retrieval, 1,294 tokens/query"
+          key_insight: "Best accuracy/token ratio: 81.95% at 4.97% of full context cost"
+          what_we_learn: "Structured memory extraction beats raw retrieval; open_domain (63.54%) is weakest category"
+          plico_gap: "Our token efficiency (L0/L1/L2) is competitive; accuracy gap is in retrieval quality"
+      - name: "Zep"
+        overall: 79.09
+        single_hop: 79.43
+        multi_hop: 69.16
+        open_domain: 73.96
+        temporal: 83.33
+        notes: "3,911 tokens/query."
+        source: "Memori Labs"
+        date: "2026-02"
+        analysis:
+          architecture: "Graph-based memory with temporal awareness, 3,911 tokens/query"
+          key_insight: "Best open_domain (73.96%) among retrieval systems — graph structure helps cross-topic queries"
+          what_we_learn: "Graph-based memory improves open-domain retrieval; 3x token cost vs Memori for 2.86pp less accuracy"
+          plico_gap: "Our KG (redb, 17 edge types) is more sophisticated; should leverage it for open-domain queries"
+      - name: "LangMem"
+        overall: 78.05
+        single_hop: 74.47
+        multi_hop: 61.06
+        open_domain: 67.71
+        temporal: 86.92
+        notes: "Best temporal reasoning among retrieval systems."
+        source: "Memori Labs"
+        date: "2026-02"
+        analysis:
+          architecture: "LangChain-integrated memory with temporal indexing"
+          key_insight: "Best temporal reasoning (86.92%) among retrieval systems — temporal indexing works"
+          what_we_learn: "Dedicated temporal indexing dramatically improves time-based queries; weakest at multi_hop (61.06%)"
+          plico_gap: "Our temporal_reasoning suite should target 87%+; KG causal edges could enable multi-hop improvement"
+      - name: "Mem0 (legacy)"
+        overall: 62.47
+        single_hop: 62.41
+        multi_hop: 57.32
+        open_domain: 44.79
+        temporal: 66.47
+        notes: "Pre-2026 algorithm. Weakest across all categories."
+        source: "Memori Labs"
+        date: "2026-02"
+        analysis:
+          architecture: "Simple extraction-based memory, minimal structuring"
+          key_insight: "62.47% overall — naive extraction without structure performs poorly across all categories"
+          what_we_learn: "Memory architecture quality matters enormously: 19.48pp gap to Memori with same underlying models"
+          plico_gap: "Our 4-layer memory (Ephemeral→Working→Long-term→Procedural) should far exceed Mem0's flat approach"
+      - name: "Mem0 (new algorithm)"
+        overall: 91.6
+        notes: "April 2026 algorithm update. Dramatic jump from 62.47%. 7K tokens, 0.88s latency."
+        source: "https://github.com/mem0ai/mem0/"
+        date: "2026-04"
+        analysis:
+          architecture: "New memory algorithm with structured extraction + semantic retrieval, 7K tokens/query"
+          key_insight: "29pp improvement (62.47%→91.6%) proves algorithm quality matters more than incremental tuning"
+          what_we_learn: "A single algorithm redesign can dramatically close the gap; don't assume competitors are static"
+          plico_gap: "Now 91.6% vs our F1-based metrics — the gap is enormous; need accuracy_pct comparable to LoCoMo"
+      - name: "EverMind HyperMem"
+        overall: 92.73
+        notes: "Hypergraph-based hierarchical memory. Best publicly claimed LoCoMo score."
+        source: "https://github.com/EverMind-AI"
+        date: "2026-04"
+        analysis:
+          architecture: "Hypergraph hierarchical memory (HyperMem), part of EverOS self-evolving agent framework"
+          key_insight: "92.73% with hypergraph structure — graph-based memory outperforms flat retrieval"
+          what_we_learn: "Hierarchical graph memory is the current state-of-the-art; our KG could serve similar role"
+          plico_gap: "Our redb KG with 17 edge types is more sophisticated but not benchmarked for memory quality"
+      - name: "delta-mem"
+        overall: null
+        notes: "1.20x improvement over baseline. 0.12% of backbone params. TTL subtask: 26.14→50.50."
+        source: "arXiv May 2026"
+        date: "2026-05"
+        analysis:
+          architecture: "Lightweight memory mechanism (0.12% of backbone params), TTL-based subtask"
+          key_insight: "1.31x on MemoryAgentBench, 1.20x on LoCoMo — minimal parameters, maximal improvement"
+          what_we_learn: "Architectural innovation matters more than scale; lightweight mechanisms can dramatically improve memory"
+          plico_gap: "Our memory architecture is already sophisticated; need to measure improvement delta"
+
+  token_efficiency:
+    description: "Tokens per query vs accuracy tradeoff"
+    metric: "tokens_per_query"
+    source: "Memori Labs benchmark page"
+    competitors:
+      - name: "Full-Context"
+        tokens: 26031
+        cost_per_query_usd: 0.020825
+        context_footprint_pct: 100.0
+        notes: "Unsustainable at scale."
+        analysis:
+          architecture: "Brute-force: entire conversation in context window"
+          key_insight: "26K tokens/query at $0.02/query — unsustainable beyond prototype scale"
+          what_we_learn: "Token efficiency is a production requirement, not an optimization"
+          plico_gap: "Our L0/L1/L2 layering targets <1K tokens for common queries"
+      - name: "Zep"
+        tokens: 3911
+        cost_per_query_usd: 0.003129
+        context_footprint_pct: 15.02
+        notes: ""
+        analysis:
+          architecture: "Graph-based retrieval, 3,911 tokens/query"
+          key_insight: "3.9K tokens is 85% reduction from full-context but 3x Memori's cost"
+          what_we_learn: "Graph retrieval adds token overhead; need to balance graph richness with token budget"
+          plico_gap: "Our KG-based retrieval must stay under 2K tokens to beat Memori's efficiency"
+      - name: "Mem0"
+        tokens: 1764
+        cost_per_query_usd: 0.001411
+        context_footprint_pct: 6.78
+        notes: ""
+        analysis:
+          architecture: "Simple extraction, 1,764 tokens/query"
+          key_insight: "1.7K tokens is efficient but accuracy (62.47%) shows extraction quality matters more than token count"
+          what_we_learn: "Low token count without quality extraction is false economy"
+          plico_gap: "Our token efficiency should match Mem0's count but with much higher accuracy"
+      - name: "Memori"
+        tokens: 1294
+        cost_per_query_usd: 0.001035
+        context_footprint_pct: 4.97
+        notes: "Best accuracy/token ratio."
+        analysis:
+          architecture: "Structured memory extraction, 1,294 tokens/query"
+          key_insight: "Best accuracy/token: 81.95% at 1.3K tokens — the benchmark to beat"
+          what_we_learn: "Structured memory extraction achieves 5% context footprint with minimal accuracy loss"
+          plico_gap: "Our L0+L1 combined should target <1.3K tokens while maintaining search quality"
+
+retrieval:
+  mteb:
+    description: "MTEB English leaderboard — embedding model ranking"
+    metric: "mteb_average_score"
+    source: "https://awesomeagents.ai/leaderboards/embedding-model-leaderboard-mteb-april-2026/"
+    date: "2026-04"
+    competitors:
+      - name: "Gemini Embedding 001"
+        mteb_avg: 68.32
+        retrieval: 67.71
+        dims: 3072
+        max_tokens: 8192
+        pricing: "~$0.004/1K chars"
+        notes: "#1 English MTEB. Google API."
+        analysis:
+          architecture: "Google's proprietary embedding model, 3072 dims, API-only"
+          key_insight: "MTEB #1 but retrieval-specific score (67.71) is lower than general MTEB avg — retrieval is a distinct skill"
+          what_we_learn: "High MTEB avg doesn't guarantee high retrieval; optimize for retrieval-specific metrics"
+          plico_gap: "We use Qwen3-0.6B (1024 dims); Gemini's 3x dimension advantage shows in MTEB scores"
+      - name: "Qwen3-Embedding-8B"
+        mteb_avg: 70.58
+        dims: 4096
+        max_tokens: 32768
+        pricing: "Free (open-weight)"
+        notes: "#3 overall. Best self-hosted. vLLM/SGLang support."
+        analysis:
+          architecture: "Qwen3 family, 8B params, 4096 dims, open-weight, vLLM/SGLang support"
+          key_insight: "Best self-hosted model at 70.58 MTEB — proves open-weight can compete with proprietary"
+          what_we_learn: "Qwen3 family scales well: 0.6B→8B gives significant MTEB improvement; same family simplifies migration"
+          plico_gap: "Our Qwen3-0.6B is 13x smaller; upgrading to 8B would require GPU but significantly improve retrieval"
+      - name: "NV-Embed-v2"
+        mteb_avg: 72.31
+        retrieval: 62.65
+        dims: 4096
+        max_tokens: 32768
+        pricing: "Free (open-weight)"
+        notes: "Legacy MTEB score (56 tasks). NVIDIA."
+        analysis:
+          architecture: "NVIDIA's embedding model, 4096 dims, legacy MTEB (56 tasks)"
+          key_insight: "Highest MTEB avg (72.31) but retrieval score (62.65) is mediocre — general vs retrieval tradeoff"
+          what_we_learn: "MTEB leaderboard position doesn't predict retrieval quality; always benchmark retrieval separately"
+          plico_gap: "Our retrieval@5 metric is the right evaluation; MTEB avg alone is misleading"
+      - name: "BGE-en-ICL"
+        mteb_avg: 71.24
+        dims: 4096
+        max_tokens: 32768
+        pricing: "Free (open-weight)"
+        notes: "BAAI. Legacy MTEB."
+        analysis:
+          architecture: "BAAI's in-context learning embedding, 4096 dims, legacy MTEB"
+          key_insight: "71.24 MTEB with in-context learning approach — shows prompt engineering works for embeddings"
+          what_we_learn: "In-context learning embeddings can achieve high MTEB scores; consider prompt-based embedding strategies"
+          plico_gap: "Our embedding model doesn't use in-context learning; adding query-time context could improve scores"
+      - name: "Voyage-3.1-large"
+        mteb_avg: 67.40
+        dims: 2048
+        max_tokens: 32768
+        pricing: "$0.05/M tokens"
+        notes: "Best non-Google API. April 2026."
+        analysis:
+          architecture: "Voyage AI's flagship, 2048 dims, API-only, $0.05/M tokens"
+          key_insight: "Best non-Google API at 67.40 MTEB — proves API market is competitive"
+          what_we_learn: "API-based embeddings have cost implications at scale; self-hosted is more economical for high-volume"
+          plico_gap: "Self-hosted Qwen3-0.6B eliminates per-query embedding cost; accuracy gap is acceptable tradeoff"
+      - name: "Jina Embeddings v4"
+        mteb_avg: 66.81
+        dims: 1024
+        max_tokens: 32768
+        pricing: "Free tier + paid"
+        notes: "Native multimodal (text+image). 32K context."
+        analysis:
+          architecture: "Jina's multimodal embedding, 1024 dims, native text+image, 32K context"
+          key_insight: "Multimodal embedding at 66.81 MTEB — image+text in single vector enables cross-modal retrieval"
+          what_we_learn: "Multimodal embeddings are mature enough for production; 32K context is significant for long documents"
+          plico_gap: "We're text-only; multimodal could be a future capability for image/document understanding"
+      - name: "BGE-M3"
+        mteb_avg: 63.00
+        dims: 1024
+        max_tokens: 8192
+        pricing: "Free (open-weight)"
+        notes: "Dense+Sparse+ColBERT. BAAI."
+        analysis:
+          architecture: "BAAI's multi-vector model: Dense + Sparse + ColBERT, 1024 dims"
+          key_insight: "Multi-representation (Dense+Sparse+ColBERT) enables hybrid search strategies"
+          what_we_learn: "Sparse vectors complement dense for keyword-heavy queries; ColBERT enables late interaction"
+          plico_gap: "Our BM25+HNSW hybrid is similar in spirit; ColBERT-style late interaction could improve re-ranking"
+      - name: "text-embedding-3-large"
+        mteb_avg: 64.60
+        dims: 3072
+        max_tokens: 8191
+        pricing: "$0.13/M tokens"
+        notes: "OpenAI."
+        analysis:
+          architecture: "OpenAI's large embedding, 3072 dims, API-only, $0.13/M tokens"
+          key_insight: "64.60 MTEB at $0.13/M tokens — expensive but below open-weight leaders"
+          what_we_learn: "OpenAI embeddings are not the best value; open-weight models outperform at zero marginal cost"
+          plico_gap: "Self-hosted Qwen3 eliminates per-query cost; accuracy gap is manageable with architecture improvements"
+      - name: "text-embedding-3-small"
+        mteb_avg: 62.26
+        dims: 1536
+        max_tokens: 8191
+        pricing: "$0.02/M tokens"
+        notes: "Cheapest defensible option."
+        analysis:
+          architecture: "OpenAI's small embedding, 1536 dims, API-only, $0.02/M tokens"
+          key_insight: "Cheapest API option at 62.26 MTEB — cost/quality tradeoff for budget-conscious deployments"
+          what_we_learn: "Budget API embeddings underperform open-weight models; self-hosted is better value"
+          plico_gap: "Our Qwen3-0.6B likely matches or exceeds this at zero marginal cost"
+      - name: "Microsoft Harrier"
+        mteb_avg: null
+        dims: null
+        max_tokens: null
+        pricing: "Free (open-weight)"
+        notes: "#1 MTEB-v2 multilingual (April 2026). Open-sourced by Microsoft Bing team."
+        source: "Microsoft Research, April 2026"
+        date: "2026-04"
+        analysis:
+          architecture: "Microsoft's multilingual embedding, open-sourced, MTEB-v2 #1"
+          key_insight: "New MTEB-v2 leaderboard favors multilingual models; Harrier displaced previous leaders"
+          what_we_learn: "Multilingual capability is increasingly important; monolingual models may lose leaderboard position"
+          plico_gap: "We use Qwen3-0.6B which is multilingual but much smaller; Harrier shows what's possible"
+      - name: "KaLM-Embedding-Gemma3-12B-2511"
+        mteb_avg: null
+        dims: null
+        max_tokens: null
+        pricing: "API (Tencent Cloud)"
+        notes: "#1 MTEB multilingual (May 2026). 12B params, Gemma3-based. Tencent WeChat team."
+        source: "Tencent Cloud, May 2026"
+        date: "2026-05"
+        analysis:
+          architecture: "Tencent's 12B embedding model, Gemma3-based, MTEB multilingual #1"
+          key_insight: "12B parameters shows scale still matters for embedding quality"
+          what_we_learn: "Large embedding models (12B) can achieve top scores but require significant compute"
+          plico_gap: "Our 0.6B model is 20x smaller; architecture quality must compensate for scale"
+
+rag_quality:
+  description: "RAGAS (Retrieval-Augmented Generation Assessment) — production RAG quality metrics"
+  metric: "score_0_to_1"
+  source: "RAGAS framework, industry baselines 2025-2026"
+  note: "RAGAS is the de-facto standard for RAG pipeline evaluation. Plico should target production-grade scores."
+  metrics:
+    - name: "Faithfulness"
+      description: "Are claims in the answer grounded in the retrieved context?"
+      production_baseline: 0.85
+      good_threshold: 0.90
+      source: "RAGAS docs, industry consensus 2025"
+    - name: "Answer Relevancy"
+      description: "Does the answer address the question asked?"
+      production_baseline: 0.80
+      good_threshold: 0.85
+      source: "RAGAS docs, industry consensus 2025"
+    - name: "Context Precision"
+      description: "Are the relevant items ranked higher in the context?"
+      production_baseline: 0.65
+      good_threshold: 0.75
+      source: "RAGAS docs, industry consensus 2025"
+    - name: "Context Recall"
+      description: "Does the retrieved context cover all claims in the ground truth?"
+      production_baseline: 0.75
+      good_threshold: 0.85
+      source: "RAGAS docs, industry consensus 2025"
+
+cross_benchmarks:
+  description: "Cross-cutting benchmarks for multi-hop reasoning and agent capabilities"
+  note: "Not directly measured by Plico suites but relevant for capability assessment"
+  hotpotqa:
+    description: "HotpotQA — multi-hop question answering over Wikipedia"
+    metric: "F1 / EM"
+    source: "hotpotqa.github.io"
+    baselines:
+      - name: "DPR (Dense Passage Retrieval)"
+        f1: 67.5
+        em: 58.7
+        date: "2020"
+      - name: "IRRR"
+        f1: 72.4
+        em: 63.5
+        date: "2021"
+      - name: "Youtu-GraphRAG (Tencent)"
+        f1: ~72
+        notes: "Agentic graph schema, ICLR 2026"
+        date: "2026"
+    plico_relevance: "Our KG multi-hop reasoning (A8) is conceptually similar; HotpotQA measures retrieval+reasoning quality"
+  agentbench:
+    description: "AgentBench — comprehensive agent capability evaluation"
+    metric: "success_rate"
+    source: "THUDM/AgentBench"
+    baselines:
+      - name: "GPT-4o"
+        overall: ~65
+        notes: "Across 8 agent environments"
+        date: "2024"
+      - name: "Claude 3.5 Sonnet"
+        overall: ~60
+        notes: "Competitive on coding/web agent tasks"
+        date: "2024"
+    plico_relevance: "Measures agent tool-use and planning; Plico's WASM skills and intent routing are related capabilities"
+  bigbench_hard:
+    description: "BigBench-Hard — challenging reasoning tasks"
+    metric: "accuracy"
+    source: "suzgunmirac/BIG-Bench-Hard"
+    baselines:
+      - name: "GPT-4 (CoT)"
+        accuracy: ~83
+        notes: "Chain-of-thought prompting"
+        date: "2023"
+      - name: "Claude 3 Opus (CoT)"
+        accuracy: ~86
+        notes: "Best overall on BBH"
+        date: "2024"
+    plico_relevance: "Multi-step reasoning tasks; our causal reasoning (A8) and KG path finding are related"
+  beam:
+    description: "BEAM — extreme-scale memory evaluation (1M/10M token contexts)"
+    metric: "accuracy_pct"
+    source: "https://github.com/mem0ai/mem0/"
+    date: "2026-04"
+    note: "Published by Mem0 alongside their new algorithm. Tests memory at extreme scale."
+    baselines:
+      - name: "Mem0 (new algorithm)"
+        accuracy_1m: 64.1
+        accuracy_10m: 48.6
+        tokens_used: 7000
+        latency_s: 1.0
+        notes: "7K retrieval tokens at 1M context, ~1s latency"
+        date: "2026-04"
+    plico_relevance: "Tests extreme-scale memory (1M/10M tokens); Plico's L0/L1/L2 layering should handle this efficiently"
+  memorybench:
+    description: "MemoryBench — latency + quality + cost composite benchmark"
+    metric: "composite"
+    source: "https://supermemory.ai/"
+    date: "2026"
+    note: "Supermemory claims #1 on MemoryBench for latency, quality, and cost"
+    baselines:
+      - name: "Supermemory"
+        rank: 1
+        notes: "#1 on MemoryBench for latency, quality, and cost"
+        date: "2026"
+    plico_relevance: "Composite benchmark covering latency+quality+cost; our performance suite measures latency but not the full composite"
+
+kg_reasoning:
+  description: "Knowledge graph multi-hop reasoning"
+  note: "No published benchmark directly comparable to Plico's KG path finding.
+         Closest: GraphRAG benchmarks focus on retrieval-augmented QA, not raw graph traversal.
+         Plico's KG is unique (redb B-tree, 17 edge types, causal graph)."
+
+agent_frameworks:
+  description: "Feature comparison — what each framework provides"
+  source: "GitHub docs, official documentation, 2026-05"
+  competitors:
+    - name: "LangChain/LangGraph"
+      github_stars: 90000
+      language: "Python"
+      memory_layers: 1
+      scope_isolation: "per-thread checkpoint"
+      kg_native: false
+      semantic_search: "external (Pinecone/Chroma/etc)"
+      session_mgmt: "checkpoint per thread"
+      proactive_optim: false
+      wasm_skills: false
+      token_efficiency: false
+      strengths: "Ecosystem (100+ integrations), LangSmith observability"
+      weaknesses: "No native memory/KG, Python-only, no proactive optimization"
+    - name: "CrewAI"
+      github_stars: 25000
+      language: "Python"
+      memory_layers: 1
+      scope_isolation: "per-agent"
+      kg_native: false
+      semantic_search: "none"
+      session_mgmt: "none"
+      proactive_optim: false
+      wasm_skills: false
+      token_efficiency: false
+      strengths: "Multi-agent role-based collaboration"
+      weaknesses: "No memory persistence, no KG, no sessions"
+    - name: "AutoGen"
+      github_stars: 40000
+      language: "Python"
+      memory_layers: 1
+      scope_isolation: "per-conversation"
+      kg_native: false
+      semantic_search: "none"
+      session_mgmt: "conversation history"
+      proactive_optim: false
+      wasm_skills: false
+      token_efficiency: false
+      strengths: "Microsoft backing, multi-agent conversation"
+      weaknesses: "No persistent memory, no KG, no proactive optimization"
+    - name: "Letta/MemGPT"
+      github_stars: 15000
+      language: "Python"
+      memory_layers: 3
+      scope_isolation: "per-agent"
+      kg_native: false
+      semantic_search: "none"
+      session_mgmt: "persistent agent state"
+      proactive_optim: "memory archival triggers"
+      wasm_skills: false
+      token_efficiency: "basic"
+      strengths: "Self-editing memory, multi-model portability, good UX"
+      weaknesses: "No KG, no WASM, Python-speed (~10ms recall)"
+    - name: "AIOS"
+      github_stars: 5680
+      language: "Python"
+      memory_layers: 1
+      scope_isolation: "none"
+      kg_native: false
+      semantic_search: "none"
+      session_mgmt: "none"
+      proactive_optim: false
+      wasm_skills: false
+      token_efficiency: false
+      strengths: "Agent SDK, scheduling abstraction"
+      weaknesses: "Monolithic Python, no memory layers, no KG, no sessions"
+    - name: "Mastra"
+      github_stars: null
+      language: "TypeScript"
+      memory_layers: 2
+      scope_isolation: "per-agent"
+      kg_native: false
+      semantic_search: "external"
+      session_mgmt: "observation log"
+      proactive_optim: "Observer + Reflector background agents"
+      wasm_skills: false
+      token_efficiency: "stable context window (prompt-cacheable)"
+      strengths: "94.87% on LongMemEval, open-source, prompt-cacheable architecture"
+      weaknesses: "TypeScript-only, no native KG, no WASM skills"
+    - name: "Cloudflare Agent Memory"
+      github_stars: null
+      language: "TypeScript/Python"
+      memory_layers: 4
+      scope_isolation: "per-agent"
+      kg_native: false
+      semantic_search: "RRF-based retrieval"
+      session_mgmt: "persistent agent state"
+      proactive_optim: false
+      wasm_skills: false
+      token_efficiency: false
+      strengths: "SHA-256 content addressing, 4 memory types (facts/events/instructions/tasks), production infrastructure"
+      weaknesses: "Private beta, no KG, no WASM, cloud-dependent"
+    - name: "MemoryOS (BAI-LAB)"
+      github_stars: null
+      language: "Python"
+      memory_layers: 4
+      scope_isolation: "per-agent"
+      kg_native: false
+      semantic_search: "hierarchical retrieval"
+      session_mgmt: "hierarchical storage"
+      proactive_optim: false
+      wasm_skills: false
+      token_efficiency: false
+      strengths: "EMNLP 2025 Oral, 4W taxonomy (What/When/Where/Why), hierarchical storage"
+      weaknesses: "Python-only, no KG, no WASM, research prototype"
+    - name: "TencentDB Agent Memory"
+      github_stars: null
+      language: "Python"
+      memory_layers: 4
+      scope_isolation: "per-agent"
+      kg_native: false
+      semantic_search: "context offloading + structured task graph"
+      session_mgmt: "progressive L0-L3 architecture"
+      proactive_optim: "Mermaid Task Canvas"
+      wasm_skills: false
+      token_efficiency: "61% token reduction"
+      strengths: "4-layer progressive architecture (L0 raw→L1 atomic→L2 scene→L3 profile), 61% token reduction, MIT license, OpenClaw/Hermes compatible"
+      weaknesses: "Python-only, no KG, no WASM, cloud-oriented"
+    - name: "agentmemory (rohitg00)"
+      github_stars: 6247
+      language: "TypeScript + Rust"
+      memory_layers: 1
+      scope_isolation: "per-agent"
+      kg_native: true
+      semantic_search: "BM25 + vector + KG hybrid"
+      session_mgmt: "auto-record from sessions"
+      proactive_optim: "zero manual maintenance"
+      wasm_skills: false
+      token_efficiency: false
+      strengths: "Fastest growing (400 stars/day), hybrid search (BM25+vector+KG), targets coding agents (Claude Code/Cursor/Gemini CLI)"
+      weaknesses: "No scope isolation, no WASM, no token efficiency, coding-agent focused"
+    - name: "NevaMind memU"
+      github_stars: 13100
+      language: "Python"
+      memory_layers: null
+      scope_isolation: "per-agent"
+      kg_native: false
+      semantic_search: "external"
+      session_mgmt: "persistent agent memory"
+      proactive_optim: "reduces LLM calls for memory management"
+      wasm_skills: false
+      token_efficiency: false
+      strengths: "13.1K stars, 24/7 proactive agents, reduces LLM overhead for memory operations"
+      weaknesses: "Python-only, no KG, no WASM, details sparse"
+    - name: "EverMind/EverOS"
+      github_stars: null
+      language: "Python"
+      memory_layers: null
+      scope_isolation: "per-agent"
+      kg_native: true
+      semantic_search: "hypergraph hierarchical retrieval"
+      session_mgmt: "self-evolving agent memory"
+      proactive_optim: "Skills Evolution Engine — auto-distills skills from interactions"
+      wasm_skills: false
+      token_efficiency: false
+      strengths: "ACL 2026, HyperMem (92.73% LoCoMo), Skills Evolution Engine, 234.8% improvement on complex tasks"
+      weaknesses: "Python-only, research prototype, no WASM"
+
+plico:
+  description: "Plico current state (v49)"
+  language: "Rust"
+  memory_layers: 4
+  scope_isolation: "Private/Shared/Group (OS-enforced)"
+  kg_native: true
+  kg_edge_types: 17
+  semantic_search: "native BM25+HNSW hybrid"
+  session_mgmt: "OS session + warm context + delta"
+  proactive_optim: "intent prefetch + skill forge + self-healing"
+  wasm_skills: true
+  token_efficiency: "L0/L1/L2 layered context"
+  performance_recall_ms: 0.3
+  performance_search_ms: 0.07
+  strengths:
+    - "Fastest recall latency (0.3ms vs Letta 10ms)"
+    - "Only OS with native KG + WASM + 4-layer memory"
+    - "Model-agnostic (zero model coupling)"
+    - "Scope isolation enforced at OS level"
+    - "Proactive optimization (intent prefetch, skill forge)"
+  weaknesses:
+    - "Memory accuracy far below specialists (F1 0.212 vs EverMind 92.73%, Mem0 91.6%, Mastra 94.87%)"
+    - "No self-editing memory paradigm (Letta) or observation agents (Mastra)"
+    - "No hypergraph memory (EverMind) or context offloading (TencentDB)"
+    - "Limited embedding model (Qwen3-0.6B vs KaLM-12B, Harrier)"
+    - "KG reasoning untested for quality (only latency)"
+    - "No RAGAS-style faithfulness/relevance metrics"
+    - "No multi-profile benchmark (PersonaMem)"
+    - "No prompt-caching optimization (Mastra's stable context)"
+    - "No extreme-scale memory test (BEAM 1M/10M)"
+    - "No skills auto-distillation (EverMind Skills Evolution Engine)"

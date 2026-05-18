@@ -54,10 +54,10 @@ cargo clippy -- -D warnings
 
 ### 阶段 5：端到端测试
 
-- 运行 benchmark suite 验证业务流程
-- 生成 benchmark 报告到 `benchmarks/results/`
-- 对比上一版本报告，确认无退化
-- 推演下一阶段里程碑
+- 运行 11 个 benchmark suites 验证业务流程（conversational-qa / retrieval / kg-reasoning / performance / memory-lifecycle / token-efficiency / scope-isolation / session-lifecycle / causal-reasoning / intent-routing / proactive-optimization）
+- 生成 benchmark 报告（6 节：Summary / Suite Results / Competitor Analysis / Framework Comparison / SAS / Key Learnings）到 `benchmarks/docs/`
+- 对比竞争对手基线（LongMemEval / LoCoMo / PersonaMem / MTEB / Token Efficiency）和上一版本报告
+- 确认无退化后推演下一阶段里程碑
 
 ## 退化判定规则
 
@@ -69,7 +69,7 @@ cargo clippy -- -D warnings
 | 覆盖率下降 | `cargo llvm-cov --lib` | 里程碑前的覆盖率 |
 | 性能回归 | `cargo test --test perf_regression` | `tests/perf_regression.rs` 中的阈值 |
 | Clippy 新增警告 | `cargo clippy -- -D warnings` | 里程碑前的警告数 |
-| Benchmark 指标下降 | 对比 `benchmarks/results/` | 上一版本的 benchmark 报告 |
+| Benchmark 指标下降 | 对比 `benchmarks/docs/` 报告 | 上一版本的 accuracy_pct / recall@5 / SAS 总分 |
 
 ## 版本快照存储规则
 

@@ -28,6 +28,8 @@ fn make_entry(agent: &str, tier: MemoryTier, importance: u8, text: &str) -> Memo
         memory_type: plico::memory::MemoryType::default(),
         causal_parent: None,
         supersedes: None,
+        deleted_at: None,
+        superseded_by: None,
     }
 }
 
@@ -286,7 +288,9 @@ fn test_promotion_ephemeral_to_working() {
         memory_type: plico::memory::MemoryType::default(),
         causal_parent: None,
         supersedes: None,
-    };
+        deleted_at: None,
+        superseded_by: None,
+};
     mem.store(entry);
 
     mem.promote_check("a1");
@@ -328,7 +332,9 @@ fn test_promotion_working_to_longterm() {
         memory_type: plico::memory::MemoryType::default(),
         causal_parent: None,
         supersedes: None,
-    };
+        deleted_at: None,
+        superseded_by: None,
+};
     mem.store(entry);
 
     mem.promote_check("a1");
@@ -369,7 +375,9 @@ fn test_no_promotion_below_threshold() {
         memory_type: plico::memory::MemoryType::default(),
         causal_parent: None,
         supersedes: None,
-    };
+        deleted_at: None,
+        superseded_by: None,
+};
     mem.store(entry);
 
     mem.promote_check("a1");
@@ -409,7 +417,9 @@ fn test_no_promotion_working_low_importance() {
         memory_type: plico::memory::MemoryType::default(),
         causal_parent: None,
         supersedes: None,
-    };
+        deleted_at: None,
+        superseded_by: None,
+};
     mem.store(entry);
 
     mem.promote_check("a1");
@@ -490,7 +500,9 @@ fn test_longterm_entries_not_promoted() {
         memory_type: plico::memory::MemoryType::default(),
         causal_parent: None,
         supersedes: None,
-    };
+        deleted_at: None,
+        superseded_by: None,
+};
     mem.store(lt_entry);
 
     let proc_entry = MemoryEntry {
@@ -517,7 +529,9 @@ fn test_longterm_entries_not_promoted() {
         memory_type: plico::memory::MemoryType::default(),
         causal_parent: None,
         supersedes: None,
-    };
+        deleted_at: None,
+        superseded_by: None,
+};
     mem.store(proc_entry);
 
     mem.promote_check("a1");

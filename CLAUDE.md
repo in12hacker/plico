@@ -1,11 +1,5 @@
 # CLAUDE.md — 太初 (Plico) AI-OS
 
-本文件为 Claude Code 提供项目级指引。
-
-## 项目概述
-
-**太初 (Plico)** 是一个 AI 原生操作系统内核，专为 AI Agent 设计——无人类 CLI/GUI，无人类文件系统路径。所有数据管理通过 AI 友好的语义 API 完成。系统与模型无关，不依赖任何特定 AI 或 Agent。"太初"意为"Genesis / In the Beginning"——AI-OS 自我觉醒的原初状态。
-
 设计文档：`system-v3.md`（Soul 3.0，中文）
 完整参考：`docs/genesis-reference.md`
 
@@ -102,7 +96,7 @@ MiniMax MCP server 提供 `web_search` 和 `understand_image` 工具。配置方
 2. **模块开发** — 按功能模块逐个开发，不可一次性生成全部代码。每个模块必须覆盖测试用例
 3. **质量门控**（每个模块完成后）— 测试通过 + Clippy 无新增警告 + 无 O(n²) 算法
 4. **里程碑验收**（所有模块完成后）— 回归测试 + 覆盖率 ≥ 90% + 性能回归 + 可达性测试
-5. **端到端测试** — 运行 benchmark suite 验证业务流程，生成报告到 `benchmarks/results/`
+5. **端到端测试** — 运行 11 个 benchmark suites（覆盖 10 条公理），生成 6 节报告（含竞争对手对比和 SAS）到 `benchmarks/docs/`
 
 ### 测试覆盖率门控
 
@@ -124,7 +118,7 @@ MiniMax MCP server 提供 `web_search` 和 `understand_image` 工具。配置方
 - 覆盖率下降（低于里程碑前的基线）
 - 性能回归测试失败（P50/P95 超过阈值）
 - Clippy 出现新增警告
-- Benchmark 指标下降（对比上一版本报告）
+- Benchmark 指标下降（对比上一版本报告中的 accuracy_pct / recall@5 / SAS 总分）
 
 ### 版本快照存储规则
 
@@ -256,7 +250,7 @@ docs/
 - 里程碑文件：`vXX-<name>.md`（如 `v46-summary.md`）
 - 设计文档：`<topic>.md`（如 `soul-v3-architecture.md`）
 - 审计报告：已完成的迁移到 `docs/milestones/`，不保留在 `docs/` 根目录
-- Benchmark 报告：存放在 `benchmarks/docs/` 或 `benchmarks/results/`
+- Benchmark 报告：存放在 `benchmarks/docs/`（6 节报告含竞争对手分析）
 
 ### 文档生命周期
 
@@ -279,3 +273,66 @@ docs/
 - **编码原则**：`.claude/rules/coding-principles.md` — Think Before Coding、Simplicity First、Surgical Changes 等
 - **Benchmark 操作**：`.claude/rules/benchmark.md` — Benchmark 框架完整操作指南
 - **开发流程详细说明**：`.claude/rules/development-workflow.md` — 里程碑模板、退化判定、性能回归测试标准等
+
+# CLAUDE.md — 12-rule template
+
+These rules apply to every task in this project unless explicitly overridden.
+Bias: caution over speed on non-trivial work. Use judgment on trivial tasks.
+
+## Rule 1 — Think Before Coding
+State assumptions explicitly. If uncertain, ask rather than guess.
+Present multiple interpretations when ambiguity exists.
+Push back when a simpler approach exists.
+Stop when confused. Name what's unclear.
+
+## Rule 2 — Simplicity First
+Minimum code that solves the problem. Nothing speculative.
+No features beyond what was asked. No abstractions for single-use code.
+Test: would a senior engineer say this is overcomplicated? If yes, simplify.
+
+## Rule 3 — Surgical Changes
+Touch only what you must. Clean up only your own mess.
+Don't "improve" adjacent code, comments, or formatting.
+Don't refactor what isn't broken. Match existing style.
+
+## Rule 4 — Goal-Driven Execution
+Define success criteria. Loop until verified.
+Don't follow steps. Define success and iterate.
+Strong success criteria let you loop independently.
+
+## Rule 5 — Use the model only for judgment calls
+Use me for: classification, drafting, summarization, extraction.
+Do NOT use me for: routing, retries, deterministic transforms.
+If code can answer, code answers.
+
+## Rule 6 — Token budgets are not advisory
+Per-task: 4,000 tokens. Per-session: 30,000 tokens.
+If approaching budget, summarize and start fresh.
+Surface the breach. Do not silently overrun.
+
+## Rule 7 — Surface conflicts, don't average them
+If two patterns contradict, pick one (more recent / more tested).
+Explain why. Flag the other for cleanup.
+Don't blend conflicting patterns.
+
+## Rule 8 — Read before you write
+Before adding code, read exports, immediate callers, shared utilities.
+"Looks orthogonal" is dangerous. If unsure why code is structured a way, ask.
+
+## Rule 9 — Tests verify intent, not just behavior
+Tests must encode WHY behavior matters, not just WHAT it does.
+A test that can't fail when business logic changes is wrong.
+
+## Rule 10 — Checkpoint after every significant step
+Summarize what was done, what's verified, what's left.
+Don't continue from a state you can't describe back.
+If you lose track, stop and restate.
+
+## Rule 11 — Match the codebase's conventions, even if you disagree
+Conformance > taste inside the codebase.
+If you genuinely think a convention is harmful, surface it. Don't fork silently.
+
+## Rule 12 — Fail loud
+"Completed" is wrong if anything was skipped silently.
+"Tests pass" is wrong if any were skipped.
+Default to surfacing uncertainty, not hiding it.

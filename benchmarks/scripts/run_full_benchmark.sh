@@ -12,6 +12,7 @@ HOST="${PLICO_HOST:-127.0.0.1}"
 PORT="${PLICO_PORT:-7878}"
 ROOT="/tmp/plico-bench-$(date +%Y%m%d-%H%M%S)"
 PREPROCESS_TIMEOUT="${PREPROCESS_TIMEOUT:-300}"
+VERSION="${PLICO_BENCH_VERSION:-dev}"
 DRY_RUN=false
 SKIP_JINA_V5=false
 FAILED_SUITES=()
@@ -24,6 +25,7 @@ Options:
   --dry-run              Print configuration and exit without running
   --skip-jina-v5         Skip Jina v5 embedding config
   --preprocess-timeout N Seconds to wait for indexing after ingest (default: 180)
+  --version V            Benchmark version string (default: dev, or PLICO_BENCH_VERSION env)
   --help                 Show this help
 EOF
 }
@@ -34,6 +36,10 @@ while [[ $# -gt 0 ]]; do
         --skip-jina-v5) SKIP_JINA_V5=true; shift ;;
         --preprocess-timeout)
             PREPROCESS_TIMEOUT="$2"
+            shift 2
+            ;;
+        --version)
+            VERSION="$2"
             shift 2
             ;;
         --help) usage; exit 0 ;;
@@ -80,8 +86,40 @@ function verify_server() {
     return 1
 }
 
+function verify_reranker() {
+    local url="http://127.0.0.1:18926/v1"
+    echo -n "Verifying Reranker (18926) /v1/rerank ... "
+    local resp
+    resp=$(curl -sf -w "\n%{http_code}" -X POST "$url/rerank" \
+        -H "Content-Type: application/json" \
+        -d '{"model":"test","query":"test","documents":["test"],"top_n":1}' 2>/dev/null) || true
+    local http_code
+    http_code=$(echo "$resp" | tail -1)
+    if [[ "$http_code" == "200" ]]; then
+        echo "OK (reranking enabled)"
+        return 0
+    elif [[ "$http_code" == "501" ]]; then
+        echo "FAILED (501: missing --reranking flag)"
+        echo ""
+        echo "Fix: scripts/model_manager.sh restart reranker"
+        echo "  or: scripts/start_model_servers.sh (re-run to auto-fix)"
+        return 1
+    else
+        echo "FAILED (HTTP $http_code)"
+        return 1
+    fi
+}
+
 function start_plicod() {
     local embed_base=$1
+    # Kill any existing plicod on the target port
+    local existing_pid
+    existing_pid=$(lsof -ti :"$PORT" 2>/dev/null || true)
+    if [[ -n "$existing_pid" ]]; then
+        echo "Killing existing process on port $PORT (PID $existing_pid)..."
+        kill -TERM $existing_pid 2>/dev/null || true
+        sleep 2
+    fi
     rm -rf "$ROOT"
     mkdir -p "$ROOT"
 
@@ -91,6 +129,15 @@ function start_plicod() {
     export LLM_BACKEND=openai
     export LLM_MODEL=gemma-4-26B-A4B-it-Q4_K_M.gguf
     export PLICO_KG_AUTO_EXTRACT=false
+    export PLICO_RERANKER_API_BASE="http://127.0.0.1:18926/v1"
+    export PLICO_RERANKER_MODEL="bge-reranker-v2-m3"
+    export PLICO_RERANKER_TOP_N=10
+
+    # Enable debug logging if DEBUG=1 is set
+    if [ "${DEBUG:-0}" = "1" ]; then
+        export RUST_LOG=debug
+        echo "Debug logging enabled (RUST_LOG=debug)"
+    fi
 
     "$PLICOD" --port "$PORT" --root "$ROOT" > /tmp/plicod_bench.log 2>&1 &
     PLICOD_PID=$!
@@ -132,7 +179,7 @@ function run_suite() {
     local suite=$1
     local samples=$2
     local embed_name=$3
-    local output="results/${suite}_${embed_name}_v44.json"
+    local output="results/${suite}_${embed_name}_${VERSION}.json"
 
     echo ""
     echo "========================================"
@@ -192,30 +239,42 @@ if [[ "$DRY_RUN" == false ]]; then
     if [[ "$SKIP_JINA_V5" == false ]]; then
         verify_server "http://127.0.0.1:18922/v1" "Embedding Jina v5 (18922)" 30
     fi
+    verify_reranker || exit 1
 fi
 
 cd "$BENCH_DIR"
 mkdir -p results
+export PLICO_BENCH_VERSION="$VERSION"
 
 # ===== Config A: Qwen3 =====
 start_plicod "http://127.0.0.1:18921/v1"
-run_suite "performance"       100 "qwen3"
-run_suite "memory-crud"       100 "qwen3"
-run_suite "conversational-qa"  40 "qwen3"
-run_suite "retrieval"          30 "qwen3"
-run_suite "kg-reasoning"       50 "qwen3"
-run_suite "temporal-reasoning" 30 "qwen3"
+run_suite "performance"             100 "qwen3"
+run_suite "memory-lifecycle"        100 "qwen3"
+run_suite "conversational-qa"        40 "qwen3"
+run_suite "retrieval"                30 "qwen3"
+run_suite "kg-reasoning"             50 "qwen3"
+run_suite "token-efficiency"         50 "qwen3"
+run_suite "scope-isolation"          30 "qwen3"
+run_suite "session-lifecycle"        20 "qwen3"
+run_suite "causal-reasoning"         30 "qwen3"
+run_suite "intent-routing"           30 "qwen3"
+run_suite "proactive-optimization"   30 "qwen3"
 kill_plicod
 
 # ===== Config B: Jina v5 =====
 if [[ "$SKIP_JINA_V5" == false ]]; then
     start_plicod "http://127.0.0.1:18922/v1"
-    run_suite "performance"       100 "jina_v5"
-    run_suite "memory-crud"       100 "jina_v5"
-    run_suite "conversational-qa"  40 "jina_v5"
-    run_suite "retrieval"          30 "jina_v5"
-    run_suite "kg-reasoning"       50 "jina_v5"
-    run_suite "temporal-reasoning" 30 "jina_v5"
+    run_suite "performance"             100 "jina_v5"
+    run_suite "memory-lifecycle"        100 "jina_v5"
+    run_suite "conversational-qa"        40 "jina_v5"
+    run_suite "retrieval"                30 "jina_v5"
+    run_suite "kg-reasoning"             50 "jina_v5"
+    run_suite "token-efficiency"         50 "jina_v5"
+    run_suite "scope-isolation"          30 "jina_v5"
+    run_suite "session-lifecycle"        20 "jina_v5"
+    run_suite "causal-reasoning"         30 "jina_v5"
+    run_suite "intent-routing"           30 "jina_v5"
+    run_suite "proactive-optimization"   30 "jina_v5"
     kill_plicod
 fi
 
@@ -225,9 +284,26 @@ echo "========================================"
 echo "Generating comparison report..."
 echo "========================================"
 if [[ "$DRY_RUN" == false ]]; then
+    # Find previous version for comparison
+    PREV_VERSION=""
+    for f in results/*_v*.json; do
+        v=$(echo "$f" | grep -oP '_v\d+\.json$' | sed 's/_//;s/\.json//')
+        if [[ -n "$v" && "$v" != "$VERSION" ]]; then
+            PREV_VERSION="$v"
+            break
+        fi
+    done
+
+    COMPARE_FLAG=""
+    if [[ -n "$PREV_VERSION" ]]; then
+        echo "Comparing against: $PREV_VERSION"
+        COMPARE_FLAG="--compare $PREV_VERSION"
+    fi
+
     uv run python -m plico_benchmarks report \
         --input results/ \
-        --output docs/benchmark_report_v44_comparison.md 2>&1 || echo "REPORT_FAILED"
+        --output "docs/benchmark_report_${VERSION}_comparison.md" \
+        $COMPARE_FLAG 2>&1 || echo "REPORT_FAILED"
 fi
 
 echo ""

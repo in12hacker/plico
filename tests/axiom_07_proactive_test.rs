@@ -43,7 +43,8 @@ fn axiom7_event_subscription_delivers_notifications() {
         tenant_id: None,
         agent_token: None,
         intent: None,
-    });
+            scope: None,
+});
 
     let poll_resp = kernel.handle_api_request(ApiRequest::EventPoll {
         subscription_id: sub_id,
@@ -78,7 +79,8 @@ fn axiom7_context_assembly_prewarming() {
             tenant_id: None,
             agent_token: None,
             intent: None,
-        });
+            scope: None,
+});
     }
 
     let assemble_resp = kernel.handle_api_request(ApiRequest::ContextAssemble {
@@ -113,7 +115,8 @@ fn axiom7_declare_intent_triggers_prefetch() {
         tenant_id: None,
         agent_token: None,
         intent: None,
-    });
+            scope: None,
+});
 
     let declare_resp = kernel.handle_api_request(ApiRequest::DeclareIntent {
         agent_id: agent_id.clone(),

@@ -107,6 +107,10 @@ pub enum ApiRequest {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         agent_token: Option<String>,
         intent: Option<String>,
+        /// Visibility scope — controls cross-agent access within a tenant.
+        /// `"private"` (default) or `"shared"`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scope: Option<crate::cas::ObjectScope>,
     },
 
     #[serde(rename = "read")]
@@ -1310,6 +1314,40 @@ pub enum ApiRequest {
         tenant_id: Option<String>,
     },
 
+    // ── Trace (v52) ────────────────────────────────────────────────
+
+    /// List trace files for an agent within a date range.
+    #[serde(rename = "trace_list")]
+    TraceList {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        agent_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        since: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        until: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tool_name: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        status: Option<String>,
+        #[serde(default)]
+        limit: Option<usize>,
+    },
+
+    /// Show all spans for a specific trace_id.
+    #[serde(rename = "trace_show")]
+    TraceShow {
+        trace_id: String,
+    },
+
+    /// List failed spans for an agent.
+    #[serde(rename = "trace_failures")]
+    TraceFailures {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        agent_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        since: Option<String>,
+    },
+
     // ── File Import (v33) ─────────────────────────────────────────
 
     /// Import files from a local directory into CAS with optional chunking.
@@ -1524,6 +1562,15 @@ pub struct ApiResponse {
     /// File import results (v33).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub import_results: Option<Vec<ImportFileResult>>,
+    /// Trace list result (v52).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trace_list: Option<serde_json::Value>,
+    /// Trace show result (v52).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trace_show: Option<serde_json::Value>,
+    /// Trace failures result (v52).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trace_failures: Option<serde_json::Value>,
 }
 
 /// Result for a single file import.
@@ -1613,6 +1660,9 @@ impl Default for ApiResponse {
             cost_agent_trend: None,
             cost_anomaly: None,
             import_results: None,
+            trace_list: None,
+            trace_show: None,
+            trace_failures: None,
         }
     }
 }
@@ -1744,6 +1794,7 @@ mod tests {
             tenant_id: None,
             agent_token: None,
             intent: None,
+            scope: None,
         };
         let json = serde_json::to_string(&req).unwrap();
         let decoded: ApiRequest = serde_json::from_str(&json).unwrap();

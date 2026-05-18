@@ -1,7 +1,12 @@
 //! DSL 技能解释器 —— 执行声明式配置型技能
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
+/// 工具执行抽象 —— 打破 DslInterpreter ↔ AIKernel 循环依赖
+pub trait ToolExecutor: Send + Sync {
+    fn execute_tool(&self, name: &str, params: &serde_json::Value, agent_id: &str) -> Result<serde_json::Value, String>;
+}
 
 /// DSL 技能定义（声明式）
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -68,35 +73,54 @@ pub struct DslCondition {
 }
 
 /// DSL 解释器
-#[derive(Debug, Default)]
-pub struct DslInterpreter;
+#[derive(Default)]
+pub struct DslInterpreter {
+    executor: Option<Arc<dyn ToolExecutor>>,
+}
+
+impl std::fmt::Debug for DslInterpreter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DslInterpreter")
+            .field("has_executor", &self.executor.is_some())
+            .finish()
+    }
+}
 
 impl DslInterpreter {
     pub fn new() -> Self {
-        Self
+        Self { executor: None }
+    }
+
+    pub fn with_executor(executor: Arc<dyn ToolExecutor>) -> Self {
+        Self { executor: Some(executor) }
     }
 
     /// 执行 DSL 技能
-    pub fn execute(&self, dsl: &DslSkill, inputs: serde_json::Value) -> Result<serde_json::Value, String> {
+    pub fn execute(&self, dsl: &DslSkill, inputs: serde_json::Value, agent_id: Option<&str>) -> Result<serde_json::Value, String> {
         let mut context = ExecutionContext::new(inputs);
 
         for step in &dsl.steps {
-            self.execute_step(step, &mut context)?;
+            self.execute_step(step, &mut context, agent_id.unwrap_or("system"))?;
         }
 
         Ok(context.get_outputs(&dsl.outputs))
     }
 
-    fn execute_step(&self, step: &DslStep, context: &mut ExecutionContext) -> Result<(), String> {
+    fn execute_step(&self, step: &DslStep, context: &mut ExecutionContext, agent_id: &str) -> Result<(), String> {
         match step {
-            DslStep::ToolCall { tool, .. } => {
-                return Err(format!("Unknown tool: {}", tool));
+            DslStep::ToolCall { tool, params, output_as } => {
+                let executor = self.executor.as_ref()
+                    .ok_or_else(|| format!("No tool executor configured (tool: {})", tool))?;
+                let resolved_params = context.resolve_params(params);
+                let result = executor.execute_tool(tool, &resolved_params, agent_id)?;
+                let var_name = output_as.as_deref().unwrap_or(tool);
+                context.set_variable(var_name, result);
             }
             DslStep::If { condition, then_steps, else_steps } => {
                 let cond_result = self.evaluate_condition(condition, context)?;
                 let steps = if cond_result { then_steps } else { else_steps };
                 for step in steps {
-                    self.execute_step(step, context)?;
+                    self.execute_step(step, context, agent_id)?;
                 }
             }
             DslStep::ForEach { over, steps } => {
@@ -104,7 +128,7 @@ impl DslInterpreter {
                 for item in items {
                     context.set_variable("item", item);
                     for step in steps {
-                        self.execute_step(step, context)?;
+                        self.execute_step(step, context, agent_id)?;
                     }
                 }
             }
@@ -114,7 +138,7 @@ impl DslInterpreter {
                 for branch in branches {
                     let mut branch_ctx = context.clone();
                     for step in branch {
-                        self.execute_step(step, &mut branch_ctx)?;
+                        self.execute_step(step, &mut branch_ctx, agent_id)?;
                     }
                     // Merge branch variables back into main context
                     for (k, v) in branch_ctx.variables {
@@ -307,7 +331,7 @@ mod tests {
             outputs: vec![],
         };
         let interpreter = DslInterpreter::new();
-        let result = interpreter.execute(&dsl, serde_json::Value::Null).unwrap();
+        let result = interpreter.execute(&dsl, serde_json::Value::Null, None).unwrap();
         assert_eq!(result, serde_json::json!({}));
     }
 
@@ -333,7 +357,7 @@ mod tests {
             ],
         };
         let interpreter = DslInterpreter::new();
-        let result = interpreter.execute(&dsl, serde_json::Value::Null).unwrap();
+        let result = interpreter.execute(&dsl, serde_json::Value::Null, None).unwrap();
         assert!(result.get("my_key").is_some());
     }
 
@@ -365,7 +389,7 @@ mod tests {
         };
         let interpreter = DslInterpreter::new();
         let inputs = serde_json::json!({"items": ["a", "b", "c"]});
-        let result = interpreter.execute(&dsl, inputs).unwrap();
+        let result = interpreter.execute(&dsl, inputs, None).unwrap();
         let stored = result.get("last_item").unwrap();
         assert!(stored.get("stored").unwrap().as_bool().unwrap());
     }
@@ -409,16 +433,16 @@ mod tests {
         };
         let interpreter = DslInterpreter::new();
         let inputs = serde_json::json!({"x": 5});
-        let result = interpreter.execute(&dsl, inputs).unwrap();
+        let result = interpreter.execute(&dsl, inputs, None).unwrap();
         assert!(result.get("result").is_some());
 
         let inputs = serde_json::json!({"x": 3});
-        let result = interpreter.execute(&dsl, inputs).unwrap();
+        let result = interpreter.execute(&dsl, inputs, None).unwrap();
         assert!(result.get("result").is_some());
     }
 
     #[test]
-    fn test_execute_unknown_tool_returns_error() {
+    fn test_execute_toolcall_without_executor_returns_error() {
         let dsl = DslSkill {
             version: "1.0".to_string(),
             name: "test".to_string(),
@@ -434,9 +458,9 @@ mod tests {
             outputs: vec![],
         };
         let interpreter = DslInterpreter::new();
-        let result = interpreter.execute(&dsl, serde_json::Value::Null);
+        let result = interpreter.execute(&dsl, serde_json::Value::Null, None);
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("Unknown tool"));
+        assert!(result.unwrap_err().contains("No tool executor"));
     }
 
     #[test]
@@ -459,7 +483,7 @@ mod tests {
         };
         let interpreter = DslInterpreter::new();
         let inputs = serde_json::json!({"name": "World"});
-        let result = interpreter.execute(&dsl, inputs).unwrap();
+        let result = interpreter.execute(&dsl, inputs, None).unwrap();
         let stored = result.get("greeting").unwrap();
         assert_eq!(stored.get("value").unwrap().as_str().unwrap(), "Hello World!");
     }
@@ -484,14 +508,14 @@ mod tests {
         };
         let interpreter = DslInterpreter::new();
         let inputs = serde_json::json!({"base": "/tmp"});
-        let result = interpreter.execute(&dsl, inputs).unwrap();
+        let result = interpreter.execute(&dsl, inputs, None).unwrap();
         let stored = result.get("path").unwrap();
         assert_eq!(stored.get("value").unwrap().as_str().unwrap(), "/tmp/file.txt");
     }
 
     #[test]
     fn test_template_substitution_in_object() {
-        let interpreter = DslInterpreter::new();
+        let _interpreter = DslInterpreter::new();
         let ctx = ExecutionContext::new(serde_json::json!({"host": "localhost", "port": 8080}));
         let params = serde_json::json!({"url": "http://${host}:${port}/api"});
         let resolved = ctx.resolve_params(&params);
@@ -522,7 +546,7 @@ mod tests {
             ],
         };
         let interpreter = DslInterpreter::new();
-        let result = interpreter.execute(&dsl, serde_json::json!({})).unwrap();
+        let result = interpreter.execute(&dsl, serde_json::json!({}), None).unwrap();
         let found = result.get("found").unwrap();
         let results = found.get("results").unwrap().as_array().unwrap();
         assert!(!results.is_empty());
@@ -553,7 +577,7 @@ mod tests {
             ],
         };
         let interpreter = DslInterpreter::new();
-        let result = interpreter.execute(&dsl, serde_json::json!({})).unwrap();
+        let result = interpreter.execute(&dsl, serde_json::json!({}), None).unwrap();
         let found = result.get("found").unwrap();
         let results = found.get("results").unwrap().as_array().unwrap();
         assert_eq!(results.len(), 1);
@@ -588,10 +612,72 @@ mod tests {
             ],
         };
         let interpreter = DslInterpreter::new();
-        let result = interpreter.execute(&dsl, serde_json::json!({})).unwrap();
+        let result = interpreter.execute(&dsl, serde_json::json!({}), None).unwrap();
         let a = result.get("branch_a").unwrap();
         assert_eq!(a.get("value").unwrap().as_str().unwrap(), "result_a");
         let b = result.get("branch_b").unwrap();
         assert_eq!(b.get("value").unwrap().as_str().unwrap(), "result_b");
+    }
+
+    /// Mock executor for testing ToolCall
+    struct MockExecutor;
+    impl ToolExecutor for MockExecutor {
+        fn execute_tool(&self, name: &str, params: &serde_json::Value, _agent_id: &str) -> Result<serde_json::Value, String> {
+            Ok(serde_json::json!({
+                "tool": name,
+                "params": params,
+                "mock": true
+            }))
+        }
+    }
+
+    #[test]
+    fn test_toolcall_with_executor() {
+        let dsl = DslSkill {
+            version: "1.0".to_string(),
+            name: "test".to_string(),
+            description: "test".to_string(),
+            inputs: vec![],
+            steps: vec![
+                DslStep::ToolCall {
+                    tool: "memory.create".to_string(),
+                    params: serde_json::json!({"content": "hello"}),
+                    output_as: Some("result".to_string()),
+                },
+            ],
+            outputs: vec![
+                DslOutput { name: "result".to_string(), dtype: "object".to_string() },
+            ],
+        };
+        let interpreter = DslInterpreter::with_executor(Arc::new(MockExecutor));
+        let result = interpreter.execute(&dsl, serde_json::json!({}), Some("test_agent")).unwrap();
+        let r = result.get("result").unwrap();
+        assert_eq!(r.get("tool").unwrap().as_str().unwrap(), "memory.create");
+        assert!(r.get("mock").unwrap().as_bool().unwrap());
+    }
+
+    #[test]
+    fn test_toolcall_resolves_template_params() {
+        let dsl = DslSkill {
+            version: "1.0".to_string(),
+            name: "test".to_string(),
+            description: "test".to_string(),
+            inputs: vec![],
+            steps: vec![
+                DslStep::ToolCall {
+                    tool: "search".to_string(),
+                    params: serde_json::json!({"query": "${search_term}"}),
+                    output_as: None,
+                },
+            ],
+            outputs: vec![
+                DslOutput { name: "search".to_string(), dtype: "object".to_string() },
+            ],
+        };
+        let interpreter = DslInterpreter::with_executor(Arc::new(MockExecutor));
+        let inputs = serde_json::json!({"search_term": "rust programming"});
+        let result = interpreter.execute(&dsl, inputs, Some("test_agent")).unwrap();
+        let r = result.get("search").unwrap();
+        assert_eq!(r.get("params").unwrap().get("query").unwrap().as_str().unwrap(), "rust programming");
     }
 }

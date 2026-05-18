@@ -173,6 +173,8 @@ fn test_checkpoint_text_roundtrip() {
         memory_type: plico::memory::MemoryType::default(),
         causal_parent: None,
         supersedes: None,
+        deleted_at: None,
+        superseded_by: None,
     };
 
     let cm = CheckpointMemory::from_entry(entry.clone());
@@ -219,6 +221,8 @@ fn test_checkpoint_procedure_roundtrip() {
         memory_type: plico::memory::MemoryType::default(),
         causal_parent: None,
         supersedes: None,
+        deleted_at: None,
+        superseded_by: None,
     };
 
     let cm = CheckpointMemory::from_entry(entry.clone());
@@ -260,6 +264,8 @@ fn test_checkpoint_knowledge_roundtrip() {
         memory_type: plico::memory::MemoryType::default(),
         causal_parent: None,
         supersedes: None,
+        deleted_at: None,
+        superseded_by: None,
     };
 
     let cm = CheckpointMemory::from_entry(entry.clone());
@@ -296,6 +302,8 @@ fn test_checkpoint_objectref_roundtrip() {
         memory_type: plico::memory::MemoryType::default(),
         causal_parent: None,
         supersedes: None,
+        deleted_at: None,
+        superseded_by: None,
     };
 
     let cm = CheckpointMemory::from_entry(entry.clone());
@@ -329,6 +337,8 @@ fn test_checkpoint_structured_roundtrip() {
         memory_type: plico::memory::MemoryType::default(),
         causal_parent: None,
         supersedes: None,
+        deleted_at: None,
+        superseded_by: None,
     };
 
     let cm = CheckpointMemory::from_entry(entry.clone());
@@ -352,7 +362,7 @@ fn test_search_does_not_inflate_access_count() {
     // Create an object
     let obj = AIObject::new(
         b"test content for search".to_vec(),
-        AIObjectMeta { content_type: ContentType::Text, tags: vec!["test".to_string()], created_by: "test".to_string(), created_at: 0, intent: None, tenant_id: "default".to_string() },
+        AIObjectMeta { content_type: ContentType::Text, tags: vec!["test".to_string()], created_by: "test".to_string(), created_at: 0, intent: None, tenant_id: "default".to_string(), scope: plico::cas::ObjectScope::default() },
     );
     let cid = storage.put(&obj).unwrap();
 
@@ -390,8 +400,8 @@ fn test_bm25_integration_with_search_result() {
     ).unwrap();
 
     // Create test objects
-    let _cid1 = fs.create(b"login authentication failure in module".to_vec(), vec!["auth".to_string()], "test".to_string(), None).unwrap();
-    let _cid2 = fs.create(b"unrelated cooking recipe chocolate cake".to_vec(), vec!["cooking".to_string()], "test".to_string(), None).unwrap();
+    let _cid1 = fs.create(b"login authentication failure in module".to_vec(), vec!["auth".to_string()], "test".to_string(), None, plico::cas::ObjectScope::default()).unwrap();
+    let _cid2 = fs.create(b"unrelated cooking recipe chocolate cake".to_vec(), vec!["cooking".to_string()], "test".to_string(), None, plico::cas::ObjectScope::default()).unwrap();
 
     let results = fs.search("login auth", 10);
 

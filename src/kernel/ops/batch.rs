@@ -52,7 +52,7 @@ impl crate::kernel::AIKernel {
                 let result = (|| {
                     let bytes = decode_content(&item.content, &item.content_encoding)
                         .map_err(|e| e.to_string())?;
-                    self.semantic_create(bytes, item.tags, agent_id, item.intent)
+                    self.semantic_create(bytes, item.tags, agent_id, item.intent, crate::cas::ObjectScope::default())
                         .map_err(|e| e.to_string())
                 })();
 
@@ -99,6 +99,7 @@ impl crate::kernel::AIKernel {
                     if let Some(emb_result) = embs.get(i) {
                         let cid = self.fs.create_with_embedding(
                             bytes, tags, agent_id_str.clone(), intent,
+                            crate::cas::ObjectScope::default(),
                             emb_result.embedding.clone(),
                             true, // skip_kg_edges: batch create avoids per-item similarity search
                         ).map_err(|e| e.to_string())?;
@@ -115,7 +116,7 @@ impl crate::kernel::AIKernel {
                         return Ok(cid);
                     }
                 }
-                self.semantic_create(bytes, tags, &agent_id_str, intent)
+                self.semantic_create(bytes, tags, &agent_id_str, intent, crate::cas::ObjectScope::default())
                     .map_err(|e| e.to_string())
             });
 

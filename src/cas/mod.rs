@@ -15,5 +15,5 @@ pub mod gc;
 pub mod object;
 pub mod storage;
 
-pub use object::{AIObject, AIObjectMeta, ContentType};
+pub use object::{AIObject, AIObjectMeta, ContentType, ObjectScope};
 pub use storage::{CASStorage, CASError};

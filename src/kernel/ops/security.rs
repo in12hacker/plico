@@ -272,6 +272,7 @@ mod tests {
             tenant_id: Some("tenant-a".to_string()),
             agent_token: Some("tok123".to_string()),
             intent: None,
+            scope: None,
         };
         let (agent_id, token, tenant) = kernel.extract_security_info(&req);
         assert_eq!(agent_id, Some("test-agent".to_string()));
@@ -313,6 +314,7 @@ mod tests {
             tenant_id: None,
             agent_token: None,
             intent: None,
+            scope: None,
         };
         assert_eq!(kernel.map_request_to_action(&req), PermissionAction::Write);
     }

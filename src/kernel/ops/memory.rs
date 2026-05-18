@@ -102,10 +102,13 @@ impl crate::kernel::AIKernel {
             memory_type: MemoryType::default(),
             causal_parent: None,
             supersedes: None,
+            superseded_by: None,
+            deleted_at: None,
         };
         let quota = self.agent_memory_quota(agent_id);
-        self.memory.store_checked(entry, quota)
+        self.memory.store_checked(entry.clone(), quota)
             .map_err(|e| e.to_string())?;
+        super::observer::check_memory_write(agent_id, &entry, &self.memory);
         Ok(entry_id)
     }
 
@@ -153,10 +156,13 @@ impl crate::kernel::AIKernel {
             memory_type: MemoryType::default(),
             causal_parent: None,
             supersedes: None,
+            superseded_by: None,
+            deleted_at: None,
         };
         let quota = self.agent_memory_quota(agent_id);
-        self.memory.store_checked(entry, quota)
+        self.memory.store_checked(entry.clone(), quota)
             .map_err(|e| e.to_string())?;
+        super::observer::check_memory_write(agent_id, &entry, &self.memory);
         self.event_bus.emit(KernelEvent::MemoryStored {
             agent_id: agent_id.to_string(),
             tier: "working".into(),
@@ -181,7 +187,7 @@ impl crate::kernel::AIKernel {
         if self.permissions.check(&ctx, PermissionAction::Read).is_err() {
             return Vec::new();
         }
-        let entries: Vec<MemoryEntry> = self.memory.get_all(agent_id)
+        let entries: Vec<MemoryEntry> = self.memory.get_active(agent_id)
             .into_iter()
             .filter(|e| e.tenant_id == tenant_id)
             .collect();
@@ -231,11 +237,78 @@ impl crate::kernel::AIKernel {
         moved
     }
 
-    /// Delete a specific memory entry by ID across all tiers.
+    /// Delete a specific memory entry by ID across all tiers (soft-delete).
+    ///
+    /// Sets `deleted_at` timestamp instead of physically removing the entry.
+    /// The entry is retained for audit trail and will be cleaned up by compaction.
     pub fn memory_delete(&self, agent_id: &str, _tenant_id: &str, entry_id: &str) -> bool {
-        let deleted = self.memory.delete_entry(agent_id, entry_id);
+        let deleted = self.memory.soft_delete_entry(agent_id, entry_id);
         if deleted { self.persist_memories(); }
         deleted
+    }
+
+    /// Update a memory entry by creating a new version and superseding the old one.
+    ///
+    /// This implements append-only updates: the old entry is preserved with
+    /// `supersedes` pointing to nothing (it's the original), and the new entry
+    /// has `supersedes` pointing to the old entry's ID.
+    pub fn memory_update(
+        &self,
+        agent_id: &str,
+        tenant_id: &str,
+        entry_id: &str,
+        new_content: String,
+    ) -> Result<String, String> {
+        let ctx = PermissionContext::new(agent_id.to_string(), tenant_id.to_string());
+        self.permissions.check(&ctx, PermissionAction::Write).map_err(|e| e.to_string())?;
+
+        // Find the old entry to copy metadata
+        let old_entry = self.memory.get_all(agent_id)
+            .into_iter()
+            .find(|e| e.id == entry_id && e.tenant_id == tenant_id)
+            .ok_or_else(|| format!("Entry {} not found", entry_id))?;
+
+        // Create new entry with supersedes pointing to old
+        let new_id = uuid::Uuid::new_v4().to_string();
+        let now = crate::memory::layered::now_ms();
+        let new_entry = MemoryEntry {
+            id: new_id.clone(),
+            agent_id: agent_id.to_string(),
+            tenant_id: tenant_id.to_string(),
+            tier: old_entry.tier,
+            content: MemoryContent::Text(new_content),
+            importance: old_entry.importance,
+            access_count: 0,
+            last_accessed: now,
+            created_at: now,
+            tags: old_entry.tags.clone(),
+            embedding: None,
+            ttl_ms: old_entry.ttl_ms,
+            original_ttl_ms: old_entry.original_ttl_ms,
+            scope: old_entry.scope.clone(),
+            memory_type: old_entry.memory_type,
+            causal_parent: old_entry.causal_parent.clone(),
+            supersedes: Some(entry_id.to_string()),
+            superseded_by: None,
+            deleted_at: None,
+        };
+
+        let quota = self.agent_memory_quota(agent_id);
+        self.memory.store_checked(new_entry, quota)
+            .map_err(|e| e.to_string())?;
+        // Mark old entry as superseded
+        self.memory.mark_superseded(agent_id, entry_id, &new_id);
+        self.persist_memories();
+        Ok(new_id)
+    }
+
+    /// Compact memory for an agent: remove superseded entries older than `max_age_ms`.
+    ///
+    /// Preserves entries referenced by causal chains. Returns number of entries removed.
+    pub fn memory_compact(&self, agent_id: &str, max_age_ms: u64) -> usize {
+        let removed = self.memory.compact(agent_id, max_age_ms);
+        if removed > 0 { self.persist_memories(); }
+        removed
     }
 
     /// Store a memory entry in the agent's long-term tier with semantic embedding.
@@ -321,6 +394,8 @@ impl crate::kernel::AIKernel {
             memory_type: MemoryType::default(),
             causal_parent: None,
             supersedes: None,
+            superseded_by: None,
+            deleted_at: None,
         };
         let quota = self.agent_memory_quota(agent_id);
         self.memory.store_checked(entry, quota)
@@ -409,6 +484,8 @@ impl crate::kernel::AIKernel {
                         memory_type: fact.fact_type.to_memory_type(),
                         causal_parent: Some(entry_id.clone()),
                         supersedes: None,
+            superseded_by: None,
+            deleted_at: None,
                     };
                     let _ = self.memory.store_checked(fact_entry, quota);
                 }
@@ -479,6 +556,8 @@ impl crate::kernel::AIKernel {
                 memory_type: MemoryType::default(),
                 causal_parent: None,
                 supersedes: None,
+            superseded_by: None,
+            deleted_at: None,
             };
             self.memory.store_checked(entry, quota).map_err(|e| e.to_string())?;
             self.event_bus.emit(KernelEvent::MemoryStored {
@@ -696,7 +775,12 @@ impl crate::kernel::AIKernel {
                     rfe.set_kg_signals(kg_score_map.clone());
                 }
 
-                let causal_graph: Option<&crate::memory::causal::CausalGraph> = None;
+                // Build CausalGraph if any entries have causal fields
+                let causal_graph = if entries.iter().any(|e| e.causal_parent.is_some() || e.supersedes.is_some()) {
+                    Some(crate::memory::causal::CausalGraph::build(&entries))
+                } else {
+                    None
+                };
 
                 let rfe_query = RetrievalQuery {
                     query_embedding: &query_emb.embedding,
@@ -706,7 +790,7 @@ impl crate::kernel::AIKernel {
                     bm25_scores: Some(&bm25_score_map),
                 };
 
-                let fused = rfe.rank(&entries, &rfe_query, causal_graph, config.top_k * 3);
+                let fused = rfe.rank(&entries, &rfe_query, causal_graph.as_ref(), config.top_k * 3);
 
                 // Intent-routed post-processing: reranker for precision intents,
                 // MMR diversity for multi-session intents (prevents single-session flooding).
@@ -929,6 +1013,8 @@ impl crate::kernel::AIKernel {
             memory_type: MemoryType::Procedural,
             causal_parent: None,
             supersedes: None,
+            superseded_by: None,
+            deleted_at: None,
         };
         let quota = self.agent_memory_quota(agent_id);
         self.memory.store_checked(entry, quota).map_err(|e| e.to_string())?;
@@ -2328,5 +2414,91 @@ mod tests {
                     "Results should be sorted by relevance descending");
             }
         }
+    }
+
+    #[test]
+    fn test_soft_delete() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let id = kernel.remember("kernel", "default", "to be deleted".to_string()).unwrap();
+
+        // Before delete: visible in recall
+        let entries = kernel.recall("kernel", "default");
+        assert!(entries.iter().any(|e| e.id == id));
+
+        // Soft-delete
+        let deleted = kernel.memory_delete("kernel", "default", &id);
+        assert!(deleted);
+
+        // After delete: not visible in recall
+        let entries = kernel.recall("kernel", "default");
+        assert!(!entries.iter().any(|e| e.id == id));
+
+        // But still in get_all (physical retention)
+        let all = kernel.memory.get_all("kernel");
+        assert!(all.iter().any(|e| e.id == id && e.deleted_at.is_some()));
+    }
+
+    #[test]
+    fn test_memory_update_append_only() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let id = kernel.remember("kernel", "default", "original content".to_string()).unwrap();
+
+        // Update creates new entry with supersedes
+        let new_id = kernel.memory_update("kernel", "default", &id, "updated content".to_string()).unwrap();
+        assert_ne!(id, new_id);
+
+        // Old entry is superseded — not in recall
+        let entries = kernel.recall("kernel", "default");
+        assert!(!entries.iter().any(|e| e.id == id));
+        // New entry is active
+        assert!(entries.iter().any(|e| e.id == new_id));
+
+        // Old entry still in get_all with supersedes pointing to nothing (it's original)
+        let all = kernel.memory.get_all("kernel");
+        let old = all.iter().find(|e| e.id == id).unwrap();
+        assert!(old.supersedes.is_none()); // old is the original
+        let new = all.iter().find(|e| e.id == new_id).unwrap();
+        assert_eq!(new.supersedes.as_deref(), Some(id.as_str()));
+    }
+
+    #[test]
+    fn test_compaction_removes_old_superseded() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+        let id = kernel.remember("kernel", "default", "old content".to_string()).unwrap();
+
+        // Update to create superseded entry
+        let new_id = kernel.memory_update("kernel", "default", &id, "new content".to_string()).unwrap();
+
+        // Compact with 0ms max_age (remove all superseded)
+        let removed = kernel.memory_compact("kernel", 0);
+        assert!(removed >= 1, "Should remove at least 1 superseded entry");
+
+        // Old entry is gone
+        let all = kernel.memory.get_all("kernel");
+        assert!(!all.iter().any(|e| e.id == id));
+        // New entry still exists
+        assert!(all.iter().any(|e| e.id == new_id));
+    }
+
+    #[test]
+    fn test_compaction_preserves_causal_chain() {
+        let (kernel, _dir) = crate::kernel::tests::make_kernel();
+
+        // Create parent entry
+        let parent_id = kernel.remember("kernel", "default", "parent".to_string()).unwrap();
+
+        // Create child with causal_parent
+        kernel.memory.store(crate::memory::layered::MemoryEntry::ephemeral("kernel", "child")
+            .with_causal_parent(&parent_id));
+
+        // Supersede parent
+        let _new_parent = kernel.memory_update("kernel", "default", &parent_id, "replaced parent".to_string()).unwrap();
+
+        // Compact — parent should be preserved because child references it
+        let _removed = kernel.memory_compact("kernel", 0);
+        let all = kernel.memory.get_all("kernel");
+        // The parent entry should still exist (referenced by child's causal_parent)
+        assert!(all.iter().any(|e| e.id == parent_id),
+            "Parent should be preserved due to causal chain reference");
     }
 }

@@ -34,7 +34,7 @@ pub use skill_validator::SkillValidator;
 pub use skill_composer::SkillComposer;
 pub use skill_registry::SkillRegistry;
 pub use wasm_runtime::WasmRuntime;
-pub use dsl_interpreter::{DslInterpreter, DslSkill, DslStep};
+pub use dsl_interpreter::{DslInterpreter, DslSkill, DslStep, ToolExecutor};
 
 use thiserror::Error;
 
@@ -223,6 +223,13 @@ pub struct ResourceLimits {
     pub max_memory_mb: usize,
     pub max_execution_time_ms: u64,
     pub max_stack_size: usize,
+}
+
+impl ResourceLimits {
+    /// Maximum WASM memory pages (1 page = 64KB)
+    pub fn max_memory_pages(&self) -> u32 {
+        (self.max_memory_mb as u32) * 1024 / 64
+    }
 }
 
 impl Default for ResourceLimits {

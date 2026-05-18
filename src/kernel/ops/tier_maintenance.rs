@@ -149,6 +149,8 @@ mod tests {
             memory_type: crate::memory::MemoryType::default(),
             causal_parent: None,
             supersedes: None,
+            superseded_by: None,
+            deleted_at: None,
         }
     }
 

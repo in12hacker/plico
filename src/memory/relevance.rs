@@ -250,6 +250,8 @@ mod tests {
             memory_type: crate::memory::layered::MemoryType::default(),
             causal_parent: None,
             supersedes: None,
+            superseded_by: None,
+            deleted_at: None,
         }
     }
 

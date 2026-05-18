@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import statistics
 import time
 from typing import Any
@@ -41,15 +42,40 @@ class PerformanceSuite(SuiteBase):
         return {"overall": overall}
 
     def report(self, metrics: dict[str, Any]) -> Report:
+        from plico_benchmarks.core.competitors import get_plico_state, get_agent_frameworks
+
+        # Build competitor comparison from YAML
+        plico = get_plico_state()
+        frameworks = get_agent_frameworks()
+        competitors = {}
+
+        # Plico's own historical baselines
+        recall_ms = plico.get("performance_recall_ms")
+        search_ms = plico.get("performance_search_ms")
+        if recall_ms is not None or search_ms is not None:
+            competitors["plico_baseline"] = {
+                "recall_ms": recall_ms,
+                "search_ms": search_ms,
+            }
+
+        # Framework performance references
+        for fw in frameworks:
+            name = fw.get("name", "")
+            if "Letta" in name:
+                competitors["Letta/MemGPT"] = {"recall_ms": 10.0, "notes": "~10ms recall (Python-speed)"}
+            elif "LangChain" in name:
+                competitors["LangChain"] = {"notes": "Python, external vector DB latency"}
+
         report_data = {
             "metadata": {
                 "suite": self.name,
-                "version": "v44",
+                "version": os.environ.get("PLICO_BENCH_VERSION", "dev"),
                 "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ"),
             },
             "config": {},
             "metrics": metrics,
             "costs": {},
+            "competitors": {"performance": competitors} if competitors else {},
             "raw_results": self._raw_results,
         }
         return Report(report_data)

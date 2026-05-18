@@ -182,6 +182,8 @@ impl CheckpointMemory {
             memory_type: crate::memory::MemoryType::default(),
             causal_parent: None,
             supersedes: None,
+            superseded_by: None,
+            deleted_at: None,
         }
     }
 }
@@ -244,6 +246,8 @@ impl AgentCheckpoint {
             memory_type: crate::memory::MemoryType::default(),
             causal_parent: None,
             supersedes: None,
+            superseded_by: None,
+            deleted_at: None,
         }
     }
 }
@@ -381,6 +385,7 @@ impl CheckpointStore {
                 created_at: cp.created_at_ms,
                 intent: Some("Agent checkpoint".into()),
                 tenant_id: cp.tenant_id.clone(),
+                scope: crate::cas::ObjectScope::default(),
             };
             let obj = AIObject::new(json.into_bytes(), meta);
             if let Ok(cid) = cas.put(&obj) {
@@ -479,6 +484,8 @@ mod tests {
             memory_type: crate::memory::MemoryType::default(),
             causal_parent: None,
             supersedes: None,
+            superseded_by: None,
+            deleted_at: None,
         };
 
         let cm = CheckpointMemory::from_entry(entry);
@@ -550,6 +557,8 @@ mod tests {
             memory_type: crate::memory::MemoryType::default(),
             causal_parent: None,
             supersedes: None,
+            superseded_by: None,
+            deleted_at: None,
         };
 
         let cm = CheckpointMemory::from_entry(entry.clone());
@@ -587,6 +596,8 @@ mod tests {
             memory_type: crate::memory::MemoryType::default(),
             causal_parent: None,
             supersedes: None,
+            superseded_by: None,
+            deleted_at: None,
         };
 
         let cm = CheckpointMemory::from_entry(entry);
@@ -636,6 +647,8 @@ mod tests {
             memory_type: crate::memory::MemoryType::default(),
             causal_parent: None,
             supersedes: None,
+            superseded_by: None,
+            deleted_at: None,
         };
 
         let cm = CheckpointMemory::from_entry(entry);
@@ -675,6 +688,8 @@ mod tests {
             memory_type: crate::memory::MemoryType::default(),
             causal_parent: None,
             supersedes: None,
+            superseded_by: None,
+            deleted_at: None,
         };
 
         let cm = CheckpointMemory::from_entry(entry);
@@ -708,6 +723,8 @@ mod tests {
             memory_type: crate::memory::MemoryType::default(),
             causal_parent: None,
             supersedes: None,
+            superseded_by: None,
+            deleted_at: None,
         };
 
         let cm = CheckpointMemory::from_entry(entry);
@@ -830,6 +847,8 @@ mod tests {
             memory_type: crate::memory::MemoryType::default(),
             causal_parent: None,
             supersedes: None,
+            superseded_by: None,
+            deleted_at: None,
         }];
         let result = find_latest_checkpoint(&entries);
         assert!(result.is_none());

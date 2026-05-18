@@ -114,6 +114,7 @@ fn test_token_decay_curve_10_sessions() {
             vec!["auth".to_string(), "security".to_string()],
             &agent_id,
             Some("authentication module".to_string()),
+            plico::cas::ObjectScope::default()
         )
         .expect("should create doc");
 
@@ -277,6 +278,7 @@ fn test_intent_cache_hit_rate_stub_mode() {
             vec!["test".to_string()],
             &agent_id,
             None,
+            plico::cas::ObjectScope::default()
         )
         .expect("should create doc");
 

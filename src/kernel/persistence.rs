@@ -164,7 +164,7 @@ pub(crate) fn create_embedding_provider(config: &crate::config::InferenceConfig)
         }
         "openai" => {
             let base_url = config.embedding_api_base.clone().map(|u| crate::config::ensure_v1_suffix(&u)).unwrap_or_else(|| {
-                if let Some(port) = crate::config::detect_llama_server_port() { format!("http://127.0.0.1:{port}/v1") } else { "http://127.0.0.1:8080/v1".into() }
+                if let Some(port) = crate::config::detect_embedding_server_port() { format!("http://127.0.0.1:{port}/v1") } else { "http://127.0.0.1:8080/v1".into() }
             });
             let model = config.embedding_model.clone().unwrap_or_else(|| "all-MiniLM-L6-v2".to_string());
             match OpenAIEmbeddingBackend::new(&base_url, &model, config.api_key.clone()) {

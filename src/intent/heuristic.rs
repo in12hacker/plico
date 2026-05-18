@@ -224,6 +224,7 @@ fn to_api_request(m: PatternMatch, agent_id: &str) -> ResolvedIntent {
                 tenant_id: None,
                 agent_token: None,
                 intent: None,
+                scope: None,
             };
             (action, format!("Create object with content '{}'", truncate(&m.query_text, 50)))
         }

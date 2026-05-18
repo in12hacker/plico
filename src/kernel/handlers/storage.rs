@@ -114,6 +114,7 @@ mod tests {
             tenant_id: None,
             agent_token: None,
             intent: None,
+            scope: None,
         });
         assert!(create_resp.ok);
         let cid = create_resp.cid.unwrap();
@@ -164,6 +165,7 @@ mod tests {
             tenant_id: None,
             agent_token: None,
             intent: None,
+            scope: None,
         });
         kernel.handle_api_request(ApiRequest::Create {
             api_version: None,
@@ -174,6 +176,7 @@ mod tests {
             tenant_id: None,
             agent_token: None,
             intent: None,
+            scope: None,
         });
 
         let resp = kernel.handle_api_request(ApiRequest::StorageStats {

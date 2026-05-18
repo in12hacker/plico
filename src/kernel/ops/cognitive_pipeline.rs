@@ -110,6 +110,7 @@ mod tests {
             vec!["test".to_string()],
             "kernel",
             None,
+            crate::cas::ObjectScope::default(),
         ).unwrap();
 
         let task = CognitiveTask::Summarize {
@@ -131,6 +132,7 @@ mod tests {
             vec!["test".to_string()],
             "kernel",
             None,
+            crate::cas::ObjectScope::default(),
         ).unwrap();
 
         let task = CognitiveTask::Summarize {
@@ -163,6 +165,7 @@ mod tests {
             vec!["knowledge".to_string()],
             "kernel",
             None,
+            crate::cas::ObjectScope::default(),
         ).unwrap();
         let task = CognitiveTask::KgExtract {
             cid,
@@ -203,6 +206,7 @@ mod tests {
             vec!["document".to_string()],
             "kernel",
             None,
+            crate::cas::ObjectScope::default(),
         ).unwrap();
         let task = CognitiveTask::ProcessDocument {
             cid,
@@ -236,7 +240,7 @@ mod tests {
         let (kernel, _dir) = make_kernel();
         let handle = start_cognitive_pipeline(kernel.clone(), 1);
         // Fill the channel
-        let cid = kernel.semantic_create(b"content".to_vec(), vec![], "kernel", None).unwrap();
+        let cid = kernel.semantic_create(b"content".to_vec(), vec![], "kernel", None, crate::cas::ObjectScope::default()).unwrap();
         let _ = handle.enqueue_sync(CognitiveTask::LinkSimilarity {
             cid: cid.clone(), agent_id: "kernel".to_string(),
         });

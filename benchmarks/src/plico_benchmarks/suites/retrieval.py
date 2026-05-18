@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import time
 from typing import Any
 
@@ -61,14 +62,22 @@ class RetrievalSuite(SuiteBase):
         return {"overall": overall, "per_dataset": overall}
 
     def report(self, metrics: dict[str, Any]) -> Report:
+        from plico_benchmarks.core.competitors import get_retrieval_competitors
+
+        competitors = get_retrieval_competitors()
+
         report_data = {
             "metadata": {
                 "suite": self.name,
-                "version": "v44",
+                "version": os.environ.get("PLICO_BENCH_VERSION", "dev"),
                 "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ"),
             },
             "config": {},
             "metrics": metrics,
+            "competitors": {
+                "mteb": competitors,
+                "note": "Plico uses BEIR SciFact recall@k. MTEB scores are from a different evaluation (56-task average). Not directly comparable but useful for embedding model selection context.",
+            },
             "costs": {},
             "raw_results": self._raw_results,
         }
@@ -79,8 +88,7 @@ class RetrievalSuite(SuiteBase):
     def _ingest_beir(self) -> None:
         corpus = self.beir_data.get("corpus", {})
         self._doc_to_cid: dict[str, str] = {}
-        # Ingest up to 3000 docs to improve qrels coverage (scifact has ~5k total)
-        for doc_id, doc in list(corpus.items())[:3000]:
+        for doc_id, doc in corpus.items():
             text = doc.get("text", doc.get("title", ""))
             resp = self.client.create(text, tags=["beir", "scifact", f"doc:{doc_id}"])
             cid = resp.get("cid", "")
@@ -148,13 +156,16 @@ class RetrievalSuite(SuiteBase):
                     answer_text = str(answer)
 
                 resp = self.client.search(query, limit=10)
-                hits = [h.get("snippet", "") for h in resp.get("results", [])]
-                hit = any(answer_text.lower() in h.lower() for h in hits)
+                result_cids = [h.get("cid", "") for h in resp.get("results", [])]
+                # Check if any of the document's chunk CIDs appear in results
+                chunk_cid_set = set(chunk_cids)
+                hit_5 = any(cid in chunk_cid_set for cid in result_cids[:5])
+                hit_10 = any(cid in chunk_cid_set for cid in result_cids[:10])
                 results.append({
                     "dataset": "mab_ar",
                     "question": query,
-                    "hit": hit,
-                    "recall@5": 1.0 if hit else 0.0,
-                    "recall@10": 1.0 if hit else 0.0,
+                    "hit": hit_10,
+                    "recall@5": 1.0 if hit_5 else 0.0,
+                    "recall@10": 1.0 if hit_10 else 0.0,
                 })
         return results

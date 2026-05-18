@@ -86,6 +86,8 @@ fn test_private_memory_invisible_to_other_agents() {
         memory_type: MemoryType::default(),
         causal_parent: None,
         supersedes: None,
+            superseded_by: None,
+            deleted_at: None,
     };
     mem.store(entry);
 
@@ -118,6 +120,8 @@ fn test_shared_memory_visible_to_all() {
         memory_type: MemoryType::default(),
         causal_parent: None,
         supersedes: None,
+            superseded_by: None,
+            deleted_at: None,
     };
     mem.store(entry);
 
@@ -152,6 +156,8 @@ fn test_group_memory_visible_to_group_members() {
         memory_type: MemoryType::default(),
         causal_parent: None,
         supersedes: None,
+            superseded_by: None,
+            deleted_at: None,
     };
     mem.store(entry);
 
@@ -180,6 +186,8 @@ fn test_get_shared_returns_only_shared_scope() {
         tags: vec![], embedding: None, ttl_ms: None, original_ttl_ms: None,
         scope: MemoryScope::Private, memory_type: MemoryType::default(),
         causal_parent: None, supersedes: None,
+            superseded_by: None,
+            deleted_at: None,
     });
     mem.store(MemoryEntry {
         id: "shared-1".into(),
@@ -191,6 +199,8 @@ fn test_get_shared_returns_only_shared_scope() {
         tags: vec![], embedding: None, ttl_ms: None, original_ttl_ms: None,
         scope: MemoryScope::Shared, memory_type: MemoryType::default(),
         causal_parent: None, supersedes: None,
+            superseded_by: None,
+            deleted_at: None,
     });
     mem.store(MemoryEntry {
         id: "group-1".into(),
@@ -202,6 +212,8 @@ fn test_get_shared_returns_only_shared_scope() {
         tags: vec![], embedding: None, ttl_ms: None, original_ttl_ms: None,
         scope: MemoryScope::Group("team".into()), memory_type: MemoryType::default(),
         causal_parent: None, supersedes: None,
+            superseded_by: None,
+            deleted_at: None,
     });
 
     let shared = mem.get_shared(MemoryTier::Working);
@@ -223,6 +235,8 @@ fn test_get_by_group_returns_only_matching_group() {
         tags: vec![], embedding: None, ttl_ms: None, original_ttl_ms: None,
         scope: MemoryScope::Group("engineering".into()), memory_type: MemoryType::default(),
         causal_parent: None, supersedes: None,
+            superseded_by: None,
+            deleted_at: None,
     });
     mem.store(MemoryEntry {
         id: "mkt-1".into(),
@@ -234,6 +248,8 @@ fn test_get_by_group_returns_only_matching_group() {
         tags: vec![], embedding: None, ttl_ms: None, original_ttl_ms: None,
         scope: MemoryScope::Group("marketing".into()), memory_type: MemoryType::default(),
         causal_parent: None, supersedes: None,
+            superseded_by: None,
+            deleted_at: None,
     });
 
     let eng = mem.get_by_group("engineering", MemoryTier::Procedural);
@@ -259,6 +275,8 @@ fn test_recall_visible_combines_private_shared_group() {
         tags: vec![], embedding: None, ttl_ms: None, original_ttl_ms: None,
         scope: MemoryScope::Private, memory_type: MemoryType::default(),
         causal_parent: None, supersedes: None,
+            superseded_by: None,
+            deleted_at: None,
     });
     mem.store(MemoryEntry {
         id: "other-private".into(),
@@ -270,6 +288,8 @@ fn test_recall_visible_combines_private_shared_group() {
         tags: vec![], embedding: None, ttl_ms: None, original_ttl_ms: None,
         scope: MemoryScope::Private, memory_type: MemoryType::default(),
         causal_parent: None, supersedes: None,
+            superseded_by: None,
+            deleted_at: None,
     });
     mem.store(MemoryEntry {
         id: "common-shared".into(),
@@ -281,6 +301,8 @@ fn test_recall_visible_combines_private_shared_group() {
         tags: vec![], embedding: None, ttl_ms: None, original_ttl_ms: None,
         scope: MemoryScope::Shared, memory_type: MemoryType::default(),
         causal_parent: None, supersedes: None,
+            superseded_by: None,
+            deleted_at: None,
     });
     mem.store(MemoryEntry {
         id: "team-group".into(),
@@ -292,6 +314,8 @@ fn test_recall_visible_combines_private_shared_group() {
         tags: vec![], embedding: None, ttl_ms: None, original_ttl_ms: None,
         scope: MemoryScope::Group("devs".into()), memory_type: MemoryType::default(),
         causal_parent: None, supersedes: None,
+            superseded_by: None,
+            deleted_at: None,
     });
 
     let visible = mem.recall_visible("agent-a", &["devs".into()]);
@@ -332,6 +356,8 @@ fn test_clear_agent_removes_all_tiers() {
         importance: 50, access_count: 0, last_accessed: now_ms(), created_at: now_ms(),
         tags: vec![], embedding: None, ttl_ms: None, original_ttl_ms: None, scope: MemoryScope::Private, memory_type: MemoryType::default(),
         causal_parent: None, supersedes: None,
+            superseded_by: None,
+            deleted_at: None,
     });
     mem.store(MemoryEntry {
         id: "lt-1".into(), agent_id: agent.into(), tenant_id: "default".to_string(), tier: MemoryTier::LongTerm,
@@ -339,6 +365,8 @@ fn test_clear_agent_removes_all_tiers() {
         importance: 80, access_count: 0, last_accessed: now_ms(), created_at: now_ms(),
         tags: vec![], embedding: None, ttl_ms: None, original_ttl_ms: None, scope: MemoryScope::Private, memory_type: MemoryType::default(),
         causal_parent: None, supersedes: None,
+            superseded_by: None,
+            deleted_at: None,
     });
 
     assert_eq!(mem.get_all(agent).len(), 3);
@@ -798,6 +826,8 @@ fn test_count_for_agent_across_tiers() {
         tags: vec![], embedding: None, ttl_ms: None, original_ttl_ms: None,
         scope: MemoryScope::Private, memory_type: MemoryType::default(),
         causal_parent: None, supersedes: None,
+            superseded_by: None,
+            deleted_at: None,
     });
     assert_eq!(mem.count_for_agent("agent"), 2);
 
@@ -811,6 +841,8 @@ fn test_count_for_agent_across_tiers() {
         tags: vec![], embedding: None, ttl_ms: None, original_ttl_ms: None,
         scope: MemoryScope::Private, memory_type: MemoryType::default(),
         causal_parent: None, supersedes: None,
+            superseded_by: None,
+            deleted_at: None,
     });
     assert_eq!(mem.count_for_agent("agent"), 4);
 
@@ -833,6 +865,8 @@ fn test_evict_ephemeral_promotes_important() {
         tags: vec![], embedding: None, ttl_ms: None, original_ttl_ms: None,
         scope: MemoryScope::Private, memory_type: MemoryType::default(),
         causal_parent: None, supersedes: None,
+            superseded_by: None,
+            deleted_at: None,
     });
     // importance < 70 should be discarded
     mem.store(MemoryEntry {
@@ -842,6 +876,8 @@ fn test_evict_ephemeral_promotes_important() {
         tags: vec![], embedding: None, ttl_ms: None, original_ttl_ms: None,
         scope: MemoryScope::Private, memory_type: MemoryType::default(),
         causal_parent: None, supersedes: None,
+            superseded_by: None,
+            deleted_at: None,
     });
 
     let discarded = mem.evict_ephemeral(agent);
@@ -877,6 +913,8 @@ fn test_evict_ephemeral_boundary_importance_70() {
         tags: vec![], embedding: None, ttl_ms: None, original_ttl_ms: None,
         scope: MemoryScope::Private, memory_type: MemoryType::default(),
         causal_parent: None, supersedes: None,
+            superseded_by: None,
+            deleted_at: None,
     });
 
     let discarded = mem.evict_ephemeral(agent);
@@ -922,6 +960,8 @@ fn test_get_shared_entries_all_agents() {
         tags: vec![], embedding: None, ttl_ms: None, original_ttl_ms: None,
         scope: MemoryScope::Shared, memory_type: MemoryType::default(),
         causal_parent: None, supersedes: None,
+            superseded_by: None,
+            deleted_at: None,
     });
     mem.store(MemoryEntry {
         id: "s2".into(), agent_id: "a2".into(), tenant_id: "default".to_string(),
@@ -930,6 +970,8 @@ fn test_get_shared_entries_all_agents() {
         tags: vec![], embedding: None, ttl_ms: None, original_ttl_ms: None,
         scope: MemoryScope::Shared, memory_type: MemoryType::default(),
         causal_parent: None, supersedes: None,
+            superseded_by: None,
+            deleted_at: None,
     });
     mem.store(MemoryEntry {
         id: "p1".into(), agent_id: "a1".into(), tenant_id: "default".to_string(),
@@ -938,6 +980,8 @@ fn test_get_shared_entries_all_agents() {
         tags: vec![], embedding: None, ttl_ms: None, original_ttl_ms: None,
         scope: MemoryScope::Private, memory_type: MemoryType::default(),
         causal_parent: None, supersedes: None,
+            superseded_by: None,
+            deleted_at: None,
     });
 
     let shared = mem.get_shared_entries_all_agents();
@@ -960,6 +1004,8 @@ fn test_get_group_entries_all_agents() {
         tags: vec![], embedding: None, ttl_ms: None, original_ttl_ms: None,
         scope: MemoryScope::Group("engineering".into()), memory_type: MemoryType::default(),
         causal_parent: None, supersedes: None,
+            superseded_by: None,
+            deleted_at: None,
     });
     mem.store(MemoryEntry {
         id: "g2".into(), agent_id: "a2".into(), tenant_id: "default".to_string(),
@@ -968,6 +1014,8 @@ fn test_get_group_entries_all_agents() {
         tags: vec![], embedding: None, ttl_ms: None, original_ttl_ms: None,
         scope: MemoryScope::Group("engineering".into()), memory_type: MemoryType::default(),
         causal_parent: None, supersedes: None,
+            superseded_by: None,
+            deleted_at: None,
     });
     mem.store(MemoryEntry {
         id: "m1".into(), agent_id: "a1".into(), tenant_id: "default".to_string(),
@@ -976,6 +1024,8 @@ fn test_get_group_entries_all_agents() {
         tags: vec![], embedding: None, ttl_ms: None, original_ttl_ms: None,
         scope: MemoryScope::Group("marketing".into()), memory_type: MemoryType::default(),
         causal_parent: None, supersedes: None,
+            superseded_by: None,
+            deleted_at: None,
     });
 
     let eng = mem.get_group_entries_all_agents("engineering");
@@ -999,6 +1049,8 @@ fn test_get_all_entries_all_agents_excludes_private() {
         tags: vec![], embedding: None, ttl_ms: None, original_ttl_ms: None,
         scope: MemoryScope::Private, memory_type: MemoryType::default(),
         causal_parent: None, supersedes: None,
+            superseded_by: None,
+            deleted_at: None,
     });
     mem.store(MemoryEntry {
         id: "shrd".into(), agent_id: "a".into(), tenant_id: "default".to_string(),
@@ -1007,6 +1059,8 @@ fn test_get_all_entries_all_agents_excludes_private() {
         tags: vec![], embedding: None, ttl_ms: None, original_ttl_ms: None,
         scope: MemoryScope::Shared, memory_type: MemoryType::default(),
         causal_parent: None, supersedes: None,
+            superseded_by: None,
+            deleted_at: None,
     });
     mem.store(MemoryEntry {
         id: "grp".into(), agent_id: "b".into(), tenant_id: "default".to_string(),
@@ -1015,6 +1069,8 @@ fn test_get_all_entries_all_agents_excludes_private() {
         tags: vec![], embedding: None, ttl_ms: None, original_ttl_ms: None,
         scope: MemoryScope::Group("team".into()), memory_type: MemoryType::default(),
         causal_parent: None, supersedes: None,
+            superseded_by: None,
+            deleted_at: None,
     });
 
     let all = mem.get_all_entries_all_agents();
@@ -1067,6 +1123,8 @@ fn test_recall_relevant_returns_within_budget() {
         tags: vec![], embedding: None, ttl_ms: None, original_ttl_ms: None,
         scope: MemoryScope::Private, memory_type: MemoryType::default(),
         causal_parent: None, supersedes: None,
+            superseded_by: None,
+            deleted_at: None,
     });
 
     // Very large budget should return all
@@ -1101,6 +1159,8 @@ fn test_evict_expired_removes_expired_entries() {
         tags: vec![], embedding: None, ttl_ms: Some(5000), original_ttl_ms: Some(5000),
         scope: MemoryScope::Private, memory_type: MemoryType::default(),
         causal_parent: None, supersedes: None,
+            superseded_by: None,
+            deleted_at: None,
     });
     // Not expired: no TTL
     mem.store(MemoryEntry {
@@ -1110,6 +1170,8 @@ fn test_evict_expired_removes_expired_entries() {
         tags: vec![], embedding: None, ttl_ms: None, original_ttl_ms: None,
         scope: MemoryScope::Private, memory_type: MemoryType::default(),
         causal_parent: None, supersedes: None,
+            superseded_by: None,
+            deleted_at: None,
     });
     // Not expired: long TTL
     mem.store(MemoryEntry {
@@ -1119,6 +1181,8 @@ fn test_evict_expired_removes_expired_entries() {
         tags: vec![], embedding: None, ttl_ms: Some(1_000_000), original_ttl_ms: Some(1_000_000),
         scope: MemoryScope::Private, memory_type: MemoryType::default(),
         causal_parent: None, supersedes: None,
+            superseded_by: None,
+            deleted_at: None,
     });
 
     let evicted = mem.evict_expired(agent);
@@ -1152,6 +1216,8 @@ fn test_promote_check_ephemeral_to_working() {
         tags: vec![], embedding: None, ttl_ms: None, original_ttl_ms: None,
         scope: MemoryScope::Private, memory_type: MemoryType::default(),
         causal_parent: None, supersedes: None,
+            superseded_by: None,
+            deleted_at: None,
     });
     // access_count < 3 should NOT be promoted
     mem.store(MemoryEntry {
@@ -1161,6 +1227,8 @@ fn test_promote_check_ephemeral_to_working() {
         tags: vec![], embedding: None, ttl_ms: None, original_ttl_ms: None,
         scope: MemoryScope::Private, memory_type: MemoryType::default(),
         causal_parent: None, supersedes: None,
+            superseded_by: None,
+            deleted_at: None,
     });
 
     mem.promote_check(agent);
@@ -1188,6 +1256,8 @@ fn test_promote_check_working_to_longterm() {
         tags: vec![], embedding: None, ttl_ms: None, original_ttl_ms: None,
         scope: MemoryScope::Private, memory_type: MemoryType::default(),
         causal_parent: None, supersedes: None,
+            superseded_by: None,
+            deleted_at: None,
     });
     // High access but low importance — should NOT promote
     mem.store(MemoryEntry {
@@ -1197,6 +1267,8 @@ fn test_promote_check_working_to_longterm() {
         tags: vec![], embedding: None, ttl_ms: None, original_ttl_ms: None,
         scope: MemoryScope::Private, memory_type: MemoryType::default(),
         causal_parent: None, supersedes: None,
+            superseded_by: None,
+            deleted_at: None,
     });
     // High importance but low access — should NOT promote
     mem.store(MemoryEntry {
@@ -1206,6 +1278,8 @@ fn test_promote_check_working_to_longterm() {
         tags: vec![], embedding: None, ttl_ms: None, original_ttl_ms: None,
         scope: MemoryScope::Private, memory_type: MemoryType::default(),
         causal_parent: None, supersedes: None,
+            superseded_by: None,
+            deleted_at: None,
     });
 
     mem.promote_check(agent);
@@ -1373,6 +1447,8 @@ fn test_is_cid_referenced() {
         tags: vec![], embedding: None, ttl_ms: None, original_ttl_ms: None,
         scope: MemoryScope::Private, memory_type: MemoryType::default(),
         causal_parent: None, supersedes: None,
+            superseded_by: None,
+            deleted_at: None,
     });
     mem.store(MemoryEntry::ephemeral("a", "plain text"));
 
@@ -1392,6 +1468,8 @@ fn test_is_cid_referenced_across_all_tiers() {
         tags: vec![], embedding: None, ttl_ms: None, original_ttl_ms: None,
         scope: MemoryScope::Private, memory_type: MemoryType::default(),
         causal_parent: None, supersedes: None,
+            superseded_by: None,
+            deleted_at: None,
     });
     assert!(mem.is_cid_referenced("cid:eph"));
 
@@ -1403,6 +1481,8 @@ fn test_is_cid_referenced_across_all_tiers() {
         tags: vec![], embedding: None, ttl_ms: None, original_ttl_ms: None,
         scope: MemoryScope::Private, memory_type: MemoryType::default(),
         causal_parent: None, supersedes: None,
+            superseded_by: None,
+            deleted_at: None,
     });
     assert!(mem.is_cid_referenced("cid:lt"));
 
@@ -1414,6 +1494,8 @@ fn test_is_cid_referenced_across_all_tiers() {
         tags: vec![], embedding: None, ttl_ms: None, original_ttl_ms: None,
         scope: MemoryScope::Private, memory_type: MemoryType::default(),
         causal_parent: None, supersedes: None,
+            superseded_by: None,
+            deleted_at: None,
     });
     assert!(mem.is_cid_referenced("cid:proc"));
 }
@@ -1455,6 +1537,8 @@ fn test_touch_entry_across_tiers() {
         tags: vec![], embedding: None, ttl_ms: None, original_ttl_ms: None,
         scope: MemoryScope::Private, memory_type: MemoryType::default(),
         causal_parent: None, supersedes: None,
+            superseded_by: None,
+            deleted_at: None,
     };
     mem.store(e2);
 
@@ -1553,6 +1637,8 @@ fn test_get_stats_with_entries() {
         tags: vec![], embedding: None, ttl_ms: None, original_ttl_ms: None,
         scope: MemoryScope::Private, memory_type: MemoryType::default(),
         causal_parent: None, supersedes: None,
+            superseded_by: None,
+            deleted_at: None,
     });
     mem.store(MemoryEntry::long_term(agent, MemoryContent::Text("long term fact".into()), vec![]));
 
@@ -1585,6 +1671,8 @@ fn test_get_stats_about_to_expire() {
         original_ttl_ms: Some(10000), // original was 10s
         scope: MemoryScope::Private, memory_type: MemoryType::default(),
         causal_parent: None, supersedes: None,
+            superseded_by: None,
+            deleted_at: None,
     });
 
     let stats = mem.get_stats();
@@ -1651,6 +1739,8 @@ fn test_move_entry_from_working_to_ephemeral() {
         tags: vec![], embedding: None, ttl_ms: None, original_ttl_ms: None,
         scope: MemoryScope::Private, memory_type: MemoryType::default(),
         causal_parent: None, supersedes: None,
+            superseded_by: None,
+            deleted_at: None,
     };
     mem.store(entry);
 
@@ -1673,6 +1763,8 @@ fn test_delete_entry_from_working() {
         tags: vec![], embedding: None, ttl_ms: None, original_ttl_ms: None,
         scope: MemoryScope::Private, memory_type: MemoryType::default(),
         causal_parent: None, supersedes: None,
+            superseded_by: None,
+            deleted_at: None,
     });
 
     assert!(mem.delete_entry(agent, "w-del"));
@@ -1691,6 +1783,8 @@ fn test_delete_entry_from_procedural() {
         tags: vec![], embedding: None, ttl_ms: None, original_ttl_ms: None,
         scope: MemoryScope::Private, memory_type: MemoryType::default(),
         causal_parent: None, supersedes: None,
+            superseded_by: None,
+            deleted_at: None,
     });
 
     assert!(mem.delete_entry(agent, "p-del"));
@@ -1721,6 +1815,8 @@ fn test_remove_entry_from_working() {
         tags: vec![], embedding: None, ttl_ms: None, original_ttl_ms: None,
         scope: MemoryScope::Private, memory_type: MemoryType::default(),
         causal_parent: None, supersedes: None,
+            superseded_by: None,
+            deleted_at: None,
     });
 
     assert!(mem.remove_entry(agent, "w-remove"));
@@ -1741,6 +1837,8 @@ fn test_update_importance_on_working_tier() {
         tags: vec![], embedding: None, ttl_ms: None, original_ttl_ms: None,
         scope: MemoryScope::Private, memory_type: MemoryType::default(),
         causal_parent: None, supersedes: None,
+            superseded_by: None,
+            deleted_at: None,
     });
 
     mem.update_importance(agent, "w-imp", 95);
@@ -1769,6 +1867,8 @@ fn test_find_entry_in_procedural() {
         tags: vec![], embedding: None, ttl_ms: None, original_ttl_ms: None,
         scope: MemoryScope::Private, memory_type: MemoryType::default(),
         causal_parent: None, supersedes: None,
+            superseded_by: None,
+            deleted_at: None,
     });
 
     let found = mem.find_entry(agent, "proc-find");

@@ -145,6 +145,7 @@ mod tests {
             created_at: 0,
             intent: None,
             tenant_id: "default".to_string(),
+            scope: crate::cas::ObjectScope::default(),
         };
         let obj = AIObject::new(content.as_bytes().to_vec(), meta);
         cas.put(&obj).unwrap()

@@ -170,6 +170,16 @@ pub struct MemoryEntry {
     /// Supersedes — ID of the memory this one replaces (contradiction resolution).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub supersedes: Option<String>,
+
+    /// Superseded-by — ID of the memory that replaces this one.
+    /// Set on the OLD entry when a new version is created via `memory_update`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub superseded_by: Option<String>,
+
+    /// Soft-delete timestamp (milliseconds). When set, the entry is logically
+    /// deleted but physically retained for audit trail and compaction.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deleted_at: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -262,6 +272,8 @@ impl MemoryEntry {
             memory_type: MemoryType::Untyped,
             causal_parent: None,
             supersedes: None,
+            superseded_by: None,
+            deleted_at: None,
         }
     }
 
@@ -290,6 +302,8 @@ impl MemoryEntry {
             memory_type: MemoryType::Untyped,
             causal_parent: None,
             supersedes: None,
+            superseded_by: None,
+            deleted_at: None,
         }
     }
 
@@ -308,6 +322,18 @@ impl MemoryEntry {
     /// Mark this entry as superseding another (contradiction resolution).
     pub fn with_supersedes(mut self, old_id: impl Into<String>) -> Self {
         self.supersedes = Some(old_id.into());
+        self
+    }
+
+    /// Mark this entry as superseded by another (set on old entry).
+    pub fn with_superseded_by(mut self, new_id: impl Into<String>) -> Self {
+        self.superseded_by = Some(new_id.into());
+        self
+    }
+
+    /// Mark this entry as soft-deleted.
+    pub fn with_deleted_at(mut self, timestamp_ms: u64) -> Self {
+        self.deleted_at = Some(timestamp_ms);
         self
     }
 
@@ -916,7 +942,7 @@ impl LayeredMemory {
         self.move_entry(agent_id, entry_id, target_tier)
     }
 
-    /// Delete a specific memory entry by ID.
+    /// Delete a specific memory entry by ID (physical removal).
     ///
     /// Returns `true` if the entry was found and deleted, `false` if not found.
     pub fn delete_entry(&self, agent_id: &str, entry_id: &str) -> bool {
@@ -930,6 +956,49 @@ impl LayeredMemory {
             }
         }
         false
+    }
+
+    /// Soft-delete a specific memory entry by ID.
+    ///
+    /// Sets `deleted_at` instead of physically removing. Returns `true` if found.
+    pub fn soft_delete_entry(&self, agent_id: &str, entry_id: &str) -> bool {
+        let now = now_ms();
+        for tier_map in [&self.ephemeral, &self.working, &self.long_term, &self.procedural] {
+            let mut map = tier_map.write().unwrap();
+            if let Some(entries) = map.get_mut(agent_id) {
+                if let Some(entry) = entries.iter_mut().find(|e| e.id == entry_id) {
+                    entry.deleted_at = Some(now);
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// Mark an entry as superseded by a new entry.
+    ///
+    /// Sets `superseded_by` on the old entry. Returns `true` if found.
+    pub fn mark_superseded(&self, agent_id: &str, old_id: &str, new_id: &str) -> bool {
+        for tier_map in [&self.ephemeral, &self.working, &self.long_term, &self.procedural] {
+            let mut map = tier_map.write().unwrap();
+            if let Some(entries) = map.get_mut(agent_id) {
+                if let Some(entry) = entries.iter_mut().find(|e| e.id == old_id) {
+                    entry.superseded_by = Some(new_id.to_string());
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// Retrieve all active (non-deleted, non-superseded) entries for an agent.
+    ///
+    /// Filters out entries where `deleted_at` is set or `superseded_by` is set.
+    pub fn get_active(&self, agent_id: &str) -> Vec<MemoryEntry> {
+        self.get_all(agent_id)
+            .into_iter()
+            .filter(|e| e.deleted_at.is_none() && e.superseded_by.is_none())
+            .collect()
     }
 
     /// Remove all memory entries for an agent across all tiers.
@@ -955,6 +1024,48 @@ impl LayeredMemory {
         } else {
             0
         }
+    }
+
+    /// Compact memory for an agent: remove superseded entries older than `max_age_ms`.
+    ///
+    /// Preserves entries that are referenced as `causal_parent` by other active entries.
+    /// Returns the number of entries removed.
+    pub fn compact(&self, agent_id: &str, max_age_ms: u64) -> usize {
+        let now = now_ms();
+        let cutoff = now.saturating_sub(max_age_ms);
+
+        // Collect IDs referenced as causal_parent by active entries
+        let all = self.get_all(agent_id);
+        let mut causal_refs: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for entry in &all {
+            if entry.deleted_at.is_none() {
+                if let Some(ref parent) = entry.causal_parent {
+                    causal_refs.insert(parent.clone());
+                }
+            }
+        }
+
+        let mut removed = 0;
+        for tier_map in [&self.ephemeral, &self.working, &self.long_term, &self.procedural] {
+            let mut map = tier_map.write().unwrap();
+            if let Some(entries) = map.get_mut(agent_id) {
+                entries.retain(|e| {
+                    // Keep if: not superseded, or superseded but too recent, or referenced by causal chain
+                    if e.superseded_by.is_none() {
+                        return true;
+                    }
+                    if e.created_at > cutoff {
+                        return true;
+                    }
+                    if causal_refs.contains(&e.id) {
+                        return true;
+                    }
+                    removed += 1;
+                    false
+                });
+            }
+        }
+        removed
     }
 
     /// Retrieve long-term memories most semantically similar to a query embedding.

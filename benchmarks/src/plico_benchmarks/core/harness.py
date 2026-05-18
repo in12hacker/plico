@@ -44,12 +44,13 @@ class BaseSuite(ABC):
 
     def report(self, metrics: dict[str, Any]) -> Report:
         """Build a standardized report dict."""
+        import os
         import time
 
         report_data = {
             "metadata": {
                 "suite": self.name,
-                "version": "v44",
+                "version": os.environ.get("PLICO_BENCH_VERSION", "dev"),
                 "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ"),
                 "plico_version": "0.1.0",
             },

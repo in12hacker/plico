@@ -246,6 +246,7 @@ fn test_knowledge_superseded_event_on_update() {
         vec!["security".into(), "sql-injection".into()],
         &agent_id,
         Some("Original".into()),
+        plico::cas::ObjectScope::default()
     ).expect("semantic_create should succeed");
 
     // Update the document (creates new version)

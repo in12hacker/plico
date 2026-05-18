@@ -232,6 +232,8 @@ fn pamb_s3_contradiction_detection_catches_conflicts() {
         memory_type: MemoryType::Semantic,
         causal_parent: None,
         supersedes: None,
+        deleted_at: None,
+        superseded_by: None,
     };
 
     let new_entry = MemoryEntry {
@@ -252,6 +254,8 @@ fn pamb_s3_contradiction_detection_catches_conflicts() {
         memory_type: MemoryType::Semantic,
         causal_parent: None,
         supersedes: None,
+        deleted_at: None,
+        superseded_by: None,
     };
 
     let result = check_contradiction_rules(&new_entry, &[old_entry], 2);
@@ -279,6 +283,8 @@ fn pamb_s3_distillation_compresses_working_memory() {
         memory_type: MemoryType::Episodic,
         causal_parent: None,
         supersedes: None,
+        deleted_at: None,
+        superseded_by: None,
     }).collect();
 
     let distilled = distill_working_memory(&working_entries, |_| None);

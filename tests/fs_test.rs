@@ -53,6 +53,7 @@ fn test_create_and_get() {
             vec!["embedding".to_string(), "batch-result".to_string()],
             "TestAgent".to_string(),
             Some("Embedding computation output".to_string()),
+            plico::cas::ObjectScope::default(),
         )
         .unwrap();
 
@@ -66,11 +67,11 @@ fn test_create_and_get() {
 fn test_search_by_tags() {
     let (fs, _dir) = make_fs();
 
-    fs.create(b"doc1".to_vec(), vec!["embedding".to_string()], "a".to_string(), None)
+    fs.create(b"doc1".to_vec(), vec!["embedding".to_string()], "a".to_string(), None, plico::cas::ObjectScope::default())
         .unwrap();
-    fs.create(b"doc2".to_vec(), vec!["embedding".to_string(), "batch-result".to_string()], "a".to_string(), None)
+    fs.create(b"doc2".to_vec(), vec!["embedding".to_string(), "batch-result".to_string()], "a".to_string(), None, plico::cas::ObjectScope::default())
         .unwrap();
-    fs.create(b"doc3".to_vec(), vec!["batch-result".to_string()], "a".to_string(), None)
+    fs.create(b"doc3".to_vec(), vec!["batch-result".to_string()], "a".to_string(), None, plico::cas::ObjectScope::default())
         .unwrap();
 
     let results = fs.read(&Query::ByTags(vec!["embedding".to_string()])).unwrap();
@@ -84,7 +85,7 @@ fn test_search_by_tags() {
 fn test_search_query() {
     let (fs, _dir) = make_fs();
 
-    fs.create(b"doc about rust".to_vec(), vec!["embedding".to_string()], "a".to_string(), None)
+    fs.create(b"doc about rust".to_vec(), vec!["embedding".to_string()], "a".to_string(), None, plico::cas::ObjectScope::default())
         .unwrap();
 
     let results = fs.search("embedding", 10);
@@ -96,7 +97,7 @@ fn test_update_generates_new_cid() {
     let (fs, _dir) = make_fs();
 
     let old_cid = fs
-        .create(b"original content".to_vec(), vec!["test".to_string()], "a".to_string(), None)
+        .create(b"original content".to_vec(), vec!["test".to_string()], "a".to_string(), None, plico::cas::ObjectScope::default())
         .unwrap();
 
     let new_cid = fs
@@ -125,7 +126,7 @@ fn test_update_with_new_tags() {
     let (fs, _dir) = make_fs();
 
     let old_cid = fs
-        .create(b"content".to_vec(), vec!["old-tag".to_string()], "a".to_string(), None)
+        .create(b"content".to_vec(), vec!["old-tag".to_string()], "a".to_string(), None, plico::cas::ObjectScope::default())
         .unwrap();
 
     let new_cid = fs
@@ -147,7 +148,7 @@ fn test_delete_is_logical() {
     let (fs, _dir) = make_fs();
 
     let cid = fs
-        .create(b"to delete".to_vec(), vec!["test".to_string()], "a".to_string(), None)
+        .create(b"to delete".to_vec(), vec!["test".to_string()], "a".to_string(), None, plico::cas::ObjectScope::default())
         .unwrap();
 
     // Delete (logical)
@@ -163,7 +164,7 @@ fn test_delete_is_logical() {
 fn test_audit_log_records_create() {
     let (fs, _dir) = make_fs();
 
-    fs.create(b"test".to_vec(), vec!["test".to_string()], "agent1".to_string(), None)
+    fs.create(b"test".to_vec(), vec!["test".to_string()], "agent1".to_string(), None, plico::cas::ObjectScope::default())
         .unwrap();
 
     let log = fs.audit_log();
@@ -178,7 +179,7 @@ fn test_audit_log_records_create() {
 fn test_audit_log_records_update() {
     let (fs, _dir) = make_fs();
 
-    let cid = fs.create(b"v1".to_vec(), vec!["test".to_string()], "a".to_string(), None).unwrap();
+    let cid = fs.create(b"v1".to_vec(), vec!["test".to_string()], "a".to_string(), None, plico::cas::ObjectScope::default()).unwrap();
     fs.update(&cid, b"v2".to_vec(), None, "a".to_string()).unwrap();
 
     let log = fs.audit_log();
@@ -195,9 +196,9 @@ fn test_audit_log_records_update() {
 fn test_list_tags() {
     let (fs, _dir) = make_fs();
 
-    fs.create(b"doc1".to_vec(), vec!["a".to_string(), "b".to_string()], "x".to_string(), None)
+    fs.create(b"doc1".to_vec(), vec!["a".to_string(), "b".to_string()], "x".to_string(), None, plico::cas::ObjectScope::default())
         .unwrap();
-    fs.create(b"doc2".to_vec(), vec!["b".to_string(), "c".to_string()], "x".to_string(), None)
+    fs.create(b"doc2".to_vec(), vec!["b".to_string(), "c".to_string()], "x".to_string(), None, plico::cas::ObjectScope::default())
         .unwrap();
 
     let tags = fs.list_tags();
@@ -211,8 +212,8 @@ fn test_list_tags() {
 fn test_deduplication_by_content() {
     let (fs, _dir) = make_fs();
 
-    let cid1 = fs.create(b"same content".to_vec(), vec!["tag1".to_string()], "a".to_string(), None).unwrap();
-    let cid2 = fs.create(b"same content".to_vec(), vec!["tag2".to_string()], "b".to_string(), None).unwrap();
+    let cid1 = fs.create(b"same content".to_vec(), vec!["tag1".to_string()], "a".to_string(), None, plico::cas::ObjectScope::default()).unwrap();
+    let cid2 = fs.create(b"same content".to_vec(), vec!["tag2".to_string()], "b".to_string(), None, plico::cas::ObjectScope::default()).unwrap();
 
     // Same content → same CID (CAS deduplication)
     assert_eq!(cid1, cid2);
@@ -395,7 +396,7 @@ fn test_content_type_predicates() {
 fn test_list_deleted_after_delete() {
     let (fs, _dir) = make_fs();
 
-    let cid = fs.create(b"will be deleted".to_vec(), vec!["trash".to_string()], "a".to_string(), None).unwrap();
+    let cid = fs.create(b"will be deleted".to_vec(), vec!["trash".to_string()], "a".to_string(), None, plico::cas::ObjectScope::default()).unwrap();
     assert!(fs.list_deleted().is_empty());
 
     fs.delete(&cid, "a".to_string()).unwrap();
@@ -410,7 +411,7 @@ fn test_list_deleted_after_delete() {
 fn test_restore_puts_back_in_tag_index() {
     let (fs, _dir) = make_fs();
 
-    let cid = fs.create(b"restorable content".to_vec(), vec!["restore-me".to_string()], "a".to_string(), None).unwrap();
+    let cid = fs.create(b"restorable content".to_vec(), vec!["restore-me".to_string()], "a".to_string(), None, plico::cas::ObjectScope::default()).unwrap();
     fs.delete(&cid, "a".to_string()).unwrap();
 
     // After delete: not in tag index
@@ -434,7 +435,7 @@ fn test_recycle_bin_persists_across_restart() {
     let dir = tempdir().unwrap();
     let cid = {
         let (fs, _) = make_fs_at(dir.path());
-        let cid = fs.create(b"survive restart".to_vec(), vec!["persist-test".to_string()], "a".to_string(), None).unwrap();
+        let cid = fs.create(b"survive restart".to_vec(), vec!["persist-test".to_string()], "a".to_string(), None, plico::cas::ObjectScope::default()).unwrap();
         fs.delete(&cid, "a".to_string()).unwrap();
         cid
     }; // fs dropped here — simulates process restart

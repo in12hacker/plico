@@ -14,6 +14,10 @@
 | [v46](v46-summary.md) | 性能优化 + 多跳推理 + 端到端质量 | 2026-05-13 | ✅ 完成 |
 | [v47](v47-document-restructure.md) | 文档体系重构 | 2026-05-14 | ✅ 完成 |
 | [v48](v48-cognitive-deepening.md) | 认知引擎深化 | 2026-05-14 | ✅ 完成 |
+| [v49](v49-wasm-quality.md) | WASM Runtime & Quality Hardening | 2026-05-14 | ✅ 完成（T1-T10, T16；T11-T15 待后续迭代） |
+| [v50](v50-memory-rearchitecture.md) | Memory Rearchitecture | 2026-05-14 | ✅ 完成 |
+| [v51](v51-summary.md) | Search Quality & Scope Isolation | 2026-05-17 | ✅ 完成（SAS 15/20，embedding 稳定性已修复） |
+| [v52](v52-trace-observability.md) | Trace Observability + Quality Fixes | 2026-05-18 | ✅ 完成 |
 
 ## 模板
 

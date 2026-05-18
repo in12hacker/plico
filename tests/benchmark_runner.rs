@@ -359,6 +359,7 @@ impl Scenario for FileQAScenario {
                 vec!["auth".to_string(), "module".to_string(), format!("file_{}", i)],
                 agent_id,
                 Some(format!("auth_file_{}.rs", i)),
+                plico::cas::ObjectScope::default()
             ) {
                 created_cids.push(cid);
                 metrics.objects_created += 1;
@@ -492,6 +493,7 @@ impl Scenario for MultiAgentScenario {
                 vec!["architecture".to_string(), format!("module_{}", i)],
                 agent_id,
                 None,
+                plico::cas::ObjectScope::default()
             ).is_ok() { metrics.objects_created += 1 }
         }
 
@@ -581,6 +583,7 @@ impl Scenario for ContextAssemblyScenario {
                 vec!["test".to_string(), format!("obj_{}", i)],
                 agent_id,
                 None,
+                plico::cas::ObjectScope::default()
             ) {
                 cids.push(cid);
                 metrics.objects_created += 1;

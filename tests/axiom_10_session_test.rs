@@ -86,6 +86,7 @@ fn axiom10_session_with_operations() {
         tenant_id: None,
         agent_token: None,
         intent: None,
+        scope: None,
     });
     assert!(create_resp.ok);
 
@@ -142,7 +143,8 @@ fn axiom10_session_continuity_via_seq() {
         tenant_id: None,
         agent_token: None,
         intent: None,
-    });
+            scope: None,
+});
 
     let end1 = kernel.handle_api_request(ApiRequest::EndSession {
         agent_id: agent_id.clone(),

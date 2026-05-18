@@ -180,7 +180,7 @@ impl SkillForge {
 
         match skill {
             Skill::Knowledge(k) => self.execute_knowledge_skill(k, inputs).await,
-            Skill::Config(c) => self.execute_config_skill(c, inputs).await,
+            Skill::Config(c) => self.execute_config_skill(c, inputs, _agent_id).await,
             Skill::Code(code) => self.execute_code_skill(code, inputs).await,
         }
     }
@@ -222,6 +222,7 @@ impl SkillForge {
         &self,
         skill: ConfigSkill,
         inputs: serde_json::Value,
+        agent_id: &str,
     ) -> CognitiveResult<SkillExecutionResult> {
         let interpreter = self.dsl_interpreter.as_ref()
             .ok_or(CognitiveError::DslExecutionFailed("DSL interpreter not available".to_string()))?;
@@ -262,7 +263,7 @@ impl SkillForge {
             outputs: dsl_outputs,
         };
 
-        let outputs = interpreter.execute(&dsl, inputs)
+        let outputs = interpreter.execute(&dsl, inputs, Some(agent_id))
             .map_err(|e| CognitiveError::DslExecutionFailed(e.to_string()))?;
 
         Ok(SkillExecutionResult::Config { outputs })
@@ -276,7 +277,7 @@ impl SkillForge {
         let runtime = self.wasm_runtime.as_ref()
             .ok_or(CognitiveError::WasmRuntimeNotAvailable)?;
 
-        let outputs = runtime.execute(&skill.wasm_bytes, inputs, &skill.resource_limits).await?;
+        let outputs = runtime.execute(&skill.wasm_bytes, inputs, &skill.resource_limits, None).await?;
         Ok(SkillExecutionResult::Code { outputs })
     }
 
@@ -513,5 +514,115 @@ mod tests {
 
         let result = forge.execute_skill("agent1", &skill_id, serde_json::json!({})).await;
         assert!(result.is_err()); // No DSL interpreter configured
+    }
+
+    #[tokio::test]
+    async fn test_execute_config_skill_with_interpreter() {
+        use super::super::DslInterpreter;
+        use super::super::ToolCallStep;
+        use super::super::ToolExecutor;
+
+        struct MockExec;
+        impl ToolExecutor for MockExec {
+            fn execute_tool(&self, name: &str, params: &serde_json::Value, _agent_id: &str) -> Result<serde_json::Value, String> {
+                Ok(serde_json::json!({"tool": name, "params": params, "mock": true}))
+            }
+        }
+
+        let interpreter = Arc::new(DslInterpreter::with_executor(Arc::new(MockExec)));
+        let forge = SkillForge::new().with_dsl_interpreter(interpreter);
+
+        let skill = Skill::Config(ConfigSkill {
+            id: uuid::Uuid::new_v4().to_string(),
+            name: "echo_skill".into(),
+            description: "echoes input".into(),
+            tool_chain: vec![ToolCallStep {
+                step_id: "s1".into(),
+                tool_name: "echo".into(),
+                parameters: serde_json::json!({"input": "$param1"}),
+                output_as: "result".into(),
+            }],
+            parameter_mappings: vec![ParameterMapping {
+                from: "param1".into(),
+                to: "param1".into(),
+                transform: None,
+            }],
+            conditional_branches: vec![],
+        });
+        let skill_id = forge.register_skill("agent1", skill).await.unwrap();
+
+        let result = forge.execute_skill("agent1", &skill_id, serde_json::json!({"param1": "hello"})).await;
+        // Should succeed — DSL interpreter handles unknown tools gracefully
+        assert!(result.is_ok());
+        match result.unwrap() {
+            SkillExecutionResult::Config { outputs } => {
+                assert!(outputs.is_object());
+            }
+            _ => panic!("Expected Config result"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_execute_code_skill_no_runtime() {
+        let forge = SkillForge::new();
+        let skill = Skill::Code(CodeSkill {
+            id: uuid::Uuid::new_v4().to_string(),
+            name: "wasm_skill".into(),
+            description: "a wasm skill".into(),
+            wasm_bytes: vec![0x00, 0x61, 0x73, 0x6d],
+            signature: super::super::FunctionSignature {
+                inputs: vec![],
+                outputs: vec![],
+            },
+            resource_limits: super::super::ResourceLimits::default(),
+        });
+        let skill_id = forge.register_skill("agent1", skill).await.unwrap();
+
+        let result = forge.execute_skill("agent1", &skill_id, serde_json::json!({})).await;
+        assert!(result.is_err()); // No WASM runtime configured
+    }
+
+    #[tokio::test]
+    async fn test_recommend_with_config_skill() {
+        let forge = SkillForge::new();
+        let skill = make_config_skill("deploy_config", "automates deployment");
+        forge.register_skill("agent1", skill).await.unwrap();
+
+        let recs = forge.recommend("agent1", "deploy application").await.unwrap();
+        // May find keyword overlap between "deploy" words
+        let _ = recs;
+    }
+
+    #[tokio::test]
+    async fn test_recommend_with_code_skill() {
+        let forge = SkillForge::new();
+        let skill = Skill::Code(CodeSkill {
+            id: uuid::Uuid::new_v4().to_string(),
+            name: "data_processor".into(),
+            description: "processes data efficiently".into(),
+            wasm_bytes: vec![],
+            signature: super::super::FunctionSignature {
+                inputs: vec![],
+                outputs: vec![],
+            },
+            resource_limits: super::super::ResourceLimits::default(),
+        });
+        forge.register_skill("agent1", skill).await.unwrap();
+
+        let recs = forge.recommend("agent1", "process data").await.unwrap();
+        let _ = recs;
+    }
+
+    #[tokio::test]
+    async fn test_compose_skills_with_two_skills() {
+        let forge = SkillForge::new();
+        let s1 = make_knowledge_skill("skill_a", "knowledge A");
+        let s2 = make_knowledge_skill("skill_b", "knowledge B");
+        let id1 = forge.register_skill("agent1", s1).await.unwrap();
+        let id2 = forge.register_skill("agent1", s2).await.unwrap();
+
+        let result = forge.compose_skills(&[id1, id2]).await.unwrap();
+        // Composer may or may not merge — just verify no panic
+        let _ = result;
     }
 }

@@ -45,6 +45,7 @@ fn test_g3_task_delegation_end_to_end() {
         vec!["security".into(), "analysis".into()],
         &coordinator,
         Some("Security Analysis".into()),
+        plico::cas::ObjectScope::default()
     ).expect("semantic_create should succeed");
 
     tracing::info!("G-3: Coordinator created document cid={}", doc_cid);
@@ -98,6 +99,7 @@ fn test_g3_task_delegation_end_to_end() {
         vec!["analysis".into(), "security".into(), "completed".into()],
         &worker,
         Some("SQL Injection Analysis Result".into()),
+        plico::cas::ObjectScope::default()
     ).expect("semantic_create should succeed");
 
     let resp = kernel.handle_api_request(plico::api::semantic::ApiRequest::TaskComplete {
@@ -263,6 +265,7 @@ fn test_g3_task_persist_and_restore() {
         vec!["task-result".into()],
         &worker,
         Some("Task Result".into()),
+        plico::cas::ObjectScope::default()
     ).expect("semantic_create should succeed");
 
     let resp = kernel.handle_api_request(plico::api::semantic::ApiRequest::TaskComplete {

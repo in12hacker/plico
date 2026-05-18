@@ -40,7 +40,7 @@ fn make_fs_with_kg(dir: &TempDir) -> SemanticFS {
 #[test]
 fn test_create_and_get() {
     let (fs, _dir) = make_fs();
-    let cid = fs.create(b"Agent task output".to_vec(), vec!["result".to_string()], "a".to_string(), None).unwrap();
+    let cid = fs.create(b"Agent task output".to_vec(), vec!["result".to_string()], "a".to_string(), None, crate::cas::ObjectScope::default()).unwrap();
     let results = fs.read(&Query::ByCid(cid.clone())).unwrap();
     assert_eq!(results.len(), 1);
 }
@@ -48,7 +48,7 @@ fn test_create_and_get() {
 #[test]
 fn test_list_tags() {
     let (fs, _dir) = make_fs();
-    fs.create(b"data".to_vec(), vec!["tag-a".to_string()], "a".to_string(), None).unwrap();
+    fs.create(b"data".to_vec(), vec!["tag-a".to_string()], "a".to_string(), None, crate::cas::ObjectScope::default()).unwrap();
     let tags = fs.list_tags();
     assert!(tags.contains(&"tag-a".to_string()));
 }
@@ -56,15 +56,15 @@ fn test_list_tags() {
 #[test]
 fn test_deduplication_by_content() {
     let (fs, _dir) = make_fs();
-    let cid1 = fs.create(b"identical".to_vec(), vec!["test".to_string()], "a".to_string(), None).unwrap();
-    let cid2 = fs.create(b"identical".to_vec(), vec!["test".to_string()], "a".to_string(), None).unwrap();
+    let cid1 = fs.create(b"identical".to_vec(), vec!["test".to_string()], "a".to_string(), None, crate::cas::ObjectScope::default()).unwrap();
+    let cid2 = fs.create(b"identical".to_vec(), vec!["test".to_string()], "a".to_string(), None, crate::cas::ObjectScope::default()).unwrap();
     assert_eq!(cid1, cid2);
 }
 
 #[test]
 fn test_delete_is_logical() {
     let (fs, _dir) = make_fs();
-    let cid = fs.create(b"to delete".to_vec(), vec!["tmp".to_string()], "a".to_string(), None).unwrap();
+    let cid = fs.create(b"to delete".to_vec(), vec!["tmp".to_string()], "a".to_string(), None, crate::cas::ObjectScope::default()).unwrap();
     fs.delete(&cid, "a".to_string()).unwrap();
     assert!(fs.read(&Query::ByTags(vec!["tmp".to_string()])).unwrap().is_empty());
     assert_eq!(fs.list_deleted().len(), 1);
@@ -73,7 +73,7 @@ fn test_delete_is_logical() {
 #[test]
 fn test_restore_puts_back_in_tag_index() {
     let (fs, _dir) = make_fs();
-    let cid = fs.create(b"restored".to_vec(), vec!["todo".to_string()], "a".to_string(), None).unwrap();
+    let cid = fs.create(b"restored".to_vec(), vec!["todo".to_string()], "a".to_string(), None, crate::cas::ObjectScope::default()).unwrap();
     fs.delete(&cid, "a".to_string()).unwrap();
     fs.restore(&cid, "a".to_string()).unwrap();
     assert_eq!(fs.read(&Query::ByTags(vec!["todo".to_string()])).unwrap().len(), 1);
@@ -82,7 +82,7 @@ fn test_restore_puts_back_in_tag_index() {
 #[test]
 fn test_audit_log_records_create() {
     let (fs, _dir) = make_fs();
-    let cid = fs.create(b"test".to_vec(), vec![], "audit-agent".to_string(), None).unwrap();
+    let cid = fs.create(b"test".to_vec(), vec![], "audit-agent".to_string(), None, crate::cas::ObjectScope::default()).unwrap();
     let log = fs.audit_log();
     assert!(log.iter().any(|e| e.cid == cid && matches!(e.action, crate::fs::semantic_fs::AuditAction::Create)));
 }
@@ -90,7 +90,7 @@ fn test_audit_log_records_create() {
 #[test]
 fn test_update_generates_new_cid() {
     let (fs, _dir) = make_fs();
-    let cid1 = fs.create(b"v1".to_vec(), vec!["ver".to_string()], "a".to_string(), None).unwrap();
+    let cid1 = fs.create(b"v1".to_vec(), vec!["ver".to_string()], "a".to_string(), None, crate::cas::ObjectScope::default()).unwrap();
     let cid2 = fs.update(&cid1, b"v2".to_vec(), None, "a".to_string()).unwrap();
     assert_ne!(cid1, cid2);
 }
@@ -98,7 +98,7 @@ fn test_update_generates_new_cid() {
 #[test]
 fn test_search_query() {
     let (fs, _dir) = make_fs();
-    fs.create(b"apple banana".to_vec(), vec!["fruit".to_string()], "a".to_string(), None).unwrap();
+    fs.create(b"apple banana".to_vec(), vec!["fruit".to_string()], "a".to_string(), None, crate::cas::ObjectScope::default()).unwrap();
     let results = fs.search("fruit", 10);
     assert!(!results.is_empty());
 }
@@ -106,15 +106,15 @@ fn test_search_query() {
 #[test]
 fn test_search_by_tags() {
     let (fs, _dir) = make_fs();
-    fs.create(b"data".to_vec(), vec!["rust".to_string()], "a".to_string(), None).unwrap();
-    fs.create(b"data".to_vec(), vec!["python".to_string()], "a".to_string(), None).unwrap();
+    fs.create(b"data".to_vec(), vec!["rust".to_string()], "a".to_string(), None, crate::cas::ObjectScope::default()).unwrap();
+    fs.create(b"data".to_vec(), vec!["python".to_string()], "a".to_string(), None, crate::cas::ObjectScope::default()).unwrap();
     assert_eq!(fs.read(&Query::ByTags(vec!["rust".to_string()])).unwrap().len(), 1);
 }
 
 #[test]
 fn test_update_with_new_tags() {
     let (fs, _dir) = make_fs();
-    let cid = fs.create(b"old".to_vec(), vec!["old-tag".to_string()], "a".to_string(), None).unwrap();
+    let cid = fs.create(b"old".to_vec(), vec!["old-tag".to_string()], "a".to_string(), None, crate::cas::ObjectScope::default()).unwrap();
     fs.update(&cid, b"new".to_vec(), Some(vec!["new-tag".to_string()]), "a".to_string()).unwrap();
     assert!(fs.read(&Query::ByTags(vec!["old-tag".to_string()])).unwrap().is_empty());
     assert_eq!(fs.read(&Query::ByTags(vec!["new-tag".to_string()])).unwrap().len(), 1);
@@ -123,7 +123,7 @@ fn test_update_with_new_tags() {
 #[test]
 fn test_context_layer_tokens() {
     let (fs, _dir) = make_fs();
-    let cid = fs.create(b"short content".to_vec(), vec![], "a".to_string(), None).unwrap();
+    let cid = fs.create(b"short content".to_vec(), vec![], "a".to_string(), None, crate::cas::ObjectScope::default()).unwrap();
     let ctx = fs.ctx_loader.load(&cid, ContextLayer::L0).unwrap();
     assert!(ctx.tokens_estimate > 0);
 }
@@ -134,7 +134,7 @@ fn test_recycle_bin_persists_across_restart() {
     let cas = Arc::new(CASStorage::new(dir.path().join("cas")).unwrap());
     let cid = {
         let fs = SemanticFS::new(dir.path().to_path_buf(), Arc::clone(&cas), Arc::new(StubEmbeddingProvider::new()), Arc::new(InMemoryBackend::new()), None, None).unwrap();
-        fs.create(b"persistent-delete".to_vec(), vec!["persist".to_string()], "a".to_string(), None).unwrap()
+        fs.create(b"persistent-delete".to_vec(), vec!["persist".to_string()], "a".to_string(), None, crate::cas::ObjectScope::default()).unwrap()
     };
     {
         let fs = SemanticFS::new(dir.path().to_path_buf(), Arc::clone(&cas), Arc::new(StubEmbeddingProvider::new()), Arc::new(InMemoryBackend::new()), None, None).unwrap();
@@ -153,7 +153,7 @@ fn test_restore_nonexistent_cid_returns_error() {
 #[test]
 fn test_list_deleted_after_delete() {
     let (fs, _dir) = make_fs();
-    let cid = fs.create(b"delete me".to_vec(), vec![], "a".to_string(), None).unwrap();
+    let cid = fs.create(b"delete me".to_vec(), vec![], "a".to_string(), None, crate::cas::ObjectScope::default()).unwrap();
     fs.delete(&cid, "a".to_string()).unwrap();
     assert_eq!(fs.list_deleted().len(), 1);
 }
@@ -194,7 +194,7 @@ fn test_delete_invalid_hex_cid_returns_invalid_input() {
 #[test]
 fn test_delete_existing_moves_to_recycle() {
     let (fs, _dir) = make_fs();
-    let cid = fs.create(b"to delete".to_vec(), vec!["tmp".to_string()], "a".to_string(), None).unwrap();
+    let cid = fs.create(b"to delete".to_vec(), vec!["tmp".to_string()], "a".to_string(), None, crate::cas::ObjectScope::default()).unwrap();
     fs.delete(&cid, "a".to_string()).unwrap();
     assert_eq!(fs.list_deleted().len(), 1);
     assert_eq!(fs.list_deleted()[0].cid, cid);
@@ -326,7 +326,7 @@ fn list_events_by_time_unknown_expression_returns_error() {
 fn context_loader_l2_returns_actual_content() {
     let (fs, _dir) = make_fs();
     let expected = b"The quick brown fox";
-    let cid = fs.create(expected.to_vec(), vec!["test".to_string()], "agent".to_string(), None).unwrap();
+    let cid = fs.create(expected.to_vec(), vec!["test".to_string()], "agent".to_string(), None, crate::cas::ObjectScope::default()).unwrap();
     let ctx = fs.ctx_loader.load(&cid, ContextLayer::L2).unwrap();
     assert_eq!(ctx.layer, ContextLayer::L2);
     assert_eq!(ctx.content.as_bytes(), expected);
@@ -336,8 +336,8 @@ fn context_loader_l2_returns_actual_content() {
 #[test]
 fn by_type_returns_matching_objects() {
     let (fs, _dir) = make_fs();
-    let cid_text = fs.create(b"hello text".to_vec(), vec!["doc".to_string()], "a".to_string(), None).unwrap();
-    let cid_bin = fs.create(vec![0x89, 0x50, 0x4E, 0x47], vec!["img".to_string()], "a".to_string(), None).unwrap();
+    let cid_text = fs.create(b"hello text".to_vec(), vec!["doc".to_string()], "a".to_string(), None, crate::cas::ObjectScope::default()).unwrap();
+    let cid_bin = fs.create(vec![0x89, 0x50, 0x4E, 0x47], vec!["img".to_string()], "a".to_string(), None, crate::cas::ObjectScope::default()).unwrap();
     let results = fs.read(&Query::ByType("text".to_string())).unwrap();
     let cids: Vec<_> = results.iter().map(|o| o.cid.as_str()).collect();
     assert!(cids.contains(&cid_text.as_str()));
@@ -347,8 +347,8 @@ fn by_type_returns_matching_objects() {
 #[test]
 fn hybrid_query_with_tags_filters_correctly() {
     let (fs, _dir) = make_fs();
-    let cid_a = fs.create(b"Rust programming notes".to_vec(), vec!["rust".to_string(), "notes".to_string()], "a".to_string(), None).unwrap();
-    let _cid_b = fs.create(b"Python tutorial".to_vec(), vec!["python".to_string(), "notes".to_string()], "a".to_string(), None).unwrap();
+    let cid_a = fs.create(b"Rust programming notes".to_vec(), vec!["rust".to_string(), "notes".to_string()], "a".to_string(), None, crate::cas::ObjectScope::default()).unwrap();
+    let _cid_b = fs.create(b"Python tutorial".to_vec(), vec!["python".to_string(), "notes".to_string()], "a".to_string(), None, crate::cas::ObjectScope::default()).unwrap();
     let results = fs.read(&Query::Hybrid { tags: vec!["rust".to_string()], semantic: None, content_type: None }).unwrap();
     let cids: Vec<_> = results.iter().map(|o| o.cid.as_str()).collect();
     assert!(cids.contains(&cid_a.as_str()));
@@ -358,7 +358,7 @@ fn hybrid_query_with_tags_filters_correctly() {
 #[test]
 fn update_tag_index_reflects_new_cid() {
     let (fs, _dir) = make_fs();
-    let cid1 = fs.create(b"version one".to_vec(), vec!["rust".to_string(), "plico".to_string()], "agent-test".to_string(), None).unwrap();
+    let cid1 = fs.create(b"version one".to_vec(), vec!["rust".to_string(), "plico".to_string()], "agent-test".to_string(), None, crate::cas::ObjectScope::default()).unwrap();
     let cid2 = fs.update(&cid1, b"version two".to_vec(), None, "agent-test".to_string()).unwrap();
     assert_ne!(cid1, cid2);
     let results = fs.read(&Query::ByTags(vec!["rust".to_string()])).unwrap();
@@ -375,12 +375,14 @@ fn bm25_search_works_with_stub_embeddings() {
         vec!["plico:type:adr".to_string()],
         "agent1".to_string(),
         None,
+        crate::cas::ObjectScope::default(),
     ).unwrap();
     fs.create(
         b"meeting notes about project timeline".to_vec(),
         vec!["plico:type:progress".to_string()],
         "agent1".to_string(),
         None,
+        crate::cas::ObjectScope::default(),
     ).unwrap();
 
     let results = fs.search("protocol decoupling", 5);
@@ -397,12 +399,14 @@ fn bm25_search_with_tag_filter_and_stub_embeddings() {
         vec!["plico:type:adr".to_string()],
         "agent1".to_string(),
         None,
+        crate::cas::ObjectScope::default(),
     ).unwrap();
     fs.create(
         b"protocol progress update".to_vec(),
         vec!["plico:type:progress".to_string()],
         "agent1".to_string(),
         None,
+        crate::cas::ObjectScope::default(),
     ).unwrap();
 
     let filter = crate::fs::search::SearchFilter {
@@ -462,6 +466,7 @@ fn test_similar_to_edges_created_for_similar_docs() {
         vec!["programming".to_string()],
         "agent1".to_string(),
         None,
+        crate::cas::ObjectScope::default(),
     ).unwrap();
     
     // Give it a tiny moment for index stability if needed (though HNSW here is sync)
@@ -470,6 +475,7 @@ fn test_similar_to_edges_created_for_similar_docs() {
         vec!["tutorial".to_string()],
         "agent1".to_string(),
         None,
+        crate::cas::ObjectScope::default(),
     ).unwrap();
 
     // Verify SimilarTo edges were created in the graph
@@ -494,6 +500,7 @@ fn test_no_similar_to_edges_for_dissimilar_docs() {
         vec!["a".to_string()],
         "agent1".to_string(),
         None,
+        crate::cas::ObjectScope::default(),
     ).unwrap();
     // Single char → one-hot vector [1, 0, 0, …]; cosine ≈ 0.354 < 0.5 threshold
     let cid2 = fs.create(
@@ -501,6 +508,7 @@ fn test_no_similar_to_edges_for_dissimilar_docs() {
         vec!["z".to_string()],
         "agent1".to_string(),
         None,
+        crate::cas::ObjectScope::default(),
     ).unwrap();
 
     let kg = PetgraphBackend::open(dir.path().to_path_buf());
@@ -522,6 +530,7 @@ fn test_iterative_retrieve_expands_results() {
             vec!["rust".to_string(), "programming".to_string()],
             "agent1".to_string(),
             None,
+            crate::cas::ObjectScope::default(),
         ).unwrap();
     }
     // Simple query — iterative retrieve should find additional docs via BM25
@@ -539,12 +548,14 @@ fn test_multihop_query_returns_results() {
         vec!["deployment".to_string(), "outage".to_string()],
         "agent1".to_string(),
         None,
+        crate::cas::ObjectScope::default(),
     ).unwrap();
     fs.create(
         b"Outage affected users".to_vec(),
         vec!["outage".to_string(), "users".to_string()],
         "agent1".to_string(),
         None,
+        crate::cas::ObjectScope::default(),
     ).unwrap();
     // Multi-hop query should trigger PPR + path discovery + iterative retrieval
     let results = fs.search("why did the deployment cause the outage", 10);
@@ -560,6 +571,7 @@ fn test_search_with_filter_respects_limit() {
             vec!["test".to_string()],
             "agent1".to_string(),
             None,
+            crate::cas::ObjectScope::default(),
         ).unwrap();
     }
     let results = fs.search("document", 5);
@@ -574,6 +586,7 @@ fn test_search_cache_hit() {
         vec!["cache".to_string()],
         "agent1".to_string(),
         None,
+        crate::cas::ObjectScope::default(),
     ).unwrap();
     // First search
     let results1 = fs.search("cache test", 5);
@@ -599,8 +612,8 @@ fn test_multihop_with_kg_nodes_triggers_path_discovery() {
     ).unwrap();
 
     // Create documents and KG nodes with content_cid
-    let cid1 = fs.create(b"Alpha project started".to_vec(), vec!["alpha".to_string()], "agent1".to_string(), None).unwrap();
-    let cid2 = fs.create(b"Beta project depends on Alpha".to_vec(), vec!["beta".to_string(), "alpha".to_string()], "agent1".to_string(), None).unwrap();
+    let cid1 = fs.create(b"Alpha project started".to_vec(), vec!["alpha".to_string()], "agent1".to_string(), None, crate::cas::ObjectScope::default()).unwrap();
+    let cid2 = fs.create(b"Beta project depends on Alpha".to_vec(), vec!["beta".to_string(), "alpha".to_string()], "agent1".to_string(), None, crate::cas::ObjectScope::default()).unwrap();
 
     let mut alpha = KGNode::new("Alpha".to_string(), KGNodeType::Entity, "agent1".to_string(), "default".to_string());
     alpha.content_cid = Some(cid1);

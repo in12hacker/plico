@@ -11,12 +11,13 @@ fn decode_content(content: &str, encoding: &ContentEncoding) -> Result<Vec<u8>, 
 impl super::super::AIKernel {
     pub(crate) fn handle_cas(&self, req: ApiRequest) -> ApiResponse {
         match req {
-            ApiRequest::Create { content, content_encoding, tags, agent_id, intent, .. } => {
+            ApiRequest::Create { content, content_encoding, tags, agent_id, intent, scope, .. } => {
                 let bytes = match decode_content(&content, &content_encoding) {
                     Ok(b) => b,
                     Err(e) => return ApiResponse::error(e),
                 };
-                match self.semantic_create(bytes, tags, &agent_id, intent) {
+                let object_scope = scope.unwrap_or_default();
+                match self.semantic_create(bytes, tags, &agent_id, intent, object_scope) {
                     Ok(cid) => {
                         self.maybe_persist_search_index();
                         ApiResponse::with_cid(cid)
@@ -153,6 +154,7 @@ mod tests {
             tenant_id: None,
             agent_token: None,
             intent: None,
+            scope: None,
         });
         assert!(resp.ok, "Create should succeed: {:?}", resp.error);
         resp.cid.unwrap()

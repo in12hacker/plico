@@ -80,7 +80,8 @@ fn axiom2_intent_drives_search() {
         tenant_id: None,
         agent_token: None,
         intent: Some("study rust async".to_string()),
-    });
+            scope: None,
+});
 
     let resp = kernel.handle_api_request(ApiRequest::Search {
         query: "async".to_string(),

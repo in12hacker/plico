@@ -57,7 +57,8 @@ fn test_ai_agent_multi_session_experience() {
                 tenant_id: None,
                 agent_token: None,
                 intent: None,
-            },
+            scope: None,
+},
         );
         assert!(create_resp.ok, "Create should succeed: {:?}", create_resp.error);
 
@@ -343,7 +344,8 @@ fn test_session_checkpoint_persistence() {
                 tenant_id: None,
                 agent_token: None,
                 intent: None,
-            },
+            scope: None,
+},
         );
 
         // End with checkpoint

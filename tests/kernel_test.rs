@@ -37,6 +37,7 @@ fn test_kernel_create_and_get() {
             vec!["embedding".to_string(), "batch-result".to_string()],
             "TestAgent",
             Some("Embedding computation output".to_string()),
+            plico::cas::ObjectScope::default()
         )
         .expect("create failed");
 
@@ -59,6 +60,7 @@ fn test_kernel_semantic_create_and_read() {
             vec!["rust".to_string(), "async".to_string()],
             "DevAgent",
             None,
+            plico::cas::ObjectScope::default()
         )
         .expect("create failed");
 
@@ -74,9 +76,9 @@ fn test_kernel_semantic_create_and_read() {
 fn test_kernel_read_by_tags() {
     let (kernel, _dir) = make_kernel();
 
-    kernel.semantic_create(b"doc1".to_vec(), vec!["a".to_string()], "x", None).ok();
-    kernel.semantic_create(b"doc2".to_vec(), vec!["a".to_string(), "b".to_string()], "x", None).ok();
-    kernel.semantic_create(b"doc3".to_vec(), vec!["b".to_string()], "x", None).ok();
+    kernel.semantic_create(b"doc1".to_vec(), vec!["a".to_string()], "x", None, plico::cas::ObjectScope::default()).ok();
+    kernel.semantic_create(b"doc2".to_vec(), vec!["a".to_string(), "b".to_string()], "x", None, plico::cas::ObjectScope::default()).ok();
+    kernel.semantic_create(b"doc3".to_vec(), vec!["b".to_string()], "x", None, plico::cas::ObjectScope::default()).ok();
 
     let objs = kernel
         .semantic_read(&plico::fs::Query::ByTags(vec!["a".to_string()]), "x", "default")
@@ -90,7 +92,7 @@ fn test_kernel_update_changes_cid() {
     let (kernel, _dir) = make_kernel();
 
     let old_cid = kernel
-        .semantic_create(b"original".to_vec(), vec!["t".to_string()], "x", None)
+        .semantic_create(b"original".to_vec(), vec!["t".to_string()], "x", None, plico::cas::ObjectScope::default())
         .expect("create failed");
 
     let new_cid = kernel
@@ -114,7 +116,7 @@ fn test_kernel_delete_requires_permission() {
     let (kernel, _dir) = make_kernel();
 
     let cid = kernel
-        .semantic_create(b"secret".to_vec(), vec!["private".to_string()], "x", None)
+        .semantic_create(b"secret".to_vec(), vec!["private".to_string()], "x", None, plico::cas::ObjectScope::default())
         .expect("create failed");
 
     // 'cli' agent has no Delete grant by default
@@ -135,10 +137,10 @@ fn test_kernel_agent_isolation() {
     let (kernel, _dir) = make_kernel();
 
     let cid_a = kernel
-        .semantic_create(b"agent A data".to_vec(), vec!["shared-tag".to_string()], "agent-a", None)
+        .semantic_create(b"agent A data".to_vec(), vec!["shared-tag".to_string()], "agent-a", None, plico::cas::ObjectScope::default())
         .expect("create by A failed");
     let cid_b = kernel
-        .semantic_create(b"agent B data".to_vec(), vec!["shared-tag".to_string()], "agent-b", None)
+        .semantic_create(b"agent B data".to_vec(), vec!["shared-tag".to_string()], "agent-b", None, plico::cas::ObjectScope::default())
         .expect("create by B failed");
 
     // A can read own object
@@ -220,8 +222,8 @@ fn test_kernel_forget_ephemeral() {
 fn test_kernel_list_tags() {
     let (kernel, _dir) = make_kernel();
 
-    kernel.semantic_create(b"doc1".to_vec(), vec!["a".to_string(), "b".to_string()], "x", None).ok();
-    kernel.semantic_create(b"doc2".to_vec(), vec!["b".to_string(), "c".to_string()], "x", None).ok();
+    kernel.semantic_create(b"doc1".to_vec(), vec!["a".to_string(), "b".to_string()], "x", None, plico::cas::ObjectScope::default()).ok();
+    kernel.semantic_create(b"doc2".to_vec(), vec!["b".to_string(), "c".to_string()], "x", None, plico::cas::ObjectScope::default()).ok();
 
     let tags = kernel.list_tags();
     assert!(tags.contains(&"a".to_string()));
@@ -458,7 +460,7 @@ fn test_kernel_list_deleted_after_delete() {
     assert!(kernel.list_deleted("kernel").is_empty());
 
     let cid = kernel
-        .semantic_create(b"to be deleted".to_vec(), vec!["temp".to_string()], "kernel", None)
+        .semantic_create(b"to be deleted".to_vec(), vec!["temp".to_string()], "kernel", None, plico::cas::ObjectScope::default())
         .expect("create failed");
 
     // "kernel" has all permissions granted by default
@@ -475,7 +477,7 @@ fn test_kernel_restore_deleted() {
     let (kernel, _dir) = make_kernel();
 
     let cid = kernel
-        .semantic_create(b"restore me".to_vec(), vec!["restore-test".to_string()], "kernel", None)
+        .semantic_create(b"restore me".to_vec(), vec!["restore-test".to_string()], "kernel", None, plico::cas::ObjectScope::default())
         .expect("create failed");
 
     kernel.semantic_delete(&cid, "kernel", "default").expect("delete failed");
@@ -579,7 +581,8 @@ fn test_kernel_intent_persists_across_restart() {
             tenant_id: None,
             agent_token: None,
             intent: None,
-        }).unwrap();
+            scope: None,
+}).unwrap();
         kernel.submit_intent(
             IntentPriority::High,
             "test persistent intent".to_string(),
@@ -616,7 +619,8 @@ fn test_kernel_handle_api_request_create_and_read() {
         tenant_id: None,
         agent_token: None,
         intent: None,
-    };
+            scope: None,
+};
     let resp = kernel.handle_api_request(create_req);
     assert!(resp.ok);
     let cid = resp.cid.expect("should have cid");
@@ -649,7 +653,8 @@ fn test_kernel_executor_dispatches_intent_action() {
         tenant_id: None,
         agent_token: None,
         intent: Some("test intent".to_string()),
-    }).unwrap();
+            scope: None,
+}).unwrap();
 
     let kernel_ref = Arc::clone(&kernel);
     let executor = KernelExecutor::new(move |json: &str, _agent_id: Option<&str>| {
@@ -727,7 +732,8 @@ async fn test_dispatch_loop_with_kernel_executor() {
         tenant_id: None,
         agent_token: None,
         intent: Some("test dispatch".to_string()),
-    }).unwrap();
+            scope: None,
+}).unwrap();
 
     kernel.submit_intent(
         IntentPriority::High,
@@ -754,7 +760,7 @@ async fn test_dispatch_loop_with_kernel_executor() {
 fn test_kernel_graph_explore_raw_returns_tuples() {
     let (kernel, _dir) = make_kernel();
     let cid = kernel
-        .semantic_create(b"graph node A".to_vec(), vec!["graph".to_string()], "x", None)
+        .semantic_create(b"graph node A".to_vec(), vec!["graph".to_string()], "x", None, plico::cas::ObjectScope::default())
         .expect("create failed");
 
     // No edges added — just confirm the call succeeds and returns the expected tuple shape
@@ -799,7 +805,8 @@ fn test_e2e_agent_autonomy_cycle() {
             tenant_id: None,
             agent_token: None,
             intent: Some("e2e autonomy test".to_string()),
-        }).unwrap();
+            scope: None,
+}).unwrap();
 
         let intent_id = kernel.submit_intent(
             IntentPriority::Critical,
@@ -1537,6 +1544,7 @@ fn test_context_load_l0() {
         vec!["test".to_string()],
         &agent_id,
         None,
+        plico::cas::ObjectScope::default()
     ).unwrap();
 
     let loaded = kernel.context_load(&cid, plico::fs::ContextLayer::L0, &agent_id).unwrap();
@@ -1555,6 +1563,7 @@ fn test_context_load_l2() {
         vec!["test".to_string()],
         &agent_id,
         None,
+        plico::cas::ObjectScope::default()
     ).unwrap();
 
     let loaded = kernel.context_load(&cid, plico::fs::ContextLayer::L2, &agent_id).unwrap();
@@ -1586,6 +1595,7 @@ fn test_context_load_via_api() {
         vec!["test".to_string()],
         &agent_id,
         None,
+        plico::cas::ObjectScope::default()
     ).unwrap();
 
     let resp = kernel.handle_api_request(ApiRequest::LoadContext {
@@ -1610,6 +1620,7 @@ fn test_context_load_tool() {
         vec!["test".to_string()],
         &agent_id,
         None,
+        plico::cas::ObjectScope::default()
     ).unwrap();
 
     let result = kernel.execute_tool(
@@ -1634,6 +1645,7 @@ fn test_intent_execute_sync_stores_result_in_memory() {
         vec!["test".to_string()],
         &agent_id,
         None,
+        plico::cas::ObjectScope::default()
     ).unwrap();
 
     let result = execution::execute_sync(
@@ -1691,6 +1703,7 @@ fn test_intent_execute_sync_learn_creates_procedural_memory() {
         vec!["data".to_string()],
         &agent_id,
         None,
+        plico::cas::ObjectScope::default()
     ).unwrap();
 
     let result = execution::execute_sync(
@@ -1753,6 +1766,7 @@ fn test_e2e_autonomous_loop_resolve_execute_learn_reuse() {
         vec!["report".to_string(), "sales".to_string()],
         &agent_id,
         None,
+        plico::cas::ObjectScope::default()
     ).unwrap();
 
     // Step 1: Execute with learn=true → stores procedural memory
@@ -1827,6 +1841,7 @@ fn test_version_history_returns_chain() {
         vec!["doc".to_string()],
         "cli",
         None,
+        plico::cas::ObjectScope::default()
     ).unwrap();
 
     let cid2 = kernel.semantic_update(
@@ -1859,6 +1874,7 @@ fn test_version_history_single_version() {
         vec!["solo".to_string()],
         "cli",
         None,
+        plico::cas::ObjectScope::default()
     ).unwrap();
 
     let history = kernel.version_history(&cid, "cli");
@@ -1874,6 +1890,7 @@ fn test_rollback_restores_previous_content() {
         vec!["doc".to_string(), "important".to_string()],
         "cli",
         None,
+        plico::cas::ObjectScope::default()
     ).unwrap();
 
     let cid2 = kernel.semantic_update(
@@ -1906,6 +1923,7 @@ fn test_rollback_no_previous_version_fails() {
         vec!["doc".to_string()],
         "cli",
         None,
+        plico::cas::ObjectScope::default()
     ).unwrap();
 
     let result = kernel.rollback(&cid, "cli");
@@ -1922,6 +1940,7 @@ fn test_history_and_rollback_via_api() {
         vec!["api-test".to_string()],
         "cli",
         None,
+        plico::cas::ObjectScope::default()
     ).unwrap();
 
     let cid2 = kernel.semantic_update(
@@ -1983,6 +2002,7 @@ fn test_multi_step_learn_creates_multi_step_procedure() {
         vec!["meeting".to_string(), "notes".to_string()],
         &agent_id,
         None,
+        plico::cas::ObjectScope::default()
     ).unwrap();
 
     // Execute with learn — conjunctive intent
@@ -2021,6 +2041,7 @@ fn test_multi_step_reuse_replays_all_steps() {
         vec!["report".to_string(), "alpha".to_string()],
         &agent_id,
         None,
+        plico::cas::ObjectScope::default()
     ).unwrap();
 
     // First execution with learn
@@ -2284,6 +2305,7 @@ fn test_cross_agent_workflow_reuse_via_shared_scope() {
         vec!["report".to_string(), "finance".to_string()],
         &agent_a,
         None,
+        plico::cas::ObjectScope::default()
     ).unwrap();
 
     // Agent A learns a workflow with learn=true
@@ -2367,6 +2389,7 @@ fn test_shared_procedure_appears_as_tool() {
         vec!["report".into()],
         &agent_a,
         None,
+        plico::cas::ObjectScope::default()
     ).unwrap();
 
     // Agent A learns a workflow and shares it
@@ -2667,6 +2690,7 @@ fn test_event_bus_object_stored_notification() {
         vec!["tag-a".into()],
         &agent,
         None,
+        plico::cas::ObjectScope::default()
     ).unwrap();
 
     let events = kernel.event_poll(&sub_id).unwrap();
@@ -2733,6 +2757,7 @@ fn test_event_bus_cross_agent_reactive_workflow() {
         vec!["shared".into(), "knowledge".into()],
         &agent_a,
         None,
+        plico::cas::ObjectScope::default()
     ).unwrap();
 
     kernel.remember_working(&agent_a, "default", "learned something".into(), vec![]).unwrap();
@@ -2754,7 +2779,7 @@ fn test_event_bus_unsubscribe_stops_events() {
     let sub_id = kernel.event_subscribe();
     assert!(kernel.event_unsubscribe(&sub_id));
 
-    kernel.semantic_create(b"data".to_vec(), vec![], &agent, None).unwrap();
+    kernel.semantic_create(b"data".to_vec(), vec![], &agent, None, plico::cas::ObjectScope::default()).unwrap();
 
     assert!(kernel.event_poll(&sub_id).is_none(), "unsubscribed should return None");
 }
@@ -2770,7 +2795,7 @@ fn test_event_bus_via_api() {
     assert!(resp.ok);
     let sub_id = resp.subscription_id.unwrap();
 
-    kernel.semantic_create(b"api test".to_vec(), vec!["api".into()], &agent, None).unwrap();
+    kernel.semantic_create(b"api test".to_vec(), vec!["api".into()], &agent, None, plico::cas::ObjectScope::default()).unwrap();
 
     let resp = kernel.handle_api_request(ApiRequest::EventPoll { subscription_id: sub_id.clone() });
     assert!(resp.ok);
@@ -2814,7 +2839,7 @@ fn test_event_bus_filtered_subscribe_by_type() {
     let sub_id = kernel.event_subscribe_filtered(Some(filter));
 
     let _ = kernel.remember_working_scoped(&agent, "default", "filter-noise".into(), vec![], plico::memory::MemoryScope::Private);
-    kernel.semantic_create(b"filtered data".to_vec(), vec!["ft".into()], &agent, None).unwrap();
+    kernel.semantic_create(b"filtered data".to_vec(), vec!["ft".into()], &agent, None, plico::cas::ObjectScope::default()).unwrap();
 
     let events = kernel.event_poll(&sub_id).unwrap();
     assert_eq!(events.len(), 1, "should only receive ObjectStored, not MemoryStored");
@@ -2833,8 +2858,8 @@ fn test_event_bus_filtered_subscribe_by_agent() {
     };
     let sub_id = kernel.event_subscribe_filtered(Some(filter));
 
-    kernel.semantic_create(b"from A".to_vec(), vec![], &agent_a, None).unwrap();
-    kernel.semantic_create(b"from B".to_vec(), vec![], &agent_b, None).unwrap();
+    kernel.semantic_create(b"from A".to_vec(), vec![], &agent_a, None, plico::cas::ObjectScope::default()).unwrap();
+    kernel.semantic_create(b"from B".to_vec(), vec![], &agent_b, None, plico::cas::ObjectScope::default()).unwrap();
 
     let events = kernel.event_poll(&sub_id).unwrap();
     assert_eq!(events.len(), 1, "should only see events from agent_b");
@@ -2861,7 +2886,7 @@ fn test_event_bus_filtered_subscribe_via_api() {
     assert!(resp.ok);
     let sub_id = resp.subscription_id.unwrap();
 
-    kernel.semantic_create(b"noise".to_vec(), vec![], &agent, None).unwrap();
+    kernel.semantic_create(b"noise".to_vec(), vec![], &agent, None, plico::cas::ObjectScope::default()).unwrap();
     let _ = kernel.remember_working_scoped(&agent, "default", "signal".into(), vec![], plico::memory::MemoryScope::Private);
 
     let resp = kernel.handle_api_request(ApiRequest::EventPoll { subscription_id: sub_id.clone() });
@@ -2879,7 +2904,7 @@ fn test_system_status_via_api() {
 
     let (kernel, _dir) = make_kernel();
     let agent = kernel.register_agent("status-tester".into()).unwrap();
-    kernel.semantic_create(b"status-data".to_vec(), vec!["test".into()], &agent, None).unwrap();
+    kernel.semantic_create(b"status-data".to_vec(), vec!["test".into()], &agent, None, plico::cas::ObjectScope::default()).unwrap();
 
     let resp = kernel.handle_api_request(ApiRequest::SystemStatus);
     assert!(resp.ok);
@@ -2893,8 +2918,8 @@ fn test_context_assemble_within_budget() {
     let (kernel, _dir) = make_kernel();
     let agent = kernel.register_agent("ctx-test".into()).unwrap();
 
-    let cid1 = kernel.semantic_create(b"First document about Rust.".to_vec(), vec!["rust".into()], &agent, None).unwrap();
-    let cid2 = kernel.semantic_create(b"Second document about Python.".to_vec(), vec!["python".into()], &agent, None).unwrap();
+    let cid1 = kernel.semantic_create(b"First document about Rust.".to_vec(), vec!["rust".into()], &agent, None, plico::cas::ObjectScope::default()).unwrap();
+    let cid2 = kernel.semantic_create(b"Second document about Python.".to_vec(), vec!["python".into()], &agent, None, plico::cas::ObjectScope::default()).unwrap();
 
     let candidates = vec![
         plico::fs::context_budget::ContextCandidate { cid: cid1, relevance: 0.9 },
@@ -2914,7 +2939,7 @@ fn test_context_assemble_via_api() {
     let (kernel, _dir) = make_kernel();
     let agent = kernel.register_agent("ctx-api".into()).unwrap();
 
-    let cid = kernel.semantic_create(b"API test document.".to_vec(), vec![], &agent, None).unwrap();
+    let cid = kernel.semantic_create(b"API test document.".to_vec(), vec![], &agent, None, plico::cas::ObjectScope::default()).unwrap();
 
     let resp = kernel.handle_api_request(ApiRequest::ContextAssemble {
         agent_id: agent.clone(),
@@ -2933,7 +2958,7 @@ fn test_context_assemble_tight_budget_downgrades() {
     let agent = kernel.register_agent("ctx-tight".into()).unwrap();
 
     let big_content = "word ".repeat(2000);
-    let cid = kernel.semantic_create(big_content.as_bytes().to_vec(), vec![], &agent, None).unwrap();
+    let cid = kernel.semantic_create(big_content.as_bytes().to_vec(), vec![], &agent, None, plico::cas::ObjectScope::default()).unwrap();
 
     let candidates = vec![
         plico::fs::context_budget::ContextCandidate { cid, relevance: 1.0 },
@@ -3220,7 +3245,8 @@ fn test_event_history_since_seq() {
         tenant_id: None,
         agent_token: None,
         intent: None,
-    });
+            scope: None,
+});
 
     let resp = kernel.handle_api_request(plico::api::semantic::ApiRequest::EventHistory {
         since_seq: Some(baseline as u64),
@@ -3249,7 +3275,8 @@ fn test_event_history_by_agent() {
         tenant_id: None,
         agent_token: None,
         intent: None,
-    });
+            scope: None,
+});
     kernel.handle_api_request(plico::api::semantic::ApiRequest::Create {
         api_version: None,
         content: "a2-data".into(),
@@ -3259,7 +3286,8 @@ fn test_event_history_by_agent() {
         tenant_id: None,
         agent_token: None,
         intent: None,
-    });
+            scope: None,
+});
 
     let r1 = kernel.handle_api_request(plico::api::semantic::ApiRequest::EventHistory {
         since_seq: None, agent_id_filter: Some(a1.clone()), limit: None,
@@ -3287,7 +3315,8 @@ fn test_event_history_via_api_full() {
         tenant_id: None,
         agent_token: None,
         intent: None,
-    });
+            scope: None,
+});
 
     let resp = kernel.handle_api_request(plico::api::semantic::ApiRequest::EventHistory {
         since_seq: None, agent_id_filter: None, limit: None,
@@ -3319,7 +3348,8 @@ fn test_event_history_api_agent_filter() {
         tenant_id: None,
         agent_token: None,
         intent: None,
-    });
+            scope: None,
+});
     kernel.handle_api_request(plico::api::semantic::ApiRequest::Create {
         api_version: None,
         content: "d2".into(),
@@ -3329,7 +3359,8 @@ fn test_event_history_api_agent_filter() {
         tenant_id: None,
         agent_token: None,
         intent: None,
-    });
+            scope: None,
+});
 
     let resp = kernel.handle_api_request(plico::api::semantic::ApiRequest::EventHistory {
         since_seq: None, agent_id_filter: Some(a1.clone()), limit: None,
@@ -3352,7 +3383,8 @@ fn test_event_history_api_limit() {
             tenant_id: None,
             agent_token: None,
             intent: None,
-        });
+            scope: None,
+});
     }
 
     let resp = kernel.handle_api_request(plico::api::semantic::ApiRequest::EventHistory {
@@ -3376,7 +3408,8 @@ fn test_event_history_monotonic_sequence() {
             tenant_id: None,
             agent_token: None,
             intent: None,
-        });
+            scope: None,
+});
     }
 
     let all = kernel.handle_api_request(plico::api::semantic::ApiRequest::EventHistory {
@@ -3409,7 +3442,8 @@ fn test_event_log_persists_across_restart() {
             tenant_id: None,
             agent_token: None,
             intent: None,
-        });
+            scope: None,
+});
         kernel.persist_all();
 
         let resp = kernel.handle_api_request(plico::api::semantic::ApiRequest::EventHistory {
@@ -3461,7 +3495,8 @@ fn test_event_log_sequence_continues_after_restore() {
             tenant_id: None,
             agent_token: None,
             intent: None,
-        });
+            scope: None,
+});
 
         let resp = kernel2.handle_api_request(plico::api::semantic::ApiRequest::EventHistory {
             since_seq: None, agent_id_filter: None, limit: None,
@@ -3486,7 +3521,8 @@ fn test_event_log_explicit_persist() {
         tenant_id: None,
         agent_token: None,
         intent: None,
-    });
+            scope: None,
+});
 
     kernel.persist_all();
 
@@ -3652,9 +3688,9 @@ fn test_discover_skills_cross_agent() {
 fn test_kernel_semantic_create_and_search() {
     let (kernel, _dir) = make_kernel();
 
-    kernel.semantic_create(b"rust async programming".to_vec(), vec!["rust".into(), "async".into()], "test", None).expect("create1");
-    kernel.semantic_create(b"python asyncio".to_vec(), vec!["python".into(), "async".into()], "test", None).expect("create2");
-    kernel.semantic_create(b"go channels".to_vec(), vec!["go".into(), "concurrency".into()], "test", None).expect("create3");
+    kernel.semantic_create(b"rust async programming".to_vec(), vec!["rust".into(), "async".into()], "test", None, plico::cas::ObjectScope::default()).expect("create1");
+    kernel.semantic_create(b"python asyncio".to_vec(), vec!["python".into(), "async".into()], "test", None, plico::cas::ObjectScope::default()).expect("create2");
+    kernel.semantic_create(b"go channels".to_vec(), vec!["go".into(), "concurrency".into()], "test", None, plico::cas::ObjectScope::default()).expect("create3");
 
     // Use tag search since stub embedding doesn't support full-text search
     let results = kernel.search_by_tags(&["async".into()], 10);
@@ -3665,9 +3701,9 @@ fn test_kernel_semantic_create_and_search() {
 fn test_kernel_semantic_create_and_search_with_require_tags() {
     let (kernel, _dir) = make_kernel();
 
-    kernel.semantic_create(b"doc1".to_vec(), vec!["rust".into()], "test", None).ok();
-    kernel.semantic_create(b"doc2".to_vec(), vec!["rust".into(), "async".into()], "test", None).ok();
-    kernel.semantic_create(b"doc3".to_vec(), vec!["async".into()], "test", None).ok();
+    kernel.semantic_create(b"doc1".to_vec(), vec!["rust".into()], "test", None, plico::cas::ObjectScope::default()).ok();
+    kernel.semantic_create(b"doc2".to_vec(), vec!["rust".into(), "async".into()], "test", None, plico::cas::ObjectScope::default()).ok();
+    kernel.semantic_create(b"doc3".to_vec(), vec!["async".into()], "test", None, plico::cas::ObjectScope::default()).ok();
 
     let results = kernel.semantic_search("doc", "test", "default", 10, vec!["rust".into()], vec![]).expect("search failed");
     // Only doc2 has rust tag
@@ -3678,8 +3714,8 @@ fn test_kernel_semantic_create_and_search_with_require_tags() {
 fn test_kernel_search_by_tags() {
     let (kernel, _dir) = make_kernel();
 
-    kernel.semantic_create(b"rust doc".to_vec(), vec!["rust".into(), "docs".into()], "test", None).ok();
-    kernel.semantic_create(b"python doc".to_vec(), vec!["python".into(), "docs".into()], "test", None).ok();
+    kernel.semantic_create(b"rust doc".to_vec(), vec!["rust".into(), "docs".into()], "test", None, plico::cas::ObjectScope::default()).ok();
+    kernel.semantic_create(b"python doc".to_vec(), vec!["python".into(), "docs".into()], "test", None, plico::cas::ObjectScope::default()).ok();
 
     let results = kernel.search_by_tags(&["docs".into()], 10);
     assert!(results.len() >= 2);
@@ -3689,9 +3725,9 @@ fn test_kernel_search_by_tags() {
 fn test_kernel_search_by_tags_intersection() {
     let (kernel, _dir) = make_kernel();
 
-    kernel.semantic_create(b"doc1".to_vec(), vec!["rust".into()], "test", None).ok();
-    kernel.semantic_create(b"doc2".to_vec(), vec!["rust".into(), "async".into()], "test", None).ok();
-    kernel.semantic_create(b"doc3".to_vec(), vec!["async".into()], "test", None).ok();
+    kernel.semantic_create(b"doc1".to_vec(), vec!["rust".into()], "test", None, plico::cas::ObjectScope::default()).ok();
+    kernel.semantic_create(b"doc2".to_vec(), vec!["rust".into(), "async".into()], "test", None, plico::cas::ObjectScope::default()).ok();
+    kernel.semantic_create(b"doc3".to_vec(), vec!["async".into()], "test", None, plico::cas::ObjectScope::default()).ok();
 
     // B25 fix: AND semantics (all tags must match)
     let results = kernel.search_by_tags_intersection(&["rust".into(), "async".into()], 10);
@@ -3703,7 +3739,7 @@ fn test_kernel_search_by_tags_intersection() {
 fn test_kernel_context_load() {
     let (kernel, _dir) = make_kernel();
 
-    let cid = kernel.semantic_create(b"full document content here".to_vec(), vec!["doc".into()], "test", None).expect("create");
+    let cid = kernel.semantic_create(b"full document content here".to_vec(), vec!["doc".into()], "test", None, plico::cas::ObjectScope::default()).expect("create");
 
     let loaded = kernel.context_load(&cid, plico::fs::ContextLayer::L0, "test").expect("load L0");
     assert_eq!(loaded.cid, cid);
@@ -3717,7 +3753,7 @@ fn test_kernel_context_load() {
 fn test_kernel_version_history() {
     let (kernel, _dir) = make_kernel();
 
-    let cid1 = kernel.semantic_create(b"v1".to_vec(), vec!["ver".into()], "test", None).expect("v1");
+    let cid1 = kernel.semantic_create(b"v1".to_vec(), vec!["ver".into()], "test", None, plico::cas::ObjectScope::default()).expect("v1");
     let cid2 = kernel.semantic_update(&cid1, b"v2".to_vec(), None, "test", "default").expect("v2");
     let cid3 = kernel.semantic_update(&cid2, b"v3".to_vec(), None, "test", "default").expect("v3");
 
@@ -3732,7 +3768,7 @@ fn test_kernel_list_deleted_and_restore() {
 
     kernel.permission_grant("test", plico::api::permission::PermissionAction::Delete, None, None);
 
-    let cid = kernel.semantic_create(b"to delete".to_vec(), vec!["temp".into()], "test", None).expect("create");
+    let cid = kernel.semantic_create(b"to delete".to_vec(), vec!["temp".into()], "test", None, plico::cas::ObjectScope::default()).expect("create");
     kernel.semantic_delete(&cid, "test", "default").expect("delete");
 
     let deleted = kernel.list_deleted("test");
@@ -3745,7 +3781,7 @@ fn test_kernel_list_deleted_and_restore() {
 fn test_kernel_get_object_usage() {
     let (kernel, _dir) = make_kernel();
 
-    let cid = kernel.semantic_create(b"test content".to_vec(), vec![], "test", None).expect("create");
+    let cid = kernel.semantic_create(b"test content".to_vec(), vec![], "test", None, plico::cas::ObjectScope::default()).expect("create");
     let _ = kernel.get_object(&cid, "test", "default"); // access it
 
     let usage = kernel.get_object_usage(&cid);
@@ -3759,8 +3795,8 @@ fn test_kernel_get_object_usage() {
 fn test_kernel_storage_stats() {
     let (kernel, _dir) = make_kernel();
 
-    kernel.semantic_create(b"doc1".to_vec(), vec![], "test", None).ok();
-    kernel.semantic_create(b"doc2".to_vec(), vec![], "test", None).ok();
+    kernel.semantic_create(b"doc1".to_vec(), vec![], "test", None, plico::cas::ObjectScope::default()).ok();
+    kernel.semantic_create(b"doc2".to_vec(), vec![], "test", None, plico::cas::ObjectScope::default()).ok();
 
     let stats = kernel.get_storage_stats();
     assert!(stats.total_objects >= 2);
@@ -3770,7 +3806,7 @@ fn test_kernel_storage_stats() {
 fn test_kernel_semantic_update() {
     let (kernel, _dir) = make_kernel();
 
-    let cid = kernel.semantic_create(b"original".to_vec(), vec!["v1".into()], "test", None).expect("create");
+    let cid = kernel.semantic_create(b"original".to_vec(), vec!["v1".into()], "test", None, plico::cas::ObjectScope::default()).expect("create");
     let new_cid = kernel.semantic_update(&cid, b"updated".to_vec(), Some(vec!["v2".into()]), "test", "default").expect("update");
 
     assert_ne!(cid, new_cid);
@@ -3913,8 +3949,8 @@ fn test_kernel_execute_tool_cas_search() {
     let (kernel, _dir) = make_kernel();
 
     // Create some content first
-    kernel.semantic_create(b"rust async programming".to_vec(), vec!["rust".into()], "test", None).ok();
-    kernel.semantic_create(b"python asyncio".to_vec(), vec!["python".into()], "test", None).ok();
+    kernel.semantic_create(b"rust async programming".to_vec(), vec!["rust".into()], "test", None, plico::cas::ObjectScope::default()).ok();
+    kernel.semantic_create(b"python asyncio".to_vec(), vec!["python".into()], "test", None, plico::cas::ObjectScope::default()).ok();
 
     let params = serde_json::json!({
         "query": "programming",
@@ -4048,7 +4084,7 @@ fn test_kernel_execute_tool_agent_suspend_resume() {
 fn test_kernel_execute_tool_context_load() {
     let (kernel, _dir) = make_kernel();
 
-    let cid = kernel.semantic_create(b"test context".to_vec(), vec!["ctx".into()], "test", None).expect("create");
+    let cid = kernel.semantic_create(b"test context".to_vec(), vec!["ctx".into()], "test", None, plico::cas::ObjectScope::default()).expect("create");
 
     let params = serde_json::json!({"cid": cid, "layer": "L1"});
     let result = kernel.execute_tool("context.load", &params, "test");
@@ -4187,7 +4223,7 @@ fn test_kernel_semantic_create_and_delete_roundtrip() {
     let (kernel, _dir) = make_kernel();
     let agent_id = kernel.register_agent("FSDeleteAgent".into()).unwrap();
 
-    let cid = kernel.semantic_create(b"delete me".to_vec(), vec!["temp".into()], &agent_id, None).unwrap();
+    let cid = kernel.semantic_create(b"delete me".to_vec(), vec!["temp".into()], &agent_id, None, plico::cas::ObjectScope::default()).unwrap();
     kernel.permission_grant(&agent_id, plico::api::permission::PermissionAction::Delete, None, None);
     let result = kernel.semantic_delete(&cid, &agent_id, "default");
     assert!(result.is_ok(), "delete of existing CID should succeed: {:?}", result.err());
@@ -4208,8 +4244,8 @@ fn test_kernel_semantic_search_with_require_tags() {
     let (kernel, _dir) = make_kernel();
     let agent_id = kernel.register_agent("SearchAgent".into()).unwrap();
 
-    kernel.semantic_create(b"doc with tags a and b".to_vec(), vec!["a".into(), "b".into()], &agent_id, None).unwrap();
-    kernel.semantic_create(b"doc with only a".to_vec(), vec!["a".into()], &agent_id, None).unwrap();
+    kernel.semantic_create(b"doc with tags a and b".to_vec(), vec!["a".into(), "b".into()], &agent_id, None, plico::cas::ObjectScope::default()).unwrap();
+    kernel.semantic_create(b"doc with only a".to_vec(), vec!["a".into()], &agent_id, None, plico::cas::ObjectScope::default()).unwrap();
 
     let results = kernel.search_by_tags_intersection(&["a".into(), "b".into()], 10);
     assert_eq!(results.len(), 1, "AND search should return only doc with both tags");
@@ -4344,7 +4380,8 @@ fn test_kernel_handle_create_via_api() {
         tenant_id: None,
         agent_token: None,
         intent: None,
-    });
+            scope: None,
+});
     assert!(resp.ok, "Create via API should succeed, error: {:?}", resp.error);
     assert!(resp.cid.is_some(), "Create response should include cid");
     let cid = resp.cid.unwrap();
@@ -4377,7 +4414,8 @@ fn test_kernel_handle_search_via_api() {
         tenant_id: None,
         agent_token: None,
         intent: None,
-    });
+            scope: None,
+});
     assert!(create_resp.ok, "Create should succeed");
 
     // Search for it
@@ -4513,7 +4551,8 @@ fn test_kernel_concurrent_api_requests() {
                 tenant_id: None,
                 agent_token: None,
                 intent: None,
-            });
+            scope: None,
+});
             resp
         })
     }).collect();
@@ -4896,6 +4935,7 @@ fn test_full_ai_os_loop_convergence() {
         vec!["auth".to_string(), "login".to_string(), "bug".to_string()],
         &agent_id,
         None,
+        plico::cas::ObjectScope::default()
     ).expect("create auth doc failed");
 
     kernel.semantic_create(
@@ -4903,6 +4943,7 @@ fn test_full_ai_os_loop_convergence() {
         vec!["deploy".to_string(), "api".to_string(), "production".to_string()],
         &agent_id,
         None,
+        plico::cas::ObjectScope::default()
     ).expect("create deploy doc failed");
 
     // Step 3: Add KG nodes + causal edges (N20 F-3 Causal Hook — Axiom 8)

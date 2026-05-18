@@ -278,7 +278,8 @@ async fn perf_cas_write_read() {
             agent_token: None,
             api_version: None,
             intent: None,
-        });
+            scope: None,
+});
         assert!(resp.ok, "create failed: {:?}", resp.error);
         let cid = resp.cid.unwrap();
 
@@ -340,7 +341,8 @@ async fn perf_search_pipeline_50() {
             agent_token: None,
             api_version: None,
             intent: None,
-        });
+            scope: None,
+});
     }
 
     let durations = bench_n(100, || {
@@ -445,4 +447,53 @@ fn perf_kg_find_paths() {
     });
 
     assert_latency_ok("kg_find_paths", &durations, Duration::from_millis(10), Duration::from_millis(30));
+}
+
+// ── Trace Write Performance ──────────────────────────────────────────────────
+// Verifies that trace recording (via mpsc channel) does not block API calls.
+
+#[test]
+fn perf_trace_write_overhead() {
+    let (kernel, _dir) = make_kernel();
+    let (agent_id, _) = register_agent(&kernel, "perf_trace_agent");
+
+    // Warm up
+    for _ in 0..3 {
+        let resp = call_api(&kernel, ApiRequest::Search {
+            query: "warmup".to_string(),
+            agent_id: agent_id.clone(),
+            tenant_id: None,
+            agent_token: None,
+            limit: Some(5),
+            offset: None,
+            require_tags: vec![],
+            exclude_tags: vec![],
+            since: None,
+            until: None,
+            intent_context: None,
+        });
+        assert!(resp.ok);
+    }
+
+    // Measure latency of API calls with trace recording enabled
+    let durations = bench_n(100, || {
+        let resp = call_api(&kernel, ApiRequest::Search {
+            query: "perf".to_string(),
+            agent_id: agent_id.clone(),
+            tenant_id: None,
+            agent_token: None,
+            limit: Some(5),
+            offset: None,
+            require_tags: vec![],
+            exclude_tags: vec![],
+            since: None,
+            until: None,
+            intent_context: None,
+        });
+        assert!(resp.ok);
+    });
+
+    // Trace overhead should be negligible (< 1ms P50, < 5ms P95)
+    // because writes go through mpsc channel (non-blocking)
+    assert_latency_ok("trace_write_overhead", &durations, Duration::from_millis(1), Duration::from_millis(5));
 }

@@ -99,9 +99,9 @@ impl AIKernel {
         match variant {
             "object" | "cas" => {
                 let content = data.as_str().map(|s| s.to_string()).unwrap_or_else(|| data.to_string());
-                self.handle_cas(ApiRequest::Create { 
-                    api_version: None, content, content_encoding: Default::default(), 
-                    tags, agent_id, tenant_id: None, agent_token: None, intent: None 
+                self.handle_cas(ApiRequest::Create {
+                    api_version: None, content, content_encoding: Default::default(),
+                    tags, agent_id, tenant_id: None, agent_token: None, intent: None, scope: None,
                 })
             },
             _ => ApiResponse::error(format!("Unsupported core_create variant: {}", variant)),

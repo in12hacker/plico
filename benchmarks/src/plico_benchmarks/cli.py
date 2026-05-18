@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Optional
@@ -26,12 +27,17 @@ RESULTS_DIR = BENCHMARKS_ROOT / "results"
 
 def _list_suites() -> dict[str, str]:
     return {
-        "conversational-qa": "LoCoMo + LongMemEval conversational memory QA",
-        "retrieval": "BEIR + MemoryAgentBench AR + DMR retrieval accuracy",
-        "kg-reasoning": "HotPotQA + KG multi-hop reasoning",
-        "performance": "CAS, search, memory, KG micro-benchmarks",
-        "temporal-reasoning": "Temporal reasoning evaluation (skeleton)",
-        "memory-crud": "Memory CRUD correctness (skeleton)",
+        "conversational-qa": "LoCoMo + LongMemEval memory QA (incl. temporal, multi-hop)",
+        "retrieval": "BEIR + MemoryAgentBench retrieval accuracy",
+        "kg-reasoning": "KG multi-hop path finding + reasoning",
+        "performance": "CAS, search, recall, KG latency micro-benchmarks",
+        "memory-lifecycle": "Memory CRUD + layer migration + checkpoint/restore",
+        "token-efficiency": "L0/L1/L2 context layering token savings vs competitors",
+        "scope-isolation": "Private/Shared/Group scope enforcement (Axiom 4)",
+        "session-lifecycle": "Session start/end, cross-session delta (Axiom 10)",
+        "causal-reasoning": "Causal graph chain traversal + retrieval (Axiom 8)",
+        "intent-routing": "Intent-aware retrieval routing (Axiom 2)",
+        "proactive-optimization": "Context layering, prefetch, pattern detection (Axiom 7)",
     }
 
 
@@ -80,7 +86,8 @@ def run(
         console.print(f"[red]Benchmark failed: {e}[/red]")
         raise typer.Exit(1)
 
-    out_path = output or RESULTS_DIR / f"{suite.replace('-', '_')}_v44.json"
+    version = os.environ.get("PLICO_BENCH_VERSION", "dev")
+    out_path = output or RESULTS_DIR / f"{suite.replace('-', '_')}_{version}.json"
     report.save_json(out_path)
     console.print(f"[green]Results saved to {out_path}[/green]")
     console.print(report.to_markdown())
@@ -92,9 +99,20 @@ def run_all(
     port: int = typer.Option(7878, "--port", "-p"),
     output_dir: Path = typer.Option(RESULTS_DIR, "--output-dir", "-o"),
     preprocess_timeout: float = typer.Option(300.0, "--preprocess-timeout", help="Seconds to wait for indexing after ingest"),
+    compare_version: Optional[str] = typer.Option(None, "--compare", help="Version to compare against (loads from output_dir)"),
 ) -> None:
     """Run all implemented benchmark suites."""
     from plico_benchmarks.suites import SUITE_REGISTRY
+
+    # Load previous results for comparison if specified
+    prev_results: list[dict] = []
+    if compare_version:
+        for path in sorted(output_dir.glob(f"*_{compare_version}.json")):
+            try:
+                prev_results.append(json.loads(path.read_text(encoding="utf-8")))
+                console.print(f"[dim]Loaded baseline: {path.name}[/dim]")
+            except Exception:
+                pass
 
     results: list[dict] = []
     for name, cls in SUITE_REGISTRY.items():
@@ -103,28 +121,36 @@ def run_all(
         try:
             instance = cls(host=host, port=port)
             report = instance.execute(preprocess_timeout=preprocess_timeout)
-            out_path = output_dir / f"{name.replace('-', '_')}_v44.json"
+            version = os.environ.get("PLICO_BENCH_VERSION", "dev")
+            out_path = output_dir / f"{name.replace('-', '_')}_{version}.json"
             report.save_json(out_path)
             results.append(report.data)
             console.print(f"[green]{name} completed.[/green]")
         except Exception as e:
             console.print(f"[red]{name} failed: {e}[/red]")
 
-    # Combined report
-    reporter = MultiReporter(results)
-    md_path = output_dir / "benchmark_report_v44.md"
-    reporter.save(output_dir, "benchmark_report_v44.md")
+    # Combined report with optional comparison
+    reporter = MultiReporter(results, prev_results=prev_results)
+    version = os.environ.get("PLICO_BENCH_VERSION", "dev")
+    report_name = f"benchmark_report_{version}.md"
+    md_path = output_dir / report_name
+    reporter.save(output_dir, report_name)
     console.print(f"[bold green]\nCombined report saved to {md_path}[/bold green]")
 
 
 @app.command()
 def report(
     input_dir: Path = typer.Option(RESULTS_DIR, "--input", "-i"),
-    output: Path = typer.Option(Path("docs/benchmark_report_v44.md"), "--output", "-o"),
+    output: Path = typer.Option(None, "--output", "-o"),
+    compare_version: Optional[str] = typer.Option(None, "--compare", help="Version to compare against"),
 ) -> None:
     """Generate Markdown report from existing JSON results."""
+    if output is None:
+        version = os.environ.get("PLICO_BENCH_VERSION", "dev")
+        output = Path(f"docs/benchmark_report_{version}.md")
     results: list[dict] = []
-    for path in sorted(input_dir.glob("*_v44.json")):
+    version = os.environ.get("PLICO_BENCH_VERSION", "dev")
+    for path in sorted(input_dir.glob(f"*_{version}.json")):
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
             results.append(data)
@@ -136,7 +162,17 @@ def report(
         console.print("[red]No result files found.[/red]")
         raise typer.Exit(1)
 
-    reporter = MultiReporter(results)
+    # Load comparison baseline
+    prev_results: list[dict] = []
+    if compare_version:
+        for path in sorted(input_dir.glob(f"*_{compare_version}.json")):
+            try:
+                prev_results.append(json.loads(path.read_text(encoding="utf-8")))
+                console.print(f"[dim]Loaded baseline: {path.name}[/dim]")
+            except Exception:
+                pass
+
+    reporter = MultiReporter(results, prev_results=prev_results)
     reporter.save(output.parent, output.name)
     console.print(f"[green]Report saved to {output}[/green]")
 

@@ -42,14 +42,25 @@ suites:
       memory_recall: 500
       kg_path: 200
 
-  temporal_reasoning:
-    datasets:
-      - longmemeval_temporal
-    default_samples: 100
-
-  memory_crud:
-    operations: [create, read, update, delete, batch]
+  memory_lifecycle:
+    operations: [create, read, update, delete, batch, layer_migration, checkpoint_restore]
     iterations: 100
+
+  token_efficiency:
+    context_levels: [L0, L1, L2]
+    test_queries: 50
+
+  scope_isolation:
+    scopes: [private, shared, group]
+    items_per_scope: 30
+
+  session_lifecycle:
+    sessions: 20
+    memories_per_session: 5
+
+  causal_reasoning:
+    chain_length: 30
+    depths: [2, 3, 4, 10]
 
 global:
   plico_host: "127.0.0.1"

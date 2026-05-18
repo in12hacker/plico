@@ -629,6 +629,7 @@ fn build_api_request(method: &str, params: Option<&serde_json::Value>) -> Result
                 tenant_id: None,
                 agent_token: None,
                 intent: params.get("intent").and_then(|v| v.as_str()).map(String::from),
+                scope: None,
             })
         }
 
@@ -896,6 +897,9 @@ mod tests {
             cost_agent_trend: None,
             cost_anomaly: None,
             import_results: None,
+            trace_list: None,
+            trace_show: None,
+            trace_failures: None,
         }
     }
 

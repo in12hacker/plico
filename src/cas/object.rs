@@ -13,6 +13,21 @@ use crate::util::now_ms;
 use serde::{Deserialize, Serialize};
 use sha2::{Sha256, Digest};
 
+/// Visibility scope for CAS objects — controls cross-agent access.
+///
+/// Unlike `MemoryScope` (which governs the layered memory system),
+/// `ObjectScope` governs content-addressed storage objects.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[derive(Default)]
+pub enum ObjectScope {
+    /// Only the creating agent can read. Other agents in the same tenant are blocked.
+    Private,
+    /// Any agent in the same tenant can read. Only the owner can update/delete.
+    #[default]
+    Shared,
+}
+
 /// The fundamental data unit in Plico's AI-native filesystem.
 /// Its identity is determined entirely by content — not by path or name.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -93,6 +108,11 @@ pub struct AIObjectMeta {
     /// Tenant ID — provides multi-tenant isolation.
     #[serde(default)]
     pub tenant_id: String,
+
+    /// Visibility scope — controls cross-agent access within a tenant.
+    /// Default: `Shared` (any agent in the same tenant can read).
+    #[serde(default)]
+    pub scope: ObjectScope,
 }
 
 impl AIObjectMeta {
@@ -110,6 +130,7 @@ impl AIObjectMeta {
             created_at: now_ms(),
             intent: None,
             tenant_id: Self::default_tenant(),
+            scope: ObjectScope::default(),
         }
     }
 
