@@ -138,6 +138,7 @@ impl crate::kernel::AIKernel {
 
         let ctx = PermissionContext::new(agent_id.to_string(), tenant_id.to_string());
         self.permissions.check(&ctx, PermissionAction::Write).map_err(|e| e.to_string())?;
+        let embedding = self.embedding.embed(&content).ok().map(|r| r.embedding);
         let entry = MemoryEntry {
             id: uuid::Uuid::new_v4().to_string(),
             agent_id: agent_id.to_string(),
@@ -149,7 +150,7 @@ impl crate::kernel::AIKernel {
             last_accessed: crate::memory::layered::now_ms(),
             created_at: crate::memory::layered::now_ms(),
             tags: tags.clone(),
-            embedding: None,
+            embedding,
             ttl_ms: None,
             original_ttl_ms: None,
             scope,
