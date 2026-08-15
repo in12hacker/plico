@@ -22,6 +22,8 @@ from plico_benchmarks.core.llm_evidence import (
 from plico_benchmarks.core.llm_journal import read_attempt_journal
 from plico_benchmarks.core.metrics import accuracy_pct, compute_statistics
 from plico_benchmarks.core.retrieval_execution import (
+    PROVIDER_IDENTITY_SCOPES,
+    provider_identity_scope,
     validate_embedding_query,
     validate_retrieval_execution,
     verified_vector_execution,
@@ -352,6 +354,7 @@ def _validate_qa_retrieval_runtime(metrics: dict[str, Any], ledger: list[dict[st
         "configured_embedding_backend",
         "active_embedding_provider",
         "embedding_provider_state",
+        "provider_identity_scope",
     }:
         raise ValueError("QA retrieval runtime evidence is missing")
     requirement = runtime["requirement"]
@@ -361,15 +364,25 @@ def _validate_qa_retrieval_runtime(metrics: dict[str, Any], ledger: list[dict[st
         "configured_embedding_backend",
         "active_embedding_provider",
         "embedding_provider_state",
+        "provider_identity_scope",
     ):
         if not isinstance(runtime[key], str) or not runtime[key]:
             raise ValueError("QA retrieval runtime identity is invalid")
+    expected_scope = provider_identity_scope(
+        runtime["configured_embedding_backend"],
+        runtime["active_embedding_provider"],
+        runtime["embedding_provider_state"],
+    )
+    if (
+        runtime["provider_identity_scope"] not in PROVIDER_IDENTITY_SCOPES
+        or runtime["provider_identity_scope"] != expected_scope
+    ):
+        raise ValueError("QA retrieval provider identity scope is inconsistent")
     if requirement == "real_non_stub_vector_per_query":
         if (
             runtime["configured_embedding_backend"].lower()
             in {"stub", "none", "disabled", "unknown"}
-            or runtime["embedding_provider_state"] != "ready"
-            or runtime["active_embedding_provider"].lower() in {"stub", "unavailable", "unknown"}
+            or expected_scope == "unavailable"
             or any(
                 item.get("embedding_query_state") != "succeeded"
                 or item.get("verified_vector_execution") is not True

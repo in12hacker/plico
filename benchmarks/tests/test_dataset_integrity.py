@@ -7,6 +7,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 import pytest
 
+from plico_benchmarks.core.result_artifact import _validate_qa_retrieval_runtime
 from plico_benchmarks.suites.conversational_qa import (
     ConversationalQASuite,
     _adversarial_abstention_correct,
@@ -56,6 +57,48 @@ class _SearchClient:
                 {"path": "vector", "candidates": len(self.hits), "accepted": len(self.hits)},
             ],
         }
+
+
+def test_real_vector_artifact_accepts_object_only_openai_identity_without_overclaiming():
+    runtime = {
+        "requirement": "real_non_stub_vector_per_query",
+        "configured_embedding_backend": "openai",
+        "active_embedding_provider": "unavailable",
+        "embedding_provider_state": "unavailable",
+        "provider_identity_scope": "object_execution_only_unattested_provider",
+    }
+    ledger = [
+        {
+            "embedding_query_state": "succeeded",
+            "verified_vector_execution": True,
+            "retrieval_degraded": False,
+        }
+    ]
+
+    _validate_qa_retrieval_runtime({"retrieval_runtime": runtime}, ledger)
+
+    with pytest.raises(ValueError, match="identity scope"):
+        _validate_qa_retrieval_runtime(
+            {
+                "retrieval_runtime": {
+                    **runtime,
+                    "provider_identity_scope": "projection_publishable_identity",
+                }
+            },
+            ledger,
+        )
+
+    with pytest.raises(ValueError, match="real-vector"):
+        _validate_qa_retrieval_runtime(
+            {
+                "retrieval_runtime": {
+                    **runtime,
+                    "configured_embedding_backend": "ollama",
+                    "provider_identity_scope": "unavailable",
+                }
+            },
+            ledger,
+        )
 
 
 def test_locomo_query_is_scoped_and_scores_ground_truth_evidence():

@@ -27,6 +27,7 @@ from plico_benchmarks.core.llm_journal import (
 from plico_benchmarks.core.metrics import accuracy_pct, bleu1, compute_statistics, token_level_f1
 from plico_benchmarks.core.reporter import Report
 from plico_benchmarks.core.retrieval_execution import (
+    provider_identity_scope,
     real_embedding_required,
     validate_embedding_query,
     validate_retrieval_execution,
@@ -101,6 +102,11 @@ class ConversationalQASuite(SuiteBase):
         configured_backend = str(readiness.get("configured_embedding_backend", ""))
         active_provider = str(readiness.get("active_embedding_provider", ""))
         provider_state = str(readiness.get("embedding_provider", ""))
+        identity_scope = provider_identity_scope(
+            configured_backend,
+            active_provider,
+            provider_state,
+        )
         requirement = (
             "real_non_stub_vector_per_query"
             if real_embedding_required()
@@ -108,8 +114,7 @@ class ConversationalQASuite(SuiteBase):
         )
         if requirement == "real_non_stub_vector_per_query" and (
             configured_backend.lower() in {"", "stub", "none", "disabled", "unknown"}
-            or provider_state != "ready"
-            or active_provider.lower() in {"", "stub", "unavailable", "unknown"}
+            or identity_scope == "unavailable"
         ):
             raise RuntimeError("real-embedding QA runtime readiness is not verified")
         self._retrieval_runtime = {
@@ -117,6 +122,7 @@ class ConversationalQASuite(SuiteBase):
             "configured_embedding_backend": configured_backend,
             "active_embedding_provider": active_provider,
             "embedding_provider_state": provider_state,
+            "provider_identity_scope": identity_scope,
         }
         self._locomo_dataset = LoCoMoDataset()
         self._longmemeval_dataset = LongMemEvalDataset()

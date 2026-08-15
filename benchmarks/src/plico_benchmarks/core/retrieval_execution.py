@@ -26,6 +26,13 @@ EMBEDDING_DEGRADATIONS = frozenset(
         "execution_failed",
     }
 )
+PROVIDER_IDENTITY_SCOPES = frozenset(
+    {
+        "projection_publishable_identity",
+        "object_execution_only_unattested_provider",
+        "unavailable",
+    }
+)
 
 
 def validate_embedding_query(value: Any) -> tuple[str, str | None]:
@@ -86,6 +93,21 @@ def verified_vector_execution(embedding_state: str, execution: list[dict[str, An
         and all(item["degradation"] is None for item in execution)
         and any(item["path"] == "vector" and item["accepted"] > 0 for item in execution)
     )
+
+
+def provider_identity_scope(
+    configured_backend: str,
+    active_provider: str,
+    provider_state: str,
+) -> str:
+    """Classify what runtime readiness can actually attest for object retrieval."""
+    backend = configured_backend.lower()
+    active = active_provider.lower()
+    if provider_state == "ready" and active not in {"", "stub", "unavailable", "unknown"}:
+        return "projection_publishable_identity"
+    if backend == "openai" and provider_state == "unavailable" and active == "unavailable":
+        return "object_execution_only_unattested_provider"
+    return "unavailable"
 
 
 def real_embedding_required() -> bool:

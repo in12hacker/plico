@@ -47,7 +47,10 @@ src/plico_benchmarks/
 Benchmark 不内置 Embedding provider，也不自动下载模型。Embedding 由本次运行的
 `plicod` 配置并在 artifact 中按实际 execution path 报告；未验证或降级路径不得写成
 real-vector 结论。Conversation QA 的 reader/judge 只接受显式、fail-closed 的 DeepSeek
-role 配置，不回退到本地模型或其他 provider。
+role 配置，不回退到本地模型或其他 provider。OpenAI-compatible 的本地 embedding 服务可用于
+Object 查询 research baseline，但只能在每条查询都证明 vector 执行成功且零降级时计分；其
+artifact 固定标记为 `object_execution_only_unattested_provider`，不得冒充 Memory projection
+的可发布 provider identity，也不得直接用于跨 run 模型归因。
 
 ## 本地推理选型（2026-08-15 冻结）
 
@@ -61,6 +64,7 @@ snapshot；只有进入 committed benchmark artifact 的重复运行才能成为
 |------|----------------|----------|----------|
 | 低延迟文本生成 | llama.cpp b8914 / Qwen2.5-7B-Instruct Q4_K_M | 5/5 完成；mean 1.056 s/request；prefill 313.5 tok/s；decode 36.5 tok/s | 默认本地效率档；不冒充 27B 质量 |
 | 较强本地文本生成 | llama.cpp b8914 / Qwen3.5-27B Q4_K_M | 5/5 完成；mean 3.975 s/request；prefill 95.6 tok/s；decode 10.0 tok/s | 本地质量候选；默认关闭 thinking，按任务显式开启 |
+| Object research embedding | llama.cpp b8914 / Qwen3-Embedding-0.6B Q8_0，同一固定 GGUF digest | unique-query p50/p95 8.45/10.55 ms；batch-8 220.8 docs/s；C=4 136.8 req/s | 下一轮 Object QA 默认；provider identity 仍 unattested |
 | Memory projection embedding | Ollama 0.32.13 / Qwen3-Embedding-0.6B Q8_0，固定 tag+digest | Object vector smoke 10/10；owner rebuild 后 Memory projection 10/10 Ready | 当前唯一能发布 P3 immutable builder identity 的实链 |
 | 外部 research reader/judge | DeepSeek V4 Flash | 10 QA samples / 59 attempts / USD 0.0101726184 | 只作 research evaluator；不回退、不冒充本地模型 |
 
@@ -68,6 +72,11 @@ Qwen3.5 的 thinking 模式在一次 64-token 探测中把输出预算全部用�
 thinking 后才产生 37-token 正文。因此低延迟路径固定 `thinking=disabled`，reasoning 只能由任务
 显式选择并单独计量。VLM 不进入纯文本 reader、judge 或 embedding 默认路径；只有含图像输入的
 独立 suite 才评估 VLM。
+
+同一 Qwen3 embedding GGUF 在当前服务配置下，llama.cpp 的 unique-query p50 比 Ollama
+快约 15.3 倍，C=4 请求吞吐约 5.25 倍；两端同文本向量 cosine 为 0.999895。该结果足以选择
+Object QA research runtime，但不是纯 kernel 对照：llama.cpp 使用 ctx=8192/parallel=4，Ollama
+runner 使用 ctx=32768/parallel=1。Memory projection 仍使用 Ollama 的固定 tag+digest 身份链。
 
 ### Runtime 迁移顺序
 
