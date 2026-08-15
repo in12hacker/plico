@@ -1,19 +1,20 @@
 //! Ollama daemon backend for text embeddings.
 
-use std::sync::{Arc, OnceLock};
+use std::sync::OnceLock;
 
 use crate::fs::embedding::types::{
     EmbedError, EmbedResult, EmbeddingBuilderIdentity, EmbeddingIdentityError, EmbeddingProvider,
     OllamaIdentityEvidence,
 };
 
+static OLLAMA_SYNC_RUNTIME: OnceLock<Result<tokio::runtime::Runtime, String>> = OnceLock::new();
+
 /// Ollama daemon backend for text embeddings.
 ///
 /// In daemon mode (Tokio runtime active), HTTP calls use `block_in_place`.
-/// In standalone mode, a dedicated runtime is created.
+/// Synchronous trait calls share one process-lifetime runtime so a reqwest
+/// connection pool is never left attached to a runtime that has been dropped.
 pub struct OllamaBackend {
-    /// Only created when no Tokio runtime is active (standalone/CLI mode).
-    rt: Option<Arc<tokio::runtime::Runtime>>,
     client: reqwest::Client,
     url: String,
     model: String,
@@ -41,23 +42,12 @@ impl OllamaBackend {
     /// `url` — Ollama server URL (e.g. `"http://localhost:11434"`).
     /// `model` — Model name (e.g. `"all-minilm-l6-v2"` or `"nomic-embed-text"`).
     pub fn new(url: &str, model: &str) -> Result<Self, EmbedError> {
-        let rt = match tokio::runtime::Handle::try_current() {
-            Ok(_) => None,
-            Err(_) => Some(Arc::new(
-                tokio::runtime::Builder::new_multi_thread()
-                    .worker_threads(1)
-                    .enable_all()
-                    .build()?,
-            )),
-        };
-
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
             .build()
             .map_err(EmbedError::Http)?;
 
         Ok(Self {
-            rt,
             client,
             url: url.to_string(),
             model: model.to_string(),
@@ -66,14 +56,14 @@ impl OllamaBackend {
         })
     }
 
-    fn block_on_async<F: std::future::Future>(&self, fut: F) -> F::Output {
+    fn block_on_async<F, T>(&self, fut: F) -> Result<T, EmbedError>
+    where
+        F: std::future::Future<Output = Result<T, EmbedError>>,
+    {
+        let runtime = ollama_sync_runtime()?;
         match tokio::runtime::Handle::try_current() {
-            Ok(handle) => tokio::task::block_in_place(|| handle.block_on(fut)),
-            Err(_) => self
-                .rt
-                .as_ref()
-                .expect("rt must exist when no Tokio runtime is active")
-                .block_on(fut),
+            Ok(_) => tokio::task::block_in_place(|| runtime.block_on(fut)),
+            Err(_) => runtime.block_on(fut),
         }
     }
 
@@ -348,6 +338,19 @@ impl OllamaBackend {
     }
 }
 
+fn ollama_sync_runtime() -> Result<&'static tokio::runtime::Runtime, EmbedError> {
+    match OLLAMA_SYNC_RUNTIME.get_or_init(|| {
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .map_err(|error| error.to_string())
+    }) {
+        Ok(runtime) => Ok(runtime),
+        Err(error) => Err(EmbedError::Runtime(std::io::Error::other(error.clone()))),
+    }
+}
+
 impl EmbeddingProvider for OllamaBackend {
     fn embed(&self, text: &str) -> Result<EmbedResult, EmbedError> {
         self.guarded_embed_document(text)
@@ -392,7 +395,6 @@ impl EmbeddingProvider for OllamaBackend {
 impl Clone for OllamaBackend {
     fn clone(&self) -> Self {
         Self {
-            rt: self.rt.as_ref().map(Arc::clone),
             client: self.client.clone(),
             url: self.url.clone(),
             model: self.model.clone(),

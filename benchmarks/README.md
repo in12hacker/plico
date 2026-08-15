@@ -49,6 +49,64 @@ Benchmark 不内置 Embedding provider，也不自动下载模型。Embedding �
 real-vector 结论。Conversation QA 的 reader/judge 只接受显式、fail-closed 的 DeepSeek
 role 配置，不回退到本地模型或其他 provider。
 
+## 本地推理选型（2026-08-15 冻结）
+
+当前机器是 NVIDIA GB10（20-core Arm、128 GB unified memory）。本节固定的是下一阶段的
+工程路线，不是跨机器通用排名：所有速度数字都是同机、单并发、短 prompt 的 exploratory
+snapshot；只有进入 committed benchmark artifact 的重复运行才能成为 regression gate。
+
+### 当前可运行基线
+
+| 用途 | Runtime / 模型 | 本机观测 | 当前结论 |
+|------|----------------|----------|----------|
+| 低延迟文本生成 | llama.cpp b8914 / Qwen2.5-7B-Instruct Q4_K_M | 5/5 完成；mean 1.056 s/request；prefill 313.5 tok/s；decode 36.5 tok/s | 默认本地效率档；不冒充 27B 质量 |
+| 较强本地文本生成 | llama.cpp b8914 / Qwen3.5-27B Q4_K_M | 5/5 完成；mean 3.975 s/request；prefill 95.6 tok/s；decode 10.0 tok/s | 本地质量候选；默认关闭 thinking，按任务显式开启 |
+| Memory projection embedding | Ollama 0.32.13 / Qwen3-Embedding-0.6B Q8_0，固定 tag+digest | Object vector smoke 10/10；owner rebuild 后 Memory projection 10/10 Ready | 当前唯一能发布 P3 immutable builder identity 的实链 |
+| 外部 research reader/judge | DeepSeek V4 Flash | 10 QA samples / 59 attempts / USD 0.0101726184 | 只作 research evaluator；不回退、不冒充本地模型 |
+
+Qwen3.5 的 thinking 模式在一次 64-token 探测中把输出预算全部用于 reasoning content；关闭
+thinking 后才产生 37-token 正文。因此低延迟路径固定 `thinking=disabled`，reasoning 只能由任务
+显式选择并单独计量。VLM 不进入纯文本 reader、judge 或 embedding 默认路径；只有含图像输入的
+独立 suite 才评估 VLM。
+
+### Runtime 迁移顺序
+
+1. **保留 llama.cpp 作为可复现控制组和当前默认本地文本服务。** 官方 CUDA server image
+   同时提供 linux/arm64，并支持 CUDA 12/13；本机现有 GGUF 可直接运行。
+2. **优先验证 TensorRT-LLM / TensorRT Edge-LLM。** NVIDIA 已把单机 DGX Spark 列为
+   TensorRT-LLM beta 支持，并验证 GPT-OSS-20B MXFP4、Qwen3-14B/32B 与 Qwen3-30B-A3B
+   等组合；本机已有 GPT-OSS-20B MXFP4，可作为第一组同模型对照。它只有通过同一 workload
+   的质量、TTFT、decode throughput、p95 和内存门槛后才替换 llama.cpp。
+3. **vLLM 作为连续批处理/并发吞吐对照。** NVIDIA 的 vLLM 容器已覆盖 DGX Spark；由于
+   unified-memory 平台默认接近满额预分配，初始试验固定
+   `--gpu-memory-utilization 0.7`，不得与现有服务抢满内存。
+4. **Ollama 保留为模型导入和当前 Memory identity 运维面，不作为高并发性能胜者的默认假设。**
+   只有相同模型、相同输入、相同量化和相同并发的实测才能比较 runtime。
+
+候选框架必须按相同 sealed model digest、prompt set、context、max tokens 和
+concurrency `1/4/16` 测量：TTFT、prefill/decode tok/s、request p50/p95、失败率、峰值 unified
+memory，以及同一 QA/retrieval 样本上的质量不回退。吞吐提升但质量、身份证明或稳定性退化时不切换。
+
+官方依据：[llama.cpp CUDA/arm64 images](https://github.com/ggml-org/llama.cpp/blob/master/docs/docker.md)、
+[TensorRT-LLM release notes](https://nvidia.github.io/TensorRT-LLM/release-notes.html)、
+[TensorRT Edge-LLM GB10 installation](https://nvidia.github.io/TensorRT-Edge-LLM/user_guide/getting_started/installation.html)、
+[NVIDIA vLLM release notes](https://docs.nvidia.com/deeplearning/frameworks/vllm-release-notes/rel-26-07.html)、
+[Ollama GGUF import](https://docs.ollama.com/import)。
+
+### 当前 research 基线
+
+| 切片 | 结果 | 可解释边界 |
+|------|------|------------|
+| Working Memory lexical exact-contract，fresh vault，100 queries | Recall@5/10 = 0.900；Recall@20 = 0.990；MRR@10/nDCG@10 = 0.900 | 证明字面 token、隔离和去重契约；不是语义记忆召回 |
+| LoCoMo 5 + LongMemEval 5，DeepSeek reader/judge | evidence recall@10 = 0.850；F1 = 0.281；BLEU-1 = 0.229；judge = 4.7/5 | N=10、alias revision unattested；只用于找方向 |
+| real-vector performance，fresh vault，1,810 serial samples | warm object.search p50/p95 = 4.85/7.99 ms；query-unique = 141.11/169.41 ms；250/250 typed vector execution、零降级 | query-unique target hit@10 = 0.920；这是 warmed-index query，不是 cold start |
+| 100-entry Memory projection catch-up | 100/100 Ready；phase 18.97 s；ready-lag p50/p95 = 9.39/18.10 s | post-batch backlog drain observation，不是逐 revision commit-to-ready latency |
+| canonical/lexical operations | memory.create ack p50/p95 = 6.52/13.13 ms；memory.get = 0.10/0.12 ms；memory.recall = 0.28/0.49 ms | recall target hit@10 = 0.910；所有请求串行，经 UDS |
+
+当前最优先方向是：降低 unique-query embedding latency、提高并解释 evidence recall，再扩大到
+固定 50-sample smoke 和 5-run shadow；judge 的 100% accuracy 与低 F1 冲突，不能单独作为质量 gate。同行公开数字若数据集、
+采样、retriever 和指标定义不同，只列背景，不直接相减或宣称领先。
+
 ## 预处理阶段（AWB-like）
 
 SemanticFS 的 `create → search` 评测必须分离摄取和查询阶段，等待其 Embedding、KG 与 HNSW 派生工作完成。Working Memory 是另一条数据域和索引管线，不能用 SemanticFS 的搜索结果判断其 projection 已 Ready。

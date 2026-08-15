@@ -29,6 +29,34 @@ class PerformanceSuite(SuiteBase):
 
     def setup(self) -> None:
         self.wait_for_plico()
+        self._projection_owner_setup: dict[str, Any] = {
+            "required": real_embedding_required(),
+            "owner_rebuild_performed": False,
+        }
+        if not real_embedding_required():
+            return
+        readiness = self.client.runtime_readiness()
+        projection = readiness.get("projection")
+        if not isinstance(projection, dict):
+            raise RuntimeError("runtime.readiness returned no typed projection health")
+        if projection.get("control_plane") != "ready" or projection.get("worker") != "ready":
+            receipt = self.client.projection_rebuild_all_eligible()
+            if receipt.get("kind") != "memory_embedding":
+                raise RuntimeError("projection.rebuild returned an unexpected projection kind")
+            self._projection_owner_setup = {
+                "required": True,
+                "owner_rebuild_performed": True,
+                "selected_count": receipt.get("selected_count"),
+                "manifest_generation": receipt.get("manifest_generation"),
+            }
+            readiness = self.client.runtime_readiness()
+            projection = readiness.get("projection")
+        if (
+            not isinstance(projection, dict)
+            or projection.get("control_plane") != "ready"
+            or projection.get("worker") != "ready"
+        ):
+            raise RuntimeError("real embedding performance setup did not activate projection")
 
     def run(self) -> list[dict[str, Any]]:
         config = self._effective_performance_config()
@@ -189,6 +217,11 @@ class PerformanceSuite(SuiteBase):
                         "projection.status is polled per created revision; observed six-state, "
                         "unreconciled, and unavailable remain distinct"
                     ),
+                    "projection_owner_setup": getattr(
+                        self,
+                        "_projection_owner_setup",
+                        {"required": False, "owner_rebuild_performed": False},
+                    ),
                 },
                 "metrics": metrics,
                 "costs": {},
@@ -290,6 +323,8 @@ class PerformanceSuite(SuiteBase):
         execution_ledger = []
         verified_vector_queries = 0
         degraded_queries = 0
+        expected_target_queries = 0
+        expected_targets_found = 0
         for query_index, (query, expected_cid) in enumerate(queries):
             started = time.perf_counter()
             result = self.client.object_search(
@@ -300,10 +335,11 @@ class PerformanceSuite(SuiteBase):
             hits = result.get("hits")
             if not isinstance(hits, list) or not hits:
                 raise RuntimeError("object.search did not return a verified hit")
-            if expected_cid is not None and expected_cid not in {
-                str(hit.get("cid")) for hit in hits if isinstance(hit, dict)
-            }:
-                raise RuntimeError("cold object.search missed its seeded canonical target")
+            returned_cids = {str(hit.get("cid")) for hit in hits if isinstance(hit, dict)}
+            target_found = expected_cid is None or expected_cid in returned_cids
+            if expected_cid is not None:
+                expected_target_queries += 1
+                expected_targets_found += int(target_found)
             state, embedding_degradation = validate_embedding_query(result.get("embedding_query"))
             retrieval_execution = validate_retrieval_execution(result.get("retrieval"))
             embedding_query_states[state] = embedding_query_states.get(state, 0) + 1
@@ -324,9 +360,7 @@ class PerformanceSuite(SuiteBase):
                     "embedding_query_degradation": embedding_degradation,
                     "retrieval_execution": retrieval_execution,
                     "expected_target_required": expected_cid is not None,
-                    "expected_target_found": expected_cid is None
-                    or expected_cid
-                    in {str(hit.get("cid")) for hit in hits if isinstance(hit, dict)},
+                    "expected_target_found": target_found,
                     "status": "degraded" if degraded else "ok",
                 }
             )
@@ -351,6 +385,13 @@ class PerformanceSuite(SuiteBase):
             query_execution_ledger=execution_ledger,
             degraded_query_count=degraded_queries,
             verified_vector_query_count=verified_vector_queries,
+            expected_target_query_count=expected_target_queries,
+            expected_target_hit_count=expected_targets_found,
+            expected_target_hit_rate=(
+                round(expected_targets_found / expected_target_queries, 6)
+                if expected_target_queries
+                else None
+            ),
             retrieval_claim=(
                 "verified_vector_execution_latency"
                 if fully_verified_vector
@@ -386,19 +427,33 @@ class PerformanceSuite(SuiteBase):
         )
 
     def _bench_memory_recall(self, entries: list[tuple[str, str]], count: int) -> dict[str, Any]:
-        def recall(index: int) -> None:
+        latencies: list[float] = []
+        target_hits = 0
+        for index in range(count):
             entry_id, token = entries[index % len(entries)]
+            started = time.perf_counter()
             result = self.client.memory_recall(token, limit=10)
+            latencies.append((time.perf_counter() - started) * 1000)
             hits = result.get("hits")
-            if not isinstance(hits, list) or not any(
-                isinstance(hit, dict)
-                and isinstance(hit.get("entry"), dict)
-                and hit["entry"].get("entry_id") == entry_id
-                for hit in hits
-            ):
-                raise RuntimeError("memory.recall did not return its seeded canonical target")
+            if not isinstance(hits, list):
+                raise RuntimeError("memory.recall returned no typed hits list")
+            target_hits += int(
+                any(
+                    isinstance(hit, dict)
+                    and isinstance(hit.get("entry"), dict)
+                    and hit["entry"].get("entry_id") == entry_id
+                    for hit in hits
+                )
+            )
 
-        return self._measure("memory.recall_lexical", count, recall)
+        return self._latency_result(
+            "memory.recall_lexical",
+            latencies,
+            expected_target_query_count=count,
+            expected_target_hit_count=target_hits,
+            expected_target_hit_rate=round(target_hits / count, 6),
+            quality_boundary="latency_workload_with_target_hit_diagnostic",
+        )
 
     def _bench_memory_projection_lag(
         self, entries: list[tuple[str, str]], *, timeout: float, poll_interval: float

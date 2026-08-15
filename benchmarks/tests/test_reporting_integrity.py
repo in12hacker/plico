@@ -286,7 +286,9 @@ def test_search_benchmark_separates_warm_and_cold_workloads(monkeypatch):
     suite = PerformanceSuite(client=client, seed=17)
     suite._performance_run_config = {"object_put": 12}
     objects = [(f"cid-{index}", f"unique-query-17-{index}") for index in range(12)]
-    client.cold_targets = {token: cid for cid, token in objects}
+    # One miss remains a retrieval-quality diagnostic; it must not erase the
+    # independently valid latency/vector-execution measurement.
+    client.cold_targets = {token: cid for cid, token in objects[1:]}
 
     results = suite._bench_object_search(
         objects,
@@ -310,6 +312,9 @@ def test_search_benchmark_separates_warm_and_cold_workloads(monkeypatch):
     assert results[1]["retrieval_claim"] == "verified_vector_execution_latency"
     assert results[1]["verified_vector_query_count"] == 6
     assert results[1]["degraded_query_count"] == 0
+    assert results[1]["expected_target_query_count"] == 6
+    assert results[1]["expected_target_hit_count"] == 5
+    assert results[1]["expected_target_hit_rate"] == 0.833333
     assert len(results[1]["query_execution_ledger"]) == 6
     assert "includes_remote_query_embedding" not in results[1]
     cold_queries = client.queries[-6:]
@@ -329,6 +334,34 @@ def test_client_working_memory_uses_typed_create_operation(monkeypatch):
     client.memory_create("remember me", tags=["test"])
 
     assert requests == [("memory.create", {"content": "remember me", "tags": ["test"]})]
+
+
+def test_memory_recall_latency_preserves_target_miss_as_quality_diagnostic(monkeypatch):
+    class FakeClient:
+        def __init__(self):
+            self.calls = 0
+
+        def memory_recall(self, query, limit):
+            self.calls += 1
+            assert query == "unique-token"
+            assert limit == 10
+            if self.calls == 1:
+                return {"hits": [{"entry": {"entry_id": "revision-1"}}]}
+            return {"hits": []}
+
+    clock = iter([0.0, 0.001, 0.002, 0.005])
+    monkeypatch.setattr(
+        "plico_benchmarks.suites.performance.time.perf_counter", lambda: next(clock)
+    )
+    suite = PerformanceSuite(client=FakeClient(), seed=17)
+
+    result = suite._bench_memory_recall([("revision-1", "unique-token")], 2)
+
+    assert result["count"] == 2
+    assert result["expected_target_query_count"] == 2
+    assert result["expected_target_hit_count"] == 1
+    assert result["expected_target_hit_rate"] == 0.5
+    assert result["quality_boundary"] == "latency_workload_with_target_hit_diagnostic"
 
 
 def test_working_memory_ack_and_projection_observability(monkeypatch):

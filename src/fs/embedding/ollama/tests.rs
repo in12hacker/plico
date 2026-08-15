@@ -182,6 +182,27 @@ fn same_name_with_different_digest_has_different_identity() {
     assert_ne!(first_identity, second_identity);
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn backend_constructed_in_tokio_can_run_on_a_plain_worker_thread() {
+    let server = MockOllama::start();
+    let backend = server.backend();
+
+    let (identity, query) = std::thread::spawn(move || {
+        let identity = backend.builder_identity()?;
+        let query = backend
+            .embed_query("cross-runtime query")
+            .map_err(|_| EmbeddingIdentityError::ProviderProbeFailed)?;
+        Ok::<_, EmbeddingIdentityError>((identity, query))
+    })
+    .join()
+    .expect("plain worker must not panic after Tokio construction")
+    .expect("plain worker must verify the provider");
+
+    assert_eq!(identity.provider_family(), EmbeddingProviderFamily::Ollama);
+    assert_eq!(identity.model_id(), MODEL);
+    assert_eq!(query.embedding, vec![1.0, 2.0, 3.0]);
+}
+
 #[test]
 fn every_operation_discards_result_if_digest_drifts_after_call() {
     for operation in 0..5 {

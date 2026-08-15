@@ -111,7 +111,10 @@ cargo run --bin plico-mcp
 
 ## Inference Backend Configuration
 
-Embedding and LLM backends are **inference-framework-agnostic**. Any server exposing an OpenAI-compatible `/v1/embeddings` or `/v1/chat/completions` endpoint works.
+Embedding and LLM backends are **inference-framework-agnostic** at the Object/chat adapter boundary.
+Memory embedding projection is stricter: today only the Ollama path proves the immutable provider/model
+identity required to publish a P3 builder. An arbitrary OpenAI-compatible endpoint must not be presented as
+a verified Memory projection provider.
 
 **Defaults (auto-detect llama-server port, fallback :8080):**
 - `LLM_BACKEND=llama` → auto-detected llama-server URL
@@ -125,6 +128,18 @@ URL resolution priority: `LLAMA_URL` env > `OPENAI_API_BASE` env > `~/.plico/lla
 export EMBEDDING_BACKEND=stub
 export LLM_BACKEND=stub
 ```
+
+### Local serving decision
+
+The current GB10 baseline keeps llama.cpp as the reproducible local text control, with Qwen2.5-7B Q4_K_M
+as the latency tier and Qwen3.5-27B Q4_K_M as the larger local tier. Ollama remains the operational path for
+the verified Qwen3-Embedding Memory builder. The next performance trial is TensorRT-LLM/TensorRT Edge-LLM
+against the existing GPT-OSS-20B MXFP4, followed by vLLM at bounded unified-memory utilization; no framework
+replaces llama.cpp until the same sealed model passes quality, TTFT, throughput, p95, memory, and failure-rate
+checks. VLMs are reserved for image-bearing suites and are not a default text or embedding backend.
+
+Measured host snapshots, limitations, source links, and the acceptance matrix are frozen in
+[benchmarks/README.md](benchmarks/README.md#本地推理选型2026-08-15-冻结).
 
 ## Configuration
 

@@ -91,6 +91,41 @@ def test_performance_latency_uses_real_request_distribution():
     assert result["p99_ms"] == pytest.approx(19.7)
 
 
+def test_real_performance_setup_explicitly_bootstraps_owner_projection(monkeypatch):
+    class FakeClient:
+        def __init__(self):
+            self.readiness_calls = 0
+            self.rebuild_calls = 0
+
+        def runtime_readiness(self):
+            self.readiness_calls += 1
+            state = "degraded" if self.readiness_calls <= 2 else "ready"
+            worker = "unavailable" if self.readiness_calls <= 2 else "ready"
+            return {"ready": True, "projection": {"control_plane": state, "worker": worker}}
+
+        def projection_rebuild_all_eligible(self):
+            self.rebuild_calls += 1
+            return {
+                "kind": "memory_embedding",
+                "selected_count": 0,
+                "manifest_generation": 1,
+            }
+
+    monkeypatch.setenv("PLICO_BENCH_REQUIRE_REAL_EMBEDDING", "1")
+    client = FakeClient()
+    suite = PerformanceSuite(client=client, seed=42)
+
+    suite.setup()
+
+    assert client.rebuild_calls == 1
+    assert suite._projection_owner_setup == {
+        "required": True,
+        "owner_rebuild_performed": True,
+        "selected_count": 0,
+        "manifest_generation": 1,
+    }
+
+
 def test_client_does_not_retry_non_idempotent_writes(monkeypatch):
     client = PlicoClient(max_retries=3, bearer_token="bench-token")
     attempts = 0
