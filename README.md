@@ -133,10 +133,12 @@ export LLM_BACKEND=stub
 
 The current GB10 baseline keeps llama.cpp as the reproducible local text control, with Qwen2.5-7B Q4_K_M
 as the latency tier and Qwen3.5-27B Q4_K_M as the larger local tier. Ollama remains the operational path for
-the verified Qwen3-Embedding Memory builder. The next performance trial is TensorRT-LLM/TensorRT Edge-LLM
-against the existing GPT-OSS-20B MXFP4, followed by vLLM at bounded unified-memory utilization; no framework
-replaces llama.cpp until the same sealed model passes quality, TTFT, throughput, p95, memory, and failure-rate
-checks. VLMs are reserved for image-bearing suites and are not a default text or embedding backend.
+the verified Qwen3-Embedding Memory builder. The next performance trials are TensorRT-LLM and then vLLM,
+using the same pinned upstream GPT-OSS-20B checkpoint and tokenizer while sealing each runtime's own format,
+quantization, and artifact digest. TensorRT Edge-LLM follows with a pinned supported Qwen checkpoint because
+its current model matrix and ONNX/engine workflow differ. No framework replaces llama.cpp until it passes the
+same quality, TTFT, throughput, p95, memory, and failure-rate checks. VLMs are reserved for image-bearing suites
+and are not a default text or embedding backend.
 
 Measured host snapshots, limitations, source links, and the acceptance matrix are frozen in
 [benchmarks/README.md](benchmarks/README.md#本地推理选型2026-08-15-冻结).

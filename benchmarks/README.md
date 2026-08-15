@@ -66,7 +66,7 @@ snapshot；只有进入 committed benchmark artifact 的重复运行才能成为
 | 较强本地文本生成 | llama.cpp b8914 / Qwen3.5-27B Q4_K_M | 5/5 完成；mean 3.975 s/request；prefill 95.6 tok/s；decode 10.0 tok/s | 本地质量候选；默认关闭 thinking，按任务显式开启 |
 | Object research embedding | llama.cpp b8914 / Qwen3-Embedding-0.6B Q8_0，同一固定 GGUF digest | unique-query p50/p95 8.45/10.55 ms；batch-8 220.8 docs/s；C=4 136.8 req/s | 下一轮 Object QA 默认；provider identity 仍 unattested |
 | Memory projection embedding | Ollama 0.32.13 / Qwen3-Embedding-0.6B Q8_0，固定 tag+digest | Object vector smoke 10/10；owner rebuild 后 Memory projection 10/10 Ready | 当前唯一能发布 P3 immutable builder identity 的实链 |
-| 外部 research reader/judge | DeepSeek V4 Flash | 10 QA samples / 59 attempts / USD 0.0101726184 | 只作 research evaluator；不回退、不冒充本地模型 |
+| 外部 research reader/judge | DeepSeek V4 Flash | 50 QA samples / 175 attempts / USD 0.0251223560 | 只作 research evaluator；不回退、不冒充本地模型 |
 
 Qwen3.5 的 thinking 模式在一次 64-token 探测中把输出预算全部用于 reasoning content；关闭
 thinking 后才产生 37-token 正文。因此低延迟路径固定 `thinking=disabled`，reasoning 只能由任务
@@ -82,24 +82,34 @@ runner 使用 ctx=32768/parallel=1。Memory projection 仍使用 Ollama 的固�
 
 1. **保留 llama.cpp 作为可复现控制组和当前默认本地文本服务。** 官方 CUDA server image
    同时提供 linux/arm64，并支持 CUDA 12/13；本机现有 GGUF 可直接运行。
-2. **优先验证 TensorRT-LLM / TensorRT Edge-LLM。** NVIDIA 已把单机 DGX Spark 列为
-   TensorRT-LLM beta 支持，并验证 GPT-OSS-20B MXFP4、Qwen3-14B/32B 与 Qwen3-30B-A3B
-   等组合；本机已有 GPT-OSS-20B MXFP4，可作为第一组同模型对照。它只有通过同一 workload
-   的质量、TTFT、decode throughput、p95 和内存门槛后才替换 llama.cpp。
-3. **vLLM 作为连续批处理/并发吞吐对照。** NVIDIA 的 vLLM 容器已覆盖 DGX Spark；由于
+2. **第二步验证 TensorRT-LLM。** 当前官方硬件表已列出 DGX Spark，Spark porting guide
+   要求 TensorRT-LLM 1.2 或更高版本。首轮固定同一 Hugging Face
+   `openai/gpt-oss-20b` checkpoint revision 与 tokenizer，不把现有 GGUF/MXFP4 文件冒充
+   TensorRT-LLM 的原生输入；它只有通过同一 workload 的质量、TTFT、decode throughput、p95
+   和内存门槛后才替换 llama.cpp。
+3. **第三步用 vLLM 做连续批处理/并发吞吐对照。** NVIDIA 的 vLLM 路线已覆盖 DGX Spark；使用
+   与 TensorRT-LLM 相同的上游 GPT-OSS checkpoint revision。由于
    unified-memory 平台默认接近满额预分配，初始试验固定
    `--gpu-memory-utilization 0.7`，不得与现有服务抢满内存。
-4. **Ollama 保留为模型导入和当前 Memory identity 运维面，不作为高并发性能胜者的默认假设。**
+4. **TensorRT Edge-LLM 后置。** 它需要 ONNX 导出和 TensorRT engine 构建；首轮使用官方支持
+   的固定 Qwen checkpoint，不把未在其当前支持表中的 GPT-OSS 当作可用对照。其工程成本高于
+   TensorRT-LLM/vLLM，因此只在前两条高性能路线完成后推进。
+5. **Ollama 保留为模型导入和当前 Memory identity 运维面，不作为高并发性能胜者的默认假设。**
    只有相同模型、相同输入、相同量化和相同并发的实测才能比较 runtime。
 
-候选框架必须按相同 sealed model digest、prompt set、context、max tokens 和
-concurrency `1/4/16` 测量：TTFT、prefill/decode tok/s、request p50/p95、失败率、峰值 unified
-memory，以及同一 QA/retrieval 样本上的质量不回退。吞吐提升但质量、身份证明或稳定性退化时不切换。
+候选框架必须固定同一 upstream checkpoint revision、tokenizer、prompt set、context、max tokens
+和 concurrency `1/4/16`；每个 runtime 分别封存格式、量化参数和 artifact digest。只有实际共享
+完全相同字节时才要求 digest 相同，例如 llama.cpp 与 Ollama 使用同一 GGUF。统一测量 TTFT、
+prefill/decode tok/s、request p50/p95、失败率、峰值 unified memory，以及同一 QA/retrieval 样本上的
+质量不回退。吞吐提升但质量、身份证明或稳定性退化时不切换。
 
 官方依据：[llama.cpp CUDA/arm64 images](https://github.com/ggml-org/llama.cpp/blob/master/docs/docker.md)、
-[TensorRT-LLM release notes](https://nvidia.github.io/TensorRT-LLM/release-notes.html)、
-[TensorRT Edge-LLM GB10 installation](https://nvidia.github.io/TensorRT-Edge-LLM/user_guide/getting_started/installation.html)、
+[TensorRT-LLM supported hardware](https://nvidia.github.io/TensorRT-LLM/supported-hardware.html)、
+[TensorRT-LLM supported models](https://nvidia.github.io/TensorRT-LLM/models/supported-models.html)、
+[DGX Spark porting guide](https://docs.nvidia.com/dgx/dgx-spark-porting-guide/porting/dependencies.html)、
 [NVIDIA vLLM release notes](https://docs.nvidia.com/deeplearning/frameworks/vllm-release-notes/rel-26-07.html)、
+[TensorRT Edge-LLM supported models](https://nvidia.github.io/TensorRT-Edge-LLM/latest/user_guide/getting_started/supported-models.html)、
+[TensorRT Edge-LLM GB10 installation](https://nvidia.github.io/TensorRT-Edge-LLM/user_guide/getting_started/installation.html)、
 [Ollama GGUF import](https://docs.ollama.com/import)。
 
 ### 当前 research 基线
@@ -107,14 +117,16 @@ memory，以及同一 QA/retrieval 样本上的质量不回退。吞吐提升但
 | 切片 | 结果 | 可解释边界 |
 |------|------|------------|
 | Working Memory lexical exact-contract，fresh vault，100 queries | Recall@5/10 = 0.900；Recall@20 = 0.990；MRR@10/nDCG@10 = 0.900 | 证明字面 token、隔离和去重契约；不是语义记忆召回 |
-| LoCoMo 5 + LongMemEval 5，DeepSeek reader/judge | evidence recall@10 = 0.850；F1 = 0.281；BLEU-1 = 0.229；judge = 4.7/5 | N=10、alias revision unattested；只用于找方向 |
+| LoCoMo 25 + LongMemEval 25，DeepSeek reader/judge，真实 Object vector | evidence recall@10 = 0.810；F1 = 0.200（bootstrap 95% CI 0.12–0.29）；BLEU-1 = 0.152；judge = 4.511/5；对抗弃答 = 60% | 单次 research run；50/50 query 均为 vector succeeded、零降级；alias revision unattested；总成本 USD 0.02512 |
 | real-vector performance，fresh vault，1,810 serial samples | warm object.search p50/p95 = 4.85/7.99 ms；query-unique = 141.11/169.41 ms；250/250 typed vector execution、零降级 | query-unique target hit@10 = 0.920；这是 warmed-index query，不是 cold start |
 | 100-entry Memory projection catch-up | 100/100 Ready；phase 18.97 s；ready-lag p50/p95 = 9.39/18.10 s | post-batch backlog drain observation，不是逐 revision commit-to-ready latency |
 | canonical/lexical operations | memory.create ack p50/p95 = 6.52/13.13 ms；memory.get = 0.10/0.12 ms；memory.recall = 0.28/0.49 ms | recall target hit@10 = 0.910；所有请求串行，经 UDS |
 
-当前最优先方向是：降低 unique-query embedding latency、提高并解释 evidence recall，再扩大到
-固定 50-sample smoke 和 5-run shadow；judge 的 100% accuracy 与低 F1 冲突，不能单独作为质量 gate。同行公开数字若数据集、
-采样、retriever 和指标定义不同，只列背景，不直接相减或宣称领先。
+当前最优先方向是：保持 llama.cpp 的低 unique-query embedding latency，针对 LoCoMo 的低
+evidence recall@10（0.620）改进检索；LongMemEval 已达到 evidence recall@10 = 1.000，但 F1
+只有 0.114，应优先修答案生成与规范化，而不是继续堆召回。下一步是同一 sealed 配置的 5-run
+shadow，确认 run 间方差后再建立阈值。judge 的 97.8% accuracy 与低 F1 冲突，不能单独作为质量
+gate。同行公开数字若数据集、采样、retriever 和指标定义不同，只列背景，不直接相减或宣称领先。
 
 ## 预处理阶段（AWB-like）
 
