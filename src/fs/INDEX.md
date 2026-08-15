@@ -50,7 +50,7 @@ Status: active | Fan-in: 2 | Fan-out: 2
 |--------|------|-------------|
 | `EmbeddingProvider` | `embedding/mod.rs` | Trait: text → vector embedding |
 | `OllamaBackend` | `embedding/ollama.rs` | Ollama HTTP embedding backend |
-| `OpenAIEmbeddingBackend` | `embedding/openai.rs` | Legacy Object vector backend; P3 identity unavailable |
+| `OpenAIEmbeddingBackend` | `embedding/openai.rs` | Legacy Object vector backend; bounded transport-only retry; P3 identity unavailable |
 | `LocalEmbeddingBackend` | `embedding/local.rs` | Compiled-in Python worker; P3 identity unavailable |
 | `StubEmbeddingProvider` | `embedding/stub.rs` | Explicit tag-only/test failure provider |
 | `EmbeddingCircuitBreaker` | `embedding/circuit_breaker.rs` | 3-state breaker without fabricated fallback vectors |
@@ -100,7 +100,7 @@ Status: active | Fan-in: 2 | Fan-out: 2
 | `ollama/tests.rs` | protocol tests | Exact evidence, drift, shape and privacy gates |
 | `local.rs` | provider | Local worker RPC boundary; P3 identity unavailable |
 | `local_worker.py` | worker | Compiled-in CPU embedding worker |
-| `openai.rs` | provider | OpenAI-compatible legacy Object embedding |
+| `openai.rs` | provider | OpenAI-compatible legacy Object embedding; one bounded retry before any HTTP response, never on HTTP/body/parse errors |
 | `stub.rs` | provider | Explicit non-production stub |
 | `adaptive.rs` | wrapper | Registered input transforms and Matryoshka normalization |
 | `circuit_breaker.rs` | wrapper | 3-state failure protection without fallback vectors |

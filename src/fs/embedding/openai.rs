@@ -9,6 +9,8 @@ use crate::fs::embedding::types::{
     EmbedError, EmbedResult, EmbeddingBuilderIdentity, EmbeddingIdentityError, EmbeddingProvider,
 };
 
+const TRANSPORT_MAX_ATTEMPTS: u8 = 2;
+
 pub struct OpenAIEmbeddingBackend {
     /// Only created when no Tokio runtime is active (standalone/CLI mode).
     rt: Option<Arc<tokio::runtime::Runtime>>,
@@ -39,14 +41,33 @@ impl OpenAIEmbeddingBackend {
             )),
         };
 
+        let base = base_url.trim_end_matches('/').to_string();
+        let retry_host = reqwest::Url::parse(&base)
+            .ok()
+            .and_then(|url| url.host_str().map(str::to_owned))
+            .ok_or_else(|| EmbedError::Api("invalid embedding provider base URL".into()))?;
+        let retry_policy = reqwest::retry::for_host(retry_host)
+            .classify_fn(|request| {
+                if request.error().is_some() {
+                    tracing::warn!(
+                        retry_scope = "transport_send",
+                        max_attempts = TRANSPORT_MAX_ATTEMPTS,
+                        "embedding provider transport failure classified for bounded retry"
+                    );
+                    request.retryable()
+                } else {
+                    request.success()
+                }
+            })
+            .max_retries_per_request(u32::from(TRANSPORT_MAX_ATTEMPTS - 1))
+            .no_budget();
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
             .connect_timeout(std::time::Duration::from_secs(10))
-            .pool_max_idle_per_host(1)
+            .pool_max_idle_per_host(4)
+            .retry(retry_policy)
             .build()
             .map_err(EmbedError::Http)?;
-
-        let base = base_url.trim_end_matches('/').to_string();
 
         Ok(Self {
             rt,
@@ -110,13 +131,11 @@ impl OpenAIEmbeddingBackend {
             "input": input,
         });
 
-        let mut req = client.post(format!("{}/embeddings", base_url)).json(&body);
-
+        let mut request = client.post(format!("{}/embeddings", base_url)).json(&body);
         if let Some(key) = api_key {
-            req = req.header("Authorization", format!("Bearer {key}"));
+            request = request.header("Authorization", format!("Bearer {key}"));
         }
-
-        let resp = req.send().await.map_err(|_| provider_request_error())?;
+        let resp = request.send().await.map_err(|_| provider_request_error())?;
 
         let status = resp.status();
         let body_bytes = resp
@@ -141,13 +160,11 @@ impl OpenAIEmbeddingBackend {
             "input": texts,
         });
 
-        let mut req = self.client.post(format!("{}/embeddings", self.base_url)).json(&body);
-
+        let mut request = self.client.post(format!("{}/embeddings", self.base_url)).json(&body);
         if let Some(ref key) = self.api_key {
-            req = req.header("Authorization", format!("Bearer {key}"));
+            request = request.header("Authorization", format!("Bearer {key}"));
         }
-
-        let resp = req.send().await.map_err(|_| provider_request_error())?;
+        let resp = request.send().await.map_err(|_| provider_request_error())?;
 
         let status = resp.status();
         let body_bytes = resp
@@ -169,6 +186,8 @@ fn provider_status_error(status: reqwest::StatusCode, body: &[u8]) -> EmbedError
         || body.contains("batch size")
         || body.contains("too many tokens")
         || body.contains("context_length_exceeded")
+        || body.contains("exceed_context_size")
+        || body.contains("exceeds the available context size")
     {
         EmbedError::InputTooLarge("provider rejected input size".into())
     } else {
@@ -315,6 +334,85 @@ impl Clone for OpenAIEmbeddingBackend {
 mod tests {
     use super::*;
 
+    use std::io::{Read, Write};
+    use std::net::{TcpListener, TcpStream};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::thread::JoinHandle;
+    use std::time::{Duration, Instant};
+
+    #[derive(Clone, Copy)]
+    enum RawServerAction {
+        DropConnection,
+        SingleSuccess,
+        BatchSuccess,
+        HttpError,
+    }
+
+    fn raw_retry_server(actions: Vec<RawServerAction>) -> Option<(String, Arc<AtomicUsize>, JoinHandle<()>)> {
+        let listener = match TcpListener::bind("127.0.0.1:0") {
+            Ok(listener) => listener,
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                eprintln!("AF_INET unavailable; skipping raw retry protocol test");
+                return None;
+            }
+            Err(error) => panic!("raw retry server bind failed: {error}"),
+        };
+        listener.set_nonblocking(true).expect("raw retry server nonblocking");
+        let address = listener.local_addr().expect("raw retry server address");
+        let calls = Arc::new(AtomicUsize::new(0));
+        let thread_calls = Arc::clone(&calls);
+        let thread = std::thread::spawn(move || {
+            for action in actions {
+                let mut stream = accept_before(&listener, Instant::now() + Duration::from_secs(2));
+                thread_calls.fetch_add(1, Ordering::SeqCst);
+                stream
+                    .set_read_timeout(Some(Duration::from_millis(500)))
+                    .expect("raw retry server read timeout");
+                let mut request = [0_u8; 4096];
+                let _ = stream.read(&mut request);
+                match action {
+                    RawServerAction::DropConnection => {}
+                    RawServerAction::SingleSuccess => respond_json(
+                        &mut stream,
+                        200,
+                        r#"{"data":[{"embedding":[0.1,0.2,0.3]}],"usage":{"prompt_tokens":3}}"#,
+                    ),
+                    RawServerAction::BatchSuccess => respond_json(
+                        &mut stream,
+                        200,
+                        r#"{"data":[{"embedding":[0.1,0.2]},{"embedding":[0.3,0.4]}],"usage":{"prompt_tokens":4}}"#,
+                    ),
+                    RawServerAction::HttpError => respond_json(&mut stream, 503, r#"{"error":{"type":"temporary"}}"#),
+                }
+            }
+        });
+        Some((format!("http://{address}/v1"), calls, thread))
+    }
+
+    fn accept_before(listener: &TcpListener, deadline: Instant) -> TcpStream {
+        loop {
+            match listener.accept() {
+                Ok((stream, _)) => return stream,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock && Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                Err(error) => panic!("raw retry server accept failed: {error}"),
+            }
+        }
+    }
+
+    fn respond_json(stream: &mut TcpStream, status: u16, body: &str) {
+        let reason = if status == 200 { "OK" } else { "Service Unavailable" };
+        let response = format!(
+            "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        stream
+            .write_all(response.as_bytes())
+            .expect("raw retry server response");
+        stream.flush().expect("raw retry server flush");
+    }
+
     #[test]
     fn test_parse_embedding_response_valid() {
         let json = br#"{"object":"list","data":[{"object":"embedding","index":0,"embedding":[0.1,0.2,0.3]}],"model":"test","usage":{"prompt_tokens":3,"total_tokens":3}}"#;
@@ -353,6 +451,13 @@ mod tests {
             provider_status_error(reqwest::StatusCode::BAD_REQUEST, b"too large"),
             EmbedError::InputTooLarge(_)
         ));
+        assert!(matches!(
+            provider_status_error(
+                reqwest::StatusCode::BAD_REQUEST,
+                br#"{"error":{"type":"exceed_context_size_error","message":"input exceeds the available context size"}}"#,
+            ),
+            EmbedError::InputTooLarge(_)
+        ));
         assert!(!error.contains(BODY_CANARY));
 
         let error =
@@ -363,6 +468,68 @@ mod tests {
         let request_error = provider_request_error().to_string();
         assert!(!request_error.contains(ENDPOINT_CANARY));
         assert_eq!(request_error, "Server unavailable at embedding provider unavailable");
+    }
+
+    #[test]
+    fn transport_failure_retries_once_and_recovers_single_request() {
+        let Some((url, calls, thread)) =
+            raw_retry_server(vec![RawServerAction::DropConnection, RawServerAction::SingleSuccess])
+        else {
+            return;
+        };
+        let backend = OpenAIEmbeddingBackend::new(&url, "test-model", None).unwrap();
+
+        let result = backend.embed("safe synthetic input").unwrap();
+
+        thread.join().unwrap();
+        assert_eq!(result.embedding.len(), 3);
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn transport_failure_exhaustion_stops_after_two_requests() {
+        let Some((url, calls, thread)) =
+            raw_retry_server(vec![RawServerAction::DropConnection, RawServerAction::DropConnection])
+        else {
+            return;
+        };
+        let backend = OpenAIEmbeddingBackend::new(&url, "test-model", None).unwrap();
+
+        let result = backend.embed("safe synthetic input");
+
+        thread.join().unwrap();
+        assert!(matches!(result, Err(EmbedError::ServerUnavailable(_))));
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn http_status_is_not_retried() {
+        let Some((url, calls, thread)) = raw_retry_server(vec![RawServerAction::HttpError]) else {
+            return;
+        };
+        let backend = OpenAIEmbeddingBackend::new(&url, "test-model", None).unwrap();
+
+        let result = backend.embed("safe synthetic input");
+
+        thread.join().unwrap();
+        assert!(matches!(result, Err(EmbedError::Api(_))));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn transport_failure_retries_once_and_recovers_batch_request() {
+        let Some((url, calls, thread)) =
+            raw_retry_server(vec![RawServerAction::DropConnection, RawServerAction::BatchSuccess])
+        else {
+            return;
+        };
+        let backend = OpenAIEmbeddingBackend::new(&url, "test-model", None).unwrap();
+
+        let result = backend.embed_batch(&["first", "second"]).unwrap();
+
+        thread.join().unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
 
     #[test]
