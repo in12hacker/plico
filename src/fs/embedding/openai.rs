@@ -209,6 +209,22 @@ fn log_provider_failure(request_kind: &'static str, failure_stage: &'static str,
     }
 }
 
+fn log_provider_json_failure(request_kind: &'static str, error: &serde_json::Error) {
+    let json_error_category = match error.classify() {
+        serde_json::error::Category::Io => "io",
+        serde_json::error::Category::Syntax => "syntax",
+        serde_json::error::Category::Data => "data",
+        serde_json::error::Category::Eof => "eof",
+    };
+    tracing::warn!(
+        provider_protocol = "openai_compatible",
+        request_kind,
+        failure_stage = "response_json",
+        json_error_category,
+        "embedding provider protocol failure"
+    );
+}
+
 fn provider_status_error(status: reqwest::StatusCode, body: &[u8], request_kind: &'static str) -> EmbedError {
     let body = String::from_utf8_lossy(body).to_ascii_lowercase();
     if body.contains("too large")
@@ -246,7 +262,7 @@ fn parse_embedding_response(body: &[u8], request_kind: &'static str) -> Result<E
     }
 
     let parsed: Response = serde_json::from_slice(body).map_err(|e| {
-        log_provider_failure(request_kind, "response_json", None);
+        log_provider_json_failure(request_kind, &e);
         EmbedError::Api(format!("response parse error: {e}"))
     })?;
 
@@ -275,7 +291,7 @@ fn parse_embedding_batch_response(body: &[u8], request_kind: &'static str) -> Re
     }
 
     let parsed: Response = serde_json::from_slice(body).map_err(|e| {
-        log_provider_failure(request_kind, "response_json", None);
+        log_provider_json_failure(request_kind, &e);
         EmbedError::Api(format!("batch response parse error: {e}"))
     })?;
 
@@ -379,6 +395,7 @@ mod tests {
         SingleSuccess,
         BatchSuccess,
         HttpError,
+        MalformedSuccess,
     }
 
     fn raw_retry_server(actions: Vec<RawServerAction>) -> Option<(String, Arc<AtomicUsize>, JoinHandle<()>)> {
@@ -416,6 +433,7 @@ mod tests {
                         r#"{"data":[{"embedding":[0.1,0.2]},{"embedding":[0.3,0.4]}],"usage":{"prompt_tokens":4}}"#,
                     ),
                     RawServerAction::HttpError => respond_json(&mut stream, 503, r#"{"error":{"type":"temporary"}}"#),
+                    RawServerAction::MalformedSuccess => respond_json(&mut stream, 200, r#"{"data": ["#),
                 }
             }
         });
@@ -544,6 +562,20 @@ mod tests {
     #[test]
     fn http_status_is_not_retried() {
         let Some((url, calls, thread)) = raw_retry_server(vec![RawServerAction::HttpError]) else {
+            return;
+        };
+        let backend = OpenAIEmbeddingBackend::new(&url, "test-model", None).unwrap();
+
+        let result = backend.embed("safe synthetic input");
+
+        thread.join().unwrap();
+        assert!(matches!(result, Err(EmbedError::Api(_))));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn malformed_success_response_is_not_retried() {
+        let Some((url, calls, thread)) = raw_retry_server(vec![RawServerAction::MalformedSuccess]) else {
             return;
         };
         let backend = OpenAIEmbeddingBackend::new(&url, "test-model", None).unwrap();
