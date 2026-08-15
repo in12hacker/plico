@@ -48,6 +48,12 @@ impl CognitivePipelineHandle {
     pub fn enqueue_sync(&self, task: CognitiveTask) -> Result<(), String> {
         self.sender.try_send(task).map_err(|e| e.to_string())
     }
+
+    #[cfg(test)]
+    pub(crate) fn channel_for_test(buffer_size: usize) -> (Self, mpsc::Receiver<CognitiveTask>) {
+        let (sender, receiver) = mpsc::channel(buffer_size);
+        (Self { sender }, receiver)
+    }
 }
 
 /// Start the cognitive pipeline worker loop.

@@ -9,6 +9,7 @@ import pytest
 
 from plico_benchmarks.suites.conversational_qa import (
     ConversationalQASuite,
+    _adversarial_abstention_correct,
     _verify_attempt_cost,
 )
 from plico_benchmarks.suites.retrieval import RetrievalSuite
@@ -117,6 +118,13 @@ def test_locomo_adversarial_null_answer_uses_deterministic_abstention_not_judge(
     assert result[0]["f1"] is None
     assert result[0]["bleu1"] is None
     assert result[0]["llm_score"] is None
+
+
+def test_adversarial_abstention_requires_one_exact_normalized_phrase():
+    assert _adversarial_abstention_correct("No information available.")
+    assert _adversarial_abstention_correct("NOT MENTIONED")
+    assert not _adversarial_abstention_correct("No information available, but probably yes")
+    assert not _adversarial_abstention_correct("I don't know")
 
 
 def test_longmemeval_query_is_scoped_to_question_evidence_domain():

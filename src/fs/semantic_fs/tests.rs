@@ -13,6 +13,7 @@ use crate::fs::search::{
 };
 use crate::fs::semantic_fs::events::CreateEventParams;
 use crate::fs::semantic_fs::{EventRelation, EventType, Query, SemanticFS};
+use crate::kernel::ops::cognitive_pipeline::{CognitivePipelineHandle, CognitiveTask};
 
 fn make_fs() -> (SemanticFS, tempfile::TempDir) {
     let dir = TempDir::new().unwrap();
@@ -119,6 +120,34 @@ fn test_create_and_get() {
         .unwrap();
     let results = fs.read(&Query::ByCid(cid.clone())).unwrap();
     assert_eq!(results.len(), 1);
+}
+
+#[test]
+fn saturated_cognitive_queue_indexes_new_object_inline_instead_of_dropping_it() {
+    let (fs, _dir) = make_fs();
+    let (handle, _receiver) = CognitivePipelineHandle::channel_for_test(1);
+    handle
+        .enqueue_sync(CognitiveTask::LinkSimilarity {
+            cid: "occupied-slot".to_string(),
+            agent_id: "test-agent".to_string(),
+        })
+        .unwrap();
+    fs.set_cognitive_pipeline(handle);
+
+    let cid = fs
+        .create(
+            b"queue backpressure canary".to_vec(),
+            vec!["queue-test".to_string()],
+            "test-agent".to_string(),
+            None,
+            crate::cas::ObjectScope::default(),
+        )
+        .unwrap();
+
+    assert!(fs
+        .search("queue backpressure canary", 5)
+        .iter()
+        .any(|result| result.cid == cid));
 }
 
 #[test]

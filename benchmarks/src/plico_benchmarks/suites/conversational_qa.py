@@ -66,7 +66,7 @@ def _reader_answer(raw: str) -> str:
 
 def _adversarial_abstention_correct(answer: str) -> bool:
     normalized = " ".join(re.sub(r"[^a-z0-9]+", " ", answer.lower()).split())
-    return "no information available" in normalized or "not mentioned" in normalized
+    return normalized in {"no information available", "not mentioned"}
 
 
 def _search_execution_evidence(response: dict[str, Any]) -> dict[str, Any]:
@@ -97,6 +97,27 @@ class ConversationalQASuite(SuiteBase):
 
     def setup(self) -> None:
         self.wait_for_plico()
+        readiness = self.client.runtime_readiness()
+        configured_backend = str(readiness.get("configured_embedding_backend", ""))
+        active_provider = str(readiness.get("active_embedding_provider", ""))
+        provider_state = str(readiness.get("embedding_provider", ""))
+        requirement = (
+            "real_non_stub_vector_per_query"
+            if real_embedding_required()
+            else "typed_execution_observed"
+        )
+        if requirement == "real_non_stub_vector_per_query" and (
+            configured_backend.lower() in {"", "stub", "none", "disabled", "unknown"}
+            or provider_state != "ready"
+            or active_provider.lower() in {"", "stub", "unavailable", "unknown"}
+        ):
+            raise RuntimeError("real-embedding QA runtime readiness is not verified")
+        self._retrieval_runtime = {
+            "requirement": requirement,
+            "configured_embedding_backend": configured_backend,
+            "active_embedding_provider": active_provider,
+            "embedding_provider_state": provider_state,
+        }
         self._locomo_dataset = LoCoMoDataset()
         self._longmemeval_dataset = LongMemEvalDataset()
         self.locomo = self._locomo_dataset.load()
@@ -349,6 +370,11 @@ class ConversationalQASuite(SuiteBase):
                 "identity": identity,
                 "costs": costs,
             },
+            "retrieval_runtime": getattr(
+                self,
+                "_retrieval_runtime",
+                {"status": "unavailable_test_double"},
+            ),
             "metric_metadata": {
                 "answerability": {
                     "answerable": "token_f1_bleu1_and_1_to_5_judge",

@@ -301,6 +301,7 @@ def _validate_qa_sample_ledger(
                 is_unanswerable and boundary != "reader"
             ):
                 raise ValueError("QA request boundary disagrees with answerability")
+            expected_role = "reader" if boundary == "reader" else "judge"
             observed_request_ids.update(request_ids)
             request_usd = Decimal(0)
             terminal_by_request: dict[str, dict[str, Any]] = {}
@@ -322,6 +323,7 @@ def _validate_qa_sample_ledger(
                     summary != expected_summary
                     or durable.get("sample_id") != item.get("sample_id")
                     or durable.get("role_request_id") not in request_ids
+                    or durable.get("role") != expected_role
                 ):
                     raise ValueError("QA sample request does not match durable attempt evidence")
                 request_usd += Decimal(durable["usd_accounted"])
@@ -339,7 +341,43 @@ def _validate_qa_sample_ledger(
             raise ValueError("QA sample is missing its required request boundary")
     if sorted(observed_sequences) != list(range(1, len(attempts) + 1)):
         raise ValueError("QA request references do not cover the journal exactly once")
+    _validate_qa_retrieval_runtime(metrics, ledger)
     _validate_qa_aggregates(metrics, ledger, manifest)
+
+
+def _validate_qa_retrieval_runtime(metrics: dict[str, Any], ledger: list[dict[str, Any]]) -> None:
+    runtime = metrics.get("retrieval_runtime")
+    if not isinstance(runtime, dict) or set(runtime) != {
+        "requirement",
+        "configured_embedding_backend",
+        "active_embedding_provider",
+        "embedding_provider_state",
+    }:
+        raise ValueError("QA retrieval runtime evidence is missing")
+    requirement = runtime["requirement"]
+    if requirement not in {"typed_execution_observed", "real_non_stub_vector_per_query"}:
+        raise ValueError("QA retrieval runtime requirement is unsupported")
+    for key in (
+        "configured_embedding_backend",
+        "active_embedding_provider",
+        "embedding_provider_state",
+    ):
+        if not isinstance(runtime[key], str) or not runtime[key]:
+            raise ValueError("QA retrieval runtime identity is invalid")
+    if requirement == "real_non_stub_vector_per_query":
+        if (
+            runtime["configured_embedding_backend"].lower()
+            in {"stub", "none", "disabled", "unknown"}
+            or runtime["embedding_provider_state"] != "ready"
+            or runtime["active_embedding_provider"].lower() in {"stub", "unavailable", "unknown"}
+            or any(
+                item.get("embedding_query_state") != "succeeded"
+                or item.get("verified_vector_execution") is not True
+                or item.get("retrieval_degraded") is not False
+                for item in ledger
+            )
+        ):
+            raise ValueError("QA real-vector execution evidence is incomplete")
 
 
 def _f1_from_counts(predicted: int, expected: int, common: int) -> float:

@@ -451,15 +451,32 @@ impl SemanticFS {
             force_chunking = true;
         }
 
-        // F-5: Delegate full processing to background pipeline (Milestone 1)
-        if let Some(ref cp) = *self.cognitive_pipeline.read().unwrap() {
-            let _ = cp.enqueue_sync(CognitiveTask::ProcessDocument {
-                cid: cid.clone(),
-                agent_id: created_by.clone(),
-                force_chunking,
-            });
-        } else {
-            // Fallback: inline processing when no cognitive pipeline is running (tests, embedded mode)
+        // F-5: Delegate full processing to the background pipeline. A saturated or
+        // closed queue must apply backpressure by processing this document inline;
+        // silently dropping the task leaves a durable object permanently absent
+        // from the semantic index.
+        let pipeline = self.cognitive_pipeline.read().unwrap().clone();
+        let (process_inline, queue_unavailable) = match pipeline {
+            Some(cp) => {
+                let unavailable = cp
+                    .enqueue_sync(CognitiveTask::ProcessDocument {
+                        cid: cid.clone(),
+                        agent_id: created_by.clone(),
+                        force_chunking,
+                    })
+                    .is_err();
+                (unavailable, unavailable)
+            }
+            None => (true, false),
+        };
+        if process_inline {
+            if queue_unavailable {
+                tracing::warn!(
+                    phase = "semantic_index_enqueue",
+                    outcome = "inline_fallback",
+                    "cognitive pipeline queue unavailable"
+                );
+            }
             let embedding = self.upsert_semantic_index(&cid, &content, &meta).unwrap_or(None);
             if let Some(ref kg) = self.knowledge_graph {
                 if let Some(ref emb) = embedding {
