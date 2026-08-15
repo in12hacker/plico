@@ -265,19 +265,23 @@ PREPROCESS_TIMEOUT=600 ./scripts/run_full_benchmark.sh --runs 5 --output-parent 
 
 四类基础 suite 是 `performance`、`retrieval`、`memory-recall-lexical`、`conversational-qa`。最后一项使用严格 DeepSeek reader/judge 角色配置；API key 只注入 QA 子进程，不传给 plicod 或前三类 suite。Memory vector/hybrid 仍为 typed unsupported，当前结果最多是 research/shadow evidence。
 
-只复测当前 QA 基线时使用专用的固定 `5 × 50` driver，避免重复运行另外三类 suite：
+只复测当前 QA 基线时使用专用 driver，避免重复运行另外三类 suite：
 
 ```bash
 cd benchmarks
 
 # 无 daemon、无外部请求、无输出目录；只打印冻结计划、成本上限和真实命令形状
-./scripts/run_qa_shadow.sh --dry-run --output-parent /tmp/plico-qa-shadow
+./scripts/run_qa_shadow.sh --dry-run --runs 1 --output-parent /tmp/plico-qa-smoke
 
-# 需要显式 DeepSeek reader/judge 配置以及当前 plicod embedding 配置
-PREPROCESS_TIMEOUT=1800 ./scripts/run_qa_shadow.sh --output-parent /tmp/plico-qa-shadow
+# 一次 fresh-vault 50-sample smoke；只深验单次 result，不生成五轮 comparison
+PREPROCESS_TIMEOUT=1800 ./scripts/run_qa_shadow.sh --runs 1 --output-parent /tmp/plico-qa-smoke
+
+# smoke 通过后才运行五轮 shadow
+PREPROCESS_TIMEOUT=1800 ./scripts/run_qa_shadow.sh --runs 5 --output-parent /tmp/plico-qa-shadow
 ```
 
-driver 固定五个 fresh vault、50 个样本、seed 42 和 research 身份。默认每轮 reader/judge 的
+driver 只接受 1 或 5 个 fresh vault，每轮固定 50 个样本、seed 42 和 research 身份。单轮模式
+深验 committed result，不伪造 comparison；五轮模式才生成 shadow 比较。默认每轮 reader/judge 的
 `MAX_USD` 分别压到 USD 0.10/0.15，所以完整 campaign 的静态最坏上限是 USD 1.25，仅占用户
 授权 USD 100 的 1.25%；按上一轮 USD 0.0251223560 实耗线性估算约 USD 0.1256117800。可用
 `PLICO_QA_SHADOW_READER_MAX_USD_PER_RUN`、`PLICO_QA_SHADOW_JUDGE_MAX_USD_PER_RUN` 调低或显式
