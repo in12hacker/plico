@@ -1,5 +1,5 @@
 #!/bin/bash
-# Five fresh-vault QA repetitions with a statically bounded paid-attempt budget.
+# One-run smoke or five-run QA shadow with a statically bounded paid-attempt budget.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -21,12 +21,13 @@ ACTIVE_VAULT=""
 EXPECTED_HEAD=""
 
 usage() {
-    echo "Usage: $0 [--dry-run] [--output-parent DIR] [--preprocess-timeout N]"
+    echo "Usage: $0 [--dry-run] [--runs 1|5] [--output-parent DIR] [--preprocess-timeout N]"
 }
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --dry-run) DRY_RUN=true; shift ;;
+        --runs) RUNS="$2"; shift 2 ;;
         --output-parent) OUTPUT_PARENT="$2"; shift 2 ;;
         --preprocess-timeout) PREPROCESS_TIMEOUT="$2"; shift 2 ;;
         --help) usage; exit 0 ;;
@@ -61,7 +62,7 @@ try:
     reader, judge, runs, authorized = map(Decimal, sys.argv[1:])
 except (InvalidOperation, ValueError):
     raise SystemExit(2)
-if reader <= 0 or judge <= 0 or runs != 5 or authorized <= 0:
+if reader <= 0 or judge <= 0 or runs not in {1, 5} or authorized <= 0:
     raise SystemExit(2)
 if runs * (reader + judge) > authorized:
     raise SystemExit(3)
@@ -85,12 +86,20 @@ echo "qa_shadow_plan=runs:${RUNS},samples_per_run:${SAMPLES},seed:42"
 echo "observed_cost_projection_usd=$EXPECTED_COST_USD"
 echo "enforced_worst_case_usd=$WORST_CASE_USD"
 echo "authorized_max_usd=$AUTHORIZED_MAX_USD"
-echo "estimated_elapsed_minutes=35-45"
+if [[ "$RUNS" == 1 ]]; then
+    echo "estimated_elapsed_minutes=7-9"
+else
+    echo "estimated_elapsed_minutes=35-45"
+fi
 
 if [[ "$DRY_RUN" == true ]]; then
     echo "dry_run=true; no daemon, provider request, journal, or result directory was created"
     echo "$PYTHON -m plico_benchmarks run conversational-qa --samples 50 --seed 42 --uds <fresh-vault>/plico.sock --output <campaign>/conversational-qa.run-N"
-    echo "$PYTHON -m plico_benchmarks compare-qa-shadow --result <run-1> ... --result <run-5> --output <campaign>/conversational-qa.shadow"
+    if [[ "$RUNS" == 5 ]]; then
+        echo "$PYTHON -m plico_benchmarks compare-qa-shadow --result <run-1> ... --result <run-5> --output <campaign>/conversational-qa.shadow"
+    else
+        echo "$PYTHON -c <deep-verify-result> <campaign>/conversational-qa.run-1"
+    fi
     exit 0
 fi
 
@@ -173,7 +182,7 @@ start_fresh_daemon() {
 }
 
 cd "$BENCH_DIR"
-for ordinal in 1 2 3 4 5; do
+for ordinal in $(seq 1 "$RUNS"); do
     require_clean_revision
     run_id="$($PYTHON -c 'import uuid; print(uuid.uuid4())')"
     output="$CAMPAIGN_DIR/conversational-qa.run-${ordinal}"
@@ -195,14 +204,20 @@ done
 
 require_clean_revision
 
-comparison_args=()
-for ordinal in 1 2 3 4 5; do
-    comparison_args+=(--result "$CAMPAIGN_DIR/conversational-qa.run-${ordinal}")
-done
-"$PYTHON" -m plico_benchmarks compare-qa-shadow \
-    "${comparison_args[@]}" \
-    --seed 42 \
-    --output "$CAMPAIGN_DIR/conversational-qa.shadow"
+if [[ "$RUNS" == 5 ]]; then
+    comparison_args=()
+    for ordinal in $(seq 1 "$RUNS"); do
+        comparison_args+=(--result "$CAMPAIGN_DIR/conversational-qa.run-${ordinal}")
+    done
+    "$PYTHON" -m plico_benchmarks compare-qa-shadow \
+        "${comparison_args[@]}" \
+        --seed 42 \
+        --output "$CAMPAIGN_DIR/conversational-qa.shadow"
+else
+    "$PYTHON" -c \
+        'import sys; from pathlib import Path; from plico_benchmarks.core.result_artifact import verify_result_directory; verify_result_directory(Path(sys.argv[1]))' \
+        "$CAMPAIGN_DIR/conversational-qa.run-1"
+fi
 
 echo "campaign_id=$CAMPAIGN_ID"
 echo "results=$CAMPAIGN_DIR"

@@ -67,6 +67,15 @@ def test_fresh_vault_runner_replaces_removed_run_all_command():
     assert "gemma" not in script.casefold()
 
 
+def test_qa_driver_supports_one_run_smoke_without_faking_five_run_comparison():
+    script = (BENCHMARK_ROOT / "scripts/run_qa_shadow.sh").read_text(encoding="utf-8")
+
+    assert '--runs) RUNS="$2"' in script
+    assert 'for ordinal in $(seq 1 "$RUNS")' in script
+    assert 'if [[ "$RUNS" == 5 ]]' in script
+    assert "verify_result_directory" in script
+
+
 def test_performance_uses_versioned_yaml_config_and_rejects_uniform_override():
     defaults = PerformanceSuite(seed=42)._effective_performance_config()
 
