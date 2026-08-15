@@ -61,7 +61,7 @@ def test_fresh_vault_runner_replaces_removed_run_all_command():
     assert "mktemp -d" in script
     assert "--samples 50" in script
     assert "--seed 42" in script
-    assert "PLICO_COGNITIVE_PIPELINE_MAX_IN_FLIGHT=4" in script
+    assert "PLICO_COGNITIVE_PIPELINE_MAX_IN_FLIGHT=3" in script
     assert "PLICO_COGNITIVE_PIPELINE_QUEUE_CAPACITY=8192" in script
     assert "LLAMA_URL" not in script
     assert "gemma" not in script.casefold()

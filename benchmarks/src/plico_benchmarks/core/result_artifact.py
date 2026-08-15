@@ -485,7 +485,10 @@ def validate_qa_retrieval_runtime(
                 ingest_outcomes is not None
                 and (
                     runtime.get("cognitive_pipeline")
-                    != {"max_in_flight": 4, "queue_capacity": 8192}
+                    not in (
+                        {"max_in_flight": 3, "queue_capacity": 8192},
+                        {"max_in_flight": 4, "queue_capacity": 8192},
+                    )
                     or ingest_outcomes["inline_document_attempts"] != 0
                     or ingest_outcomes["submitted"]
                     > runtime["cognitive_pipeline"]["queue_capacity"]

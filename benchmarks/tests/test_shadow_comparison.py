@@ -201,7 +201,7 @@ def _qa_input(run: int) -> QaShadowInput:
                 "embedding_provider_state": "unavailable",
                 "provider_identity_scope": "object_execution_only_unattested_provider",
                 "requirement": "real_non_stub_vector_per_query",
-                "cognitive_pipeline": {"max_in_flight": 4, "queue_capacity": 8192},
+                "cognitive_pipeline": {"max_in_flight": 3, "queue_capacity": 8192},
                 "ingest_watermark": {
                     "accepted": 2,
                     "accepted_delta": 2,
@@ -280,6 +280,7 @@ def test_qa_shadow_summarizes_fixed_five_run_variance_and_never_gates(tmp_path):
         "sample_set",
         "degraded",
         "pipeline_config",
+        "pipeline_profile",
         "watermark_missing",
         "in_flight",
     ],
@@ -300,6 +301,8 @@ def test_qa_shadow_rejects_changed_or_unverified_campaign_inputs(mutation):
         inputs[4].result["metrics"]["retrieval_runtime"]["cognitive_pipeline"]["queue_capacity"] = (
             1024
         )
+    elif mutation == "pipeline_profile":
+        inputs[4].result["metrics"]["retrieval_runtime"]["cognitive_pipeline"]["max_in_flight"] = 4
     elif mutation == "watermark_missing":
         del inputs[4].result["metrics"]["retrieval_runtime"]["ingest_watermark"]
     else:

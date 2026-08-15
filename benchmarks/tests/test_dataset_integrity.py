@@ -66,7 +66,7 @@ def test_real_vector_artifact_accepts_object_only_openai_identity_without_overcl
         "active_embedding_provider": "unavailable",
         "embedding_provider_state": "unavailable",
         "provider_identity_scope": "object_execution_only_unattested_provider",
-        "cognitive_pipeline": {"max_in_flight": 4, "queue_capacity": 8192},
+        "cognitive_pipeline": {"max_in_flight": 3, "queue_capacity": 8192},
         "ingest_watermark": {
             "accepted": 7,
             "accepted_delta": 7,
@@ -94,6 +94,23 @@ def test_real_vector_artifact_accepts_object_only_openai_identity_without_overcl
     ]
 
     validate_qa_retrieval_runtime({"retrieval_runtime": runtime}, ledger)
+
+    legacy_c4_runtime = {
+        **runtime,
+        "cognitive_pipeline": {"max_in_flight": 4, "queue_capacity": 8192},
+    }
+    validate_qa_retrieval_runtime({"retrieval_runtime": legacy_c4_runtime}, ledger)
+
+    with pytest.raises(ValueError, match="real-vector"):
+        validate_qa_retrieval_runtime(
+            {
+                "retrieval_runtime": {
+                    **runtime,
+                    "cognitive_pipeline": {"max_in_flight": 2, "queue_capacity": 8192},
+                }
+            },
+            ledger,
+        )
 
     with pytest.raises(ValueError, match="identity scope"):
         validate_qa_retrieval_runtime(

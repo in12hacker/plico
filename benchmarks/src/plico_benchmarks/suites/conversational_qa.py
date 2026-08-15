@@ -57,7 +57,7 @@ Rules:
 - Be concise — maximum 15 words
 - Do NOT start with "Based on" or "The text says"""
 
-QA_COGNITIVE_MAX_IN_FLIGHT = 4
+QA_COGNITIVE_MAX_IN_FLIGHT = 3
 QA_COGNITIVE_QUEUE_CAPACITY = 8192
 
 
@@ -77,7 +77,7 @@ def _cognitive_pipeline_runtime(requirement: str) -> dict[str, int]:
     if requirement == "real_non_stub_vector_per_query" and (
         max_in_flight != QA_COGNITIVE_MAX_IN_FLIGHT or queue_capacity != QA_COGNITIVE_QUEUE_CAPACITY
     ):
-        raise RuntimeError("real-embedding QA requires frozen cognitive pipeline tuning 4/8192")
+        raise RuntimeError("real-embedding QA requires frozen cognitive pipeline tuning 3/8192")
     return {
         "max_in_flight": max_in_flight,
         "queue_capacity": queue_capacity,
