@@ -66,7 +66,24 @@ def test_real_vector_artifact_accepts_object_only_openai_identity_without_overcl
         "active_embedding_provider": "unavailable",
         "embedding_provider_state": "unavailable",
         "provider_identity_scope": "object_execution_only_unattested_provider",
-        "ingest_watermark": {"accepted": 7, "completed": 7, "in_flight": 0},
+        "cognitive_pipeline": {"max_in_flight": 4, "queue_capacity": 8192},
+        "ingest_watermark": {
+            "accepted": 7,
+            "accepted_delta": 7,
+            "completed": 7,
+            "in_flight": 0,
+        },
+        "ingest_outcomes": {
+            "submitted": 7,
+            "unique_cids": 6,
+            "duplicate_cids": 1,
+            "queued_accepted_attempts": 7,
+            "inline_document_attempts": 0,
+            "document_vector_succeeded_attempts": 7,
+            "document_lexical_degraded_attempts": 0,
+            "task_failed_attempts": 0,
+            "other_succeeded_attempts": 0,
+        },
     }
     ledger = [
         {
@@ -108,6 +125,7 @@ def test_real_vector_artifact_accepts_object_only_openai_identity_without_overcl
                     **runtime,
                     "ingest_watermark": {
                         "accepted": 7,
+                        "accepted_delta": 7,
                         "completed": 6,
                         "in_flight": 1,
                     },
@@ -115,6 +133,63 @@ def test_real_vector_artifact_accepts_object_only_openai_identity_without_overcl
             },
             ledger,
         )
+
+    with pytest.raises(ValueError, match="pipeline runtime configuration"):
+        validate_qa_retrieval_runtime(
+            {
+                "retrieval_runtime": {
+                    **runtime,
+                    "cognitive_pipeline": {
+                        "max_in_flight": 4,
+                        "queue_capacity": 3,
+                    },
+                }
+            },
+            ledger,
+        )
+
+    inline_attempt = {
+        **runtime,
+        "ingest_watermark": {
+            "accepted": 7,
+            "accepted_delta": 6,
+            "completed": 7,
+            "in_flight": 0,
+        },
+        "ingest_outcomes": {
+            **runtime["ingest_outcomes"],
+            "queued_accepted_attempts": 6,
+            "inline_document_attempts": 1,
+        },
+    }
+    with pytest.raises(ValueError, match="real-vector"):
+        validate_qa_retrieval_runtime(
+            {"retrieval_runtime": inline_attempt},
+            ledger,
+        )
+
+    duplicate_with_one_degraded = {
+        **runtime,
+        "ingest_watermark": {
+            "accepted": 2,
+            "accepted_delta": 2,
+            "completed": 2,
+            "in_flight": 0,
+        },
+        "ingest_outcomes": {
+            "submitted": 2,
+            "unique_cids": 1,
+            "duplicate_cids": 1,
+            "queued_accepted_attempts": 2,
+            "inline_document_attempts": 0,
+            "document_vector_succeeded_attempts": 1,
+            "document_lexical_degraded_attempts": 1,
+            "task_failed_attempts": 0,
+            "other_succeeded_attempts": 0,
+        },
+    }
+    with pytest.raises(ValueError, match="real-vector"):
+        validate_qa_retrieval_runtime({"retrieval_runtime": duplicate_with_one_degraded}, ledger)
 
 
 def test_locomo_query_is_scoped_and_scores_ground_truth_evidence():

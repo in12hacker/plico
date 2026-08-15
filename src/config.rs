@@ -165,6 +165,14 @@ pub struct TuningConfig {
     #[serde(default)]
     pub auto_summarize: bool,
 
+    /// Maximum cognitive tasks executing concurrently (default: 4).
+    #[serde(default = "default_cognitive_pipeline_max_in_flight")]
+    pub cognitive_pipeline_max_in_flight: usize,
+
+    /// Bounded cognitive task queue capacity (default: 1024).
+    #[serde(default = "default_cognitive_pipeline_queue_capacity")]
+    pub cognitive_pipeline_queue_capacity: usize,
+
     /// Log level filter (default: `"info"`). Overridden by `RUST_LOG`.
     #[serde(default = "default_log_level")]
     pub log_level: String,
@@ -205,6 +213,12 @@ fn default_log_level() -> String {
 }
 fn default_chunking_mode() -> String {
     "none".into()
+}
+fn default_cognitive_pipeline_max_in_flight() -> usize {
+    4
+}
+fn default_cognitive_pipeline_queue_capacity() -> usize {
+    1024
 }
 
 // ── Default trait impls ────────────────────────────────────────────────
@@ -260,6 +274,8 @@ impl Default for TuningConfig {
             kg_extract_batch_size: default_kg_batch_size(),
             kg_extract_timeout_ms: default_kg_extract_timeout(),
             auto_summarize: false,
+            cognitive_pipeline_max_in_flight: default_cognitive_pipeline_max_in_flight(),
+            cognitive_pipeline_queue_capacity: default_cognitive_pipeline_queue_capacity(),
             log_level: default_log_level(),
         }
     }
@@ -294,6 +310,7 @@ impl PlicoConfig {
 
         // Layer 3: environment variables (highest priority for each field).
         config.apply_env_overrides();
+        config.validate_tuning();
 
         config
     }
@@ -365,6 +382,12 @@ impl PlicoConfig {
         }
         if other.tuning.auto_summarize {
             self.tuning.auto_summarize = true;
+        }
+        if other.tuning.cognitive_pipeline_max_in_flight != default_cognitive_pipeline_max_in_flight() {
+            self.tuning.cognitive_pipeline_max_in_flight = other.tuning.cognitive_pipeline_max_in_flight;
+        }
+        if other.tuning.cognitive_pipeline_queue_capacity != default_cognitive_pipeline_queue_capacity() {
+            self.tuning.cognitive_pipeline_queue_capacity = other.tuning.cognitive_pipeline_queue_capacity;
         }
         if other.tuning.log_level != default_log_level() {
             self.tuning.log_level = other.tuning.log_level;
@@ -438,10 +461,41 @@ impl PlicoConfig {
         }
         env_parse!("PLICO_KG_EXTRACT_BATCH_SIZE", self.tuning.kg_extract_batch_size);
         env_parse!("PLICO_KG_EXTRACT_TIMEOUT_MS", self.tuning.kg_extract_timeout_ms);
+        env_parse!(
+            "PLICO_COGNITIVE_PIPELINE_MAX_IN_FLIGHT",
+            self.tuning.cognitive_pipeline_max_in_flight
+        );
+        env_parse!(
+            "PLICO_COGNITIVE_PIPELINE_QUEUE_CAPACITY",
+            self.tuning.cognitive_pipeline_queue_capacity
+        );
 
         // Log level — RUST_LOG takes priority over config
         if let Ok(val) = std::env::var("RUST_LOG") {
             self.tuning.log_level = val;
+        }
+    }
+
+    /// Reset unsafe cognitive-pipeline tuning values to fail-safe defaults.
+    fn validate_tuning(&mut self) {
+        if !(1..=64).contains(&self.tuning.cognitive_pipeline_max_in_flight) {
+            tracing::warn!(
+                configured = self.tuning.cognitive_pipeline_max_in_flight,
+                fallback = default_cognitive_pipeline_max_in_flight(),
+                "invalid cognitive pipeline max_in_flight; using fail-safe default"
+            );
+            self.tuning.cognitive_pipeline_max_in_flight = default_cognitive_pipeline_max_in_flight();
+        }
+        if self.tuning.cognitive_pipeline_queue_capacity < self.tuning.cognitive_pipeline_max_in_flight
+            || self.tuning.cognitive_pipeline_queue_capacity > 65_536
+        {
+            tracing::warn!(
+                configured = self.tuning.cognitive_pipeline_queue_capacity,
+                max_in_flight = self.tuning.cognitive_pipeline_max_in_flight,
+                fallback = default_cognitive_pipeline_queue_capacity(),
+                "invalid cognitive pipeline queue capacity; using fail-safe default"
+            );
+            self.tuning.cognitive_pipeline_queue_capacity = default_cognitive_pipeline_queue_capacity();
         }
     }
 
@@ -558,6 +612,8 @@ mod tests {
         assert_eq!(config.inference.llm_backend, "llama");
         assert_eq!(config.tuning.persist_interval_secs, 300);
         assert_eq!(config.tuning.rrf_k, 60);
+        assert_eq!(config.tuning.cognitive_pipeline_max_in_flight, 4);
+        assert_eq!(config.tuning.cognitive_pipeline_queue_capacity, 1024);
         assert_eq!(config.tuning.log_level, "info");
     }
 
@@ -608,6 +664,33 @@ mod tests {
         other.network.daemon_port = 9999;
         config.merge_from(other);
         assert_eq!(config.network.daemon_port, 9999);
+    }
+
+    #[test]
+    fn cognitive_pipeline_tuning_accepts_valid_bounds() {
+        let mut config = PlicoConfig::default();
+        config.tuning.cognitive_pipeline_max_in_flight = 64;
+        config.tuning.cognitive_pipeline_queue_capacity = 65_536;
+        config.validate_tuning();
+        assert_eq!(config.tuning.cognitive_pipeline_max_in_flight, 64);
+        assert_eq!(config.tuning.cognitive_pipeline_queue_capacity, 65_536);
+    }
+
+    #[test]
+    fn cognitive_pipeline_tuning_fails_safe_on_invalid_values() {
+        for max_in_flight in [0, 65] {
+            let mut config = PlicoConfig::default();
+            config.tuning.cognitive_pipeline_max_in_flight = max_in_flight;
+            config.validate_tuning();
+            assert_eq!(config.tuning.cognitive_pipeline_max_in_flight, 4);
+        }
+
+        for queue_capacity in [3, 65_537] {
+            let mut config = PlicoConfig::default();
+            config.tuning.cognitive_pipeline_queue_capacity = queue_capacity;
+            config.validate_tuning();
+            assert_eq!(config.tuning.cognitive_pipeline_queue_capacity, 1024);
+        }
     }
 
     #[test]

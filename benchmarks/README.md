@@ -66,7 +66,7 @@ snapshot；只有进入 committed benchmark artifact 的重复运行才能成为
 | 较强本地文本生成 | llama.cpp b8914 / Qwen3.5-27B Q4_K_M | 5/5 完成；mean 3.975 s/request；prefill 95.6 tok/s；decode 10.0 tok/s | 本地质量候选；默认关闭 thinking，按任务显式开启 |
 | Object research embedding | llama.cpp b8914 / Qwen3-Embedding-0.6B Q8_0，同一固定 GGUF digest | unique-query p50/p95 8.45/10.55 ms；batch-8 220.8 docs/s；C=4 136.8 req/s | 下一轮 Object QA 默认；provider identity 仍 unattested |
 | Memory projection embedding | Ollama 0.32.13 / Qwen3-Embedding-0.6B Q8_0，固定 tag+digest | Object vector smoke 10/10；owner rebuild 后 Memory projection 10/10 Ready | 当前唯一能发布 P3 immutable builder identity 的实链 |
-| 外部 research reader/judge | DeepSeek V4 Flash | 50 QA samples / 175 attempts / USD 0.0251223560 | 只作 research evaluator；不回退、不冒充本地模型 |
+| 外部 research reader/judge | DeepSeek V4 Flash | 5 × 50 QA samples / 875 attempts / USD 0.0668515736 | 只作 research evaluator；同 fingerprint、无回退、不冒充本地模型 |
 
 Qwen3.5 的 thinking 模式在一次 64-token 探测中把输出预算全部用于 reasoning content；关闭
 thinking 后才产生 37-token 正文。因此低延迟路径固定 `thinking=disabled`，reasoning 只能由任务
@@ -117,16 +117,21 @@ prefill/decode tok/s、request p50/p95、失败率、峰值 unified memory，以
 | 切片 | 结果 | 可解释边界 |
 |------|------|------------|
 | Working Memory lexical exact-contract，fresh vault，100 queries | Recall@5/10 = 0.900；Recall@20 = 0.990；MRR@10/nDCG@10 = 0.900 | 证明字面 token、隔离和去重契约；不是语义记忆召回 |
-| LoCoMo 25 + LongMemEval 25，DeepSeek reader/judge，真实 Object vector | evidence recall@10 = 0.810；F1 = 0.200（bootstrap 95% CI 0.12–0.29）；BLEU-1 = 0.152；judge = 4.511/5；对抗弃答 = 60% | 单次 research run；50/50 query 均为 vector succeeded、零降级；alias revision unattested；总成本 USD 0.02512 |
+| 同一固定 50 样本重复 5 轮（250 sample-observations），DeepSeek reader/judge，Object vector query shadow | evidence recall@10 = 0.816（run std 0.013，run×sample two-way cluster bootstrap shadow CI 0.712–0.904）；F1 = 0.200（run std 0.007，shadow CI 0.125–0.281）；BLEU-1 = 0.146；judge = 4.529/5；对抗弃答 = 84% | 250/250 query 均为 vector succeeded、零查询降级；相邻 daemon 日志回放显示每轮摄取有 8–12 个 embedding 降级，5,897 个唯一 CID 中仅 5,885–5,889 个进入 HNSW，但该日志未被 COMMITTED result/manifest 绑定；不是完整向量语料基线；`source_watermark_verified=false`、`gate_eligible=false`；同 alias+fingerprint 但 revision unattested；总成本 USD 0.06685 |
 | real-vector performance，fresh vault，1,810 serial samples | warm object.search p50/p95 = 4.85/7.99 ms；query-unique = 141.11/169.41 ms；250/250 typed vector execution、零降级 | query-unique target hit@10 = 0.920；这是 warmed-index query，不是 cold start |
 | 100-entry Memory projection catch-up | 100/100 Ready；phase 18.97 s；ready-lag p50/p95 = 9.39/18.10 s | post-batch backlog drain observation，不是逐 revision commit-to-ready latency |
 | canonical/lexical operations | memory.create ack p50/p95 = 6.52/13.13 ms；memory.get = 0.10/0.12 ms；memory.recall = 0.28/0.49 ms | recall target hit@10 = 0.910；所有请求串行，经 UDS |
 
 当前最优先方向是：保持 llama.cpp 的低 unique-query embedding latency，针对 LoCoMo 的低
-evidence recall@10（0.620）改进检索；LongMemEval 已达到 evidence recall@10 = 1.000，但 F1
-只有 0.114，应优先修答案生成与规范化，而不是继续堆召回。下一步是同一 sealed 配置的 5-run
-shadow，确认 run 间方差后再建立阈值。judge 的 97.8% accuracy 与低 F1 冲突，不能单独作为质量
-gate。同行公开数字若数据集、采样、retriever 和指标定义不同，只列背景，不直接相减或宣称领先。
+evidence recall@10（五轮 mean 0.632、run std 0.027）改进多证据检索；LongMemEval 五轮
+evidence recall@10 稳定为 1.000，但 F1 只有 0.115（run std 0.002），应优先修答案等价判断与
+reader 规范化，而不是继续堆召回。对抗弃答 mean 0.840、run std 0.167，仍是高波动硬负例。
+judge mean 4.529/5 与低 F1 冲突，不能单独作为质量 gate。五轮已建立固定样本的 query-path shadow 方差，
+但摄取阶段发生了 lexical degradation；`accepted/completed/in_flight` 只证明任务尝试已排空，不能
+证明每个对象已经向量化。本地 OpenAI-compatible embedding 也只具备 Object execution evidence，
+DeepSeek alias revision 未受证明，因此上述区间不是发布或泛化置信区间，当前固定
+`gate_eligible=false`。同行公开数字若数据集、采样、
+retriever 和指标定义不同，只列背景，不直接相减或宣称领先。
 
 ## 预处理阶段（AWB-like）
 

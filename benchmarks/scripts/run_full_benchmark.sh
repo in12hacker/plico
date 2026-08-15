@@ -14,6 +14,8 @@ DRY_RUN=false
 RUNS=1
 PLICOD_PID=""
 ACTIVE_VAULT=""
+export PLICO_COGNITIVE_PIPELINE_MAX_IN_FLIGHT=4
+export PLICO_COGNITIVE_PIPELINE_QUEUE_CAPACITY=8192
 
 usage() {
     echo "Usage: $0 [--dry-run] [--runs 1|5] [--output-parent DIR] [--preprocess-timeout N]"
@@ -141,13 +143,19 @@ run_one() {
     start_fresh_daemon "$suite" "$ordinal"
     echo "suite=$suite independent_run=$ordinal/$RUNS run_id=$run_id"
     if [[ "$DRY_RUN" == true ]]; then
-        echo "PLICO_BENCH_RUN_ID=$run_id PLICO_LLM_RUN_ID=$run_id PLICO_LLM_ATTEMPT_JOURNAL_DIR=$journal $PYTHON -m plico_benchmarks run $suite --uds <fresh-vault>/plico.sock --output $output"
+        if [[ "$suite" == "conversational-qa" ]]; then
+            echo "PLICO_BENCH_RUN_ID=$run_id PLICO_LLM_RUN_ID=$run_id PLICO_LLM_ATTEMPT_JOURNAL_DIR=$journal $PYTHON -m plico_benchmarks run $suite --samples 50 --seed 42 --uds <fresh-vault>/plico.sock --output $output"
+        else
+            echo "PLICO_BENCH_RUN_ID=$run_id PLICO_LLM_RUN_ID=$run_id PLICO_LLM_ATTEMPT_JOURNAL_DIR=$journal $PYTHON -m plico_benchmarks run $suite --uds <fresh-vault>/plico.sock --output $output"
+        fi
     elif [[ "$suite" == "conversational-qa" ]]; then
         PLICO_BENCH_RUN_CLASS="$RUN_CLASS" \
             PLICO_BENCH_RUN_ID="$run_id" \
             PLICO_LLM_RUN_ID="$run_id" \
             PLICO_LLM_ATTEMPT_JOURNAL_DIR="$journal" \
             "$PYTHON" -m plico_benchmarks run "$suite" \
+            --samples 50 \
+            --seed 42 \
             --uds "$ACTIVE_VAULT/plico.sock" \
             --output "$output" \
             --preprocess-timeout "$PREPROCESS_TIMEOUT"

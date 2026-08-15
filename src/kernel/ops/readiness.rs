@@ -80,6 +80,11 @@ impl AIKernel {
             cognitive_accepted = readiness.workers.cognitive_progress.map(|progress| progress.accepted),
             cognitive_completed = readiness.workers.cognitive_progress.map(|progress| progress.completed),
             cognitive_in_flight = readiness.workers.cognitive_progress.map(|progress| progress.in_flight),
+            cognitive_document_vector_succeeded_attempts = readiness.workers.cognitive_progress.map(|progress| progress.document_vector_succeeded_attempts),
+            cognitive_document_lexical_degraded_attempts = readiness.workers.cognitive_progress.map(|progress| progress.document_lexical_degraded_attempts),
+            cognitive_task_failed_attempts = readiness.workers.cognitive_progress.map(|progress| progress.task_failed_attempts),
+            cognitive_other_succeeded_attempts = readiness.workers.cognitive_progress.map(|progress| progress.other_succeeded_attempts),
+            cognitive_inline_document_attempts = readiness.workers.cognitive_progress.map(|progress| progress.inline_document_attempts),
             configured_embedding_backend = %readiness.embedding.configured_backend,
             active_embedding_provider = %readiness.embedding.active_provider,
             embedding_probe_state = match readiness.embedding.probe_state {

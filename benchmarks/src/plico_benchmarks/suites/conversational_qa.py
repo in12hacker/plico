@@ -57,6 +57,32 @@ Rules:
 - Be concise — maximum 15 words
 - Do NOT start with "Based on" or "The text says"""
 
+QA_COGNITIVE_MAX_IN_FLIGHT = 4
+QA_COGNITIVE_QUEUE_CAPACITY = 8192
+
+
+def _cognitive_pipeline_runtime(requirement: str) -> dict[str, int]:
+    try:
+        max_in_flight = int(
+            os.environ.get(
+                "PLICO_COGNITIVE_PIPELINE_MAX_IN_FLIGHT",
+                str(QA_COGNITIVE_MAX_IN_FLIGHT),
+            )
+        )
+        queue_capacity = int(os.environ.get("PLICO_COGNITIVE_PIPELINE_QUEUE_CAPACITY", "1024"))
+    except ValueError as error:
+        raise RuntimeError("invalid cognitive pipeline benchmark tuning") from error
+    if not 1 <= max_in_flight <= 64 or not max_in_flight <= queue_capacity <= 65_536:
+        raise RuntimeError("invalid cognitive pipeline benchmark tuning")
+    if requirement == "real_non_stub_vector_per_query" and (
+        max_in_flight != QA_COGNITIVE_MAX_IN_FLIGHT or queue_capacity != QA_COGNITIVE_QUEUE_CAPACITY
+    ):
+        raise RuntimeError("real-embedding QA requires frozen cognitive pipeline tuning 4/8192")
+    return {
+        "max_in_flight": max_in_flight,
+        "queue_capacity": queue_capacity,
+    }
+
 
 def _reader_answer(raw: str) -> str:
     answer = raw.strip()
@@ -123,6 +149,7 @@ class ConversationalQASuite(SuiteBase):
             "active_embedding_provider": active_provider,
             "embedding_provider_state": provider_state,
             "provider_identity_scope": identity_scope,
+            "cognitive_pipeline": _cognitive_pipeline_runtime(requirement),
         }
         self._locomo_dataset = LoCoMoDataset()
         self._longmemeval_dataset = LongMemEvalDataset()
@@ -177,7 +204,16 @@ class ConversationalQASuite(SuiteBase):
         )
         self._qa_config = section
 
-        # Phase 1: ingest exactly the sampled evaluation domains.
+        # Phase 1: ingest exactly the sampled evaluation domains. Capture the
+        # monotonic counters first so this run records a cohort delta rather
+        # than mistaking process-lifetime totals for its own outcomes.
+        progress_before = self.client.cognitive_progress()
+        if (
+            progress_before["in_flight"] != 0
+            or progress_before["completed"] != progress_before["accepted"]
+        ):
+            raise RuntimeError("QA ingest requires a drained cognitive pipeline at cohort start")
+        self._ingest_cids: list[str] = []
         self._ingest_locomo()
         self._ingest_longmemeval()
 
@@ -185,18 +221,70 @@ class ConversationalQASuite(SuiteBase):
         # for every earlier cognitive task. A searchable probe alone can finish
         # ahead of older concurrent work and is not a backlog-drain barrier.
         timeout = getattr(self, "_preprocess_timeout", 120.0)
-        accepted = self.client.cognitive_progress()["accepted"]
+        accepted_snapshot = self.client.cognitive_progress()
+        accepted = accepted_snapshot["accepted"]
         completed = self.wait_for_indexing(
             timeout=timeout,
             accepted_watermark=accepted,
         )
         if completed is None:
             raise RuntimeError("cognitive indexing watermark was not observed")
+        accepted_delta = accepted - progress_before["accepted"]
+        if accepted_delta < 0:
+            raise RuntimeError("cognitive accepted counter moved backwards during ingest")
+        outcome_delta = {
+            field: completed[field] - progress_before[field]
+            for field in (
+                "document_vector_succeeded_attempts",
+                "document_lexical_degraded_attempts",
+                "task_failed_attempts",
+                "other_succeeded_attempts",
+            )
+        }
+        inline_delta = (
+            completed["inline_document_attempts"] - progress_before["inline_document_attempts"]
+        )
+        if inline_delta < 0 or any(value < 0 for value in outcome_delta.values()):
+            raise RuntimeError("cognitive outcome counter moved backwards during ingest")
+        submitted = len(self._ingest_cids)
+        unique_cids = len(set(self._ingest_cids))
+        if accepted_delta + inline_delta != submitted:
+            raise RuntimeError(
+                "QA ingest is not fully covered by cognitive attempt telemetry "
+                f"(submitted={submitted}, accepted_delta={accepted_delta}, "
+                f"inline_delta={inline_delta})"
+            )
+        if outcome_delta["other_succeeded_attempts"] != 0 or submitted != sum(
+            outcome_delta[field]
+            for field in (
+                "document_vector_succeeded_attempts",
+                "document_lexical_degraded_attempts",
+                "task_failed_attempts",
+            )
+        ):
+            raise RuntimeError("QA ingest cognitive outcomes do not conserve submitted documents")
         self._retrieval_runtime["ingest_watermark"] = {
             "accepted": accepted,
+            "accepted_delta": accepted_delta,
             "completed": completed["completed"],
             "in_flight": completed["in_flight"],
         }
+        self._retrieval_runtime["ingest_outcomes"] = {
+            "submitted": submitted,
+            "unique_cids": unique_cids,
+            "duplicate_cids": submitted - unique_cids,
+            "queued_accepted_attempts": accepted_delta,
+            "inline_document_attempts": inline_delta,
+            **outcome_delta,
+        }
+        if self._retrieval_runtime["requirement"] == "real_non_stub_vector_per_query" and (
+            inline_delta != 0
+            or outcome_delta["document_lexical_degraded_attempts"] != 0
+            or outcome_delta["task_failed_attempts"] != 0
+        ):
+            raise RuntimeError(
+                "real-vector QA ingest requires zero inline, degraded, and failed documents"
+            )
 
         # Phase 3: Query
         results = []
@@ -778,12 +866,14 @@ class ConversationalQASuite(SuiteBase):
             )
         return results
 
-    @staticmethod
-    def _require_created_cid(response: dict[str, Any], source: str) -> str:
+    def _require_created_cid(self, response: dict[str, Any], source: str) -> str:
         cid = response.get("cid")
         if not cid:
             raise RuntimeError(f"{source} ingest did not return a CID: {response!r}")
-        return str(cid)
+        normalized = str(cid)
+        if hasattr(self, "_ingest_cids"):
+            self._ingest_cids.append(normalized)
+        return normalized
 
     @staticmethod
     def _evidence_recall(expected_cids: set[str], retrieved_cids: list[str]) -> float | None:

@@ -90,6 +90,18 @@ def verify_result_directory(output: Path) -> dict[str, Any]:
         raise ValueError("benchmark detached manifest does not bind result bytes")
     if result.get("metadata", {}).get("run_id") != embedded.get("run_id"):
         raise ValueError("benchmark result run identities differ")
+    result_schema = embedded.get("schemas", {}).get("result")
+    expected_version = {
+        "plico.benchmark-result/v4": 4,
+        "plico.benchmark-result/v5": 5,
+    }.get(result_schema)
+    metadata_version = result.get("metadata", {}).get("result_schema_version")
+    if (embedded.get("suite") == "conversational-qa" and metadata_version != expected_version) or (
+        embedded.get("suite") != "conversational-qa"
+        and metadata_version is not None
+        and metadata_version != expected_version
+    ):
+        raise ValueError("benchmark result metadata and manifest schemas differ")
     _validate_suite_evidence(result, output)
     return result
 
@@ -343,25 +355,47 @@ def _validate_qa_sample_ledger(
             raise ValueError("QA sample is missing its required request boundary")
     if sorted(observed_sequences) != list(range(1, len(attempts) + 1)):
         raise ValueError("QA request references do not cover the journal exactly once")
-    validate_qa_retrieval_runtime(metrics, ledger)
+    validate_qa_retrieval_runtime(
+        metrics,
+        ledger,
+        result_schema=manifest.get("schemas", {}).get("result", ""),
+    )
     _validate_qa_aggregates(metrics, ledger, manifest)
 
 
-def validate_qa_retrieval_runtime(metrics: dict[str, Any], ledger: list[dict[str, Any]]) -> None:
+def validate_qa_retrieval_runtime(
+    metrics: dict[str, Any],
+    ledger: list[dict[str, Any]],
+    *,
+    result_schema: str = "plico.benchmark-result/v5",
+) -> None:
     runtime = metrics.get("retrieval_runtime")
-    if not isinstance(runtime, dict) or set(runtime) != {
+    common_fields = {
         "requirement",
         "configured_embedding_backend",
         "active_embedding_provider",
         "embedding_provider_state",
         "provider_identity_scope",
         "ingest_watermark",
-    }:
+    }
+    if not isinstance(runtime, dict):
         raise ValueError("QA retrieval runtime evidence is missing")
+    if result_schema == "plico.benchmark-result/v4":
+        if set(runtime) != common_fields:
+            raise ValueError("QA retrieval runtime evidence is missing")
+        watermark_fields = {"accepted", "completed", "in_flight"}
+        ingest_outcomes = None
+    elif result_schema == "plico.benchmark-result/v5":
+        if set(runtime) != common_fields | {"ingest_outcomes", "cognitive_pipeline"}:
+            raise ValueError("QA retrieval runtime evidence is missing")
+        watermark_fields = {"accepted", "accepted_delta", "completed", "in_flight"}
+        ingest_outcomes = runtime["ingest_outcomes"]
+    else:
+        raise ValueError("QA result schema is unsupported")
     ingest_watermark = runtime["ingest_watermark"]
     if (
         not isinstance(ingest_watermark, dict)
-        or set(ingest_watermark) != {"accepted", "completed", "in_flight"}
+        or set(ingest_watermark) != watermark_fields
         or any(
             isinstance(ingest_watermark[field], bool)
             or not isinstance(ingest_watermark[field], int)
@@ -369,9 +403,61 @@ def validate_qa_retrieval_runtime(metrics: dict[str, Any], ledger: list[dict[str
             for field in ingest_watermark
         )
         or ingest_watermark["completed"] < ingest_watermark["accepted"]
+        or (
+            result_schema == "plico.benchmark-result/v5"
+            and ingest_watermark["accepted_delta"] > ingest_watermark["accepted"]
+        )
         or ingest_watermark["in_flight"] != 0
     ):
         raise ValueError("QA ingest watermark evidence is incomplete")
+    if ingest_outcomes is not None:
+        pipeline = runtime["cognitive_pipeline"]
+        if (
+            not isinstance(pipeline, dict)
+            or set(pipeline) != {"max_in_flight", "queue_capacity"}
+            or any(
+                isinstance(pipeline[field], bool) or not isinstance(pipeline[field], int)
+                for field in pipeline
+            )
+            or not 1 <= pipeline["max_in_flight"] <= 64
+            or not pipeline["max_in_flight"] <= pipeline["queue_capacity"] <= 65_536
+        ):
+            raise ValueError("QA cognitive pipeline runtime configuration is invalid")
+        outcome_fields = {
+            "submitted",
+            "unique_cids",
+            "duplicate_cids",
+            "queued_accepted_attempts",
+            "inline_document_attempts",
+            "document_vector_succeeded_attempts",
+            "document_lexical_degraded_attempts",
+            "task_failed_attempts",
+            "other_succeeded_attempts",
+        }
+        if (
+            not isinstance(ingest_outcomes, dict)
+            or set(ingest_outcomes) != outcome_fields
+            or any(
+                isinstance(ingest_outcomes[field], bool)
+                or not isinstance(ingest_outcomes[field], int)
+                or ingest_outcomes[field] < 0
+                for field in outcome_fields
+            )
+            or ingest_outcomes["submitted"] == 0
+            or ingest_outcomes["unique_cids"] == 0
+            or ingest_outcomes["submitted"]
+            != ingest_outcomes["unique_cids"] + ingest_outcomes["duplicate_cids"]
+            or ingest_outcomes["queued_accepted_attempts"] != ingest_watermark["accepted_delta"]
+            or ingest_outcomes["submitted"]
+            != ingest_outcomes["queued_accepted_attempts"]
+            + ingest_outcomes["inline_document_attempts"]
+            or ingest_outcomes["submitted"]
+            != ingest_outcomes["document_vector_succeeded_attempts"]
+            + ingest_outcomes["document_lexical_degraded_attempts"]
+            + ingest_outcomes["task_failed_attempts"]
+            or ingest_outcomes["other_succeeded_attempts"] != 0
+        ):
+            raise ValueError("QA ingest outcome evidence does not conserve the submitted cohort")
     requirement = runtime["requirement"]
     if requirement not in {"typed_execution_observed", "real_non_stub_vector_per_query"}:
         raise ValueError("QA retrieval runtime requirement is unsupported")
@@ -395,9 +481,26 @@ def validate_qa_retrieval_runtime(metrics: dict[str, Any], ledger: list[dict[str
         raise ValueError("QA retrieval provider identity scope is inconsistent")
     if requirement == "real_non_stub_vector_per_query":
         if (
-            runtime["configured_embedding_backend"].lower()
+            (
+                ingest_outcomes is not None
+                and (
+                    runtime.get("cognitive_pipeline")
+                    != {"max_in_flight": 4, "queue_capacity": 8192}
+                    or ingest_outcomes["inline_document_attempts"] != 0
+                    or ingest_outcomes["submitted"]
+                    > runtime["cognitive_pipeline"]["queue_capacity"]
+                )
+            )
+            or runtime["configured_embedding_backend"].lower()
             in {"stub", "none", "disabled", "unknown"}
             or expected_scope == "unavailable"
+            or (
+                ingest_outcomes is not None
+                and (
+                    ingest_outcomes["document_lexical_degraded_attempts"] != 0
+                    or ingest_outcomes["task_failed_attempts"] != 0
+                )
+            )
             or any(
                 item.get("embedding_query_state") != "succeeded"
                 or item.get("verified_vector_execution") is not True

@@ -80,7 +80,11 @@ def validate_qa_shadow_inputs(inputs: list[QaShadowInput]) -> QaShadowCampaign:
         selected = _selected_ids(accounting)
         _same(common, "sample_ids", tuple(selected), "ordered sample IDs")
         indexed, sample_contract = _validated_rows(ledger, selected)
-        validate_qa_retrieval_runtime(result["metrics"], ledger)
+        validate_qa_retrieval_runtime(
+            result["metrics"],
+            ledger,
+            result_schema=manifest.get("schemas", {}).get("result", ""),
+        )
         _same(common, "sample_contract", sample_contract, "sample classification")
         rows_by_run.append(indexed)
 

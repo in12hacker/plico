@@ -170,6 +170,7 @@ def _qa_input(run: int) -> QaShadowInput:
             "suite": "conversational-qa",
             "run_class": "research",
             "run_id": f"qa-run-{run}",
+            "schemas": {"result": "plico.benchmark-result/v5"},
             "sampling": {"actual": 2, "scored": 2, "failed": 0, "excluded": 0},
             "artifacts": [
                 {"logical_name": "locomo", "sha256": "a" * 64},
@@ -200,10 +201,23 @@ def _qa_input(run: int) -> QaShadowInput:
                 "embedding_provider_state": "unavailable",
                 "provider_identity_scope": "object_execution_only_unattested_provider",
                 "requirement": "real_non_stub_vector_per_query",
+                "cognitive_pipeline": {"max_in_flight": 4, "queue_capacity": 8192},
                 "ingest_watermark": {
                     "accepted": 2,
+                    "accepted_delta": 2,
                     "completed": 2,
                     "in_flight": 0,
+                },
+                "ingest_outcomes": {
+                    "submitted": 2,
+                    "unique_cids": 2,
+                    "duplicate_cids": 0,
+                    "queued_accepted_attempts": 2,
+                    "inline_document_attempts": 0,
+                    "document_vector_succeeded_attempts": 2,
+                    "document_lexical_degraded_attempts": 0,
+                    "task_failed_attempts": 0,
+                    "other_succeeded_attempts": 0,
                 },
             },
             "llm_evidence": {
@@ -260,7 +274,15 @@ def test_qa_shadow_summarizes_fixed_five_run_variance_and_never_gates(tmp_path):
 
 @pytest.mark.parametrize(
     "mutation",
-    ["fingerprint", "role_config", "sample_set", "degraded", "watermark_missing", "in_flight"],
+    [
+        "fingerprint",
+        "role_config",
+        "sample_set",
+        "degraded",
+        "pipeline_config",
+        "watermark_missing",
+        "in_flight",
+    ],
 )
 def test_qa_shadow_rejects_changed_or_unverified_campaign_inputs(mutation):
     inputs = [_qa_input(index) for index in range(5)]
@@ -274,6 +296,10 @@ def test_qa_shadow_rejects_changed_or_unverified_campaign_inputs(mutation):
         inputs[4].result["metrics"]["sample_accounting"]["selected_ids"][0] = "locomo:other"
     elif mutation == "degraded":
         inputs[4].result["metrics"]["capability_ledger"][0]["retrieval_degraded"] = True
+    elif mutation == "pipeline_config":
+        inputs[4].result["metrics"]["retrieval_runtime"]["cognitive_pipeline"]["queue_capacity"] = (
+            1024
+        )
     elif mutation == "watermark_missing":
         del inputs[4].result["metrics"]["retrieval_runtime"]["ingest_watermark"]
     else:

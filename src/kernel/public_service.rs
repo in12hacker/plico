@@ -191,6 +191,11 @@ impl super::AIKernel {
                             accepted: progress.accepted,
                             completed: progress.completed,
                             in_flight: progress.in_flight,
+                            document_vector_succeeded_attempts: progress.document_vector_succeeded_attempts,
+                            document_lexical_degraded_attempts: progress.document_lexical_degraded_attempts,
+                            task_failed_attempts: progress.task_failed_attempts,
+                            other_succeeded_attempts: progress.other_succeeded_attempts,
+                            inline_document_attempts: progress.inline_document_attempts,
                         }
                     }),
                     embedding_provider: match readiness.embedding.probe_state {
@@ -1093,6 +1098,11 @@ mod tests {
                 accepted: 1,
                 completed: 0,
                 in_flight: 1,
+                document_vector_succeeded_attempts: 0,
+                document_lexical_degraded_attempts: 0,
+                task_failed_attempts: 0,
+                other_succeeded_attempts: 0,
+                inline_document_attempts: 0,
             })
         );
     }

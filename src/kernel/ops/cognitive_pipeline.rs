@@ -9,8 +9,10 @@
 use crate::fs::summarizer::SummaryLayer;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
+use std::future::Future;
 use std::sync::{Arc, Mutex, MutexGuard};
 use tokio::sync::mpsc;
+use tokio::task::{JoinError, JoinSet};
 
 /// Represents a unit of cognitive work in the pipeline.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -54,6 +56,24 @@ pub struct CognitivePipelineSnapshot {
     pub accepted: u64,
     pub completed: u64,
     pub in_flight: u64,
+    /// Document attempts with a real root-object vector.
+    pub document_vector_succeeded_attempts: u64,
+    /// Document attempts that retained lexical indexing only.
+    pub document_lexical_degraded_attempts: u64,
+    /// Task attempts that returned an error or unwound.
+    pub task_failed_attempts: u64,
+    /// Successful non-document cognitive tasks.
+    pub other_succeeded_attempts: u64,
+    /// Document attempts processed inline because the queue was unavailable.
+    pub inline_document_attempts: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CognitiveTaskOutcome {
+    VectorSucceeded,
+    LexicalDegraded,
+    OtherSucceeded,
+    TaskFailed,
 }
 
 #[derive(Default)]
@@ -66,17 +86,29 @@ struct CognitivePipelineProgressState {
     accepted: u64,
     completed: u64,
     in_flight: u64,
+    document_vector_succeeded_attempts: u64,
+    document_lexical_degraded_attempts: u64,
+    task_failed_attempts: u64,
+    other_succeeded_attempts: u64,
+    inline_document_attempts: u64,
     completed_out_of_order: BTreeSet<u64>,
 }
 
 struct CognitiveTaskCompletion {
     progress: Arc<CognitivePipelineProgress>,
     watermark: u64,
+    outcome: CognitiveTaskOutcome,
+}
+
+impl CognitiveTaskCompletion {
+    fn record(&mut self, outcome: CognitiveTaskOutcome) {
+        self.outcome = outcome;
+    }
 }
 
 impl Drop for CognitiveTaskCompletion {
     fn drop(&mut self) {
-        self.progress.complete(self.watermark);
+        self.progress.complete(self.watermark, self.outcome);
     }
 }
 
@@ -100,12 +132,13 @@ impl CognitivePipelineProgress {
         Ok(watermark)
     }
 
-    fn complete(&self, watermark: u64) {
+    fn complete(&self, watermark: u64, outcome: CognitiveTaskOutcome) {
         let mut state = self.state();
-        state.in_flight = state.in_flight.saturating_sub(1);
-        if watermark <= state.completed {
+        if watermark <= state.completed || state.completed_out_of_order.contains(&watermark) {
             return;
         }
+        state.in_flight = state.in_flight.saturating_sub(1);
+        Self::record_outcome(&mut state, outcome);
         if watermark != state.completed.saturating_add(1) {
             state.completed_out_of_order.insert(watermark);
             return;
@@ -120,19 +153,47 @@ impl CognitivePipelineProgress {
         }
     }
 
+    fn complete_inline_document(&self, outcome: CognitiveTaskOutcome) {
+        let mut state = self.state();
+        state.inline_document_attempts = state.inline_document_attempts.saturating_add(1);
+        Self::record_outcome(&mut state, outcome);
+    }
+
+    fn record_outcome(state: &mut CognitivePipelineProgressState, outcome: CognitiveTaskOutcome) {
+        match outcome {
+            CognitiveTaskOutcome::VectorSucceeded => {
+                state.document_vector_succeeded_attempts = state.document_vector_succeeded_attempts.saturating_add(1);
+            }
+            CognitiveTaskOutcome::LexicalDegraded => {
+                state.document_lexical_degraded_attempts = state.document_lexical_degraded_attempts.saturating_add(1);
+            }
+            CognitiveTaskOutcome::TaskFailed => {
+                state.task_failed_attempts = state.task_failed_attempts.saturating_add(1);
+            }
+            CognitiveTaskOutcome::OtherSucceeded => {
+                state.other_succeeded_attempts = state.other_succeeded_attempts.saturating_add(1);
+            }
+        }
+    }
+
     fn snapshot(&self) -> CognitivePipelineSnapshot {
         let state = self.state();
         CognitivePipelineSnapshot {
             accepted: state.accepted,
             completed: state.completed,
             in_flight: state.in_flight,
+            document_vector_succeeded_attempts: state.document_vector_succeeded_attempts,
+            document_lexical_degraded_attempts: state.document_lexical_degraded_attempts,
+            task_failed_attempts: state.task_failed_attempts,
+            other_succeeded_attempts: state.other_succeeded_attempts,
+            inline_document_attempts: state.inline_document_attempts,
         }
     }
 }
 
 pub(crate) struct QueuedCognitiveTask {
-    watermark: u64,
     task: CognitiveTask,
+    completion: CognitiveTaskCompletion,
 }
 
 /// Handle to the asynchronous cognitive pipeline.
@@ -151,7 +212,14 @@ impl CognitivePipelineHandle {
             .await
             .map_err(|_| CognitivePipelineError::QueueClosed)?;
         let watermark = self.progress.accept()?;
-        permit.send(QueuedCognitiveTask { watermark, task });
+        permit.send(QueuedCognitiveTask {
+            task,
+            completion: CognitiveTaskCompletion {
+                progress: Arc::clone(&self.progress),
+                watermark,
+                outcome: CognitiveTaskOutcome::TaskFailed,
+            },
+        });
         Ok(watermark)
     }
 
@@ -162,13 +230,32 @@ impl CognitivePipelineHandle {
             mpsc::error::TrySendError::Closed(_) => CognitivePipelineError::QueueClosed,
         })?;
         let watermark = self.progress.accept()?;
-        permit.send(QueuedCognitiveTask { watermark, task });
+        permit.send(QueuedCognitiveTask {
+            task,
+            completion: CognitiveTaskCompletion {
+                progress: Arc::clone(&self.progress),
+                watermark,
+                outcome: CognitiveTaskOutcome::TaskFailed,
+            },
+        });
         Ok(watermark)
     }
 
     /// Return one coherent progress snapshot without probing providers.
     pub fn snapshot(&self) -> CognitivePipelineSnapshot {
         self.progress.snapshot()
+    }
+
+    pub(crate) fn record_inline_document_outcome(&self, outcome: crate::fs::semantic_fs::DocumentProcessingOutcome) {
+        let outcome = match outcome {
+            crate::fs::semantic_fs::DocumentProcessingOutcome::VectorSucceeded => CognitiveTaskOutcome::VectorSucceeded,
+            crate::fs::semantic_fs::DocumentProcessingOutcome::LexicalDegraded => CognitiveTaskOutcome::LexicalDegraded,
+        };
+        self.progress.complete_inline_document(outcome);
+    }
+
+    pub(crate) fn record_inline_document_failure(&self) {
+        self.progress.complete_inline_document(CognitiveTaskOutcome::TaskFailed);
     }
 
     #[cfg(test)]
@@ -185,26 +272,27 @@ impl CognitivePipelineHandle {
 }
 
 /// Start the cognitive pipeline worker loop.
-pub fn start_cognitive_pipeline(kernel: Arc<crate::kernel::AIKernel>, buffer_size: usize) -> CognitivePipelineHandle {
-    let (tx, mut rx) = mpsc::channel(buffer_size);
+pub fn start_cognitive_pipeline(
+    kernel: Arc<crate::kernel::AIKernel>,
+    buffer_size: usize,
+    max_in_flight: usize,
+) -> CognitivePipelineHandle {
+    let max_in_flight = max_in_flight.clamp(1, 64);
+    let buffer_size = buffer_size.clamp(max_in_flight, 65_536);
+    let (tx, rx) = mpsc::channel(buffer_size);
     let progress = Arc::new(CognitivePipelineProgress::default());
 
     let kernel_ref = Arc::downgrade(&kernel);
-    let worker_progress = Arc::clone(&progress);
     tokio::spawn(async move {
-        tracing::info!("Async Cognitive Pipeline started (buffer_size={})", buffer_size);
+        tracing::info!(buffer_size, max_in_flight, "Async Cognitive Pipeline started");
 
-        while let Some(queued) = rx.recv().await {
-            let Some(kernel) = kernel_ref.upgrade() else {
-                break;
-            };
-            let task_progress = Arc::clone(&worker_progress);
-            tokio::spawn(async move {
-                let QueuedCognitiveTask { watermark, task } = queued;
-                let _completion = CognitiveTaskCompletion {
-                    progress: task_progress,
-                    watermark,
+        run_bounded_receiver(rx, max_in_flight, move |queued| {
+            let kernel_ref = kernel_ref.clone();
+            async move {
+                let Some(kernel) = kernel_ref.upgrade() else {
+                    return;
                 };
+                let QueuedCognitiveTask { task, mut completion } = queued;
                 let (agent_id, cid) = match &task {
                     CognitiveTask::Summarize { agent_id, cid, .. } => (agent_id.clone(), Some(cid.clone())),
                     CognitiveTask::KgExtract { agent_id, cid } => (agent_id.clone(), Some(cid.clone())),
@@ -212,19 +300,67 @@ pub fn start_cognitive_pipeline(kernel: Arc<crate::kernel::AIKernel>, buffer_siz
                     CognitiveTask::ProcessDocument { agent_id, cid, .. } => (agent_id.clone(), Some(cid.clone())),
                 };
 
-                if let Err(e) = process_task(kernel.clone(), task).await {
-                    tracing::error!("Cognitive task failed: {}", e);
-                    kernel.diagnostic_store.record_failure(&agent_id, cid, &e);
+                match process_task(kernel.clone(), task).await {
+                    Ok(outcome) => completion.record(outcome),
+                    Err(e) => {
+                        tracing::error!("Cognitive task failed: {}", e);
+                        kernel.diagnostic_store.record_failure(&agent_id, cid, &e);
+                    }
                 }
-            });
-        }
+            }
+        })
+        .await;
     });
 
     CognitivePipelineHandle { sender: tx, progress }
 }
 
-async fn process_task(kernel: Arc<crate::kernel::AIKernel>, task: CognitiveTask) -> Result<(), String> {
-    match task {
+/// Drive a bounded set of tasks without receiving beyond the execution limit.
+///
+/// Keeping the receive operation behind the limit is intentional: pending work
+/// remains in the bounded channel where callers can observe backpressure.
+async fn run_bounded_receiver<T, F, Fut>(mut receiver: mpsc::Receiver<T>, max_in_flight: usize, mut task: F)
+where
+    T: Send + 'static,
+    F: FnMut(T) -> Fut,
+    Fut: Future<Output = ()> + Send + 'static,
+{
+    let mut running = JoinSet::new();
+    loop {
+        if running.len() >= max_in_flight {
+            report_worker_join(running.join_next().await);
+            continue;
+        }
+
+        tokio::select! {
+            queued = receiver.recv() => match queued {
+                Some(queued) => {
+                    running.spawn(task(queued));
+                }
+                None => break,
+            },
+            joined = running.join_next(), if !running.is_empty() => {
+                report_worker_join(joined);
+            }
+        }
+    }
+
+    while !running.is_empty() {
+        report_worker_join(running.join_next().await);
+    }
+}
+
+fn report_worker_join(joined: Option<Result<(), JoinError>>) {
+    if let Some(Err(error)) = joined {
+        tracing::error!(%error, "Cognitive task worker failed to join");
+    }
+}
+
+async fn process_task(
+    kernel: Arc<crate::kernel::AIKernel>,
+    task: CognitiveTask,
+) -> Result<CognitiveTaskOutcome, String> {
+    let outcome = match task {
         CognitiveTask::Summarize {
             cid,
             layer,
@@ -243,7 +379,7 @@ async fn process_task(kernel: Arc<crate::kernel::AIKernel>, task: CognitiveTask)
 
             let text = String::from_utf8_lossy(&obj.data).to_string();
             if text.is_empty() {
-                return Ok(());
+                return Ok(CognitiveTaskOutcome::OtherSucceeded);
             }
 
             if let Some(ref summarizer) = kernel.fs.summarizer() {
@@ -255,6 +391,7 @@ async fn process_task(kernel: Arc<crate::kernel::AIKernel>, task: CognitiveTask)
                     .map_err(|e: std::io::Error| e.to_string())?;
                 tracing::debug!(cid = %crate::util::safe_truncate(&cid, 8), "Async summary generated");
             }
+            CognitiveTaskOutcome::OtherSucceeded
         }
         CognitiveTask::KgExtract { cid, agent_id: _ } => {
             if let Some(ref builder) = kernel.kg_builder {
@@ -278,9 +415,11 @@ async fn process_task(kernel: Arc<crate::kernel::AIKernel>, task: CognitiveTask)
                     });
                 }
             }
+            CognitiveTaskOutcome::OtherSucceeded
         }
         CognitiveTask::LinkSimilarity { cid: _, agent_id: _ } => {
             // Implementation of similarity linking
+            CognitiveTaskOutcome::OtherSucceeded
         }
         CognitiveTask::ProcessDocument {
             cid,
@@ -323,31 +462,48 @@ async fn process_task(kernel: Arc<crate::kernel::AIKernel>, task: CognitiveTask)
             }
 
             // 3. Self-healing Chunking & Indexing
-            kernel
+            match kernel
                 .fs
                 .process_document_background(&cid, &obj, &agent_id, force_chunking)
                 .await
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| e.to_string())?
+            {
+                crate::fs::semantic_fs::DocumentProcessingOutcome::VectorSucceeded => {
+                    CognitiveTaskOutcome::VectorSucceeded
+                }
+                crate::fs::semantic_fs::DocumentProcessingOutcome::LexicalDegraded => {
+                    CognitiveTaskOutcome::LexicalDegraded
+                }
+            }
         }
-    }
-    Ok(())
+    };
+    Ok(outcome)
 }
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::kernel::tests::make_kernel;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio::sync::Semaphore;
 
     #[tokio::test]
     async fn test_start_cognitive_pipeline() {
         let (kernel, _dir) = make_kernel();
-        let handle = start_cognitive_pipeline(kernel, 64);
+        let handle = start_cognitive_pipeline(kernel, 64, 4);
+        assert_eq!(handle.snapshot(), CognitivePipelineSnapshot::default());
+    }
+
+    #[tokio::test]
+    async fn start_cognitive_pipeline_normalizes_zero_capacity() {
+        let (kernel, _dir) = make_kernel();
+        let handle = start_cognitive_pipeline(kernel, 0, 0);
         assert_eq!(handle.snapshot(), CognitivePipelineSnapshot::default());
     }
 
     #[tokio::test]
     async fn test_enqueue_sync() {
         let (kernel, _dir) = make_kernel();
-        let handle = start_cognitive_pipeline(kernel.clone(), 256);
+        let handle = start_cognitive_pipeline(kernel.clone(), 256, 4);
 
         let cid = kernel
             .semantic_create(
@@ -372,7 +528,7 @@ mod tests {
     #[tokio::test]
     async fn test_enqueue_async() {
         let (kernel, _dir) = make_kernel();
-        let handle = start_cognitive_pipeline(kernel.clone(), 256);
+        let handle = start_cognitive_pipeline(kernel.clone(), 256, 4);
 
         let cid = kernel
             .semantic_create(
@@ -423,7 +579,7 @@ mod tests {
             agent_id: "kernel".to_string(),
         };
         let result = process_task(kernel, task).await;
-        assert!(result.is_ok());
+        assert_eq!(result, Ok(CognitiveTaskOutcome::OtherSucceeded));
     }
 
     #[tokio::test]
@@ -434,7 +590,7 @@ mod tests {
             agent_id: "kernel".to_string(),
         };
         let result = process_task(kernel, task).await;
-        assert!(result.is_ok());
+        assert_eq!(result, Ok(CognitiveTaskOutcome::OtherSucceeded));
     }
 
     #[tokio::test]
@@ -467,7 +623,7 @@ mod tests {
             force_chunking: false,
         };
         let result = process_task(kernel, task).await;
-        assert!(result.is_ok());
+        assert_eq!(result, Ok(CognitiveTaskOutcome::LexicalDegraded));
     }
 
     #[tokio::test]
@@ -511,6 +667,7 @@ mod tests {
                 accepted: 1,
                 completed: 0,
                 in_flight: 1,
+                ..CognitivePipelineSnapshot::default()
             }
         );
     }
@@ -532,30 +689,64 @@ mod tests {
     }
 
     #[test]
+    fn dropping_an_accepted_queued_task_records_a_failed_attempt() {
+        let (handle, receiver) = CognitivePipelineHandle::channel_for_test(1);
+        handle
+            .enqueue_sync(CognitiveTask::LinkSimilarity {
+                cid: "cancelled".to_string(),
+                agent_id: "kernel".to_string(),
+            })
+            .unwrap();
+
+        drop(receiver);
+
+        assert_eq!(
+            handle.snapshot(),
+            CognitivePipelineSnapshot {
+                accepted: 1,
+                completed: 1,
+                in_flight: 0,
+                task_failed_attempts: 1,
+                ..CognitivePipelineSnapshot::default()
+            }
+        );
+    }
+
+    #[test]
     fn completed_watermark_advances_only_after_contiguous_concurrent_work() {
         let progress = CognitivePipelineProgress::default();
         let first = progress.accept().unwrap();
         let second = progress.accept().unwrap();
         let third = progress.accept().unwrap();
 
-        progress.complete(second);
-        progress.complete(third);
+        progress.complete(second, CognitiveTaskOutcome::VectorSucceeded);
+        progress.complete(third, CognitiveTaskOutcome::LexicalDegraded);
         assert_eq!(
             progress.snapshot(),
             CognitivePipelineSnapshot {
                 accepted: 3,
                 completed: 0,
                 in_flight: 1,
+                document_vector_succeeded_attempts: 1,
+                document_lexical_degraded_attempts: 1,
+                task_failed_attempts: 0,
+                other_succeeded_attempts: 0,
+                inline_document_attempts: 0,
             }
         );
 
-        progress.complete(first);
+        progress.complete(first, CognitiveTaskOutcome::TaskFailed);
         assert_eq!(
             progress.snapshot(),
             CognitivePipelineSnapshot {
                 accepted: 3,
                 completed: 3,
                 in_flight: 0,
+                document_vector_succeeded_attempts: 1,
+                document_lexical_degraded_attempts: 1,
+                task_failed_attempts: 1,
+                other_succeeded_attempts: 0,
+                inline_document_attempts: 0,
             }
         );
     }
@@ -568,6 +759,7 @@ mod tests {
             let _completion = CognitiveTaskCompletion {
                 progress: Arc::clone(&progress),
                 watermark,
+                outcome: CognitiveTaskOutcome::TaskFailed,
             };
         }
 
@@ -577,6 +769,11 @@ mod tests {
                 accepted: 1,
                 completed: 1,
                 in_flight: 0,
+                document_vector_succeeded_attempts: 0,
+                document_lexical_degraded_attempts: 0,
+                task_failed_attempts: 1,
+                other_succeeded_attempts: 0,
+                inline_document_attempts: 0,
             }
         );
     }
@@ -584,7 +781,7 @@ mod tests {
     #[tokio::test]
     async fn worker_completion_reaches_the_accepted_watermark_after_processing() {
         let (kernel, _dir) = make_kernel();
-        let handle = start_cognitive_pipeline(Arc::clone(&kernel), 4);
+        let handle = start_cognitive_pipeline(Arc::clone(&kernel), 4, 4);
         let watermark = handle
             .enqueue(CognitiveTask::LinkSimilarity {
                 cid: "any-cid".to_string(),
@@ -601,5 +798,191 @@ mod tests {
         .await
         .expect("cognitive task completion watermark must advance");
         assert_eq!(handle.snapshot().in_flight, 0);
+    }
+
+    #[tokio::test]
+    async fn bounded_receiver_never_runs_more_than_four_tasks() {
+        let (sender, receiver) = mpsc::channel(16);
+        let active = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let release = Arc::new(Semaphore::new(0));
+        let worker = {
+            let active = Arc::clone(&active);
+            let peak = Arc::clone(&peak);
+            let release = Arc::clone(&release);
+            tokio::spawn(run_bounded_receiver(receiver, 4, move |_: usize| {
+                let active = Arc::clone(&active);
+                let peak = Arc::clone(&peak);
+                let release = Arc::clone(&release);
+                async move {
+                    let now = active.fetch_add(1, Ordering::SeqCst) + 1;
+                    peak.fetch_max(now, Ordering::SeqCst);
+                    let permit = release.acquire().await.expect("test gate stays open");
+                    permit.forget();
+                    active.fetch_sub(1, Ordering::SeqCst);
+                }
+            }))
+        };
+        for task in 0..8 {
+            sender.send(task).await.unwrap();
+        }
+
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            while active.load(Ordering::SeqCst) < 4 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("four tasks should enter the bounded worker");
+        assert_eq!(peak.load(Ordering::SeqCst), 4);
+
+        release.add_permits(8);
+        drop(sender);
+        worker.await.unwrap();
+        assert_eq!(peak.load(Ordering::SeqCst), 4);
+    }
+
+    #[tokio::test]
+    async fn receiver_leaves_backlog_in_queue_and_queue_full_does_not_accept() {
+        let (handle, receiver) = CognitivePipelineHandle::channel_for_test(1);
+        let active = Arc::new(AtomicUsize::new(0));
+        let release = Arc::new(Semaphore::new(0));
+        let worker = {
+            let active = Arc::clone(&active);
+            let release = Arc::clone(&release);
+            tokio::spawn(run_bounded_receiver(receiver, 1, move |queued| {
+                let active = Arc::clone(&active);
+                let release = Arc::clone(&release);
+                async move {
+                    active.fetch_add(1, Ordering::SeqCst);
+                    let permit = release.acquire().await.expect("test gate stays open");
+                    permit.forget();
+                    let QueuedCognitiveTask { mut completion, .. } = queued;
+                    completion.record(CognitiveTaskOutcome::OtherSucceeded);
+                    active.fetch_sub(1, Ordering::SeqCst);
+                }
+            }))
+        };
+
+        let task = |cid: &str| CognitiveTask::LinkSimilarity {
+            cid: cid.to_string(),
+            agent_id: "kernel".to_string(),
+        };
+        handle.enqueue_sync(task("running")).unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            while active.load(Ordering::SeqCst) != 1 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("first task should start");
+        handle.enqueue_sync(task("queued")).unwrap();
+        for _ in 0..8 {
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(
+            handle.enqueue_sync(task("rejected")),
+            Err(CognitivePipelineError::QueueFull)
+        );
+        assert_eq!(handle.snapshot().accepted, 2);
+
+        release.add_permits(2);
+        drop(handle);
+        worker.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn panic_releases_slot_and_completion_guard_records_failure() {
+        let (handle, receiver) = CognitivePipelineHandle::channel_for_test(2);
+        let worker = tokio::spawn(run_bounded_receiver(receiver, 1, |queued| async move {
+            let QueuedCognitiveTask { task, mut completion } = queued;
+            if matches!(task, CognitiveTask::LinkSimilarity { ref cid, .. } if cid == "panic") {
+                panic!("injected cognitive task panic");
+            }
+            completion.record(CognitiveTaskOutcome::OtherSucceeded);
+        }));
+
+        for cid in ["panic", "after-panic"] {
+            handle
+                .enqueue(CognitiveTask::LinkSimilarity {
+                    cid: cid.to_string(),
+                    agent_id: "kernel".to_string(),
+                })
+                .await
+                .unwrap();
+        }
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            while handle.snapshot().completed != 2 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("panic must release the only execution slot");
+        let snapshot = handle.snapshot();
+        assert_eq!(snapshot.task_failed_attempts, 1);
+        assert_eq!(snapshot.other_succeeded_attempts, 1);
+        assert_eq!(snapshot.in_flight, 0);
+        drop(handle);
+        worker.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn task_error_releases_slot_for_following_work() {
+        let (kernel, _dir) = make_kernel();
+        let handle = start_cognitive_pipeline(Arc::clone(&kernel), 2, 1);
+        handle
+            .enqueue(CognitiveTask::Summarize {
+                cid: "missing".to_string(),
+                layer: SummaryLayer::L0,
+                agent_id: "kernel".to_string(),
+            })
+            .await
+            .unwrap();
+        handle
+            .enqueue(CognitiveTask::LinkSimilarity {
+                cid: "after-error".to_string(),
+                agent_id: "kernel".to_string(),
+            })
+            .await
+            .unwrap();
+
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while handle.snapshot().completed != 2 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("task error must release the only execution slot");
+        let snapshot = handle.snapshot();
+        assert_eq!(snapshot.task_failed_attempts, 1);
+        assert_eq!(snapshot.other_succeeded_attempts, 1);
+        assert_eq!(snapshot.in_flight, 0);
+    }
+
+    #[tokio::test]
+    async fn start_workers_twice_preserves_pipeline_and_progress() {
+        let (kernel, _dir) = make_kernel();
+        kernel.start_workers();
+        let first = kernel.cognitive_pipeline.read().unwrap().clone().unwrap();
+        let watermark = first
+            .enqueue(CognitiveTask::LinkSimilarity {
+                cid: "idempotent".to_string(),
+                agent_id: "kernel".to_string(),
+            })
+            .await
+            .unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            while first.snapshot().completed < watermark {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("initial pipeline task should complete");
+        let before = first.snapshot();
+
+        kernel.start_workers();
+        let second = kernel.cognitive_pipeline.read().unwrap().clone().unwrap();
+        assert!(Arc::ptr_eq(&first.progress, &second.progress));
+        assert_eq!(second.snapshot(), before);
     }
 }

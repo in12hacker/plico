@@ -273,7 +273,16 @@ class PlicoClient:
         progress = readiness.get("cognitive_progress")
         if not isinstance(progress, dict):
             raise PlicoProtocolError("runtime.readiness returned no cognitive_progress snapshot")
-        expected = {"accepted", "completed", "in_flight"}
+        expected = {
+            "accepted",
+            "completed",
+            "in_flight",
+            "document_vector_succeeded_attempts",
+            "document_lexical_degraded_attempts",
+            "task_failed_attempts",
+            "other_succeeded_attempts",
+            "inline_document_attempts",
+        }
         if set(progress) != expected:
             raise PlicoProtocolError("runtime.readiness returned malformed cognitive_progress")
         values: dict[str, int] = {}
@@ -283,6 +292,16 @@ class PlicoClient:
                 raise PlicoProtocolError("runtime.readiness returned malformed cognitive_progress")
             values[field] = value
         if values["completed"] > values["accepted"]:
+            raise PlicoProtocolError("runtime.readiness returned inconsistent cognitive_progress")
+        terminal = (
+            values["document_vector_succeeded_attempts"]
+            + values["document_lexical_degraded_attempts"]
+            + values["task_failed_attempts"]
+            + values["other_succeeded_attempts"]
+        )
+        if terminal + values["in_flight"] != (
+            values["accepted"] + values["inline_document_attempts"]
+        ):
             raise PlicoProtocolError("runtime.readiness returned inconsistent cognitive_progress")
         return values
 

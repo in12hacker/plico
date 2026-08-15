@@ -271,6 +271,16 @@ pub struct CognitivePipelineProgressView {
     pub completed: u64,
     /// Accepted tasks that have not finished, including queued and running work.
     pub in_flight: u64,
+    /// Document attempts with a real root-object vector.
+    pub document_vector_succeeded_attempts: u64,
+    /// Document attempts that retained lexical indexing only.
+    pub document_lexical_degraded_attempts: u64,
+    /// Task attempts that returned an error or unwound.
+    pub task_failed_attempts: u64,
+    /// Successful non-document cognitive tasks.
+    pub other_succeeded_attempts: u64,
+    /// Document attempts processed inline because the queue was unavailable.
+    pub inline_document_attempts: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

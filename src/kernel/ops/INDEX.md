@@ -17,7 +17,7 @@ runtime/controller types owned only by `AIKernel`.
 | Projection runtime | `projection_runtime.rs` | lifecycle, wake queue, worker health, owner maintenance |
 | Projection controller | `projection_controller/` | canonical guard, reconciliation, lease, artifact and Ready sequencing |
 | Readiness | `readiness.rs` | side-effect-free canonical/persister/worker/provider configuration state |
-| Cognitive pipeline | `cognitive_pipeline.rs` | concurrent background work plus accepted/completed/in-flight progress watermarks |
+| Cognitive pipeline | `cognitive_pipeline.rs` | bounded background work plus queue-drain watermarks and root-attempt outcome telemetry |
 | Session | `session.rs` | durable `start_session()`, `end_session()`, timeout cleanup, `compound_response()` |
 | Graph | `graph.rs` | `kg_add_node()`, `kg_traverse()`, `kg_impact()`, `causal_path()` |
 | Checkpoint | `checkpoint.rs` | internal checkpoint capture/store; live-memory restore is unsupported |
@@ -103,9 +103,11 @@ All ops depend on `AIKernel` fields (self-referencing). No external module depen
 - Legacy operation methods are on `AIKernel`; projection controller/store writers are not public capabilities.
 - Public dispatch uses `api/public` typed commands. Internal semantic commands do not enter transports.
 - Projection lock order is runtime lifecycle → canonical proof → projection store.
-- Cognitive tasks retain one channel receiver and concurrent processing. The completed watermark advances
-  only across a contiguous accepted prefix, so a caller can wait for a captured ingest boundary without
-  treating a later searchable probe as proof that older work finished.
+- Cognitive tasks retain one channel receiver and a configured bounded execution set (default four tasks).
+  The completed watermark advances only across a contiguous accepted prefix, so a caller can wait for a
+  captured ingest boundary without treating a later searchable probe as proof that older work finished.
+  Vector-success, lexical-degradation and failure counters describe root task attempts, including synchronous
+  queue fallback; they do not prove per-CID source-watermark completeness.
 
 ## Tests
 

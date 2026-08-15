@@ -46,6 +46,8 @@ unsupported and `memory.recall` remains lexical.
 `runtime.readiness` reports projection `control_plane` and `worker` separately. Provider drift keeps
 the verified control plane readable while marking the worker restart-required; canonical/lexical
 availability therefore remains independent of embedding execution.
+The same response exposes cognitive queue-drain watermarks and root-attempt outcomes. Those counters
+distinguish vector success, lexical degradation and task failure, but are not a per-CID index watermark.
 
 ## Files
 

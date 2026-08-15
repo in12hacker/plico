@@ -83,8 +83,9 @@ tools, and legacy semantic handlers are internal surfaces, not remotely advertis
 - Thread safety: kernel not `Clone`; daemon uses `Arc<AIKernel>`
 - EventBus: JSONL append-on-emit, restore on startup via `restore_event_log()`
 - Runtime readiness exposes the cognitive queue's accepted watermark, contiguous completed watermark,
-  and in-flight count. These are observations only: reading them never probes a model, enqueues work,
-  or changes the single-receiver/concurrent-task execution policy.
+  in-flight count and root-attempt outcome counters. These are observations only: reading them never probes
+  a model, enqueues work or changes the single-receiver/bounded-task execution policy. Attempt counters do
+  not establish per-CID source-watermark completeness.
 
 ## P3-A projection orchestration
 

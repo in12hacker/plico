@@ -41,6 +41,16 @@ const MAX_SNIPPET_LEN: usize = 1024;
 const MAX_AUDIT_LOG: usize = 10_000;
 const RECYCLE_BIN_TTL_MS: u64 = 30 * 24 * 60 * 60 * 1000; // 30 days
 
+/// Typed result for the root object's semantic-index projection.
+///
+/// Lexical degradation is a completed processing attempt, but it is not a
+/// successful vector projection and must remain distinguishable to callers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DocumentProcessingOutcome {
+    VectorSucceeded,
+    LexicalDegraded,
+}
+
 /// Read RRF K constant from env or default to 60.
 fn rrf_config_k() -> f32 {
     std::env::var("PLICO_RRF_K")
@@ -241,13 +251,13 @@ impl SemanticFS {
     }
 
     /// Background processing for a document: embedding, BM25, and hierarchical chunking.
-    pub async fn process_document_background(
+    pub(crate) async fn process_document_background(
         &self,
         cid: &str,
         obj: &crate::cas::AIObject,
         agent_id: &str,
         force_chunking: bool,
-    ) -> std::io::Result<()> {
+    ) -> std::io::Result<DocumentProcessingOutcome> {
         let mut embedding_result = self.upsert_semantic_index(cid, &obj.data, &obj.meta);
         let mut actual_force_chunking = force_chunking;
 
@@ -257,7 +267,14 @@ impl SemanticFS {
             embedding_result = Ok(None);
         }
 
-        let _ = embedding_result.map_err(|e| std::io::Error::other(e.to_string()))?;
+        let root_outcome = if embedding_result
+            .map_err(|e| std::io::Error::other(e.to_string()))?
+            .is_some()
+        {
+            DocumentProcessingOutcome::VectorSucceeded
+        } else {
+            DocumentProcessingOutcome::LexicalDegraded
+        };
 
         // Hierarchical chunking
         let mut chunking_mode = crate::fs::chunking::ChunkingMode::parse(&self.config_chunking_mode);
@@ -302,7 +319,7 @@ impl SemanticFS {
                 }
             }
         }
-        Ok(())
+        Ok(root_outcome)
     }
 
     fn rebuild_vector_index(&self) {
@@ -456,7 +473,7 @@ impl SemanticFS {
         // silently dropping the task leaves a durable object permanently absent
         // from the semantic index.
         let pipeline = self.cognitive_pipeline.read().unwrap().clone();
-        let (process_inline, queue_unavailable) = match pipeline {
+        let (process_inline, queue_unavailable, inline_telemetry) = match pipeline {
             Some(cp) => {
                 let unavailable = cp
                     .enqueue_sync(CognitiveTask::ProcessDocument {
@@ -465,9 +482,10 @@ impl SemanticFS {
                         force_chunking,
                     })
                     .is_err();
-                (unavailable, unavailable)
+                let telemetry = unavailable.then_some(cp);
+                (unavailable, unavailable, telemetry)
             }
-            None => (true, false),
+            None => (true, false, None),
         };
         if process_inline {
             if queue_unavailable {
@@ -477,7 +495,25 @@ impl SemanticFS {
                     "cognitive pipeline queue unavailable"
                 );
             }
-            let embedding = self.upsert_semantic_index(&cid, &content, &meta).unwrap_or(None);
+            let embedding_result = self.upsert_semantic_index(&cid, &content, &meta);
+            let (embedding, outcome) = match embedding_result {
+                Ok(Some(embedding)) => (Some(embedding), Some(DocumentProcessingOutcome::VectorSucceeded)),
+                Ok(None) => (None, Some(DocumentProcessingOutcome::LexicalDegraded)),
+                Err(error) => {
+                    tracing::warn!(
+                        error_category = error.category(),
+                        phase = "semantic_index_inline",
+                        "inline document indexing failed"
+                    );
+                    (None, None)
+                }
+            };
+            if let Some(handle) = inline_telemetry {
+                match outcome {
+                    Some(outcome) => handle.record_inline_document_outcome(outcome),
+                    None => handle.record_inline_document_failure(),
+                }
+            }
             if let Some(ref kg) = self.knowledge_graph {
                 if let Some(ref emb) = embedding {
                     self.add_similar_to_edges(kg, &cid, emb);

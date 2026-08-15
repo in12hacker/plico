@@ -167,7 +167,11 @@ def build_run_manifest(
         "schema_version": "plico.memory-eval-run/v1",
         "protocol": PROTOCOL,
         "schemas": {
-            "result": "plico.benchmark-result/v4",
+            "result": (
+                "plico.benchmark-result/v5"
+                if suite == "conversational-qa"
+                else "plico.benchmark-result/v4"
+            ),
             "canonical_ledger_root": "plico.memory.root/v1",
             "canonical_revision": "plico.memory.revision/v1",
             "migration_source_manifest": "plico.memory.migration-source-manifest/v1",
@@ -229,6 +233,16 @@ def validate_run_manifest(manifest: dict[str, Any]) -> None:
         raise ValueError("run manifest run class is unsupported")
     if run_class not in _SUITE_RUN_CLASSES.get(str(suite), {"regression", "research"}):
         raise ValueError("run manifest suite/run class combination is invalid")
+    result_schema = manifest.get("schemas", {}).get("result")
+    supported_result_schemas = (
+        {"plico.benchmark-result/v4", "plico.benchmark-result/v5"}
+        if suite == "conversational-qa"
+        else {"plico.benchmark-result/v4"}
+    )
+    if not (suite == "v1b-release" and result_schema is None) and (
+        result_schema not in supported_result_schemas
+    ):
+        raise ValueError("run manifest result schema is unsupported")
     sampling = manifest["sampling"]
     accounted = sampling["scored"] + sampling["failed"] + sampling["excluded"]
     if sampling["actual"] != accounted:

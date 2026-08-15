@@ -132,7 +132,7 @@ fn saturated_cognitive_queue_indexes_new_object_inline_instead_of_dropping_it() 
             agent_id: "test-agent".to_string(),
         })
         .unwrap();
-    fs.set_cognitive_pipeline(handle);
+    fs.set_cognitive_pipeline(handle.clone());
 
     let cid = fs
         .create(
@@ -148,6 +148,60 @@ fn saturated_cognitive_queue_indexes_new_object_inline_instead_of_dropping_it() 
         .search("queue backpressure canary", 5)
         .iter()
         .any(|result| result.cid == cid));
+    let snapshot = handle.snapshot();
+    assert_eq!(snapshot.accepted, 1);
+    assert_eq!(snapshot.in_flight, 1);
+    assert_eq!(snapshot.inline_document_attempts, 1);
+    assert_eq!(snapshot.document_lexical_degraded_attempts, 1);
+}
+
+#[test]
+fn closed_cognitive_queue_records_inline_lexical_attempt() {
+    let (fs, _dir) = make_fs();
+    let (handle, receiver) = CognitivePipelineHandle::channel_for_test(1);
+    drop(receiver);
+    fs.set_cognitive_pipeline(handle.clone());
+
+    fs.create(
+        b"closed queue canary".to_vec(),
+        vec!["queue-test".to_string()],
+        "test-agent".to_string(),
+        None,
+        crate::cas::ObjectScope::default(),
+    )
+    .unwrap();
+
+    let snapshot = handle.snapshot();
+    assert_eq!(snapshot.accepted, 0);
+    assert_eq!(snapshot.inline_document_attempts, 1);
+    assert_eq!(snapshot.document_lexical_degraded_attempts, 1);
+}
+
+#[test]
+fn saturated_cognitive_queue_records_inline_vector_attempt() {
+    let (fs, _dir) = make_fs_with_embeddings();
+    let (handle, _receiver) = CognitivePipelineHandle::channel_for_test(1);
+    handle
+        .enqueue_sync(CognitiveTask::LinkSimilarity {
+            cid: "occupied-slot".to_string(),
+            agent_id: "test-agent".to_string(),
+        })
+        .unwrap();
+    fs.set_cognitive_pipeline(handle.clone());
+
+    fs.create(
+        b"inline vector canary".to_vec(),
+        vec!["queue-test".to_string()],
+        "test-agent".to_string(),
+        None,
+        crate::cas::ObjectScope::default(),
+    )
+    .unwrap();
+
+    let snapshot = handle.snapshot();
+    assert_eq!(snapshot.inline_document_attempts, 1);
+    assert_eq!(snapshot.document_vector_succeeded_attempts, 1);
+    assert_eq!(snapshot.document_lexical_degraded_attempts, 0);
 }
 
 #[test]

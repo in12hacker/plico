@@ -533,16 +533,33 @@ impl AIKernel {
         &self.llm_provider
     }
 
-    /// Starts background cognitive workers. Must be called once after kernel is wrapped in Arc.
+    /// Starts background cognitive workers after the kernel is wrapped in Arc.
+    /// Repeated calls preserve the existing cognitive pipeline and its counters.
     pub fn start_workers(self: &Arc<Self>) {
         if let Ok(mut worker) = self.projection_worker.lock() {
             if worker.is_none() {
                 *worker = self.projection.start_worker();
             }
         }
-        let cp_handle = ops::cognitive_pipeline::start_cognitive_pipeline(Arc::clone(self), 1024);
-        *self.cognitive_pipeline.write().unwrap() = Some(cp_handle.clone());
+        let (cp_handle, newly_started) = {
+            let mut pipeline = self.cognitive_pipeline.write().unwrap();
+            match pipeline.as_ref() {
+                Some(handle) => (handle.clone(), false),
+                None => {
+                    let handle = ops::cognitive_pipeline::start_cognitive_pipeline(
+                        Arc::clone(self),
+                        self.config.tuning.cognitive_pipeline_queue_capacity,
+                        self.config.tuning.cognitive_pipeline_max_in_flight,
+                    );
+                    *pipeline = Some(handle.clone());
+                    (handle, true)
+                }
+            }
+        };
         self.fs.set_cognitive_pipeline(cp_handle);
+        if !newly_started {
+            return;
+        }
 
         // Start background conflict detection
         if let Some(ref kg) = self.knowledge_graph {

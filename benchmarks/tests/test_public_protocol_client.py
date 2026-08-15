@@ -92,8 +92,30 @@ def test_cognitive_watermark_waits_for_contiguous_completion(monkeypatch):
     client = PlicoClient()
     snapshots = iter(
         [
-            {"cognitive_progress": {"accepted": 3, "completed": 1, "in_flight": 1}},
-            {"cognitive_progress": {"accepted": 3, "completed": 3, "in_flight": 0}},
+            {
+                "cognitive_progress": {
+                    "accepted": 3,
+                    "completed": 1,
+                    "in_flight": 1,
+                    "document_vector_succeeded_attempts": 2,
+                    "document_lexical_degraded_attempts": 0,
+                    "task_failed_attempts": 0,
+                    "other_succeeded_attempts": 0,
+                    "inline_document_attempts": 0,
+                }
+            },
+            {
+                "cognitive_progress": {
+                    "accepted": 3,
+                    "completed": 3,
+                    "in_flight": 0,
+                    "document_vector_succeeded_attempts": 3,
+                    "document_lexical_degraded_attempts": 0,
+                    "task_failed_attempts": 0,
+                    "other_succeeded_attempts": 0,
+                    "inline_document_attempts": 0,
+                }
+            },
         ]
     )
     monkeypatch.setattr(client, "runtime_readiness", lambda: next(snapshots))
@@ -105,16 +127,43 @@ def test_cognitive_watermark_waits_for_contiguous_completion(monkeypatch):
         poll_interval=0.0,
     )
 
-    assert completed == {"accepted": 3, "completed": 3, "in_flight": 0}
+    assert completed == {
+        "accepted": 3,
+        "completed": 3,
+        "in_flight": 0,
+        "document_vector_succeeded_attempts": 3,
+        "document_lexical_degraded_attempts": 0,
+        "task_failed_attempts": 0,
+        "other_succeeded_attempts": 0,
+        "inline_document_attempts": 0,
+    }
 
 
 @pytest.mark.parametrize(
     "progress",
     [
         None,
-        {"accepted": 1, "completed": 2, "in_flight": 0},
+        {
+            "accepted": 1,
+            "completed": 2,
+            "in_flight": 0,
+            "document_vector_succeeded_attempts": 1,
+            "document_lexical_degraded_attempts": 0,
+            "task_failed_attempts": 0,
+            "other_succeeded_attempts": 0,
+            "inline_document_attempts": 0,
+        },
         {"accepted": 1, "completed": 0},
-        {"accepted": True, "completed": 0, "in_flight": 0},
+        {
+            "accepted": True,
+            "completed": 0,
+            "in_flight": 0,
+            "document_vector_succeeded_attempts": 0,
+            "document_lexical_degraded_attempts": 0,
+            "task_failed_attempts": 0,
+            "other_succeeded_attempts": 0,
+            "inline_document_attempts": 0,
+        },
     ],
 )
 def test_cognitive_progress_fails_closed_on_malformed_snapshot(monkeypatch, progress):

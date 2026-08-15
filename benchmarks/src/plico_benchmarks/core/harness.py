@@ -183,6 +183,8 @@ class BaseSuite(ABC):
             "PLICO_RERANKER_MODEL",
             "PLICO_RERANKER_API_BASE",
             "PLICO_KG_AUTO_EXTRACT",
+            "PLICO_COGNITIVE_PIPELINE_MAX_IN_FLIGHT",
+            "PLICO_COGNITIVE_PIPELINE_QUEUE_CAPACITY",
         )
         url_keys = {
             "PLICO_READER_API_BASE",
@@ -205,7 +207,7 @@ class BaseSuite(ABC):
         else:
             report.data.pop("raw_results", None)
         metadata = report.data.setdefault("metadata", {})
-        metadata["result_schema_version"] = 4
+        metadata["result_schema_version"] = 5 if self.name == "conversational-qa" else 4
         metadata["run_id"] = self.run_id
         report.data["run_manifest"] = build_run_manifest(
             run_id=self.run_id,
