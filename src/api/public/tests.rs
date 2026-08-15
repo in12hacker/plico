@@ -222,6 +222,7 @@ fn success_and_failure_are_mutually_exclusive_by_constructor() {
                 worker_reason: Some(ProjectionUnavailableCategory::ProjectionNotInitialized),
             },
             cognitive_worker: ComponentState::Unavailable,
+            cognitive_progress: None,
             embedding_provider: ComponentState::Unavailable,
             configured_embedding_backend: "stub".to_string(),
             active_embedding_provider: "stub".to_string(),

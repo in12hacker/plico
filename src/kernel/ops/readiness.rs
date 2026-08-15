@@ -22,6 +22,7 @@ pub struct ProviderReadiness {
 pub struct WorkerReadiness {
     pub projection_ready: bool,
     pub cognitive_present: bool,
+    pub cognitive_progress: Option<super::cognitive_pipeline::CognitivePipelineSnapshot>,
 }
 
 #[derive(Clone)]
@@ -41,13 +42,15 @@ impl AIKernel {
         let canonical_initialized = true;
         let canonical_memory_ledger_present = true;
         let projection = self.projection.readiness_snapshot();
+        let cognitive_progress = self
+            .cognitive_pipeline
+            .read()
+            .ok()
+            .and_then(|pipeline| pipeline.as_ref().map(|handle| handle.snapshot()));
         let workers = WorkerReadiness {
             projection_ready: projection.worker_ready,
-            cognitive_present: self
-                .cognitive_pipeline
-                .read()
-                .map(|pipeline| pipeline.is_some())
-                .unwrap_or(false),
+            cognitive_present: cognitive_progress.is_some(),
+            cognitive_progress,
         };
         let embedding = ProviderReadiness {
             configured_backend: self.config.inference.embedding_backend.clone(),
@@ -74,6 +77,9 @@ impl AIKernel {
             canonical_memory_ledger_present = readiness.canonical_memory_ledger_present,
             projection_worker_ready = readiness.workers.projection_ready,
             cognitive_worker_present = readiness.workers.cognitive_present,
+            cognitive_accepted = readiness.workers.cognitive_progress.map(|progress| progress.accepted),
+            cognitive_completed = readiness.workers.cognitive_progress.map(|progress| progress.completed),
+            cognitive_in_flight = readiness.workers.cognitive_progress.map(|progress| progress.in_flight),
             configured_embedding_backend = %readiness.embedding.configured_backend,
             active_embedding_provider = %readiness.embedding.active_provider,
             embedding_probe_state = match readiness.embedding.probe_state {
@@ -189,6 +195,7 @@ mod tests {
         assert!(readiness.canonical_initialized);
         assert!(readiness.canonical_memory_ledger_present);
         assert!(!readiness.workers.projection_ready);
+        assert_eq!(readiness.workers.cognitive_progress, None);
         assert_eq!(readiness.embedding.probe_state, ProviderProbeState::Verified);
         assert_eq!(readiness.embedding.active_provider, "counting-test");
         assert_eq!(embedding_calls.load(Ordering::Relaxed), 0);
@@ -218,6 +225,10 @@ mod tests {
 
         assert!(readiness.workers.projection_ready);
         assert!(readiness.workers.cognitive_present);
+        assert_eq!(
+            readiness.workers.cognitive_progress,
+            Some(crate::kernel::ops::cognitive_pipeline::CognitivePipelineSnapshot::default())
+        );
         assert!(readiness.ready);
         assert_eq!(embedding_calls.load(Ordering::Relaxed), 0);
         assert_eq!(llm_calls.load(Ordering::Relaxed), 0);

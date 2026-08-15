@@ -255,9 +255,22 @@ pub struct ReadinessView {
     pub canonical_memory_persistence: ComponentState,
     pub projection: ProjectionReadinessView,
     pub cognitive_worker: ComponentState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cognitive_progress: Option<CognitivePipelineProgressView>,
     pub embedding_provider: ComponentState,
     pub configured_embedding_backend: String,
     pub active_embedding_provider: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct CognitivePipelineProgressView {
+    /// Latest task watermark accepted by the cognitive queue.
+    pub accepted: u64,
+    /// Latest contiguous task watermark whose processing attempt finished.
+    pub completed: u64,
+    /// Accepted tasks that have not finished, including queued and running work.
+    pub in_flight: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

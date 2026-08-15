@@ -267,6 +267,52 @@ class PlicoClient:
     def runtime_readiness(self) -> dict[str, Any]:
         return self.request("runtime.readiness", {})
 
+    def cognitive_progress(self) -> dict[str, int]:
+        """Read the coherent cognitive-pipeline progress snapshot."""
+        readiness = self.runtime_readiness()
+        progress = readiness.get("cognitive_progress")
+        if not isinstance(progress, dict):
+            raise PlicoProtocolError("runtime.readiness returned no cognitive_progress snapshot")
+        expected = {"accepted", "completed", "in_flight"}
+        if set(progress) != expected:
+            raise PlicoProtocolError("runtime.readiness returned malformed cognitive_progress")
+        values: dict[str, int] = {}
+        for field in sorted(expected):
+            value = progress[field]
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise PlicoProtocolError("runtime.readiness returned malformed cognitive_progress")
+            values[field] = value
+        if values["completed"] > values["accepted"]:
+            raise PlicoProtocolError("runtime.readiness returned inconsistent cognitive_progress")
+        return values
+
+    def wait_for_cognitive_watermark(
+        self,
+        accepted_watermark: int,
+        *,
+        timeout: float = 120.0,
+        poll_interval: float = 0.2,
+    ) -> dict[str, int]:
+        """Wait until every task through one accepted ingest watermark finishes."""
+        if (
+            isinstance(accepted_watermark, bool)
+            or not isinstance(accepted_watermark, int)
+            or accepted_watermark < 0
+        ):
+            raise ValueError("accepted watermark must be a non-negative integer")
+        deadline = time.monotonic() + timeout
+        last: dict[str, int] | None = None
+        while time.monotonic() < deadline:
+            last = self.cognitive_progress()
+            if last["completed"] >= accepted_watermark:
+                return last
+            time.sleep(poll_interval)
+        completed = None if last is None else last["completed"]
+        raise TimeoutError(
+            "cognitive indexing did not reach accepted watermark "
+            f"{accepted_watermark} after {timeout}s (completed={completed})"
+        )
+
     def object_put(self, content: str, tags: list[str] | None = None) -> dict[str, Any]:
         return self.request(
             "object.put", {"content": content, "encoding": "utf8", "tags": tags or []}

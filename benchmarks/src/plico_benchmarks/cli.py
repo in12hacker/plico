@@ -158,6 +158,30 @@ def compare_shadow(
     console.print(f"[green]Shadow comparison saved to {output}[/green]")
 
 
+@app.command("compare-qa-shadow")
+def compare_qa_shadow_command(
+    results: list[Path] = typer.Option(
+        ..., "--result", help="Exactly five explicit committed QA result directories"
+    ),
+    output: Path = typer.Option(..., "--output"),
+    seed: int = typer.Option(42, "--seed"),
+) -> None:
+    """Build a non-gating five-run QA variance artifact."""
+    from plico_benchmarks.core.comparison import commit_shadow_directory
+    from plico_benchmarks.core.qa_comparison import compare_qa_shadow, load_qa_shadow_input
+
+    try:
+        comparison = compare_qa_shadow(
+            [load_qa_shadow_input(path) for path in results],
+            seed=seed,
+        )
+        commit_shadow_directory(output, comparison)
+    except (OSError, ValueError, json.JSONDecodeError) as error:
+        console.print(f"[red]QA shadow comparison rejected: {error}[/red]")
+        raise typer.Exit(1) from error
+    console.print(f"[green]QA shadow comparison saved to {output}[/green]")
+
+
 @app.command("bundle-v1b")
 def bundle_v1b(
     benchmark_result: Path = typer.Option(..., "--benchmark-result"),

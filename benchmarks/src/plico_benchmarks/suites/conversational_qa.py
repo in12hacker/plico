@@ -181,9 +181,22 @@ class ConversationalQASuite(SuiteBase):
         self._ingest_locomo()
         self._ingest_longmemeval()
 
-        # Phase 2: Wait for async indexing (embedding + HNSW)
+        # Phase 2: Capture the ingest watermark after the final write, then wait
+        # for every earlier cognitive task. A searchable probe alone can finish
+        # ahead of older concurrent work and is not a backlog-drain barrier.
         timeout = getattr(self, "_preprocess_timeout", 120.0)
-        self.wait_for_indexing(timeout=timeout)
+        accepted = self.client.cognitive_progress()["accepted"]
+        completed = self.wait_for_indexing(
+            timeout=timeout,
+            accepted_watermark=accepted,
+        )
+        if completed is None:
+            raise RuntimeError("cognitive indexing watermark was not observed")
+        self._retrieval_runtime["ingest_watermark"] = {
+            "accepted": accepted,
+            "completed": completed["completed"],
+            "in_flight": completed["in_flight"],
+        }
 
         # Phase 3: Query
         results = []

@@ -34,7 +34,7 @@ Status: active | Fan-in: 3 | Fan-out: 7
 
 | Export | File | Description |
 |--------|------|-------------|
-| `AIKernel` | `mod.rs` | Central orchestrator — all subsystem access, including side-effect-free runtime readiness |
+| `AIKernel` | `mod.rs` | Central orchestrator — all subsystem access, including side-effect-free runtime readiness and cognitive indexing watermarks |
 | `handle_public_request` | `public_service.rs` | Direct typed dispatch for the 14-operation `plico.personal.v2` contract |
 | `ensure_personal_owner_credential` | `public_service.rs` | Durable local daemon bootstrap; returns only the owner-only credential file path, never the bearer |
 | `authenticate_public_bearer` | `public_service.rs` | Resolves a TCP bearer to a trusted local role with a stable, non-enumerating error |
@@ -82,6 +82,9 @@ tools, and legacy semantic handlers are internal surfaces, not remotely advertis
 - `pub(crate)` fields: library-internal only; crate integration tests in `tests/` must use public API
 - Thread safety: kernel not `Clone`; daemon uses `Arc<AIKernel>`
 - EventBus: JSONL append-on-emit, restore on startup via `restore_event_log()`
+- Runtime readiness exposes the cognitive queue's accepted watermark, contiguous completed watermark,
+  and in-flight count. These are observations only: reading them never probes a model, enqueues work,
+  or changes the single-receiver/concurrent-task execution policy.
 
 ## P3-A projection orchestration
 

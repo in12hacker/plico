@@ -88,6 +88,47 @@ def test_uds_request_omits_payload_auth_and_records_frame_bytes(monkeypatch):
     }
 
 
+def test_cognitive_watermark_waits_for_contiguous_completion(monkeypatch):
+    client = PlicoClient()
+    snapshots = iter(
+        [
+            {"cognitive_progress": {"accepted": 3, "completed": 1, "in_flight": 1}},
+            {"cognitive_progress": {"accepted": 3, "completed": 3, "in_flight": 0}},
+        ]
+    )
+    monkeypatch.setattr(client, "runtime_readiness", lambda: next(snapshots))
+    monkeypatch.setattr("plico_benchmarks.core.client.time.sleep", lambda _seconds: None)
+
+    completed = client.wait_for_cognitive_watermark(
+        3,
+        timeout=1.0,
+        poll_interval=0.0,
+    )
+
+    assert completed == {"accepted": 3, "completed": 3, "in_flight": 0}
+
+
+@pytest.mark.parametrize(
+    "progress",
+    [
+        None,
+        {"accepted": 1, "completed": 2, "in_flight": 0},
+        {"accepted": 1, "completed": 0},
+        {"accepted": True, "completed": 0, "in_flight": 0},
+    ],
+)
+def test_cognitive_progress_fails_closed_on_malformed_snapshot(monkeypatch, progress):
+    client = PlicoClient()
+    monkeypatch.setattr(
+        client,
+        "runtime_readiness",
+        lambda: {"cognitive_progress": progress},
+    )
+
+    with pytest.raises(PlicoProtocolError, match="cognitive_progress"):
+        client.cognitive_progress()
+
+
 @pytest.mark.parametrize("operation", sorted(PUBLIC_OPERATIONS))
 def test_public_catalog_has_no_legacy_operation_names(operation):
     assert "." in operation

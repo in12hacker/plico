@@ -343,11 +343,11 @@ def _validate_qa_sample_ledger(
             raise ValueError("QA sample is missing its required request boundary")
     if sorted(observed_sequences) != list(range(1, len(attempts) + 1)):
         raise ValueError("QA request references do not cover the journal exactly once")
-    _validate_qa_retrieval_runtime(metrics, ledger)
+    validate_qa_retrieval_runtime(metrics, ledger)
     _validate_qa_aggregates(metrics, ledger, manifest)
 
 
-def _validate_qa_retrieval_runtime(metrics: dict[str, Any], ledger: list[dict[str, Any]]) -> None:
+def validate_qa_retrieval_runtime(metrics: dict[str, Any], ledger: list[dict[str, Any]]) -> None:
     runtime = metrics.get("retrieval_runtime")
     if not isinstance(runtime, dict) or set(runtime) != {
         "requirement",
@@ -355,8 +355,23 @@ def _validate_qa_retrieval_runtime(metrics: dict[str, Any], ledger: list[dict[st
         "active_embedding_provider",
         "embedding_provider_state",
         "provider_identity_scope",
+        "ingest_watermark",
     }:
         raise ValueError("QA retrieval runtime evidence is missing")
+    ingest_watermark = runtime["ingest_watermark"]
+    if (
+        not isinstance(ingest_watermark, dict)
+        or set(ingest_watermark) != {"accepted", "completed", "in_flight"}
+        or any(
+            isinstance(ingest_watermark[field], bool)
+            or not isinstance(ingest_watermark[field], int)
+            or ingest_watermark[field] < 0
+            for field in ingest_watermark
+        )
+        or ingest_watermark["completed"] < ingest_watermark["accepted"]
+        or ingest_watermark["in_flight"] != 0
+    ):
+        raise ValueError("QA ingest watermark evidence is incomplete")
     requirement = runtime["requirement"]
     if requirement not in {"typed_execution_observed", "real_non_stub_vector_per_query"}:
         raise ValueError("QA retrieval runtime requirement is unsupported")

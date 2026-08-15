@@ -138,7 +138,12 @@ SemanticFS 的 `create → search` 评测必须分离摄取和查询阶段，等
 - warmup 阶段默认启用；多次运行取 mean ± std
 - 向量数据库 benchmark 必须在索引完全构建后才开始查询
 
-`PlicoClient.wait_for_object_indexing()` 的 probe 只用于 public `object.put → object.search` 预处理。Working Memory 使用 `projection.status(kind=memory_embedding, revision_id=...)` 对每个 revision 做有界轮询，分别报告 `observed` 六态、`unreconciled`、`unavailable`、timeout、请求数和阶段耗时；两条派生管线不互相替代。
+`conversational-qa` 在最后一次摄取后捕获 cognitive pipeline 的 accepted watermark，并等待
+contiguous completed watermark 到达该边界；后写入且先完成的 searchable probe 不能替代 backlog
+drain 证明。其他 Object 基础 suite 仍可用 `PlicoClient.wait_for_object_indexing()` 做 public
+`object.put → object.search` probe。Working Memory 使用
+`projection.status(kind=memory_embedding, revision_id=...)` 对每个 revision 做有界轮询，分别报告
+`observed` 六态、`unreconciled`、`unavailable`、timeout、请求数和阶段耗时；两条派生管线不互相替代。
 
 ## V1-B 发布证据
 
@@ -254,6 +259,31 @@ PREPROCESS_TIMEOUT=600 ./scripts/run_full_benchmark.sh --runs 5 --output-parent 
 ```
 
 四类基础 suite 是 `performance`、`retrieval`、`memory-recall-lexical`、`conversational-qa`。最后一项使用严格 DeepSeek reader/judge 角色配置；API key 只注入 QA 子进程，不传给 plicod 或前三类 suite。Memory vector/hybrid 仍为 typed unsupported，当前结果最多是 research/shadow evidence。
+
+只复测当前 QA 基线时使用专用的固定 `5 × 50` driver，避免重复运行另外三类 suite：
+
+```bash
+cd benchmarks
+
+# 无 daemon、无外部请求、无输出目录；只打印冻结计划、成本上限和真实命令形状
+./scripts/run_qa_shadow.sh --dry-run --output-parent /tmp/plico-qa-shadow
+
+# 需要显式 DeepSeek reader/judge 配置以及当前 plicod embedding 配置
+PREPROCESS_TIMEOUT=1800 ./scripts/run_qa_shadow.sh --output-parent /tmp/plico-qa-shadow
+```
+
+driver 固定五个 fresh vault、50 个样本、seed 42 和 research 身份。默认每轮 reader/judge 的
+`MAX_USD` 分别压到 USD 0.10/0.15，所以完整 campaign 的静态最坏上限是 USD 1.25，仅占用户
+授权 USD 100 的 1.25%；按上一轮 USD 0.0251223560 实耗线性估算约 USD 0.1256117800。可用
+`PLICO_QA_SHADOW_READER_MAX_USD_PER_RUN`、`PLICO_QA_SHADOW_JUDGE_MAX_USD_PER_RUN` 调低或显式
+调整，但五轮预算总和不得超过 `PLICO_QA_SHADOW_AUTHORIZED_MAX_USD`（默认 100）。
+
+最后的 `compare-qa-shadow` 会逐个深验 committed result 及相邻 paid-attempt journal，并要求五轮
+dataset/selection digest、ordered sample IDs、clean git revision、suite config、embedding identity
+scope、DeepSeek reader/judge role config、response model 和 system fingerprint 完全相同。输出 overall、
+LoCoMo、LongMemEval 的 evidence recall、answerable F1/BLEU-1/judge score 与 adversarial abstention 的
+run means、between-run std 和 two-way bootstrap 95% CI；artifact 永远是
+`qa_shadow_variance_only`、`gate_eligible=false`，不自动升级为发布门禁。
 
 ## Benchmark Pipeline 经验
 

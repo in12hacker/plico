@@ -7,7 +7,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 import pytest
 
-from plico_benchmarks.core.result_artifact import _validate_qa_retrieval_runtime
+from plico_benchmarks.core.result_artifact import validate_qa_retrieval_runtime
 from plico_benchmarks.suites.conversational_qa import (
     ConversationalQASuite,
     _adversarial_abstention_correct,
@@ -66,6 +66,7 @@ def test_real_vector_artifact_accepts_object_only_openai_identity_without_overcl
         "active_embedding_provider": "unavailable",
         "embedding_provider_state": "unavailable",
         "provider_identity_scope": "object_execution_only_unattested_provider",
+        "ingest_watermark": {"accepted": 7, "completed": 7, "in_flight": 0},
     }
     ledger = [
         {
@@ -75,10 +76,10 @@ def test_real_vector_artifact_accepts_object_only_openai_identity_without_overcl
         }
     ]
 
-    _validate_qa_retrieval_runtime({"retrieval_runtime": runtime}, ledger)
+    validate_qa_retrieval_runtime({"retrieval_runtime": runtime}, ledger)
 
     with pytest.raises(ValueError, match="identity scope"):
-        _validate_qa_retrieval_runtime(
+        validate_qa_retrieval_runtime(
             {
                 "retrieval_runtime": {
                     **runtime,
@@ -89,12 +90,27 @@ def test_real_vector_artifact_accepts_object_only_openai_identity_without_overcl
         )
 
     with pytest.raises(ValueError, match="real-vector"):
-        _validate_qa_retrieval_runtime(
+        validate_qa_retrieval_runtime(
             {
                 "retrieval_runtime": {
                     **runtime,
                     "configured_embedding_backend": "ollama",
                     "provider_identity_scope": "unavailable",
+                }
+            },
+            ledger,
+        )
+
+    with pytest.raises(ValueError, match="ingest watermark"):
+        validate_qa_retrieval_runtime(
+            {
+                "retrieval_runtime": {
+                    **runtime,
+                    "ingest_watermark": {
+                        "accepted": 7,
+                        "completed": 6,
+                        "in_flight": 1,
+                    },
                 }
             },
             ledger,

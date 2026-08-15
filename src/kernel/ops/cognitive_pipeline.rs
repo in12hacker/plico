@@ -8,7 +8,8 @@
 
 use crate::fs::summarizer::SummaryLayer;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use std::collections::BTreeSet;
+use std::sync::{Arc, Mutex, MutexGuard};
 use tokio::sync::mpsc;
 
 /// Represents a unit of cognitive work in the pipeline.
@@ -32,43 +33,178 @@ pub enum CognitiveTask {
     },
 }
 
+/// Stable queue failures for callers that must choose a typed fallback.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum CognitivePipelineError {
+    #[error("cognitive pipeline queue is full")]
+    QueueFull,
+    #[error("cognitive pipeline queue is closed")]
+    QueueClosed,
+    #[error("cognitive pipeline progress counter is exhausted")]
+    CounterExhausted,
+}
+
+/// Coherent, side-effect-free progress for accepted cognitive work.
+///
+/// `accepted` is the latest assigned watermark. `completed` is the latest
+/// contiguous completed watermark, so callers may safely wait for
+/// `completed >= accepted_at_ingest_end` even though tasks execute concurrently.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CognitivePipelineSnapshot {
+    pub accepted: u64,
+    pub completed: u64,
+    pub in_flight: u64,
+}
+
+#[derive(Default)]
+struct CognitivePipelineProgress {
+    state: Mutex<CognitivePipelineProgressState>,
+}
+
+#[derive(Default)]
+struct CognitivePipelineProgressState {
+    accepted: u64,
+    completed: u64,
+    in_flight: u64,
+    completed_out_of_order: BTreeSet<u64>,
+}
+
+struct CognitiveTaskCompletion {
+    progress: Arc<CognitivePipelineProgress>,
+    watermark: u64,
+}
+
+impl Drop for CognitiveTaskCompletion {
+    fn drop(&mut self) {
+        self.progress.complete(self.watermark);
+    }
+}
+
+impl CognitivePipelineProgress {
+    fn state(&self) -> MutexGuard<'_, CognitivePipelineProgressState> {
+        self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn accept(&self) -> Result<u64, CognitivePipelineError> {
+        let mut state = self.state();
+        let watermark = state
+            .accepted
+            .checked_add(1)
+            .ok_or(CognitivePipelineError::CounterExhausted)?;
+        let in_flight = state
+            .in_flight
+            .checked_add(1)
+            .ok_or(CognitivePipelineError::CounterExhausted)?;
+        state.accepted = watermark;
+        state.in_flight = in_flight;
+        Ok(watermark)
+    }
+
+    fn complete(&self, watermark: u64) {
+        let mut state = self.state();
+        state.in_flight = state.in_flight.saturating_sub(1);
+        if watermark <= state.completed {
+            return;
+        }
+        if watermark != state.completed.saturating_add(1) {
+            state.completed_out_of_order.insert(watermark);
+            return;
+        }
+        state.completed = watermark;
+        loop {
+            let next = state.completed.saturating_add(1);
+            if !state.completed_out_of_order.remove(&next) {
+                break;
+            }
+            state.completed = next;
+        }
+    }
+
+    fn snapshot(&self) -> CognitivePipelineSnapshot {
+        let state = self.state();
+        CognitivePipelineSnapshot {
+            accepted: state.accepted,
+            completed: state.completed,
+            in_flight: state.in_flight,
+        }
+    }
+}
+
+pub(crate) struct QueuedCognitiveTask {
+    watermark: u64,
+    task: CognitiveTask,
+}
+
 /// Handle to the asynchronous cognitive pipeline.
 #[derive(Clone)]
 pub struct CognitivePipelineHandle {
-    sender: mpsc::Sender<CognitiveTask>,
+    sender: mpsc::Sender<QueuedCognitiveTask>,
+    progress: Arc<CognitivePipelineProgress>,
 }
 
 impl CognitivePipelineHandle {
     /// Enqueue a task into the pipeline.
-    pub async fn enqueue(&self, task: CognitiveTask) -> Result<(), String> {
-        self.sender.send(task).await.map_err(|e| e.to_string())
+    pub async fn enqueue(&self, task: CognitiveTask) -> Result<u64, CognitivePipelineError> {
+        let permit = self
+            .sender
+            .reserve()
+            .await
+            .map_err(|_| CognitivePipelineError::QueueClosed)?;
+        let watermark = self.progress.accept()?;
+        permit.send(QueuedCognitiveTask { watermark, task });
+        Ok(watermark)
     }
 
     /// Synchronous version for use in non-async contexts.
-    pub fn enqueue_sync(&self, task: CognitiveTask) -> Result<(), String> {
-        self.sender.try_send(task).map_err(|e| e.to_string())
+    pub fn enqueue_sync(&self, task: CognitiveTask) -> Result<u64, CognitivePipelineError> {
+        let permit = self.sender.try_reserve().map_err(|error| match error {
+            mpsc::error::TrySendError::Full(_) => CognitivePipelineError::QueueFull,
+            mpsc::error::TrySendError::Closed(_) => CognitivePipelineError::QueueClosed,
+        })?;
+        let watermark = self.progress.accept()?;
+        permit.send(QueuedCognitiveTask { watermark, task });
+        Ok(watermark)
+    }
+
+    /// Return one coherent progress snapshot without probing providers.
+    pub fn snapshot(&self) -> CognitivePipelineSnapshot {
+        self.progress.snapshot()
     }
 
     #[cfg(test)]
-    pub(crate) fn channel_for_test(buffer_size: usize) -> (Self, mpsc::Receiver<CognitiveTask>) {
+    pub(crate) fn channel_for_test(buffer_size: usize) -> (Self, mpsc::Receiver<QueuedCognitiveTask>) {
         let (sender, receiver) = mpsc::channel(buffer_size);
-        (Self { sender }, receiver)
+        (
+            Self {
+                sender,
+                progress: Arc::new(CognitivePipelineProgress::default()),
+            },
+            receiver,
+        )
     }
 }
 
 /// Start the cognitive pipeline worker loop.
 pub fn start_cognitive_pipeline(kernel: Arc<crate::kernel::AIKernel>, buffer_size: usize) -> CognitivePipelineHandle {
     let (tx, mut rx) = mpsc::channel(buffer_size);
+    let progress = Arc::new(CognitivePipelineProgress::default());
 
     let kernel_ref = Arc::downgrade(&kernel);
+    let worker_progress = Arc::clone(&progress);
     tokio::spawn(async move {
         tracing::info!("Async Cognitive Pipeline started (buffer_size={})", buffer_size);
 
-        while let Some(task) = rx.recv().await {
+        while let Some(queued) = rx.recv().await {
             let Some(kernel) = kernel_ref.upgrade() else {
                 break;
             };
+            let task_progress = Arc::clone(&worker_progress);
             tokio::spawn(async move {
+                let QueuedCognitiveTask { watermark, task } = queued;
+                let _completion = CognitiveTaskCompletion {
+                    progress: task_progress,
+                    watermark,
+                };
                 let (agent_id, cid) = match &task {
                     CognitiveTask::Summarize { agent_id, cid, .. } => (agent_id.clone(), Some(cid.clone())),
                     CognitiveTask::KgExtract { agent_id, cid } => (agent_id.clone(), Some(cid.clone())),
@@ -84,7 +220,7 @@ pub fn start_cognitive_pipeline(kernel: Arc<crate::kernel::AIKernel>, buffer_siz
         }
     });
 
-    CognitivePipelineHandle { sender: tx }
+    CognitivePipelineHandle { sender: tx, progress }
 }
 
 async fn process_task(kernel: Arc<crate::kernel::AIKernel>, task: CognitiveTask) -> Result<(), String> {
@@ -204,8 +340,8 @@ mod tests {
     #[tokio::test]
     async fn test_start_cognitive_pipeline() {
         let (kernel, _dir) = make_kernel();
-        let _handle = start_cognitive_pipeline(kernel, 64);
-        // Handle created successfully — pipeline worker spawned
+        let handle = start_cognitive_pipeline(kernel, 64);
+        assert_eq!(handle.snapshot(), CognitivePipelineSnapshot::default());
     }
 
     #[tokio::test]
@@ -228,8 +364,9 @@ mod tests {
             layer: SummaryLayer::L0,
             agent_id: "kernel".to_string(),
         };
-        let result = handle.enqueue_sync(task);
-        assert!(result.is_ok());
+        let watermark = handle.enqueue_sync(task).unwrap();
+        assert_eq!(watermark, 1);
+        assert_eq!(handle.snapshot().accepted, 1);
     }
 
     #[tokio::test]
@@ -252,8 +389,8 @@ mod tests {
             layer: SummaryLayer::L0,
             agent_id: "kernel".to_string(),
         };
-        let result = handle.enqueue(task).await;
-        assert!(result.is_ok());
+        let watermark = handle.enqueue(task).await.unwrap();
+        assert_eq!(watermark, 1);
     }
 
     #[tokio::test]
@@ -353,22 +490,116 @@ mod tests {
 
     #[tokio::test]
     async fn test_enqueue_sync_channel_full() {
-        let (kernel, _dir) = make_kernel();
-        let handle = start_cognitive_pipeline(kernel.clone(), 1);
-        // Fill the channel
-        let cid = kernel
-            .semantic_create(
-                b"content".to_vec(),
-                vec![],
-                "kernel",
-                None,
-                crate::cas::ObjectScope::default(),
-            )
+        let (handle, _receiver) = CognitivePipelineHandle::channel_for_test(1);
+        handle
+            .enqueue_sync(CognitiveTask::LinkSimilarity {
+                cid: "first".to_string(),
+                agent_id: "kernel".to_string(),
+            })
             .unwrap();
-        let _ = handle.enqueue_sync(CognitiveTask::LinkSimilarity {
-            cid: cid.clone(),
-            agent_id: "kernel".to_string(),
-        });
-        // The channel might be full now or the task was consumed — either way, no panic
+        let error = handle
+            .enqueue_sync(CognitiveTask::LinkSimilarity {
+                cid: "second".to_string(),
+                agent_id: "kernel".to_string(),
+            })
+            .unwrap_err();
+
+        assert_eq!(error, CognitivePipelineError::QueueFull);
+        assert_eq!(
+            handle.snapshot(),
+            CognitivePipelineSnapshot {
+                accepted: 1,
+                completed: 0,
+                in_flight: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn closed_queue_does_not_advance_the_accepted_watermark() {
+        let (handle, receiver) = CognitivePipelineHandle::channel_for_test(1);
+        drop(receiver);
+
+        let error = handle
+            .enqueue_sync(CognitiveTask::LinkSimilarity {
+                cid: "closed".to_string(),
+                agent_id: "kernel".to_string(),
+            })
+            .unwrap_err();
+
+        assert_eq!(error, CognitivePipelineError::QueueClosed);
+        assert_eq!(handle.snapshot(), CognitivePipelineSnapshot::default());
+    }
+
+    #[test]
+    fn completed_watermark_advances_only_after_contiguous_concurrent_work() {
+        let progress = CognitivePipelineProgress::default();
+        let first = progress.accept().unwrap();
+        let second = progress.accept().unwrap();
+        let third = progress.accept().unwrap();
+
+        progress.complete(second);
+        progress.complete(third);
+        assert_eq!(
+            progress.snapshot(),
+            CognitivePipelineSnapshot {
+                accepted: 3,
+                completed: 0,
+                in_flight: 1,
+            }
+        );
+
+        progress.complete(first);
+        assert_eq!(
+            progress.snapshot(),
+            CognitivePipelineSnapshot {
+                accepted: 3,
+                completed: 3,
+                in_flight: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn dropping_task_completion_guard_advances_the_watermark() {
+        let progress = Arc::new(CognitivePipelineProgress::default());
+        let watermark = progress.accept().unwrap();
+        {
+            let _completion = CognitiveTaskCompletion {
+                progress: Arc::clone(&progress),
+                watermark,
+            };
+        }
+
+        assert_eq!(
+            progress.snapshot(),
+            CognitivePipelineSnapshot {
+                accepted: 1,
+                completed: 1,
+                in_flight: 0,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn worker_completion_reaches_the_accepted_watermark_after_processing() {
+        let (kernel, _dir) = make_kernel();
+        let handle = start_cognitive_pipeline(Arc::clone(&kernel), 4);
+        let watermark = handle
+            .enqueue(CognitiveTask::LinkSimilarity {
+                cid: "any-cid".to_string(),
+                agent_id: "kernel".to_string(),
+            })
+            .await
+            .unwrap();
+
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            while handle.snapshot().completed < watermark {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("cognitive task completion watermark must advance");
+        assert_eq!(handle.snapshot().in_flight, 0);
     }
 }

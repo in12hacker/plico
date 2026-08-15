@@ -197,10 +197,23 @@ def verify_shadow_directory(output: Path) -> dict[str, Any]:
         commit_schema=_COMPARISON_COMMIT_SCHEMA,
     )
     value = strict_json_object(payload)
-    if payload != canonical_json(value) or value.get("schema") != (
-        "plico.benchmark.shadow-comparison/v1"
+    schemas = {
+        "plico.benchmark.shadow-comparison/v1": "retrieval",
+        "plico.benchmark.qa-shadow-comparison/v1": "conversational-qa",
+    }
+    if (
+        payload != canonical_json(value)
+        or value.get("schema") not in schemas
+        or value.get("suite") != schemas[value["schema"]]
     ):
         raise ValueError("shadow comparison artifact is not canonical supported JSON")
+    if value.get("schema") == "plico.benchmark.qa-shadow-comparison/v1" and (
+        value.get("independent_runs") != 5
+        or value.get("status") != "qa_shadow_variance_only"
+        or value.get("gate_eligible") is not False
+        or value.get("comparative_inference") != "shadow_only_not_a_release_gate"
+    ):
+        raise ValueError("QA shadow comparison cannot claim release-gate eligibility")
     expected_sidecar = {
         "schema": "plico.benchmark.shadow-comparison-digest/v1",
         "file_name": _COMPARISON_FILE,

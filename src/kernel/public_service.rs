@@ -186,6 +186,13 @@ impl super::AIKernel {
                     canonical_memory_persistence: component(readiness.canonical_memory_ledger_present),
                     projection: projection_readiness(&readiness.projection),
                     cognitive_worker: component(readiness.workers.cognitive_present),
+                    cognitive_progress: readiness.workers.cognitive_progress.map(|progress| {
+                        CognitivePipelineProgressView {
+                            accepted: progress.accepted,
+                            completed: progress.completed,
+                            in_flight: progress.in_flight,
+                        }
+                    }),
                     embedding_provider: match readiness.embedding.probe_state {
                         super::ops::readiness::ProviderProbeState::Verified => ComponentState::Ready,
                         super::ops::readiness::ProviderProbeState::Unavailable => ComponentState::Unavailable,
@@ -1057,6 +1064,37 @@ mod tests {
             Some(ProjectionUnavailableCategory::RuntimeShuttingDown)
         );
         assert_eq!(identity_calls.load(Ordering::Acquire), calls_before);
+    }
+
+    #[test]
+    fn runtime_readiness_exposes_coherent_cognitive_progress() {
+        let (kernel, _directory) = crate::kernel::tests::make_kernel();
+        let (handle, _receiver) = crate::kernel::ops::cognitive_pipeline::CognitivePipelineHandle::channel_for_test(1);
+        handle
+            .enqueue_sync(crate::kernel::ops::cognitive_pipeline::CognitiveTask::LinkSimilarity {
+                cid: "progress-cid".to_string(),
+                agent_id: "kernel".to_string(),
+            })
+            .unwrap();
+        *kernel.cognitive_pipeline.write().unwrap() = Some(handle);
+
+        let response = kernel.handle_public_request(
+            &context(),
+            request(PublicCommand::RuntimeReadiness(EmptyInput::default())),
+        );
+        let PublicData::RuntimeReadiness(readiness) = response.data.unwrap() else {
+            panic!("wrong typed response")
+        };
+
+        assert_eq!(readiness.cognitive_worker, ComponentState::Ready);
+        assert_eq!(
+            readiness.cognitive_progress,
+            Some(CognitivePipelineProgressView {
+                accepted: 1,
+                completed: 0,
+                in_flight: 1,
+            })
+        );
     }
 
     #[test]

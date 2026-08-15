@@ -87,9 +87,20 @@ class BaseSuite(ABC):
         }
         return Report(report_data)
 
-    def wait_for_indexing(self, timeout: float = 300.0) -> None:
-        """Convenience wrapper — wait until recent writes are searchable."""
-        self.client.wait_for_object_indexing(timeout=timeout)
+    def wait_for_indexing(
+        self,
+        timeout: float = 300.0,
+        *,
+        accepted_watermark: int | None = None,
+    ) -> dict[str, int] | None:
+        """Wait for a captured ingest watermark or use the legacy probe barrier."""
+        if accepted_watermark is None:
+            self.client.wait_for_object_indexing(timeout=timeout)
+            return None
+        return self.client.wait_for_cognitive_watermark(
+            accepted_watermark,
+            timeout=timeout,
+        )
 
     def execute(self, preprocess_timeout: float = 120.0) -> Report:
         """Orchestrate the full benchmark lifecycle."""
