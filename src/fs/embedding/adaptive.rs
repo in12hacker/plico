@@ -150,6 +150,11 @@ impl AdaptiveEmbeddingProvider {
 
     fn postprocess(&self, mut result: EmbedResult) -> Result<EmbedResult, EmbedError> {
         if result.embedding.len() != self.inner.dimension() {
+            tracing::warn!(
+                provider_protocol = "adaptive_wrapper",
+                failure_stage = "dimension_mismatch",
+                "embedding provider protocol failure"
+            );
             return Err(EmbedError::Api(
                 "provider returned unexpected embedding dimension".into(),
             ));
@@ -157,12 +162,22 @@ impl AdaptiveEmbeddingProvider {
         if result.embedding.iter().any(|component| !component.is_finite())
             || result.embedding.iter().all(|component| *component == 0.0)
         {
+            tracing::warn!(
+                provider_protocol = "adaptive_wrapper",
+                failure_stage = "invalid_vector",
+                "embedding provider protocol failure"
+            );
             return Err(EmbedError::Api("provider returned invalid embedding values".into()));
         }
         if let Some(td) = self.target_dim {
             if td < result.embedding.len() {
                 result.embedding.truncate(td);
                 if !l2_normalize(&mut result.embedding) {
+                    tracing::warn!(
+                        provider_protocol = "adaptive_wrapper",
+                        failure_stage = "normalization",
+                        "embedding provider protocol failure"
+                    );
                     return Err(EmbedError::Api("embedding normalization failed".into()));
                 }
             }

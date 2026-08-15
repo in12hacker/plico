@@ -110,7 +110,8 @@ impl OpenAIEmbeddingBackend {
         model: &str,
         api_key: Option<&str>,
     ) -> Result<usize, EmbedError> {
-        let embedding = Self::embed_request(client, base_url, model, api_key, "dimension probe").await?;
+        let embedding =
+            Self::embed_request(client, base_url, model, api_key, "dimension probe", "dimension_probe").await?;
         if embedding.embedding.is_empty() {
             return Err(EmbedError::ServerUnavailable(
                 "probe returned empty embedding".to_string(),
@@ -125,6 +126,7 @@ impl OpenAIEmbeddingBackend {
         model: &str,
         api_key: Option<&str>,
         input: &str,
+        request_kind: &'static str,
     ) -> Result<EmbedResult, EmbedError> {
         let body = serde_json::json!({
             "model": model,
@@ -138,20 +140,28 @@ impl OpenAIEmbeddingBackend {
         let resp = request.send().await.map_err(|_| provider_request_error())?;
 
         let status = resp.status();
-        let body_bytes = resp
-            .bytes()
-            .await
-            .map_err(|_| EmbedError::Api("provider response read failed".into()))?;
+        let body_bytes = resp.bytes().await.map_err(|_| {
+            log_provider_failure(request_kind, "response_body_read", None);
+            EmbedError::Api("provider response read failed".into())
+        })?;
 
         if !status.is_success() {
-            return Err(provider_status_error(status, &body_bytes));
+            return Err(provider_status_error(status, &body_bytes, request_kind));
         }
 
-        parse_embedding_response(&body_bytes)
+        parse_embedding_response(&body_bytes, request_kind)
     }
 
     async fn embed_async(&self, text: &str) -> Result<EmbedResult, EmbedError> {
-        Self::embed_request(&self.client, &self.base_url, &self.model, self.api_key.as_deref(), text).await
+        Self::embed_request(
+            &self.client,
+            &self.base_url,
+            &self.model,
+            self.api_key.as_deref(),
+            text,
+            "single",
+        )
+        .await
     }
 
     async fn embed_batch_async(&self, texts: &[String]) -> Result<Vec<EmbedResult>, EmbedError> {
@@ -167,20 +177,39 @@ impl OpenAIEmbeddingBackend {
         let resp = request.send().await.map_err(|_| provider_request_error())?;
 
         let status = resp.status();
-        let body_bytes = resp
-            .bytes()
-            .await
-            .map_err(|_| EmbedError::Api("provider response read failed".into()))?;
+        let body_bytes = resp.bytes().await.map_err(|_| {
+            log_provider_failure("batch", "response_body_read", None);
+            EmbedError::Api("provider response read failed".into())
+        })?;
 
         if !status.is_success() {
-            return Err(provider_status_error(status, &body_bytes));
+            return Err(provider_status_error(status, &body_bytes, "batch"));
         }
 
-        parse_embedding_batch_response(&body_bytes)
+        parse_embedding_batch_response(&body_bytes, "batch")
     }
 }
 
-fn provider_status_error(status: reqwest::StatusCode, body: &[u8]) -> EmbedError {
+fn log_provider_failure(request_kind: &'static str, failure_stage: &'static str, http_status_code: Option<u16>) {
+    if let Some(http_status_code) = http_status_code {
+        tracing::warn!(
+            provider_protocol = "openai_compatible",
+            request_kind,
+            failure_stage,
+            http_status_code,
+            "embedding provider protocol failure"
+        );
+    } else {
+        tracing::warn!(
+            provider_protocol = "openai_compatible",
+            request_kind,
+            failure_stage,
+            "embedding provider protocol failure"
+        );
+    }
+}
+
+fn provider_status_error(status: reqwest::StatusCode, body: &[u8], request_kind: &'static str) -> EmbedError {
     let body = String::from_utf8_lossy(body).to_ascii_lowercase();
     if body.contains("too large")
         || body.contains("batch size")
@@ -189,8 +218,10 @@ fn provider_status_error(status: reqwest::StatusCode, body: &[u8]) -> EmbedError
         || body.contains("exceed_context_size")
         || body.contains("exceeds the available context size")
     {
+        log_provider_failure(request_kind, "input_rejected", Some(status.as_u16()));
         EmbedError::InputTooLarge("provider rejected input size".into())
     } else {
+        log_provider_failure(request_kind, "http_status", Some(status.as_u16()));
         EmbedError::Api(format!("provider returned HTTP status {}", status.as_u16()))
     }
 }
@@ -199,7 +230,7 @@ fn provider_request_error() -> EmbedError {
     EmbedError::ServerUnavailable("embedding provider unavailable".into())
 }
 
-fn parse_embedding_response(body: &[u8]) -> Result<EmbedResult, EmbedError> {
+fn parse_embedding_response(body: &[u8], request_kind: &'static str) -> Result<EmbedResult, EmbedError> {
     #[derive(serde::Deserialize)]
     struct Response {
         data: Vec<EmbeddingData>,
@@ -214,21 +245,21 @@ fn parse_embedding_response(body: &[u8]) -> Result<EmbedResult, EmbedError> {
         prompt_tokens: u32,
     }
 
-    let parsed: Response =
-        serde_json::from_slice(body).map_err(|e| EmbedError::Api(format!("response parse error: {e}")))?;
+    let parsed: Response = serde_json::from_slice(body).map_err(|e| {
+        log_provider_failure(request_kind, "response_json", None);
+        EmbedError::Api(format!("response parse error: {e}"))
+    })?;
 
-    let embedding = parsed
-        .data
-        .into_iter()
-        .next()
-        .map(|d| d.embedding)
-        .ok_or_else(|| EmbedError::Api("empty data array in response".into()))?;
+    let embedding = parsed.data.into_iter().next().map(|d| d.embedding).ok_or_else(|| {
+        log_provider_failure(request_kind, "empty_data", None);
+        EmbedError::Api("empty data array in response".into())
+    })?;
 
     let input_tokens = parsed.usage.map(|u| u.prompt_tokens).unwrap_or(0);
     Ok(EmbedResult::new(embedding, input_tokens))
 }
 
-fn parse_embedding_batch_response(body: &[u8]) -> Result<Vec<EmbedResult>, EmbedError> {
+fn parse_embedding_batch_response(body: &[u8], request_kind: &'static str) -> Result<Vec<EmbedResult>, EmbedError> {
     #[derive(serde::Deserialize)]
     struct Response {
         data: Vec<EmbeddingData>,
@@ -243,8 +274,10 @@ fn parse_embedding_batch_response(body: &[u8]) -> Result<Vec<EmbedResult>, Embed
         prompt_tokens: u32,
     }
 
-    let parsed: Response =
-        serde_json::from_slice(body).map_err(|e| EmbedError::Api(format!("batch response parse error: {e}")))?;
+    let parsed: Response = serde_json::from_slice(body).map_err(|e| {
+        log_provider_failure(request_kind, "response_json", None);
+        EmbedError::Api(format!("batch response parse error: {e}"))
+    })?;
 
     let total_tokens = parsed.usage.map(|u| u.prompt_tokens).unwrap_or(0);
     let count = parsed.data.len();
@@ -416,7 +449,7 @@ mod tests {
     #[test]
     fn test_parse_embedding_response_valid() {
         let json = br#"{"object":"list","data":[{"object":"embedding","index":0,"embedding":[0.1,0.2,0.3]}],"model":"test","usage":{"prompt_tokens":3,"total_tokens":3}}"#;
-        let result = parse_embedding_response(json);
+        let result = parse_embedding_response(json, "test");
         assert!(result.is_ok());
         let emb = result.unwrap();
         assert_eq!(emb.embedding.len(), 3);
@@ -426,7 +459,7 @@ mod tests {
     #[test]
     fn test_parse_embedding_response_empty_data() {
         let json = br#"{"object":"list","data":[],"model":"test"}"#;
-        let result = parse_embedding_response(json);
+        let result = parse_embedding_response(json, "test");
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("empty data"));
     }
@@ -434,7 +467,7 @@ mod tests {
     #[test]
     fn test_parse_embedding_response_malformed() {
         let json = br#"{"error":"bad request"}"#;
-        let result = parse_embedding_response(json);
+        let result = parse_embedding_response(json, "test");
         assert!(result.is_err());
     }
 
@@ -445,23 +478,29 @@ mod tests {
         let error = provider_status_error(
             reqwest::StatusCode::BAD_REQUEST,
             format!("too large {BODY_CANARY}").as_bytes(),
+            "test",
         )
         .to_string();
         assert!(matches!(
-            provider_status_error(reqwest::StatusCode::BAD_REQUEST, b"too large"),
+            provider_status_error(reqwest::StatusCode::BAD_REQUEST, b"too large", "test"),
             EmbedError::InputTooLarge(_)
         ));
         assert!(matches!(
             provider_status_error(
                 reqwest::StatusCode::BAD_REQUEST,
                 br#"{"error":{"type":"exceed_context_size_error","message":"input exceeds the available context size"}}"#,
+                "test",
             ),
             EmbedError::InputTooLarge(_)
         ));
         assert!(!error.contains(BODY_CANARY));
 
-        let error =
-            provider_status_error(reqwest::StatusCode::INTERNAL_SERVER_ERROR, BODY_CANARY.as_bytes()).to_string();
+        let error = provider_status_error(
+            reqwest::StatusCode::INTERNAL_SERVER_ERROR,
+            BODY_CANARY.as_bytes(),
+            "test",
+        )
+        .to_string();
         assert!(error.contains("status 500"));
         assert!(!error.contains(BODY_CANARY));
 
@@ -535,7 +574,7 @@ mod tests {
     #[test]
     fn test_parse_embedding_batch_response() {
         let json = br#"{"object":"list","data":[{"object":"embedding","index":0,"embedding":[0.1,0.2]},{"object":"embedding","index":1,"embedding":[0.3,0.4]}],"model":"test"}"#;
-        let result = parse_embedding_batch_response(json);
+        let result = parse_embedding_batch_response(json, "test");
         assert!(result.is_ok());
         let embs = result.unwrap();
         assert_eq!(embs.len(), 2);
