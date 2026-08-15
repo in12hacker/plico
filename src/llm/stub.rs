@@ -1,6 +1,6 @@
 //! Stub LLM provider — returns fixed responses for testing.
 
-use super::{LlmProvider, ChatMessage, ChatOptions, LlmError};
+use super::{ChatMessage, ChatOptions, LlmError, LlmProvider};
 
 pub struct StubProvider {
     response: String,
@@ -8,11 +8,15 @@ pub struct StubProvider {
 
 impl StubProvider {
     pub fn new(response: impl Into<String>) -> Self {
-        Self { response: response.into() }
+        Self {
+            response: response.into(),
+        }
     }
 
     pub fn empty() -> Self {
-        Self { response: String::new() }
+        Self {
+            response: String::new(),
+        }
     }
 }
 

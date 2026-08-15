@@ -6,7 +6,14 @@ use crate::kernel::trace::TraceStore;
 impl super::super::AIKernel {
     pub(crate) fn handle_trace(&self, req: ApiRequest) -> ApiResponse {
         match req {
-            ApiRequest::TraceList { agent_id, since, until, tool_name, status, limit } => {
+            ApiRequest::TraceList {
+                agent_id,
+                since,
+                until,
+                tool_name,
+                status,
+                limit,
+            } => {
                 let store = TraceStore::new(self.root.clone());
                 let files = store.list_files(agent_id.as_deref(), since.as_deref(), until.as_deref());
                 let mut all_spans = Vec::new();

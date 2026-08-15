@@ -3,69 +3,135 @@ suites:
     datasets:
       - locomo
       - longmemeval
-    default_samples:
-      locomo: 1986
-      longmemeval: 500
-    judge: gemini-3-flash
-    reader: gpt-4o
-    max_tokens: 64
+    sampling:
+      strategy: deterministic_sha256_stratified_v1
+      default_profile: regression
+      profiles:
+        regression:
+          locomo: 25
+          longmemeval: 25
+        research:
+          locomo: 200
+          longmemeval: 200
+        official:
+          locomo: 1986
+          longmemeval: 500
+    top_k: 10
+    reader_max_tokens: 128
+    ragas_style_proxy_samples: 20
 
   retrieval:
     datasets:
       - beir_scifact
       - memoryagentbench_ar
-      - dmr
-    default_samples:
-      beir_scifact: 300
-      memoryagentbench_ar: 1000
-      dmr: 500
+    sampling:
+      strategy: deterministic_sha256_stratified_v1
+      default_profile: regression
+      profiles:
+        regression:
+          beir_scifact: 50
+          memoryagentbench_ar: 50
+        research:
+          beir_scifact: 300
+          memoryagentbench_ar: 300
+        official:
+          beir_scifact: all
+          memoryagentbench_ar: all
+    candidates:
+      - plico_object_search
+      - bm25_only
+      - vector_only
     top_k: [5, 10, 20]
+    retrieve_limit: 20
+    bm25:
+      implementation: bm25s
+      version: 0.3.10
+      method: lucene
+      k1: 1.2
+      b: 0.75
+      tokenizer:
+        contract: bm25s_regex_words_v1
+        lower: true
+        token_pattern: '(?u)\b\w\w+\b'
+        stopwords: en
+        stemmer: none
+  memory_recall_lexical:
+    query_count: 100
+    duplicate_every: 10
+    top_k: [5, 10, 20]
+    retrieve_limit: 20
+    retriever: lexical
+    unsupported_retrievers: [vector, hybrid, bm25]
 
-  kg_reasoning:
-    datasets:
-      - hotpotqa
-      - kg_multi_hop
-    default_samples:
-      hotpotqa: 100
-      kg_multi_hop: 50
-    max_depth: 4
+  comparison:
+    mode: shadow
+    independent_runs_required: 5
+    bootstrap_resamples: 10000
+    confidence_level: 0.95
+    paired_on: sample_id
+    minimum_samples_for_p99_gate: 1000
+    thresholds_file: configs/regression_thresholds.yaml
 
   performance:
     operations:
-      - cas_write
-      - search
-      - memory_recall
-      - kg_path
+      - runtime.readiness
+      - object.put
+      - object.get
+      - object.search_warm_repeated
+      - object.search_query_cold_unique
+      - memory.create_ack
+      - memory.get
+      - projection.memory_embedding_catch_up
+      - memory.recall_lexical
+      - memory.update
+      - memory.delete
+      - session.start
+      - session.end
     default_counts:
-      cas_write: 1000
-      search: 500
+      readiness: 20
+      object_put: 250
+      object_get: 100
+      object_search: 500
+      memory_create: 100
+      memory_get: 100
       memory_recall: 500
-      kg_path: 200
+      memory_mutations: 50
+      session_round_trips: 20
+    projection_timeout_seconds: 120
+    projection_poll_interval_seconds: 0.2
+    warmup:
+      enabled: true
+      readiness_requests: 5
+    search_warm_queries:
+      - machine learning
+      - neural network
+      - deep learning
 
-  memory_lifecycle:
-    operations: [create, read, update, delete, batch, layer_migration, checkpoint_restore]
-    iterations: 100
-
-  token_efficiency:
-    context_levels: [L0, L1, L2]
-    test_queries: 50
-
-  scope_isolation:
-    scopes: [private, shared, group]
-    items_per_scope: 30
-
-  session_lifecycle:
-    sessions: 20
-    memories_per_session: 5
-
-  causal_reasoning:
-    chain_length: 30
-    depths: [2, 3, 4, 10]
+  v1b_release:
+    run_cardinality: 1
+    operations:
+      - protocol.capability_catalog
+      - protocol.mutating_disconnect_no_retry
+      - memory.create_ack
+      - memory.expected_head_conflict
+      - memory.update_ack
+      - memory.delete_ack
+      - memory.delete_idempotent
+      - memory.restart_replay
+      - projection.status_identity_unavailable
+      - projection.rebuild_identity_unavailable
+      - policy.private_recall
+      - policy.shared_recall
+      - policy.group_recall
+      - migration.inspect
+      - migration.dry_run
+      - migration.migrate
+    canonical_transport: uds
+    canonical_embedding_backend: stub
 
 global:
   plico_host: "127.0.0.1"
   plico_port: 7878
   timeout: 300.0
   output_dir: "results"
-  n_runs: 1
   warmup: true

@@ -1,19 +1,95 @@
-"""TCP client for plicod — 4-byte BE length-framed JSON."""
+"""Typed ``plico.personal.v2`` TCP/UDS client for plicod."""
 
 from __future__ import annotations
 
 import json
+import os
 import socket
 import struct
 import time
 import uuid
 from typing import Any
 
-MAX_MSG = 16 * 1024 * 1024  # 16 MiB, matches server
+from plico_benchmarks.core.retrieval_execution import (
+    real_embedding_required,
+    validate_embedding_query,
+    validate_retrieval_execution,
+    verified_vector_execution,
+)
+
+MAX_MSG = 16 * 1024 * 1024
+PROTOCOL = "plico.personal.v2"
+PUBLIC_OPERATION_CATALOG = (
+    "capabilities.describe",
+    "runtime.readiness",
+    "object.put",
+    "object.get",
+    "object.search",
+    "memory.create",
+    "memory.get",
+    "memory.recall",
+    "projection.status",
+    "projection.rebuild",
+    "memory.update",
+    "memory.delete",
+    "session.start",
+    "session.end",
+)
+PUBLIC_OPERATIONS = frozenset(PUBLIC_OPERATION_CATALOG)
+READ_ONLY_OPERATIONS = frozenset(
+    {
+        "capabilities.describe",
+        "runtime.readiness",
+        "object.get",
+        "object.search",
+        "memory.get",
+        "memory.recall",
+        "projection.status",
+    }
+)
+PUBLIC_ERROR_CODES = frozenset(
+    {
+        "INVALID_ARGUMENT",
+        "UNAUTHENTICATED",
+        "PERMISSION_DENIED",
+        "NOT_FOUND",
+        "CONFLICT",
+        "LIMIT_EXCEEDED",
+        "BUSY",
+        "PROVIDER_UNAVAILABLE",
+        "DEPENDENCY_UNAVAILABLE",
+        "UNSUPPORTED_CAPABILITY",
+        "INTERNAL",
+    }
+)
+PUBLIC_INPUT_FIELDS = {
+    "capabilities.describe": frozenset(),
+    "runtime.readiness": frozenset(),
+    "object.put": frozenset({"content", "encoding", "tags"}),
+    "object.get": frozenset({"cid"}),
+    "object.search": frozenset({"query", "limit", "require_tags", "exclude_tags"}),
+    "memory.create": frozenset({"content", "tags"}),
+    "memory.get": frozenset({"entry_id"}),
+    "memory.recall": frozenset({"query", "limit"}),
+    "projection.status": frozenset({"kind", "revision_id"}),
+    "projection.rebuild": frozenset({"kind", "selector"}),
+    "memory.update": frozenset({"entry_id", "content"}),
+    "memory.delete": frozenset({"entry_id"}),
+    "session.start": frozenset({"last_seen_seq"}),
+    "session.end": frozenset({"session_id"}),
+}
+
+
+class PlicoProtocolError(RuntimeError):
+    """The peer returned an invalid envelope or a typed domain failure."""
+
+    def __init__(self, message: str, *, code: str | None = None):
+        super().__init__(message)
+        self.code = code
 
 
 class PlicoClient:
-    """Thread-safe-ish TCP client for plicod with automatic reconnection."""
+    """Fail-closed client for the exact 14-operation personal protocol."""
 
     def __init__(
         self,
@@ -21,18 +97,35 @@ class PlicoClient:
         port: int = 7878,
         timeout: float = 300.0,
         max_retries: int = 2,
+        bearer_token: str | None = None,
+        uds_path: str | None = None,
     ):
+        if max_retries < 1:
+            raise ValueError("max_retries must be at least 1")
         self.host = host
         self.port = port
         self.timeout = timeout
         self.max_retries = max_retries
+        self._bearer_token = bearer_token or os.environ.get("PLICO_BEARER_TOKEN") or None
+        self.uds_path = uds_path
         self._sock: socket.socket | None = None
+        self.last_exchange_bytes: dict[str, int] | None = None
+        self.last_exchange: dict[str, Any] | None = None
+
+    @property
+    def transport(self) -> str:
+        return "uds" if self.uds_path is not None else "tcp"
 
     def connect(self) -> None:
-        self._sock = socket.create_connection(
-            (self.host, self.port), timeout=self.timeout
-        )
-        self._sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        if self.uds_path is not None:
+            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            sock.settimeout(self.timeout)
+            sock.connect(self.uds_path)
+            self._sock = sock
+        else:
+            self._require_bearer()
+            self._sock = socket.create_connection((self.host, self.port), timeout=self.timeout)
+            self._sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
 
     def ensure_connected(self) -> None:
         if self._sock is None:
@@ -56,257 +149,212 @@ class PlicoClient:
     def __exit__(self, *_: Any) -> None:
         self.close()
 
-    def _send(self, data: bytes) -> None:
-        assert self._sock is not None
-        header = struct.pack(">I", len(data))
-        self._sock.sendall(header + data)
+    def request(self, operation: str, input_data: dict[str, Any]) -> dict[str, Any]:
+        if operation not in PUBLIC_OPERATIONS:
+            raise ValueError(f"operation is not in the public capability catalog: {operation}")
+        unknown_fields = set(input_data) - PUBLIC_INPUT_FIELDS[operation]
+        if unknown_fields:
+            fields = ", ".join(sorted(unknown_fields))
+            raise ValueError(f"{operation} input contains fields outside its schema: {fields}")
+        request_id = str(uuid.uuid4())
+        envelope = {
+            "protocol": PROTOCOL,
+            "request_id": request_id,
+            "operation": operation,
+            "input": input_data,
+        }
+        if self.uds_path is None:
+            envelope["auth"] = {"bearer": self._require_bearer()}
+        payload = json.dumps(envelope, ensure_ascii=False, separators=(",", ":")).encode()
+        if not payload or len(payload) > MAX_MSG:
+            raise PlicoProtocolError("request frame is outside the public protocol size limit")
 
-    def _recv(self) -> bytes:
-        assert self._sock is not None
-        header = self._recvn(4)
-        length = struct.unpack(">I", header)[0]
-        if length > MAX_MSG:
-            raise ValueError(f"response too large: {length}")
-        return self._recvn(length)
-
-    def _recvn(self, n: int) -> bytes:
-        assert self._sock is not None
-        buf = bytearray()
-        while len(buf) < n:
-            chunk = self._sock.recv(n - len(buf))
-            if not chunk:
-                raise ConnectionError("connection closed")
-            buf.extend(chunk)
-        return bytes(buf)
-
-    def request(self, req: dict[str, Any]) -> dict[str, Any]:
-        self.ensure_connected()
-        payload = json.dumps(req, ensure_ascii=False).encode("utf-8")
-        for attempt in range(self.max_retries):
+        attempts = self.max_retries if operation in READ_ONLY_OPERATIONS else 1
+        self.last_exchange = {
+            "request_id": request_id,
+            "wire_operation": operation,
+            "attempt_count": 0,
+            "frame_sent": False,
+            "response_observed": False,
+            "request": len(payload) + 4,
+            "response": 0,
+        }
+        for attempt in range(attempts):
             try:
+                self.last_exchange["attempt_count"] = attempt + 1
+                self.ensure_connected()
                 self._send(payload)
-                resp_bytes = self._recv()
-                return json.loads(resp_bytes)
-            except (ConnectionError, OSError, TimeoutError) as e:
-                self._sock = None
-                if attempt == self.max_retries - 1:
+                self.last_exchange["frame_sent"] = True
+                response_payload = self._recv()
+                self.last_exchange["response_observed"] = True
+                self.last_exchange["response"] = len(response_payload) + 4
+                self.last_exchange_bytes = {
+                    "request": len(payload) + 4,
+                    "response": len(response_payload) + 4,
+                }
+                response = json.loads(response_payload)
+                return self._validated_result(response, request_id, operation)
+            except (ConnectionError, OSError, TimeoutError):
+                self.close()
+                if attempt == attempts - 1:
                     raise
                 time.sleep(0.5 * (attempt + 1))
-                self.connect()
-        raise ConnectionError("max retries exceeded")
+        raise ConnectionError("maximum reconnect attempts exceeded")
 
-    # ── Convenience methods ────────────────────────────────────────
+    def _require_bearer(self) -> str:
+        if not self._bearer_token:
+            raise PlicoProtocolError("PLICO_BEARER_TOKEN is required for TCP benchmark requests")
+        if len(self._bearer_token.encode()) > 4096:
+            raise PlicoProtocolError("PLICO_BEARER_TOKEN exceeds the public protocol limit")
+        return self._bearer_token
 
-    def health(self) -> dict[str, Any]:
-        return self.request({"method": "health_report"})
+    def _send(self, data: bytes) -> None:
+        assert self._sock is not None
+        self._sock.sendall(struct.pack(">I", len(data)) + data)
 
-    def wait_for_indexing(
-        self, timeout: float = 120.0, poll_interval: float = 2.0
-    ) -> None:
-        """Wait until recently written data is searchable.
+    def _recv(self) -> bytes:
+        header = self._recvn(4)
+        length = struct.unpack(">I", header)[0]
+        if length == 0 or length > MAX_MSG:
+            raise PlicoProtocolError("response frame length is outside the protocol limit")
+        return self._recvn(length)
 
-        Writes a probe item and polls search until it is retrievable.
-        This ensures async embedding generation and HNSW index refresh
-        have caught up. Call after bulk ingest and before querying.
-        """
-        probe = f"__bench_probe_{uuid.uuid4().hex}__"
-        resp = self.create(probe, tags=["_bench_probe"])
-        probe_cid = resp.get("cid", "")
-        if not probe_cid:
-            # Fallback: heuristic sleep if probe write failed
-            time.sleep(min(10.0, timeout))
-            return
+    def _recvn(self, size: int) -> bytes:
+        assert self._sock is not None
+        payload = bytearray()
+        while len(payload) < size:
+            chunk = self._sock.recv(size - len(payload))
+            if not chunk:
+                raise ConnectionError("connection closed before the frame completed")
+            payload.extend(chunk)
+        return bytes(payload)
 
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            try:
-                resp = self.search(probe, limit=5, require_tags=["_bench_probe"])
-                for h in resp.get("results", []):
-                    if h.get("cid") == probe_cid:
-                        return
-            except Exception:
-                pass
-            time.sleep(poll_interval)
+    @staticmethod
+    def _validated_result(response: Any, request_id: str, operation: str) -> dict[str, Any]:
+        if not isinstance(response, dict):
+            raise PlicoProtocolError(f"{operation} returned a non-object response")
+        if response.get("protocol") != PROTOCOL:
+            raise PlicoProtocolError(f"{operation} returned an unexpected protocol")
+        if response.get("request_id") != request_id:
+            raise PlicoProtocolError(f"{operation} returned a mismatched request_id")
+        ok = response.get("ok")
+        if ok is True:
+            if set(response) != {"protocol", "request_id", "ok", "data"}:
+                raise PlicoProtocolError(f"{operation} returned an invalid success envelope")
+        elif ok is False:
+            if set(response) != {"protocol", "request_id", "ok", "error"}:
+                raise PlicoProtocolError(f"{operation} returned an invalid error envelope")
+            error = response.get("error")
+            code = error.get("code") if isinstance(error, dict) else "INVALID_RESPONSE"
+            if code not in PUBLIC_ERROR_CODES:
+                code = "INVALID_RESPONSE"
+            raise PlicoProtocolError(f"{operation} failed [{code}]", code=code)
+        else:
+            raise PlicoProtocolError(f"{operation} returned a non-boolean ok field")
+        data = response.get("data")
+        if not isinstance(data, dict) or data.get("operation") != operation:
+            raise PlicoProtocolError(f"{operation} returned mismatched typed data")
+        result = data.get("result")
+        if not isinstance(result, dict):
+            raise PlicoProtocolError(f"{operation} returned a non-object typed result")
+        return result
 
-        raise TimeoutError(
-            f"Indexing not complete after {timeout}s (probe cid={probe_cid})"
-        )
+    # Exact public capability conveniences.
 
-    def create(
-        self, content: str, tags: list[str], agent_id: str = "bench",
-        scope: str | None = None,
-    ) -> dict[str, Any]:
-        req: dict[str, Any] = {
-            "method": "create",
-            "content": content,
-            "tags": tags,
-            "agent_id": agent_id,
-        }
-        if scope:
-            req["scope"] = scope
-        return self.request(req)
+    def capabilities_describe(self) -> dict[str, Any]:
+        return self.request("capabilities.describe", {})
 
-    def batch_create(
-        self, items: list[dict[str, Any]], agent_id: str = "bench"
-    ) -> dict[str, Any]:
+    def runtime_readiness(self) -> dict[str, Any]:
+        return self.request("runtime.readiness", {})
+
+    def object_put(self, content: str, tags: list[str] | None = None) -> dict[str, Any]:
         return self.request(
-            {"method": "batch_create", "items": items, "agent_id": agent_id}
+            "object.put", {"content": content, "encoding": "utf8", "tags": tags or []}
         )
 
-    def read(self, cid: str, agent_id: str = "bench") -> dict[str, Any]:
-        return self.request({"method": "read", "cid": cid, "agent_id": agent_id})
+    def object_get(self, cid: str) -> dict[str, Any]:
+        return self.request("object.get", {"cid": cid})
 
-    def delete(self, cid: str, agent_id: str = "bench") -> dict[str, Any]:
-        return self.request({"method": "delete", "cid": cid, "agent_id": agent_id})
-
-    def search(
+    def object_search(
         self,
         query: str,
-        agent_id: str = "bench",
         limit: int = 10,
         require_tags: list[str] | None = None,
-        intent: str | None = None,
-        scope: str | None = None,
-    ) -> dict[str, Any]:
-        req: dict[str, Any] = {
-            "method": "search",
-            "query": query,
-            "agent_id": agent_id,
-            "limit": limit,
-        }
-        if require_tags:
-            req["require_tags"] = require_tags
-        if intent:
-            req["intent"] = intent
-        if scope:
-            req["scope"] = scope
-        return self.request(req)
-
-    def remember(self, agent_id: str, content: str) -> dict[str, Any]:
-        return self.request(
-            {"method": "remember", "agent_id": agent_id, "content": content}
-        )
-
-    def recall(
-        self, agent_id: str, query: str | None = None, limit: int = 10
-    ) -> dict[str, Any]:
-        req: dict[str, Any] = {
-            "method": "recall",
-            "agent_id": agent_id,
-            "limit": limit,
-        }
-        if query:
-            req["query"] = query
-        return self.request(req)
-
-    def recall_semantic(
-        self, agent_id: str, query: str, k: int = 10
+        exclude_tags: list[str] | None = None,
     ) -> dict[str, Any]:
         return self.request(
+            "object.search",
             {
-                "method": "recall_semantic",
-                "agent_id": agent_id,
                 "query": query,
-                "k": k,
-            }
+                "limit": limit,
+                "require_tags": require_tags or [],
+                "exclude_tags": exclude_tags or [],
+            },
         )
 
-    def recall_routed(self, agent_id: str, query: str, k: int = 10) -> dict[str, Any]:
+    def memory_create(self, content: str, tags: list[str] | None = None) -> dict[str, Any]:
+        return self.request("memory.create", {"content": content, "tags": tags or []})
+
+    def memory_get(self, entry_id: str) -> dict[str, Any]:
+        return self.request("memory.get", {"entry_id": entry_id})
+
+    def memory_recall(self, query: str, limit: int = 10) -> dict[str, Any]:
+        return self.request("memory.recall", {"query": query, "limit": limit})
+
+    def projection_status(self, revision_id: str) -> dict[str, Any]:
         return self.request(
-            {
-                "method": "recall_routed",
-                "agent_id": agent_id,
-                "query": query,
-                "k": k,
-            }
+            "projection.status",
+            {"kind": "memory_embedding", "revision_id": revision_id},
         )
 
-    def add_node(
-        self,
-        label: str,
-        node_type: str = "Entity",
-        agent_id: str = "bench",
-        properties: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        req: dict[str, Any] = {
-            "method": "add_node",
-            "label": label,
-            "node_type": node_type,
-            "agent_id": agent_id,
-            "properties": properties or {},
-        }
-        return self.request(req)
-
-    def add_edge(
-        self,
-        src_id: str,
-        dst_id: str,
-        edge_type: str = "RelatedTo",
-        agent_id: str = "bench",
-        weight: float = 1.0,
-    ) -> dict[str, Any]:
+    def projection_rebuild_current(self, revision_id: str) -> dict[str, Any]:
         return self.request(
+            "projection.rebuild",
             {
-                "method": "add_edge",
-                "src_id": src_id,
-                "dst_id": dst_id,
-                "edge_type": edge_type,
-                "agent_id": agent_id,
-                "weight": weight,
-            }
+                "kind": "memory_embedding",
+                "selector": {"type": "current_revision", "revision_id": revision_id},
+            },
         )
 
-    def find_paths(
-        self,
-        src_id: str,
-        dst_id: str,
-        agent_id: str = "bench",
-        max_depth: int = 4,
-        weighted: bool = False,
-    ) -> dict[str, Any]:
+    def projection_rebuild_all_eligible(self) -> dict[str, Any]:
         return self.request(
-            {
-                "method": "find_paths",
-                "src_id": src_id,
-                "dst_id": dst_id,
-                "agent_id": agent_id,
-                "max_depth": max_depth,
-                "weighted": weighted,
-            }
+            "projection.rebuild",
+            {"kind": "memory_embedding", "selector": {"type": "all_eligible"}},
         )
 
-    def start_session(
-        self, agent_id: str, goals: list[str] | None = None
-    ) -> dict[str, Any]:
-        req: dict[str, Any] = {"method": "start_session", "agent_id": agent_id}
-        if goals:
-            req["goals"] = goals
-        return self.request(req)
+    def memory_update(self, entry_id: str, content: str) -> dict[str, Any]:
+        return self.request("memory.update", {"entry_id": entry_id, "content": content})
 
-    def end_session(
-        self, agent_id: str, session_id: str = "", auto_checkpoint: bool = True
-    ) -> dict[str, Any]:
-        req: dict[str, Any] = {
-            "method": "end_session",
-            "agent_id": agent_id,
-            "session_id": session_id,
-            "auto_checkpoint": auto_checkpoint,
-        }
-        return self.request(req)
+    def memory_delete(self, entry_id: str) -> dict[str, Any]:
+        return self.request("memory.delete", {"entry_id": entry_id})
 
-    def remember_long_term(
-        self,
-        agent_id: str,
-        content: str,
-        tags: list[str] | None = None,
-        importance: int = 5,
-    ) -> dict[str, Any]:
-        req: dict[str, Any] = {
-            "method": "remember_long_term",
-            "agent_id": agent_id,
-            "content": content,
-            "importance": importance,
-        }
-        if tags:
-            req["tags"] = tags
-        return self.request(req)
+    def session_start(self, last_seen_seq: int | None = None) -> dict[str, Any]:
+        input_data = {} if last_seen_seq is None else {"last_seen_seq": last_seen_seq}
+        return self.request("session.start", input_data)
+
+    def session_end(self, session_id: str) -> dict[str, Any]:
+        return self.request("session.end", {"session_id": session_id})
+
+    def wait_for_object_indexing(self, timeout: float = 120.0, poll_interval: float = 2.0) -> None:
+        """Wait for one public object probe to become searchable."""
+        probe = f"__bench_probe_{uuid.uuid4().hex}__"
+        cid = self.object_put(probe, tags=["_bench_probe"])["cid"]
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            response = self.object_search(probe, limit=5, require_tags=["_bench_probe"])
+            hits = response.get("hits")
+            if not isinstance(hits, list):
+                raise PlicoProtocolError("object.search returned no hits list")
+            if any(isinstance(hit, dict) and hit.get("cid") == cid for hit in hits):
+                if real_embedding_required() and not _response_proves_vector_execution(response):
+                    time.sleep(poll_interval)
+                    continue
+                return
+            time.sleep(poll_interval)
+        raise TimeoutError(f"object indexing did not complete after {timeout}s")
+
+
+def _response_proves_vector_execution(response: dict[str, Any]) -> bool:
+    state, _ = validate_embedding_query(response.get("embedding_query"))
+    retrieval = validate_retrieval_execution(response.get("retrieval"))
+    return verified_vector_execution(state, retrieval)

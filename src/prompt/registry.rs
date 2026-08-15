@@ -110,14 +110,16 @@ impl PromptRegistry {
         vars: &HashMap<&str, String>,
         agent_id: Option<&str>,
     ) -> Result<String, RenderError> {
-        let template = self.resolve(name, agent_id)
+        let template = self
+            .resolve(name, agent_id)
             .ok_or_else(|| RenderError::NotFound(name.to_string()))?;
 
         let mut result = template.template.clone();
         for var_name in &template.variables {
             let placeholder = format!("{{{{{}}}}}", var_name);
             if result.contains(&placeholder) {
-                let value = vars.get(var_name.as_str())
+                let value = vars
+                    .get(var_name.as_str())
                     .ok_or_else(|| RenderError::MissingVariable {
                         prompt: name.to_string(),
                         var: var_name.clone(),
@@ -190,8 +192,16 @@ mod tests {
     fn test_override_priority() {
         let mut reg = PromptRegistry::new();
         reg.register_default(PromptTemplate::new("greet", "Default {{name}}", &["name"]));
-        reg.set_override("greet", PromptTemplate::new("greet", "Global {{name}}", &["name"]), None);
-        reg.set_override("greet", PromptTemplate::new("greet", "Agent {{name}}", &["name"]), Some("agent-1"));
+        reg.set_override(
+            "greet",
+            PromptTemplate::new("greet", "Global {{name}}", &["name"]),
+            None,
+        );
+        reg.set_override(
+            "greet",
+            PromptTemplate::new("greet", "Agent {{name}}", &["name"]),
+            Some("agent-1"),
+        );
 
         let mut vars = HashMap::new();
         vars.insert("name", "X".to_string());
@@ -207,7 +217,10 @@ mod tests {
     fn test_missing_prompt() {
         let reg = PromptRegistry::new();
         let vars = HashMap::new();
-        assert!(matches!(reg.render("nonexistent", &vars, None), Err(RenderError::NotFound(_))));
+        assert!(matches!(
+            reg.render("nonexistent", &vars, None),
+            Err(RenderError::NotFound(_))
+        ));
     }
 
     #[test]
@@ -306,7 +319,10 @@ mod tests {
     fn test_render_error_display() {
         let not_found = RenderError::NotFound("x".into());
         assert!(not_found.to_string().contains("x"));
-        let missing = RenderError::MissingVariable { prompt: "p".into(), var: "v".into() };
+        let missing = RenderError::MissingVariable {
+            prompt: "p".into(),
+            var: "v".into(),
+        };
         assert!(missing.to_string().contains("v"));
     }
 

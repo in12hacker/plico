@@ -1,9 +1,9 @@
 //! Event operations — knowledge graph event containers.
 
-use crate::fs::{EventType, EventSummary, EventRelation};
-use crate::api::permission::{PermissionContext, PermissionAction};
-use crate::temporal::{TemporalResolver, RULE_BASED_RESOLVER};
+use crate::api::permission::{PermissionAction, PermissionContext};
+use crate::fs::{EventRelation, EventSummary, EventType};
 use crate::kernel::event_bus::KernelEvent;
+use crate::temporal::{TemporalResolver, RULE_BASED_RESOLVER};
 
 impl crate::kernel::AIKernel {
     /// Create an event and register it in the knowledge graph.
@@ -15,7 +15,9 @@ impl crate::kernel::AIKernel {
         let agent_id = params.agent_id.to_string();
         let ctx = PermissionContext::new(agent_id.clone(), crate::DEFAULT_TENANT.to_string());
         self.permissions.check(&ctx, PermissionAction::Write)?;
-        let event_id = self.fs.create_event(params)
+        let event_id = self
+            .fs
+            .create_event(params)
             .map_err(|e| std::io::Error::other(e.to_string()))?;
         self.event_bus.emit(KernelEvent::EventCreated {
             event_id: event_id.clone(),
@@ -34,7 +36,9 @@ impl crate::kernel::AIKernel {
         event_type: Option<EventType>,
         agent_id: Option<&str>,
     ) -> Vec<EventSummary> {
-        self.fs.list_events(since, until, tags, event_type, agent_id).unwrap_or_default()
+        self.fs
+            .list_events(since, until, tags, event_type, agent_id)
+            .unwrap_or_default()
     }
 
     /// List events by natural-language time expression (e.g. "几天前", "上周").
@@ -46,7 +50,8 @@ impl crate::kernel::AIKernel {
         agent_id: Option<&str>,
     ) -> std::io::Result<Vec<EventSummary>> {
         let resolver: &dyn TemporalResolver = &RULE_BASED_RESOLVER;
-        self.fs.list_events_by_time(time_expression, tags, event_type, resolver, agent_id)
+        self.fs
+            .list_events_by_time(time_expression, tags, event_type, resolver, agent_id)
             .map_err(|e| std::io::Error::other(e.to_string()))
     }
 
@@ -60,7 +65,8 @@ impl crate::kernel::AIKernel {
     ) -> std::io::Result<()> {
         let ctx = PermissionContext::new(agent_id.to_string(), crate::DEFAULT_TENANT.to_string());
         self.permissions.check(&ctx, PermissionAction::Write)?;
-        self.fs.event_attach(event_id, target_id, relation, agent_id)
+        self.fs
+            .event_attach(event_id, target_id, relation, agent_id)
             .map_err(|e| std::io::Error::other(e.to_string()))
     }
 }
@@ -68,8 +74,8 @@ impl crate::kernel::AIKernel {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::kernel::tests::make_kernel;
     use crate::fs::semantic_fs::events::CreateEventParams;
+    use crate::kernel::tests::make_kernel;
 
     #[test]
     fn test_create_event() {
@@ -132,13 +138,15 @@ mod tests {
         let event_id = kernel.create_event(params).unwrap();
 
         // Create a CAS object to use as target
-        let cid = kernel.semantic_create(
-            b"target content".to_vec(),
-            vec!["target".to_string()],
-            "kernel",
-            None,
-            crate::cas::ObjectScope::default(),
-        ).unwrap();
+        let cid = kernel
+            .semantic_create(
+                b"target content".to_vec(),
+                vec!["target".to_string()],
+                "kernel",
+                None,
+                crate::cas::ObjectScope::default(),
+            )
+            .unwrap();
 
         // Attach
         let result = kernel.event_attach(&event_id, &cid, EventRelation::Artifact, "kernel");

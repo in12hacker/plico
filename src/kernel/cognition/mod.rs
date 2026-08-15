@@ -24,17 +24,25 @@ pub mod trajectory_tracker;
 pub mod wasm_runtime;
 
 // Re-export core types for inter-module use
-pub use cognitive_loop::{CognitiveLoop, CognitiveOptimizationReport, OptimizationAction, CognitiveStats, CognitiveState, SessionCognitiveState};
-pub use context_quality::{ContextQualityEngine, ContextQuality, CompressedContext, RemovalRecord, RemovalReason, ContextIssue};
-pub use intent_network::{IntentSemanticNetwork, SemanticRelation, SemanticNode, SemanticEdge, RelatedContext, LearningReport, ExperienceAssociation};
-pub use skill_forge::{SkillForge, SkillRecommendation, ValidationResult};
-pub use trajectory_tracker::{TrajectoryTracker, FailureRecord, FailureStats};
-pub use experience_miner::ExperienceMiner;
-pub use skill_validator::SkillValidator;
-pub use skill_composer::SkillComposer;
-pub use skill_registry::SkillRegistry;
-pub use wasm_runtime::WasmRuntime;
+pub use cognitive_loop::{
+    CognitiveLoop, CognitiveOptimizationReport, CognitiveState, CognitiveStats, OptimizationAction,
+    SessionCognitiveState,
+};
+pub use context_quality::{
+    CompressedContext, ContextIssue, ContextQuality, ContextQualityEngine, RemovalReason, RemovalRecord,
+};
 pub use dsl_interpreter::{DslInterpreter, DslSkill, DslStep, ToolExecutor};
+pub use experience_miner::ExperienceMiner;
+pub use intent_network::{
+    ExperienceAssociation, IntentSemanticNetwork, LearningReport, RelatedContext, SemanticEdge, SemanticNode,
+    SemanticRelation,
+};
+pub use skill_composer::SkillComposer;
+pub use skill_forge::{SkillForge, SkillRecommendation, ValidationResult};
+pub use skill_registry::SkillRegistry;
+pub use skill_validator::SkillValidator;
+pub use trajectory_tracker::{FailureRecord, FailureStats, TrajectoryTracker};
+pub use wasm_runtime::WasmRuntime;
 
 use thiserror::Error;
 
@@ -183,10 +191,22 @@ pub enum ReportVerbosity {
 /// 认知模式
 #[derive(Debug, Clone)]
 pub enum CognitivePattern {
-    RepetitiveSequence { operations: Vec<String>, count: usize },
-    RepeatedFailure { problem_signature: String, failure_count: usize },
-    ContextBloat { added_tokens: usize, time_window_ms: u64 },
-    AttentionDrift { topics: Vec<String>, switch_count: usize },
+    RepetitiveSequence {
+        operations: Vec<String>,
+        count: usize,
+    },
+    RepeatedFailure {
+        problem_signature: String,
+        failure_count: usize,
+    },
+    ContextBloat {
+        added_tokens: usize,
+        time_window_ms: u64,
+    },
+    AttentionDrift {
+        topics: Vec<String>,
+        switch_count: usize,
+    },
 }
 
 /// 轨迹点

@@ -3,9 +3,9 @@
 //! Receives `Span` from API handlers via a channel and writes them
 //! to JSONL files asynchronously, avoiding blocking the request path.
 
+use super::Span;
 use std::sync::mpsc;
 use std::thread;
-use super::Span;
 
 /// Background writer that receives spans and appends them to JSONL files.
 pub struct TraceWriter {
@@ -25,7 +25,10 @@ impl TraceWriter {
                 }
             }
         });
-        Self { sender, _handle: handle }
+        Self {
+            sender,
+            _handle: handle,
+        }
     }
 
     /// Send a span to the background writer (non-blocking).
@@ -43,21 +46,17 @@ impl TraceWriter {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let json = serde_json::to_string(span)
-            .map_err(std::io::Error::other)?;
+        let json = serde_json::to_string(span).map_err(std::io::Error::other)?;
         use std::io::Write;
-        let mut file = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)?;
+        let mut file = std::fs::OpenOptions::new().create(true).append(true).open(&path)?;
         writeln!(file, "{json}")
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::super::{new_id, today_str, SpanStatus};
     use super::*;
-    use super::super::{SpanStatus, today_str, new_id};
 
     #[test]
     fn test_writer_records_span() {

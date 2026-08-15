@@ -1,7 +1,8 @@
-//! Session lifecycle management (F-6).
+//! Durable session lifecycle management.
 //!
-//! Orchestrates existing checkpoint/restore/delta/prefetch components
-//! to provide StartSession and EndSession APIs with automatic timeout cleanup.
+//! Session start/end are deliberately small state transitions. Derived work such
+//! as prefetch, checkpoints, and memory consolidation is not part of the public
+//! acknowledgement boundary.
 
 use crate::util::now_ms;
 use std::collections::HashMap;
@@ -11,11 +12,9 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use crate::api::semantic::{ChangeEntry, CheckpointSummaryDto, ConsolidationReport};
-use crate::kernel::event_bus::{EventBus, KernelEvent};
-use crate::kernel::ops::delta::handle_delta_since;
-use crate::kernel::ops::tier_maintenance::TierMaintenance;
-use crate::memory::layered::{LayeredMemory, MemoryTier};
+use crate::api::semantic::ChangeEntry;
+use crate::kernel::event_bus::EventBus;
+use crate::kernel::ops::delta::change_entry_from_event;
 
 // ── F-10: Agent Profile & Intent Key Strategy ─────────────────────────────────
 
@@ -138,14 +137,19 @@ impl AgentProfile {
             });
         }
         // Keep top 50 preferences, sorted by confidence
-        self.preference_facts.sort_by(|a, b| b.confidence.partial_cmp(&a.confidence).unwrap_or(std::cmp::Ordering::Equal));
+        self.preference_facts.sort_by(|a, b| {
+            b.confidence
+                .partial_cmp(&a.confidence)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         self.preference_facts.truncate(50);
     }
 
     /// Get preference keywords for search augmentation.
     /// Returns preference strings above the given confidence threshold.
     pub fn preference_keywords(&self, min_confidence: f32) -> Vec<&str> {
-        self.preference_facts.iter()
+        self.preference_facts
+            .iter()
             .filter(|f| f.confidence >= min_confidence)
             .map(|f| f.preference.as_str())
             .collect()
@@ -241,7 +245,32 @@ const DEFAULT_SESSION_TTL_MS: u64 = 30 * 60 * 1000;
 /// Interval between session timeout scans: 60 seconds.
 const SESSION_SCAN_INTERVAL_SECS: u64 = 60;
 /// Maximum completed sessions to retain per agent for growth reporting.
+#[cfg(test)]
 const MAX_COMPLETED_SESSIONS_PER_AGENT: usize = 100;
+
+#[derive(Debug, thiserror::Error)]
+pub enum SessionError {
+    #[error("session not found: {0}")]
+    NotFound(String),
+    #[error("session {session_id} does not belong to agent {agent_id}")]
+    Ownership { session_id: String, agent_id: String },
+    #[error("failed to persist session {operation}: {source}")]
+    Persistence {
+        operation: &'static str,
+        #[source]
+        source: std::io::Error,
+    },
+}
+
+impl SessionError {
+    fn category(&self) -> &'static str {
+        match self {
+            Self::NotFound(_) => "not_found",
+            Self::Ownership { .. } => "ownership",
+            Self::Persistence { .. } => "persistence",
+        }
+    }
+}
 
 /// An active session tracked by SessionStore.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -321,22 +350,24 @@ impl SessionStore {
         }
     }
 
-    /// Create a new session for an agent.
-    pub fn start_session(&self, session_id: String, agent_id: String, start_seq: u64) -> ActiveSession {
+    /// In-memory helper retained for store-level tests only. Production session
+    /// transitions must use [`start_session`] so acknowledgement implies persistence.
+    #[cfg(test)]
+    fn start_session(&self, session_id: String, agent_id: String, start_seq: u64) -> ActiveSession {
         let session = ActiveSession::new(session_id, agent_id, start_seq);
         let mut sessions = self.sessions.write().unwrap();
         sessions.insert(session.session_id.clone(), session.clone());
         session
     }
 
-    /// End a session and return it for cleanup.
-    /// Optionally record completion with token usage and session summary.
-    pub fn end_session(&self, session_id: &str, tokens_used: Option<usize>) -> Option<ActiveSession> {
+    #[cfg(test)]
+    fn end_session(&self, session_id: &str, tokens_used: Option<usize>) -> Option<ActiveSession> {
         self.end_session_with_summary(session_id, tokens_used, None, Vec::new())
     }
 
     /// End a session with an optional summary for cross-session recall.
-    pub fn end_session_with_summary(
+    #[cfg(test)]
+    fn end_session_with_summary(
         &self,
         session_id: &str,
         tokens_used: Option<usize>,
@@ -358,7 +389,14 @@ impl SessionStore {
     }
 
     /// Record a completed session for an agent.
-    fn record_completion(&self, session: ActiveSession, tokens_used: usize, summary: Option<SessionSummary>, created_cids: Vec<String>) {
+    #[cfg(test)]
+    fn record_completion(
+        &self,
+        session: ActiveSession,
+        tokens_used: usize,
+        summary: Option<SessionSummary>,
+        created_cids: Vec<String>,
+    ) {
         let completed = CompletedSession {
             session_id: session.session_id,
             agent_id: session.agent_id.clone(),
@@ -445,10 +483,7 @@ impl SessionStore {
         let sessions = self.sessions.read().unwrap();
         sessions
             .values()
-            .filter(|s| {
-                s.agent_id == agent_id
-                && cutoff_ms.map(|c| s.created_at_ms >= c).unwrap_or(true)
-            })
+            .filter(|s| s.agent_id == agent_id && cutoff_ms.map(|c| s.created_at_ms >= c).unwrap_or(true))
             .cloned()
             .collect()
     }
@@ -463,7 +498,7 @@ impl SessionStore {
             .collect()
     }
 
-/// Get the TTL in milliseconds.
+    /// Get the TTL in milliseconds.
     pub fn ttl_ms(&self) -> u64 {
         self.ttl_ms
     }
@@ -476,7 +511,8 @@ impl SessionStore {
             Some(s) => s,
             None => return vec![],
         };
-        sessions.iter()
+        sessions
+            .iter()
             .rev()
             .take(max_sessions)
             .filter_map(|s| s.summary.clone())
@@ -493,22 +529,77 @@ impl SessionStore {
         root.join("completed_sessions.json")
     }
 
+    fn persist_active_snapshot(root: &Path, sessions: &HashMap<String, ActiveSession>) -> std::io::Result<()> {
+        let sessions_data = serde_json::to_vec_pretty(sessions).map_err(|e| std::io::Error::other(e.to_string()))?;
+        let sessions_path = Self::sessions_path(root);
+        let tmp = sessions_path.with_extension("json.tmp");
+        {
+            use std::io::Write;
+            let mut file = std::fs::File::create(&tmp)?;
+            file.write_all(&sessions_data)?;
+            file.sync_all()?;
+        }
+        std::fs::rename(&tmp, &sessions_path)
+    }
+
+    fn begin_persisted(
+        &self,
+        session_id: String,
+        agent_id: String,
+        start_seq: u64,
+        root: &Path,
+    ) -> Result<ActiveSession, SessionError> {
+        let session = ActiveSession::new(session_id, agent_id, start_seq);
+        let mut sessions = self.sessions.write().unwrap();
+        sessions.insert(session.session_id.clone(), session.clone());
+
+        if let Err(source) = Self::persist_active_snapshot(root, &sessions) {
+            sessions.remove(&session.session_id);
+            return Err(SessionError::Persistence {
+                operation: "start",
+                source,
+            });
+        }
+
+        Ok(session)
+    }
+
+    fn finish_persisted(&self, agent_id: &str, session_id: &str, root: &Path) -> Result<ActiveSession, SessionError> {
+        let mut sessions = self.sessions.write().unwrap();
+        let session = sessions
+            .get(session_id)
+            .cloned()
+            .ok_or_else(|| SessionError::NotFound(session_id.to_string()))?;
+        if session.agent_id != agent_id {
+            return Err(SessionError::Ownership {
+                session_id: session_id.to_string(),
+                agent_id: agent_id.to_string(),
+            });
+        }
+
+        sessions.remove(session_id);
+        if let Err(source) = Self::persist_active_snapshot(root, &sessions) {
+            sessions.insert(session_id.to_string(), session.clone());
+            return Err(SessionError::Persistence {
+                operation: "end",
+                source,
+            });
+        }
+
+        Ok(session)
+    }
+
     /// Persist active and completed sessions to disk (A-1).
     pub fn persist(&self, root: &Path) -> std::io::Result<()> {
         // Persist active sessions
         let sessions = self.sessions.read().unwrap();
-        let sessions_data = serde_json::to_string_pretty(&*sessions)
-            .map_err(|e| std::io::Error::other(e.to_string()))?;
-        let sessions_path = Self::sessions_path(root);
-        let tmp = sessions_path.with_extension("json.tmp");
-        std::fs::write(&tmp, &sessions_data)?;
-        std::fs::rename(&tmp, &sessions_path)?;
+        Self::persist_active_snapshot(root, &sessions)?;
 
         // Persist completed sessions
         drop(sessions);
         let completed = self.completed_sessions.read().unwrap();
-        let completed_data = serde_json::to_string_pretty(&*completed)
-            .map_err(|e| std::io::Error::other(e.to_string()))?;
+        let completed_data =
+            serde_json::to_string_pretty(&*completed).map_err(|e| std::io::Error::other(e.to_string()))?;
         let completed_path = Self::completed_sessions_path(root);
         let tmp = completed_path.with_extension("json.tmp");
         std::fs::write(&tmp, &completed_data)?;
@@ -527,8 +618,11 @@ impl SessionStore {
             if let Ok(data) = std::fs::read_to_string(&sessions_path) {
                 if let Ok(sessions) = serde_json::from_str::<HashMap<String, ActiveSession>>(&data) {
                     *store.sessions.write().unwrap() = sessions;
-                    tracing::info!("Restored {} active sessions from {}",
-                        store.sessions.read().unwrap().len(), sessions_path.display());
+                    tracing::info!(
+                        "Restored {} active sessions from {}",
+                        store.sessions.read().unwrap().len(),
+                        sessions_path.display()
+                    );
                 }
             }
         }
@@ -554,361 +648,183 @@ impl Default for SessionStore {
     }
 }
 
-/// Bundled parameters for session orchestration.
-pub struct SessionStartParams<'a> {
+/// Inputs for the durable session start transition.
+pub struct StartSessionParams<'a> {
     pub agent_id: &'a str,
-    pub intent_hint: Option<String>,
-    pub load_tiers: Vec<MemoryTier>,
     pub last_seen_seq: Option<u64>,
     pub session_store: &'a SessionStore,
     pub event_bus: &'a Arc<EventBus>,
-    pub memory: &'a Arc<LayeredMemory>,
-    pub prefetch: &'a crate::kernel::ops::prefetch::IntentPrefetcher,
-    pub fs: &'a Arc<crate::fs::SemanticFS>,
     pub root: &'a Path,
 }
 
-/// StartSession orchestration — restore checkpoint + compute delta + prefetch intent.
-pub fn start_session_orchestrate(params: SessionStartParams<'_>) -> Result<StartSessionResult, String> {
-    let SessionStartParams {
-        agent_id, intent_hint, load_tiers: _load_tiers,
-        last_seen_seq, session_store, event_bus,
-        memory: _memory, prefetch, fs, root,
+/// Start a session and durably record it before acknowledging success.
+pub fn start_session(params: StartSessionParams<'_>) -> Result<StartSessionResult, SessionError> {
+    let StartSessionParams {
+        agent_id,
+        last_seen_seq,
+        session_store,
+        event_bus,
+        root,
     } = params;
-    // 1. Get current event seq for this session's start point
-    let current_seq = event_bus.current_seq();
+    let watermark = event_bus.current_seq();
 
-    // 2. Generate session ID
     let session_id = uuid::Uuid::new_v4().to_string();
-
-    // 3. Create session in store
-    let _session = session_store.start_session(
-        session_id.clone(),
-        agent_id.to_string(),
-        current_seq,
-    );
-
-    // 4. Touch session immediately after creation
-    session_store.touch(&session_id);
-
-    // 5. Persist immediately (A-1)
-    if let Err(e) = session_store.persist(root) {
-        tracing::warn!("Failed to persist session start: {}", e);
-    }
-
-    // 5b. F-3: Warm intent cache from agent profile (cache preheat at session-start)
-    // This uses historical hot_objects to pre-populate the cache
-    // F-2: Set session_id for cost tracking before any embedding calls
-    prefetch.set_session_id(Some(session_id.clone()));
-    let cache_warmed = prefetch.warm_cache_for_agent(agent_id);
-    if cache_warmed > 0 {
-        tracing::debug!("warmed {} cache entries from agent profile for {}", cache_warmed, agent_id);
-    }
-
-    // Soul v3.0: Register session with CognitiveLoop for proactive optimization
-    if let Some(cognitive_loop) = prefetch.cognitive_loop.get() {
-        let cognitive_loop = Arc::clone(cognitive_loop);
-        let agent_id = agent_id.to_string();
-        let session_id = session_id.clone();
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            handle.spawn(async move {
-                cognitive_loop.register_session(&agent_id, &session_id).await;
-                tracing::debug!("CognitiveLoop registered session {} for agent {}", session_id, agent_id);
-            });
+    match session_store.begin_persisted(session_id.clone(), agent_id.to_string(), watermark, root) {
+        Ok(_) => tracing::info!(
+            role_id = agent_id,
+            session_id,
+            ?last_seen_seq,
+            current_seq = watermark,
+            phase = "persist",
+            outcome = "success",
+            "session start persisted"
+        ),
+        Err(error) => {
+            tracing::warn!(
+                role_id = agent_id,
+                session_id,
+                ?last_seen_seq,
+                current_seq = watermark,
+                phase = "persist",
+                outcome = "error",
+                error_category = error.category(),
+                "session start persistence failed"
+            );
+            return Err(error);
         }
     }
 
-    // 5c. Restore from latest checkpoint if exists
-    // (checkpoint_agent stores via semantic_create which persists to CAS)
-    // We don't auto-restore here — that's done via explicit AgentRestore call.
-    // For StartSession, we return checkpoint info for the client to decide.
-    let restored_checkpoint = None;
-
-    // 6. Compute delta since last_seen_seq
-    let since_seq = last_seen_seq.unwrap_or(0);
-    let changes_since_last: Vec<ChangeEntry> = if since_seq < current_seq {
-        let delta = handle_delta_since(
-            since_seq,
-            vec![],   // watch_cids — empty means all
-            vec![],   // watch_tags — empty means all
-            None,     // limit — none means all
-            event_bus,
-        );
-        delta.changes
+    let since_seq = last_seen_seq.unwrap_or(watermark);
+    let changes_since_last: Vec<ChangeEntry> = if since_seq < watermark {
+        event_bus
+            .events_since(since_seq)
+            .into_iter()
+            .filter(|event| event.event.agent_id() == Some(agent_id))
+            .map(|event| change_entry_from_event(&event))
+            .collect()
     } else {
         vec![]
     };
 
-    // 7. If intent_hint provided, trigger prefetch and store assembled context in CAS
-    let warm_context: Option<String> = if let Some(ref hint) = intent_hint {
-        // Use a default budget_tokens if not specified
-        let budget = 4096;
-        let assembly_id = prefetch.declare_intent(
-            agent_id,
-            hint,
-            vec![],  // related_cids — none provided
-            budget,
-        );
-
-        // B51 Fix: Try to get assembled context and store in CAS — return CAS CID instead of assembly UUID
-        match prefetch.fetch_assembled_context(agent_id, &assembly_id) {
-            Some(Ok(allocation)) => {
-                // Assembly is ready (from cache hit), serialize and store in CAS
-                let content = serde_json::to_vec(&allocation).unwrap_or_default();
-                if !content.is_empty() {
-                    match fs.create(content, vec!["warm-context".into()], agent_id.to_string(), Some(hint.clone()), crate::cas::ObjectScope::default()) {
-                        Ok(cid) => Some(cid),
-                        Err(e) => {
-                            tracing::warn!("Failed to store warm_context in CAS: {}, falling back to assembly_id", e);
-                            Some(assembly_id)
-                        }
-                    }
-                } else {
-                    Some(assembly_id)
-                }
-            }
-            Some(Err(_)) | None => {
-                // B51 fix: even when prefetch is not ready, store a placeholder in CAS
-                // so warm_context always returns a CAS CID, not a UUID
-                let placeholder = serde_json::json!({
-                    "items": [],
-                    "total_tokens": 0,
-                    "budget": budget,
-                    "status": "pending",
-                    "assembly_id": assembly_id,
-                });
-                let content = serde_json::to_vec(&placeholder).unwrap_or_default();
-                match fs.create(content, vec!["warm-context".into(), "pending".into()], agent_id.to_string(), Some(hint.clone()), crate::cas::ObjectScope::default()) {
-                    Ok(cid) => Some(cid),
-                    Err(e) => {
-                        tracing::warn!("Failed to store warm_context placeholder in CAS: {}, falling back to assembly_id", e);
-                        Some(assembly_id)
-                    }
-                }
-            }
-        }
-    } else {
-        None
-    };
-
-    // 8. Estimate token count for the restored checkpoint summary + changes
-    let token_estimate = changes_since_last.iter()
-        .map(|c| crate::api::semantic::estimate_tokens(&c.summary))
-        .sum::<usize>();
-
-    // 9. Get CIDs from the most recent completed session (cross-session delta)
-    let previous_session_cids = session_store
-        .get_completed_sessions(agent_id, None)
-        .last()
-        .map(|cs| cs.created_cids.clone())
-        .unwrap_or_default();
+    tracing::info!(
+        role_id = agent_id,
+        session_id,
+        ?last_seen_seq,
+        current_seq = watermark,
+        phase = "publish",
+        outcome = "success",
+        "session start acknowledged"
+    );
 
     Ok(StartSessionResult {
         session_id,
-        restored_checkpoint,
-        warm_context,
         changes_since_last,
-        token_estimate,
-        previous_session_cids,
+        watermark,
     })
 }
 
-/// EndSession orchestration — checkpoint + clear ephemeral + return last_seq.
-pub fn end_session_orchestrate(
+/// End a session and durably remove it before acknowledging success.
+pub fn end_session(
     agent_id: &str,
     session_id: &str,
-    auto_checkpoint: bool,
     session_store: &SessionStore,
-    memory: &Arc<LayeredMemory>,
     root: &Path,
-    prefetch: Option<&crate::kernel::ops::prefetch::IntentPrefetcher>,
-    event_bus: Option<&Arc<EventBus>>,
-) -> Result<EndSessionResult, String> {
-    // 1. Validate session exists
-    let session = session_store.get(session_id)
-        .ok_or_else(|| format!("Session not found: {}", session_id))?;
-
-    if session.agent_id != agent_id {
-        return Err(format!(
-            "Session {} does not belong to agent {}",
-            session_id, agent_id
-        ));
-    }
-
-    // 2. Collect CIDs created during this session for cross-session delta
-    let created_cids: Vec<String> = if let Some(bus) = event_bus {
-        let events = bus.events_by_agent(agent_id);
-        events.iter()
-            .filter(|e| e.timestamp_ms >= session.created_at_ms)
-            .filter_map(|e| match &e.event {
-                KernelEvent::ObjectStored { cid, .. } => Some(cid.clone()),
-                _ => None,
-            })
-            .collect()
-    } else {
-        Vec::new()
-    };
-
-    // 3. Auto-checkpoint if requested
-    let checkpoint_id = if auto_checkpoint {
-        // Use memory.get_all to collect current state
-        // Then store via the existing checkpoint mechanism
-        // For now, we rely on the client's explicit AgentCheckpoint call
-        // or the periodic persist mechanism
-        None
-    } else {
-        None
-    };
-
-    // 3. A-5 Memory Consolidation Cycle: run tier maintenance then clear only ephemeral
-    // Run tier maintenance to promote important ephemeral memories to working/long-term
-    let maintenance = TierMaintenance::new();
-    let stats = maintenance.run_maintenance_cycle(memory, agent_id);
-    tracing::debug!(
-        ephemeral_before = stats.ephemeral_before,
-        ephemeral_after = stats.ephemeral_after,
-        working_before = stats.working_before,
-        working_after = stats.working_after,
-        promoted = stats.promoted_count,
-        evicted = stats.evicted_count,
-        "Memory Consolidation Cycle completed",
-    );
-    // Soul v3.0 公理3: Run memory consolidation (dedup, contradiction, decay/boost)
-    let consolidation_report = memory.consolidate_agent(agent_id);
-    if consolidation_report.merges > 0 || consolidation_report.contradictions_found > 0
-        || consolidation_report.decays_applied > 0 || consolidation_report.boosts_applied > 0
-    {
-        tracing::info!(
-            agent = agent_id,
-            scanned = consolidation_report.entries_scanned,
-            merges = consolidation_report.merges,
-            contradictions = consolidation_report.contradictions_found,
-            decays = consolidation_report.decays_applied,
-            boosts = consolidation_report.boosts_applied,
-            "Memory consolidation completed",
+    event_bus: &EventBus,
+) -> Result<EndSessionResult, SessionError> {
+    let last_seq = event_bus.current_seq();
+    if let Err(error) = session_store.finish_persisted(agent_id, session_id, root) {
+        tracing::warn!(
+            role_id = agent_id,
+            session_id,
+            current_seq = last_seq,
+            phase = "persist",
+            outcome = "error",
+            error_category = error.category(),
+            "session end persistence failed"
         );
+        return Err(error);
     }
-    // Clear only the ephemeral tier — preserve working and long-term memories
-    let _cleared = memory.clear_ephemeral(agent_id);
-
-    // Soul v3.0: End session in CognitiveLoop for skill extraction and trajectory finalization
-    if let Some(p) = prefetch {
-        if let Some(cognitive_loop) = p.cognitive_loop.get() {
-            let cognitive_loop = Arc::clone(cognitive_loop);
-            let agent_id = agent_id.to_string();
-            let session_id = session_id.to_string();
-            if let Ok(handle) = tokio::runtime::Handle::try_current() {
-                handle.spawn(async move {
-                    cognitive_loop.end_session(&agent_id, &session_id).await;
-                    tracing::debug!("CognitiveLoop ended session {} for agent {}", session_id, agent_id);
-                });
-            }
-        }
-    }
-
-    // 4. Get actual token cost from cost ledger (F-2: TokenCostLedger integration)
-    let (input_tokens, output_tokens) = prefetch
-        .map(|p| p.get_session_cost(session_id))
-        .unwrap_or((0, 0));
-    let total_tokens = (input_tokens + output_tokens) as usize;
-
-    // 4b. Generate lightweight session summary for cross-session recall
-    let session_summary = SessionSummary {
-        top_tags: vec![], // populated by caller if fs is available
-        object_count: 0,
-        intent: session.current_intent.clone(),
-        summary_cid: None,
-    };
-
-    // 5. Remove session from store with actual token cost and summary
-    session_store.end_session_with_summary(session_id, Some(total_tokens), Some(session_summary), created_cids);
-
-    // 6. Persist immediately (A-1)
-    if let Err(e) = session_store.persist(root) {
-        tracing::warn!("Failed to persist session end: {}", e);
-    }
-
-    // F-2: Clear session_id from prefetcher to stop cost tracking
-    if let Some(p) = prefetch {
-        p.set_session_id(None);
-    }
-
-    // 7. Return last_seq — this is the current event count at EndSession time
-    // The client will receive this and pass it back as last_seen_seq in next StartSession
-    let last_seq = session.start_seq; // Use session's start_seq as the baseline
-
-    Ok(EndSessionResult {
-        checkpoint_id,
-        last_seq,
-        consolidation: ConsolidationReport {
-            ephemeral_before: stats.ephemeral_before,
-            ephemeral_after: stats.ephemeral_after,
-            working_before: stats.working_before,
-            working_after: stats.working_after,
-            promoted: stats.promoted_count,
-            evicted: stats.evicted_count,
-            linked: stats.linked_count,
-        },
-    })
+    tracing::info!(
+        role_id = agent_id,
+        session_id,
+        current_seq = last_seq,
+        phase = "persist",
+        outcome = "success",
+        "session end persisted"
+    );
+    tracing::info!(
+        role_id = agent_id,
+        session_id,
+        current_seq = last_seq,
+        phase = "publish",
+        outcome = "success",
+        "session end acknowledged"
+    );
+    Ok(EndSessionResult { last_seq })
 }
 
 /// Result of StartSession orchestration.
 #[derive(Debug)]
 pub struct StartSessionResult {
     pub session_id: String,
-    pub restored_checkpoint: Option<CheckpointSummaryDto>,
-    pub warm_context: Option<String>, // assembly_id for FetchAssembledContext
     pub changes_since_last: Vec<ChangeEntry>,
-    pub token_estimate: usize,
-    /// CIDs created in the previous session (cross-session delta).
-    pub previous_session_cids: Vec<String>,
+    pub watermark: u64,
 }
 
 /// Result of EndSession orchestration.
 #[derive(Debug)]
 pub struct EndSessionResult {
-    pub checkpoint_id: Option<String>,
     pub last_seq: u64,
-    pub consolidation: crate::api::semantic::ConsolidationReport,
 }
 
 /// Spawn a background task that periodically scans for expired sessions
-/// and triggers auto-EndSession with checkpoint.
-pub fn spawn_session_timeout_scanner(
-    session_store: Arc<SessionStore>,
-    memory: Arc<LayeredMemory>,
-    root: PathBuf,
-) {
+/// and applies the same durable end transition used by explicit calls.
+pub fn spawn_session_timeout_scanner(session_store: Arc<SessionStore>, event_bus: Arc<EventBus>, root: PathBuf) {
     let root_clone = root.clone();
-    std::thread::spawn(move || {
-        loop {
-            std::thread::sleep(Duration::from_secs(SESSION_SCAN_INTERVAL_SECS));
+    std::thread::spawn(move || loop {
+        std::thread::sleep(Duration::from_secs(SESSION_SCAN_INTERVAL_SECS));
 
-            let expired = session_store.expired_sessions();
-            for session in expired {
-                tracing::info!(
-                    "Session {} for agent {} expired (TTL {}ms), auto-ending",
-                    session.session_id,
-                    session.agent_id,
-                    session_store.ttl_ms(),
+        let expired = session_store.expired_sessions();
+        for session in expired {
+            tracing::info!(
+                role_id = session.agent_id,
+                session_id = session.session_id,
+                current_seq = event_bus.current_seq(),
+                phase = "timeout",
+                outcome = "detected",
+                ttl_ms = session_store.ttl_ms(),
+                "expired session detected"
+            );
+
+            if let Err(error) = end_session(
+                &session.agent_id,
+                &session.session_id,
+                &session_store,
+                &root_clone,
+                &event_bus,
+            ) {
+                tracing::warn!(
+                    session_id = session.session_id,
+                    role_id = session.agent_id,
+                    current_seq = event_bus.current_seq(),
+                    phase = "timeout",
+                    outcome = "error",
+                    error_category = error.category(),
+                    "failed to durably end expired session"
                 );
-
-                // Auto-EndSession with checkpoint
-                let _ = end_session_orchestrate(
-                    &session.agent_id,
-                    &session.session_id,
-                    true, // auto_checkpoint
-                    &session_store,
-                    &memory,
-                    &root_clone,
-                    None, // no prefetch in timeout scanner
-                    None, // no event_bus in timeout scanner
+            } else {
+                tracing::info!(
+                    session_id = session.session_id,
+                    role_id = session.agent_id,
+                    current_seq = event_bus.current_seq(),
+                    phase = "timeout",
+                    outcome = "success",
+                    "expired session durably ended"
                 );
             }
         }
     });
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -1052,7 +968,12 @@ mod tests {
     #[test]
     fn test_tag_extraction_extracts_matching_tags() {
         let strategy = IntentKeyStrategy::TagExtraction;
-        let known_tags = vec!["auth".to_string(), "test".to_string(), "doc".to_string(), "api".to_string()];
+        let known_tags = vec![
+            "auth".to_string(),
+            "test".to_string(),
+            "doc".to_string(),
+            "api".to_string(),
+        ];
 
         // "修复 auth 和 test" should extract "auth" and "test"
         let tag_key = strategy.extract_tag_key("修复 auth 和 test", &known_tags);
@@ -1154,139 +1075,6 @@ mod tests {
     fn test_default_strategy_is_tag_extraction() {
         let strategy = IntentKeyStrategy::default();
         assert!(matches!(strategy, IntentKeyStrategy::TagExtraction));
-    }
-
-    // ── F-6 B51: Warm Context Tests ─────────────────────────────────────────────
-
-    fn create_test_fs_and_prefetcher() -> (Arc<crate::fs::SemanticFS>, Arc<crate::kernel::ops::prefetch::IntentPrefetcher>, tempfile::TempDir) {
-        let dir = tempfile::tempdir().unwrap();
-        let cas = Arc::new(crate::cas::CASStorage::new(dir.path().join("cas")).unwrap());
-        let ctx_loader = Arc::new(
-            crate::fs::context_loader::ContextLoader::new(
-                dir.path().join("context"),
-                None,
-                cas.clone(),
-            ).unwrap()
-        );
-
-        let embedding = Arc::new(crate::fs::StubEmbeddingProvider::new());
-        let search = Arc::new(crate::fs::search::memory::InMemoryBackend::new());
-        let knowledge_graph: Option<Arc<dyn crate::fs::KnowledgeGraph>> = None;
-
-        let fs = Arc::new(crate::fs::SemanticFS::new(
-            dir.path().to_path_buf(),
-            cas.clone(),
-            embedding.clone(),
-            search.clone(),
-            None,
-            knowledge_graph,
-        ).unwrap());
-
-        let prefetcher = Arc::new(crate::kernel::ops::prefetch::IntentPrefetcher::new(
-            search,
-            None,
-            Arc::new(crate::memory::LayeredMemory::new()),
-            Arc::new(crate::kernel::event_bus::EventBus::new()),
-            embedding,
-            ctx_loader,
-            dir.path().to_path_buf(),
-        ));
-
-        (fs, prefetcher, dir)
-    }
-
-    #[test]
-    fn test_session_start_without_intent_has_no_warm_context() {
-        let (fs, prefetcher, _dir) = create_test_fs_and_prefetcher();
-        let session_store = Arc::new(SessionStore::new());
-        let event_bus = Arc::new(crate::kernel::event_bus::EventBus::new());
-        let memory = Arc::new(crate::memory::LayeredMemory::new());
-        let root = std::env::temp_dir();
-
-        let result = start_session_orchestrate(SessionStartParams {
-            agent_id: "test-agent",
-            intent_hint: None,
-            load_tiers: vec![],
-            last_seen_seq: None,
-            session_store: &session_store,
-            event_bus: &event_bus,
-            memory: &memory,
-            prefetch: &prefetcher,
-            fs: &fs,
-            root: &root,
-        }).unwrap();
-
-        assert!(result.warm_context.is_none());
-    }
-
-    #[test]
-    fn test_session_start_warm_context_fallback_when_prefetch_not_ready() {
-        let (fs, prefetcher, _dir) = create_test_fs_and_prefetcher();
-        let session_store = Arc::new(SessionStore::new());
-        let event_bus = Arc::new(crate::kernel::event_bus::EventBus::new());
-        let memory = Arc::new(crate::memory::LayeredMemory::new());
-        let root = std::env::temp_dir();
-
-        // Start session WITH intent_hint — but prefetch runs in background thread
-        // and may not be ready immediately, so we should fall back to assembly_id (UUID)
-        let result = start_session_orchestrate(SessionStartParams {
-            agent_id: "test-agent",
-            intent_hint: Some("audit".to_string()),
-            load_tiers: vec![],
-            last_seen_seq: None,
-            session_store: &session_store,
-            event_bus: &event_bus,
-            memory: &memory,
-            prefetch: &prefetcher,
-            fs: &fs,
-            root: &root,
-        }).unwrap();
-
-        // B51 Fix: warm_context should always be a CAS CID (64 hex chars), never a UUID
-        assert!(result.warm_context.is_some());
-        let warm_context = result.warm_context.unwrap();
-
-        let is_valid_cid = warm_context.len() == 64
-            && warm_context.chars().all(|c| c.is_ascii_hexdigit());
-
-        assert!(is_valid_cid,
-            "warm_context should be a valid CAS CID (64 hex chars), got: {}", warm_context);
-
-        // Verify the CID can be read from CAS
-        let obj = fs.read(&crate::fs::semantic_fs::Query::ByCid(warm_context.clone()));
-        assert!(obj.is_ok(), "warm_context CID should be readable from CAS");
-    }
-
-    #[test]
-    fn test_session_start_warm_context_stores_in_cas_when_ready() {
-        // This test verifies the B51 fix: when warm_context IS a CID,
-        // it can be retrieved from CAS
-        let (fs, _prefetcher, _dir) = create_test_fs_and_prefetcher();
-
-        // First, manually create a warm_context in CAS to simulate the fixed behavior
-        let test_content = serde_json::json!({
-            "items": [],
-            "total_tokens": 100,
-            "budget": 4096
-        }).to_string().into_bytes();
-
-        let warm_cid = fs.create(
-            test_content,
-            vec!["warm-context".to_string()],
-            "test-agent".to_string(),
-            Some("audit".to_string()),
-            crate::cas::ObjectScope::default(),
-        ).unwrap();
-
-        // Now simulate what start_session_orchestrate does when prefetch returns a ready allocation
-        // We can verify that a CID created via fs.create is readable
-        use crate::fs::types::Query;
-        let read_result = fs.read(&Query::ByCid(warm_cid.clone()));
-        assert!(read_result.is_ok(), "CID created via fs.create should be readable");
-
-        // Also verify the CID format is correct (64 hex chars, not UUID)
-        assert_eq!(warm_cid.len(), 64, "CID should be 64 hex chars");
-        assert!(warm_cid.chars().all(|c| c.is_ascii_hexdigit()), "CID should be hex digits only");
     }
 
     // ── AgentProfile: hot object tracking ──────────────────────────────────────
@@ -1521,7 +1309,12 @@ mod tests {
     fn test_tag_extraction_truncates_at_five_tags() {
         let strategy = IntentKeyStrategy::TagExtraction;
         let known_tags = vec![
-            "aa".into(), "bb".into(), "cc".into(), "dd".into(), "ee".into(), "ff".into(),
+            "aa".into(),
+            "bb".into(),
+            "cc".into(),
+            "dd".into(),
+            "ee".into(),
+            "ff".into(),
         ];
         let intent = "aa bb cc dd ee ff";
         let key = strategy.extract_tag_key(intent, &known_tags);
@@ -1911,114 +1704,161 @@ mod tests {
         assert!(store.list().is_empty());
     }
 
-    // ── end_session_orchestrate ─────────────────────────────────────────────────
+    // ── Durable session lifecycle ──────────────────────────────────────────────
 
     #[test]
-    fn test_end_session_orchestrate_session_not_found() {
-        let store = SessionStore::new();
-        let memory = Arc::new(crate::memory::LayeredMemory::new());
+    fn start_persistence_failure_rolls_back_active_session() {
         let dir = tempfile::tempdir().unwrap();
+        let missing_root = dir.path().join("missing");
+        let store = SessionStore::new();
+        let event_bus = Arc::new(EventBus::new());
 
-        let result = end_session_orchestrate(
+        let error = start_session(StartSessionParams {
+            agent_id: "a1",
+            last_seen_seq: None,
+            session_store: &store,
+            event_bus: &event_bus,
+            root: &missing_root,
+        })
+        .unwrap_err();
+
+        assert!(matches!(error, SessionError::Persistence { operation: "start", .. }));
+        assert!(store.list().is_empty());
+    }
+
+    #[test]
+    fn end_persistence_failure_restores_active_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SessionStore::new();
+        let event_bus = Arc::new(EventBus::new());
+        let started = start_session(StartSessionParams {
+            agent_id: "a1",
+            last_seen_seq: None,
+            session_store: &store,
+            event_bus: &event_bus,
+            root: dir.path(),
+        })
+        .unwrap();
+
+        let error = end_session(
             "a1",
-            "nonexistent",
-            false,
+            &started.session_id,
             &store,
-            &memory,
-            dir.path(),
-            None,
-            None,
-        );
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("Session not found"));
+            &dir.path().join("missing"),
+            &event_bus,
+        )
+        .unwrap_err();
+
+        assert!(matches!(error, SessionError::Persistence { operation: "end", .. }));
+        assert!(store.get(&started.session_id).is_some());
+        assert!(SessionStore::restore(dir.path()).get(&started.session_id).is_some());
     }
 
     #[test]
-    fn test_end_session_orchestrate_wrong_agent() {
-        let store = SessionStore::new();
-        store.start_session("s1".into(), "a1".into(), 0);
-        let memory = Arc::new(crate::memory::LayeredMemory::new());
+    fn session_lifecycle_survives_restart() {
         let dir = tempfile::tempdir().unwrap();
+        let event_bus = Arc::new(EventBus::new());
+        let store = SessionStore::new();
+        let started = start_session(StartSessionParams {
+            agent_id: "a1",
+            last_seen_seq: None,
+            session_store: &store,
+            event_bus: &event_bus,
+            root: dir.path(),
+        })
+        .unwrap();
 
-        let result = end_session_orchestrate(
-            "wrong-agent",
-            "s1",
-            false,
-            &store,
-            &memory,
-            dir.path(),
-            None,
-            None,
-        );
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("does not belong to agent"));
+        let restored = SessionStore::restore(dir.path());
+        assert!(restored.get(&started.session_id).is_some());
+        end_session("a1", &started.session_id, &restored, dir.path(), &event_bus).unwrap();
+        assert!(SessionStore::restore(dir.path()).get(&started.session_id).is_none());
     }
 
     #[test]
-    fn test_end_session_orchestrate_success() {
-        let store = SessionStore::new();
-        store.start_session("s1".into(), "a1".into(), 10);
-        let memory = Arc::new(crate::memory::LayeredMemory::new());
+    fn end_rejects_wrong_owner_without_mutating_state() {
         let dir = tempfile::tempdir().unwrap();
+        let event_bus = Arc::new(EventBus::new());
+        let store = SessionStore::new();
+        let started = start_session(StartSessionParams {
+            agent_id: "owner",
+            last_seen_seq: None,
+            session_store: &store,
+            event_bus: &event_bus,
+            root: dir.path(),
+        })
+        .unwrap();
 
-        let result = end_session_orchestrate(
-            "a1",
-            "s1",
-            false,
-            &store,
-            &memory,
-            dir.path(),
-            None,
-            None,
-        );
-        assert!(result.is_ok());
-        let r = result.unwrap();
-        assert_eq!(r.last_seq, 10);
-        assert!(r.checkpoint_id.is_none());
-        // Session should be removed
-        assert!(store.get("s1").is_none());
-        // Should have been recorded as completed
-        assert_eq!(store.completed_session_count("a1"), 1);
+        let error = end_session("other", &started.session_id, &store, dir.path(), &event_bus).unwrap_err();
+        assert!(matches!(error, SessionError::Ownership { .. }));
+        assert!(store.get(&started.session_id).is_some());
+        assert!(SessionStore::restore(dir.path()).get(&started.session_id).is_some());
     }
 
     #[test]
-    fn test_end_session_orchestrate_with_auto_checkpoint() {
-        let store = SessionStore::new();
-        store.start_session("s1".into(), "a1".into(), 0);
-        let memory = Arc::new(crate::memory::LayeredMemory::new());
+    fn end_returns_monotonic_event_bus_watermark() {
         let dir = tempfile::tempdir().unwrap();
+        let event_bus = Arc::new(EventBus::new());
+        event_bus.emit(crate::kernel::event_bus::KernelEvent::ObjectStored {
+            cid: "before".into(),
+            agent_id: "a1".into(),
+            tags: vec![],
+        });
+        let store = SessionStore::new();
+        let started = start_session(StartSessionParams {
+            agent_id: "a1",
+            last_seen_seq: Some(0),
+            session_store: &store,
+            event_bus: &event_bus,
+            root: dir.path(),
+        })
+        .unwrap();
+        assert_eq!(started.watermark, event_bus.current_seq());
+        assert_eq!(started.changes_since_last.len(), 1);
 
-        let result = end_session_orchestrate(
-            "a1",
-            "s1",
-            true, // auto_checkpoint
-            &store,
-            &memory,
-            dir.path(),
-            None,
-            None,
-        );
-        assert!(result.is_ok());
-        // checkpoint_id is currently None even with auto_checkpoint=true
-        // (relying on explicit AgentCheckpoint)
-        let r = result.unwrap();
-        assert!(r.checkpoint_id.is_none());
+        event_bus.emit(crate::kernel::event_bus::KernelEvent::ObjectStored {
+            cid: "during".into(),
+            agent_id: "a1".into(),
+            tags: vec![],
+        });
+        let ended = end_session("a1", &started.session_id, &store, dir.path(), &event_bus).unwrap();
+        assert_eq!(ended.last_seq, event_bus.current_seq());
+        assert!(ended.last_seq >= started.watermark);
     }
 
     #[test]
-    fn test_end_session_orchestrate_records_session_summary() {
-        let store = SessionStore::new();
-        store.start_session("s1".into(), "a1".into(), 0);
-        store.set_current_intent("a1", Some("fix auth".into()));
-        let memory = Arc::new(crate::memory::LayeredMemory::new());
+    fn start_changes_are_scoped_to_the_local_role() {
         let dir = tempfile::tempdir().unwrap();
+        let event_bus = Arc::new(EventBus::new());
+        event_bus.emit(crate::kernel::event_bus::KernelEvent::ObjectStored {
+            cid: "role-a-object".into(),
+            agent_id: "role-a".into(),
+            tags: vec!["private-a".into()],
+        });
+        event_bus.emit(crate::kernel::event_bus::KernelEvent::ObjectStored {
+            cid: "role-b-object".into(),
+            agent_id: "role-b".into(),
+            tags: vec!["private-b".into()],
+        });
+        event_bus.emit(crate::kernel::event_bus::KernelEvent::IntentCompleted {
+            intent_id: "system-event".into(),
+            success: true,
+        });
 
-        end_session_orchestrate("a1", "s1", false, &store, &memory, dir.path(), None, None).unwrap();
+        let started = start_session(StartSessionParams {
+            agent_id: "role-a",
+            last_seen_seq: Some(0),
+            session_store: &SessionStore::new(),
+            event_bus: &event_bus,
+            root: dir.path(),
+        })
+        .unwrap();
 
-        let completed = store.get_completed_sessions("a1", None);
-        assert_eq!(completed.len(), 1);
-        let summary = completed[0].summary.as_ref().unwrap();
-        assert_eq!(summary.intent.as_deref(), Some("fix auth"));
+        assert_eq!(started.changes_since_last.len(), 1);
+        assert_eq!(started.changes_since_last[0].cid, "role-a-object");
+        let encoded = serde_json::to_string(&started.changes_since_last).unwrap();
+        assert!(!encoded.contains("role-b-object"));
+        assert!(!encoded.contains("private-b"));
+        assert!(!encoded.contains("system-event"));
     }
 
     // ── ActiveSession: touch via private method ────────────────────────────────

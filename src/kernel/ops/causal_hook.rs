@@ -3,10 +3,10 @@
 //! On PostToolCall, automatically creates KG nodes and `CausedBy` edges
 //! connecting tool calls to their triggering intents.
 
-use std::sync::Arc;
-use crate::fs::graph::{KnowledgeGraph, KGEdgeType, KGNode, KGNodeType};
+use crate::fs::graph::{KGEdgeType, KGNode, KGNodeType, KnowledgeGraph};
 use crate::kernel::hook::{HookContext, HookHandler, HookPoint, HookResult};
 use crate::kernel::ops::session::SessionStore;
+use std::sync::Arc;
 
 /// Causal Hook Handler — writes KG edges on PostToolCall events.
 ///
@@ -168,34 +168,73 @@ mod tests {
         fn list_edges(&self, _agent_id: &str) -> Result<Vec<crate::fs::graph::KGEdge>, crate::fs::graph::KGError> {
             Ok(self.edges.lock().unwrap().clone())
         }
-        fn get_neighbors(&self, _id: &str, _edge_type: Option<KGEdgeType>, _depth: u8) -> Result<Vec<(KGNode, crate::fs::graph::KGEdge)>, crate::fs::graph::KGError> {
+        fn get_neighbors(
+            &self,
+            _id: &str,
+            _edge_type: Option<KGEdgeType>,
+            _depth: u8,
+        ) -> Result<Vec<(KGNode, crate::fs::graph::KGEdge)>, crate::fs::graph::KGError> {
             Ok(Vec::new())
         }
-        fn find_paths(&self, _src: &str, _dst: &str, _max_depth: u8) -> Result<Vec<Vec<KGNode>>, crate::fs::graph::KGError> {
+        fn find_paths(
+            &self,
+            _src: &str,
+            _dst: &str,
+            _max_depth: u8,
+        ) -> Result<Vec<Vec<KGNode>>, crate::fs::graph::KGError> {
             Ok(Vec::new())
         }
-        fn find_weighted_path(&self, _src: &str, _dst: &str, _max_depth: u8) -> Result<Option<Vec<KGNode>>, crate::fs::graph::KGError> {
+        fn find_weighted_path(
+            &self,
+            _src: &str,
+            _dst: &str,
+            _max_depth: u8,
+        ) -> Result<Option<Vec<KGNode>>, crate::fs::graph::KGError> {
             Ok(None)
         }
-        fn list_nodes(&self, _agent_id: &str, _node_type: Option<KGNodeType>) -> Result<Vec<KGNode>, crate::fs::graph::KGError> {
+        fn list_nodes(
+            &self,
+            _agent_id: &str,
+            _node_type: Option<KGNodeType>,
+        ) -> Result<Vec<KGNode>, crate::fs::graph::KGError> {
             Ok(Vec::new())
         }
         fn remove_node(&self, _id: &str) -> Result<(), crate::fs::graph::KGError> {
             Ok(())
         }
-        fn remove_edge(&self, _src: &str, _dst: &str, _edge_type: Option<KGEdgeType>) -> Result<(), crate::fs::graph::KGError> {
+        fn remove_edge(
+            &self,
+            _src: &str,
+            _dst: &str,
+            _edge_type: Option<KGEdgeType>,
+        ) -> Result<(), crate::fs::graph::KGError> {
             Ok(())
         }
-        fn invalidate_edge(&self, _src: &str, _dst: &str, _edge_type: KGEdgeType) -> Result<bool, crate::fs::graph::KGError> {
+        fn invalidate_edge(
+            &self,
+            _src: &str,
+            _dst: &str,
+            _edge_type: KGEdgeType,
+        ) -> Result<bool, crate::fs::graph::KGError> {
             Ok(false)
         }
-        fn update_node(&self, _id: &str, _label: Option<&str>, _properties: Option<serde_json::Value>) -> Result<(), crate::fs::graph::KGError> {
+        fn update_node(
+            &self,
+            _id: &str,
+            _label: Option<&str>,
+            _properties: Option<serde_json::Value>,
+        ) -> Result<(), crate::fs::graph::KGError> {
             Ok(())
         }
         fn all_node_ids(&self) -> Vec<String> {
             Vec::new()
         }
-        fn upsert_document(&self, _cid: &str, _tags: &[String], _agent_id: &str) -> Result<(), crate::fs::graph::KGError> {
+        fn upsert_document(
+            &self,
+            _cid: &str,
+            _tags: &[String],
+            _agent_id: &str,
+        ) -> Result<(), crate::fs::graph::KGError> {
             Ok(())
         }
         fn authority_score(&self, _node_id: &str) -> Result<f32, crate::fs::graph::KGError> {
@@ -210,16 +249,35 @@ mod tests {
         fn get_valid_edges_at(&self, _t: u64) -> Result<Vec<crate::fs::graph::KGEdge>, crate::fs::graph::KGError> {
             Ok(Vec::new())
         }
-        fn get_valid_edge_between(&self, _src: &str, _dst: &str, _edge_type: Option<KGEdgeType>, _t: u64) -> Result<Option<crate::fs::graph::KGEdge>, crate::fs::graph::KGError> {
+        fn get_valid_edge_between(
+            &self,
+            _src: &str,
+            _dst: &str,
+            _edge_type: Option<KGEdgeType>,
+            _t: u64,
+        ) -> Result<Option<crate::fs::graph::KGEdge>, crate::fs::graph::KGError> {
             Ok(None)
         }
-        fn invalidate_conflicts(&self, _new_edge: &crate::fs::graph::KGEdge) -> Result<usize, crate::fs::graph::KGError> {
+        fn invalidate_conflicts(
+            &self,
+            _new_edge: &crate::fs::graph::KGEdge,
+        ) -> Result<usize, crate::fs::graph::KGError> {
             Ok(0)
         }
-        fn edge_history(&self, _src: &str, _dst: &str, _edge_type: Option<KGEdgeType>) -> Result<Vec<crate::fs::graph::KGEdge>, crate::fs::graph::KGError> {
+        fn edge_history(
+            &self,
+            _src: &str,
+            _dst: &str,
+            _edge_type: Option<KGEdgeType>,
+        ) -> Result<Vec<crate::fs::graph::KGEdge>, crate::fs::graph::KGError> {
             Ok(Vec::new())
         }
-        fn get_valid_nodes_at(&self, _agent_id: &str, _node_type: Option<KGNodeType>, _t: u64) -> Result<Vec<KGNode>, crate::fs::graph::KGError> {
+        fn get_valid_nodes_at(
+            &self,
+            _agent_id: &str,
+            _node_type: Option<KGNodeType>,
+            _t: u64,
+        ) -> Result<Vec<KGNode>, crate::fs::graph::KGError> {
             Ok(Vec::new())
         }
         fn save_to_disk(&self, _path: &std::path::Path) -> Result<(), crate::fs::graph::KGError> {
@@ -234,22 +292,23 @@ mod tests {
     fn causal_hook_handler_creates_caused_by_edge() {
         let kg = Arc::new(FakeKG::new());
         let session_store = Arc::new(SessionStore::new());
+        let event_bus = Arc::new(crate::kernel::event_bus::EventBus::new());
+        let root = tempfile::tempdir().unwrap();
 
         // Start a session with a current intent
-        let _session_id = session_store.start_session(
-            "session-1".to_string(),
-            "agent-1".to_string(),
-            0,
-        );
+        crate::kernel::ops::session::start_session(crate::kernel::ops::session::StartSessionParams {
+            agent_id: "agent-1",
+            last_seen_seq: None,
+            session_store: &session_store,
+            event_bus: &event_bus,
+            root: root.path(),
+        })
+        .unwrap();
         session_store.set_current_intent("agent-1", Some("fix authentication bug".to_string()));
 
         let handler = CausalHookHandler::new(kg.clone(), session_store.clone());
 
-        let context = HookContext::new(
-            "agent-1",
-            "cas.search",
-            serde_json::json!({ "query": "auth" }),
-        );
+        let context = HookContext::new("agent-1", "cas.search", serde_json::json!({ "query": "auth" }));
 
         let result = handler.handle(HookPoint::PostToolCall, &context);
         assert!(matches!(result, HookResult::Continue));
@@ -268,11 +327,7 @@ mod tests {
         // No session with intent
         let handler = CausalHookHandler::new(kg.clone(), session_store.clone());
 
-        let context = HookContext::new(
-            "agent-1",
-            "cas.search",
-            serde_json::json!({ "query": "auth" }),
-        );
+        let context = HookContext::new("agent-1", "cas.search", serde_json::json!({ "query": "auth" }));
 
         let result = handler.handle(HookPoint::PostToolCall, &context);
         assert!(matches!(result, HookResult::Continue));
@@ -288,11 +343,7 @@ mod tests {
         let session_store = Arc::new(SessionStore::new());
         let handler = CausalHookHandler::new(kg.clone(), session_store.clone());
 
-        let context = HookContext::new(
-            "agent-1",
-            "cas.create",
-            serde_json::json!({}),
-        );
+        let context = HookContext::new("agent-1", "cas.create", serde_json::json!({}));
 
         // Should always return Continue, never Block
         let result = handler.handle(HookPoint::PostToolCall, &context);

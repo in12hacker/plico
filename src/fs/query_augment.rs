@@ -65,11 +65,7 @@ pub fn parse_rewrite_response(response: &str, original: &str) -> Option<String> 
 /// Extract entity labels from the query by matching against KG nodes.
 ///
 /// Scans the query for substrings that match known node labels (case-insensitive).
-pub fn expand_entities_from_kg(
-    query: &str,
-    kg: &dyn KnowledgeGraph,
-    agent_id: &str,
-) -> Vec<String> {
+pub fn expand_entities_from_kg(query: &str, kg: &dyn KnowledgeGraph, agent_id: &str) -> Vec<String> {
     let all_ids = kg.all_node_ids();
     let query_lower = query.to_lowercase();
     let mut expanded = Vec::new();
@@ -168,10 +164,27 @@ pub fn augment_query(
 /// Extract phrases from a query that might represent temporal expressions.
 fn extract_temporal_phrases(query: &str) -> Vec<String> {
     let temporal_markers = [
-        "yesterday", "today", "last week", "last month", "last year",
-        "this week", "this month", "this year", "tomorrow",
-        "two weeks ago", "three days ago", "a week ago", "a month ago",
-        "昨天", "今天", "上周", "上个月", "去年", "本周", "本月", "今年",
+        "yesterday",
+        "today",
+        "last week",
+        "last month",
+        "last year",
+        "this week",
+        "this month",
+        "this year",
+        "tomorrow",
+        "two weeks ago",
+        "three days ago",
+        "a week ago",
+        "a month ago",
+        "昨天",
+        "今天",
+        "上周",
+        "上个月",
+        "去年",
+        "本周",
+        "本月",
+        "今年",
     ];
 
     let query_lower = query.to_lowercase();
@@ -229,11 +242,11 @@ mod tests {
 
     #[test]
     fn test_parse_rewrite_response_valid() {
-        let result = parse_rewrite_response(
-            "What is the Plico AI-Native Operating System?",
-            "What is Plico?",
+        let result = parse_rewrite_response("What is the Plico AI-Native Operating System?", "What is Plico?");
+        assert_eq!(
+            result,
+            Some("What is the Plico AI-Native Operating System?".to_string())
         );
-        assert_eq!(result, Some("What is the Plico AI-Native Operating System?".to_string()));
     }
 
     #[test]
@@ -299,13 +312,7 @@ mod tests {
 
     #[test]
     fn test_augment_query_no_llm() {
-        let aq = augment_query(
-            "What is Plico?",
-            None,
-            None,
-            "agent-1",
-            &[],
-        );
+        let aq = augment_query("What is Plico?", None, None, "agent-1", &[]);
         assert!(aq.rewritten.is_none());
         assert!(aq.expanded_entities.is_empty());
         assert!(aq.time_range.is_none());

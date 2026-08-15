@@ -11,7 +11,7 @@
 //! # Default Policy
 //!
 //! - All agents can READ and WRITE by default (low risk).
-//! - DELETE, NETWORK, EXECUTE require explicit permission grant.
+//! - DELETE, NETWORK, EXECUTE, MANAGE_PERMISSIONS require explicit permission grant.
 //! - Trusted agents ("kernel", "system") bypass all checks.
 //!
 //! # Usage
@@ -34,7 +34,7 @@ use std::sync::RwLock;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PermissionContext {
     pub agent_id: String,
-    /// Tenant ID for multi-tenant isolation.
+    /// Legacy namespace within this personal vault; retained for migration.
     #[serde(default)]
     pub tenant_id: String,
     /// Grants embedded in the context (e.g., from API request).
@@ -161,8 +161,8 @@ pub enum PermissionAction {
     Execute,
     /// Send messages to other agents.
     SendMessage,
-    /// Cross-tenant access — required to access resources in other tenants.
-    CrossTenant,
+    /// Grant or revoke permissions for another agent.
+    ManagePermissions,
     All,
 }
 
@@ -213,18 +213,21 @@ impl PermissionGuard {
         }
 
         // Default policy: Read and Write are allowed by default.
-        // ReadAny, Delete, Network, Execute, CrossTenant require explicit grants.
+        // ReadAny, Delete, Network, Execute and administrative actions require explicit grants.
         match action {
             PermissionAction::Read | PermissionAction::Write => Ok(()),
-            PermissionAction::ReadAny | PermissionAction::Delete | PermissionAction::Network | PermissionAction::Execute | PermissionAction::SendMessage | PermissionAction::CrossTenant => {
-                Err(std::io::Error::new(
-                    std::io::ErrorKind::PermissionDenied,
-                    format!(
-                        "Agent '{}' lacks permission for {:?}. Grant it first: grant(..., {:?})",
-                        ctx.agent_id, action, action
-                    ),
-                ))
-            }
+            PermissionAction::ReadAny
+            | PermissionAction::Delete
+            | PermissionAction::Network
+            | PermissionAction::Execute
+            | PermissionAction::SendMessage
+            | PermissionAction::ManagePermissions => Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                format!(
+                    "Agent '{}' lacks permission for {:?}. Grant it first: grant(..., {:?})",
+                    ctx.agent_id, action, action
+                ),
+            )),
             PermissionAction::All => Err(std::io::Error::new(
                 std::io::ErrorKind::PermissionDenied,
                 "Permission 'All' not granted",
@@ -233,7 +236,12 @@ impl PermissionGuard {
     }
 
     /// Check permission with scope context — grants must match the scope.
-    pub fn check_scoped(&self, ctx: &PermissionContext, action: PermissionAction, scope: Option<&str>) -> std::io::Result<()> {
+    pub fn check_scoped(
+        &self,
+        ctx: &PermissionContext,
+        action: PermissionAction,
+        scope: Option<&str>,
+    ) -> std::io::Result<()> {
         if self.trusted_agents.contains(&ctx.agent_id) {
             return Ok(());
         }
@@ -251,7 +259,8 @@ impl PermissionGuard {
                 std::io::ErrorKind::PermissionDenied,
                 format!(
                     "Agent '{}' lacks {:?} permission{}",
-                    ctx.agent_id, action,
+                    ctx.agent_id,
+                    action,
                     scope.map(|s| format!(" for scope '{}'", s)).unwrap_or_default()
                 ),
             )),
@@ -319,9 +328,9 @@ impl PermissionGuard {
             return true;
         }
         if let Some(grants) = self.grants.read().unwrap().get(agent_id) {
-            return grants.iter().any(|g|
-                g.covers(PermissionAction::ReadAny) || g.covers(PermissionAction::All)
-            );
+            return grants
+                .iter()
+                .any(|g| g.covers(PermissionAction::ReadAny) || g.covers(PermissionAction::All));
         }
         false
     }
@@ -332,22 +341,20 @@ impl PermissionGuard {
     /// - agent is the owner
     /// - agent has ReadAny or All grant
     ///
-    /// Note: Trusted agents still cannot bypass tenant isolation.
-    /// Use `check_tenant_access` for cross-tenant isolation.
-    pub fn check_ownership(
-        &self,
-        ctx: &PermissionContext,
-        owner_id: &str,
-    ) -> std::io::Result<()> {
+    /// Namespace equality is checked separately from ownership.
+    pub fn check_ownership(&self, ctx: &PermissionContext, owner_id: &str) -> std::io::Result<()> {
         if ctx.agent_id == owner_id {
             return Ok(());
         }
-        // Trusted agents bypass ownership check (but NOT tenant isolation)
+        // Trusted local roles bypass ownership, but not the legacy namespace boundary.
         if self.trusted_agents.contains(&ctx.agent_id) {
             return Ok(());
         }
         if let Some(grants) = self.grants.read().unwrap().get(&ctx.agent_id) {
-            if grants.iter().any(|g| g.covers(PermissionAction::ReadAny) || g.covers(PermissionAction::All)) {
+            if grants
+                .iter()
+                .any(|g| g.covers(PermissionAction::ReadAny) || g.covers(PermissionAction::All))
+            {
                 return Ok(());
             }
         }
@@ -363,36 +370,19 @@ impl PermissionGuard {
         ))
     }
 
-    /// Check tenant access permission — verifies tenant isolation.
+    /// Enforce the persisted local namespace boundary.
     ///
-    /// This is the critical security boundary: even trusted agents CANNOT
-    /// bypass tenant isolation. Cross-tenant access requires explicit
-    /// CrossTenant permission grant.
-    ///
-    /// Returns Ok(()) if:
-    /// - Context tenant_id matches resource tenant_id
-    /// - Context has explicit CrossTenant permission grant
-    pub fn check_tenant_access(
-        &self,
-        ctx: &PermissionContext,
-        resource_tenant_id: &str,
-    ) -> std::io::Result<()> {
-        // Same tenant: always allowed (tenant isolation is about cross-tenant)
-        if ctx.tenant_id == resource_tenant_id {
+    /// `tenant_id` remains in the storage format until a one-time data
+    /// migration removes it; it is not a grantable cross-vault boundary.
+    pub fn check_namespace_access(&self, ctx: &PermissionContext, resource_namespace: &str) -> std::io::Result<()> {
+        if ctx.tenant_id == resource_namespace {
             return Ok(());
         }
-
-        // Cross-tenant: requires explicit CrossTenant permission
-        // No bypass allowed — not even for "kernel" or "system" trusted agents
-        if ctx.embedded_grants.iter().any(|g| g.covers(PermissionAction::CrossTenant)) {
-            return Ok(());
-        }
-
         Err(std::io::Error::new(
             std::io::ErrorKind::PermissionDenied,
             format!(
-                "Agent '{}' in tenant '{}' cannot access resource in tenant '{}'. Need CrossTenant permission.",
-                ctx.agent_id, ctx.tenant_id, resource_tenant_id
+                "Agent '{}' cannot cross local namespace boundary '{}' -> '{}'.",
+                ctx.agent_id, ctx.tenant_id, resource_namespace
             ),
         ))
     }
@@ -419,7 +409,7 @@ impl PermissionGuard {
             "network" => Some(PermissionAction::Network),
             "execute" => Some(PermissionAction::Execute),
             "send_message" | "sendmessage" => Some(PermissionAction::SendMessage),
-            "cross_tenant" | "crosstenant" => Some(PermissionAction::CrossTenant),
+            "manage_permissions" | "managepermissions" => Some(PermissionAction::ManagePermissions),
             "all" => Some(PermissionAction::All),
             _ => None,
         }
@@ -456,7 +446,7 @@ mod tests {
         assert!(guard.check(&c, PermissionAction::Network).is_err());
         assert!(guard.check(&c, PermissionAction::Execute).is_err());
         assert!(guard.check(&c, PermissionAction::SendMessage).is_err());
-        assert!(guard.check(&c, PermissionAction::CrossTenant).is_err());
+        assert!(guard.check(&c, PermissionAction::ManagePermissions).is_err());
         assert!(guard.check(&c, PermissionAction::All).is_err());
     }
 
@@ -505,8 +495,12 @@ mod tests {
             "agent1",
             PermissionGrant::new(PermissionAction::Execute).with_scope("tool:web_search"),
         );
-        assert!(guard.check_scoped(&c, PermissionAction::Execute, Some("tool:web_search")).is_ok());
-        assert!(guard.check_scoped(&c, PermissionAction::Execute, Some("tool:other")).is_err());
+        assert!(guard
+            .check_scoped(&c, PermissionAction::Execute, Some("tool:web_search"))
+            .is_ok());
+        assert!(guard
+            .check_scoped(&c, PermissionAction::Execute, Some("tool:other"))
+            .is_err());
     }
 
     #[test]
@@ -527,7 +521,8 @@ mod tests {
     fn test_embedded_grants() {
         let guard = PermissionGuard::new();
         let c = PermissionContext::with_grants(
-            "agent1".into(), "default".into(),
+            "agent1".into(),
+            "default".into(),
             vec![PermissionGrant::new(PermissionAction::Delete)],
         );
         assert!(guard.check(&c, PermissionAction::Delete).is_ok());
@@ -545,24 +540,18 @@ mod tests {
     }
 
     #[test]
-    fn test_tenant_isolation() {
+    fn test_local_namespace_isolation() {
         let guard = PermissionGuard::new();
         let c = PermissionContext::new("agent1".into(), "tenant_a".into());
-        assert!(guard.check_tenant_access(&c, "tenant_a").is_ok());
-        assert!(guard.check_tenant_access(&c, "tenant_b").is_err());
-
-        let c_cross = PermissionContext::with_grants(
-            "agent1".into(), "tenant_a".into(),
-            vec![PermissionGrant::new(PermissionAction::CrossTenant)],
-        );
-        assert!(guard.check_tenant_access(&c_cross, "tenant_b").is_ok());
+        assert!(guard.check_namespace_access(&c, "tenant_a").is_ok());
+        assert!(guard.check_namespace_access(&c, "tenant_b").is_err());
     }
 
     #[test]
-    fn test_trusted_cannot_bypass_tenant() {
+    fn test_trusted_cannot_bypass_local_namespace() {
         let guard = PermissionGuard::new();
         let c = PermissionContext::new("kernel".into(), "tenant_a".into());
-        assert!(guard.check_tenant_access(&c, "tenant_b").is_err());
+        assert!(guard.check_namespace_access(&c, "tenant_b").is_err());
     }
 
     #[test]
@@ -585,9 +574,18 @@ mod tests {
     fn test_parse_action() {
         assert_eq!(PermissionGuard::parse_action("read"), Some(PermissionAction::Read));
         assert_eq!(PermissionGuard::parse_action("DELETE"), Some(PermissionAction::Delete));
-        assert_eq!(PermissionGuard::parse_action("read_any"), Some(PermissionAction::ReadAny));
-        assert_eq!(PermissionGuard::parse_action("readany"), Some(PermissionAction::ReadAny));
-        assert_eq!(PermissionGuard::parse_action("cross_tenant"), Some(PermissionAction::CrossTenant));
+        assert_eq!(
+            PermissionGuard::parse_action("read_any"),
+            Some(PermissionAction::ReadAny)
+        );
+        assert_eq!(
+            PermissionGuard::parse_action("readany"),
+            Some(PermissionAction::ReadAny)
+        );
+        assert_eq!(
+            PermissionGuard::parse_action("manage_permissions"),
+            Some(PermissionAction::ManagePermissions)
+        );
         assert_eq!(PermissionGuard::parse_action("unknown"), None);
     }
 
@@ -610,4 +608,3 @@ mod tests {
         assert!(guard.can_read_any("agent1"));
     }
 }
-

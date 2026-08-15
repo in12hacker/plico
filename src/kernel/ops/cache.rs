@@ -9,15 +9,14 @@
 //! - LRU eviction when capacity is reached
 //! - Tag-based invalidation when source data changes
 
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
 use std::num::NonZeroUsize;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
 use lru::LruCache;
+use sha2::{Digest, Sha256};
 
-use crate::fs::Embedding;
+use crate::fs::{Embedding, EmbeddingBuilderIdentity, EmbeddingInputOperation};
 
 /// Cache entry with metadata for eviction policy.
 #[derive(Debug, Clone)]
@@ -69,7 +68,11 @@ pub struct CacheStats {
 impl CacheStats {
     pub fn hit_rate(&self) -> f64 {
         let total = self.hits + self.misses;
-        if total == 0 { 0.0 } else { self.hits as f64 / total as f64 }
+        if total == 0 {
+            0.0
+        } else {
+            self.hits as f64 / total as f64
+        }
     }
 }
 
@@ -77,26 +80,35 @@ impl CacheStats {
 #[derive(Debug, Clone)]
 pub struct EmbeddingCacheEntry {
     pub embedding: Embedding,
-    pub model_id: String,
     pub created_at: Instant,
     pub access_count: u64,
 }
 
-/// Text hash for cache key (simple hash, not cryptographic).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct TextHash(pub u64);
+struct EmbeddingCacheKey {
+    text_hash: TextHash,
+    builder_identity: EmbeddingBuilderIdentity,
+    operation: EmbeddingInputOperation,
+}
+
+const EMBEDDING_CACHE_INPUT_DOMAIN: &[u8] = b"plico.embedding.cache-input.v1\0";
+
+/// Domain-separated input digest used only as an in-memory cache key.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct TextHash([u8; 32]);
 
 impl TextHash {
     pub fn from_text(text: &str) -> Self {
-        let mut hasher = DefaultHasher::new();
-        text.hash(&mut hasher);
-        TextHash(hasher.finish())
+        let mut hasher = Sha256::new();
+        hasher.update(EMBEDDING_CACHE_INPUT_DOMAIN);
+        hasher.update(text.as_bytes());
+        Self(hasher.finalize().into())
     }
 }
 
 /// Embedding cache with LRU eviction.
 pub struct EmbeddingCache {
-    cache: RwLock<LruCache<TextHash, EmbeddingCacheEntry>>,
+    cache: RwLock<LruCache<EmbeddingCacheKey, EmbeddingCacheEntry>>,
     max_entries: usize,
     stats: RwLock<CacheStats>,
 }
@@ -104,36 +116,54 @@ pub struct EmbeddingCache {
 impl EmbeddingCache {
     pub fn new(max_entries: usize) -> Self {
         Self {
-            cache: RwLock::new(LruCache::new(NonZeroUsize::new(max_entries).unwrap_or(NonZeroUsize::MIN))),
+            cache: RwLock::new(LruCache::new(
+                NonZeroUsize::new(max_entries).unwrap_or(NonZeroUsize::MIN),
+            )),
             max_entries,
             stats: RwLock::new(CacheStats::default()),
         }
     }
 
-    pub fn get(&self, text: &str, model_id: &str) -> Option<Embedding> {
-        let hash = TextHash::from_text(text);
+    pub fn get(
+        &self,
+        text: &str,
+        builder_identity: &EmbeddingBuilderIdentity,
+        operation: EmbeddingInputOperation,
+    ) -> Option<Embedding> {
+        let key = EmbeddingCacheKey {
+            text_hash: TextHash::from_text(text),
+            builder_identity: builder_identity.clone(),
+            operation,
+        };
         let mut cache = self.cache.write().unwrap();
         let stats = &mut *self.stats.write().unwrap();
 
-        if let Some(entry) = cache.get_mut(&hash) {
-            if entry.model_id == model_id {
-                entry.access_count += 1;
-                stats.hits += 1;
-                return Some(entry.embedding.clone());
-            }
+        if let Some(entry) = cache.get_mut(&key) {
+            entry.access_count += 1;
+            stats.hits += 1;
+            return Some(entry.embedding.clone());
         }
         stats.misses += 1;
         None
     }
 
-    pub fn put(&self, text: &str, model_id: &str, embedding: Embedding) {
-        let hash = TextHash::from_text(text);
+    pub fn put(
+        &self,
+        text: &str,
+        builder_identity: &EmbeddingBuilderIdentity,
+        operation: EmbeddingInputOperation,
+        embedding: Embedding,
+    ) {
+        let key = EmbeddingCacheKey {
+            text_hash: TextHash::from_text(text),
+            builder_identity: builder_identity.clone(),
+            operation,
+        };
         let mut cache = self.cache.write().unwrap();
         let stats = &mut *self.stats.write().unwrap();
 
         let entry = EmbeddingCacheEntry {
             embedding,
-            model_id: model_id.to_string(),
             created_at: Instant::now(),
             access_count: 0,
         };
@@ -141,7 +171,7 @@ impl EmbeddingCache {
         if cache.len() >= self.max_entries {
             stats.evictions += 1;
         }
-        cache.put(hash, entry);
+        cache.put(key, entry);
         stats.current_entries = cache.len();
     }
 
@@ -149,8 +179,16 @@ impl EmbeddingCache {
         let hash = TextHash::from_text(text);
         let mut cache = self.cache.write().unwrap();
         let stats = &mut *self.stats.write().unwrap();
-        if cache.pop(&hash).is_some() {
-            stats.invalidations += 1;
+        let keys: Vec<_> = cache
+            .iter()
+            .filter(|(key, _)| key.text_hash == hash)
+            .map(|(key, _)| key.clone())
+            .collect();
+        for key in &keys {
+            cache.pop(key);
+        }
+        if !keys.is_empty() {
+            stats.invalidations += keys.len() as u64;
             stats.current_entries = cache.len();
         }
     }
@@ -193,7 +231,9 @@ pub struct KgQueryCache {
 impl KgQueryCache {
     pub fn new(max_entries: usize) -> Self {
         Self {
-            cache: RwLock::new(LruCache::new(NonZeroUsize::new(max_entries).unwrap_or(NonZeroUsize::MIN))),
+            cache: RwLock::new(LruCache::new(
+                NonZeroUsize::new(max_entries).unwrap_or(NonZeroUsize::MIN),
+            )),
             max_entries,
             stats: RwLock::new(CacheStats::default()),
         }
@@ -226,7 +266,8 @@ impl KgQueryCache {
 
     pub fn invalidate_pattern(&self, pattern: &str) {
         let mut cache = self.cache.write().unwrap();
-        let keys: Vec<_> = cache.iter()
+        let keys: Vec<_> = cache
+            .iter()
             .filter(|(k, _)| k.contains(pattern))
             .map(|(k, _)| k.clone())
             .collect();
@@ -277,7 +318,9 @@ pub struct SearchCache {
 impl SearchCache {
     pub fn new(max_entries: usize, ttl_seconds: u64) -> Self {
         Self {
-            cache: RwLock::new(LruCache::new(NonZeroUsize::new(max_entries).unwrap_or(NonZeroUsize::MIN))),
+            cache: RwLock::new(LruCache::new(
+                NonZeroUsize::new(max_entries).unwrap_or(NonZeroUsize::MIN),
+            )),
             max_entries,
             ttl: Duration::from_secs(ttl_seconds),
             stats: RwLock::new(CacheStats::default()),
@@ -364,21 +407,17 @@ impl EdgeCache {
     }
 
     pub fn stats(&self) -> (CacheStats, CacheStats, CacheStats) {
-        (
-            self.embedding.stats(),
-            self.kg_query.stats(),
-            self.search.stats(),
-        )
+        (self.embedding.stats(), self.kg_query.stats(), self.search.stats())
     }
 }
 
 impl Default for EdgeCache {
     fn default() -> Self {
         Self::new(
-            1024,      // embedding cache: 1024 entries
-            512,       // KG query cache: 512 entries
-            256,       // search cache: 256 entries
-            300,       // search TTL: 5 minutes
+            1024, // embedding cache: 1024 entries
+            512,  // KG query cache: 512 entries
+            256,  // search cache: 256 entries
+            300,  // search TTL: 5 minutes
         )
     }
 }
@@ -400,16 +439,35 @@ mod tests {
     #[test]
     fn test_embedding_cache() {
         let cache = EmbeddingCache::new(10);
+        let identity = EmbeddingBuilderIdentity::test_deterministic("cache-test", 3, "cache-v1");
+        let other_identity = EmbeddingBuilderIdentity::test_deterministic("cache-test", 3, "cache-v2");
 
         let embedding: Embedding = vec![0.1, 0.2, 0.3];
 
-        cache.put("test text", "test", embedding.clone());
+        cache.put(
+            "test text",
+            &identity,
+            EmbeddingInputOperation::Document,
+            embedding.clone(),
+        );
 
         let stats = cache.stats();
         assert_eq!(stats.current_entries, 1);
 
-        let cached = cache.get("test text", "test");
+        let cached = cache.get("test text", &identity, EmbeddingInputOperation::Document);
         assert!(cached.is_some());
+        assert!(cache
+            .get("other text", &identity, EmbeddingInputOperation::Document)
+            .is_none());
+        assert!(cache
+            .get("test text", &other_identity, EmbeddingInputOperation::Document)
+            .is_none());
+        assert!(cache
+            .get("test text", &identity, EmbeddingInputOperation::Generic)
+            .is_none());
+        assert!(cache
+            .get("test text", &identity, EmbeddingInputOperation::Query)
+            .is_none());
         // Note: stats.hits is 0 because we read stats before the get updated it
         // The important thing is that cached is Some
     }

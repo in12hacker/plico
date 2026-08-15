@@ -25,31 +25,94 @@ mod tests {
             let mut modules = HashMap::new();
 
             // CAS — 98% coverage
-            modules.insert("cas".to_string(), ModuleCoverage { unit: 45, integration: 20, e2e: 5 });
+            modules.insert(
+                "cas".to_string(),
+                ModuleCoverage {
+                    unit: 45,
+                    integration: 20,
+                    e2e: 5,
+                },
+            );
 
             // FS (semantic_fs) — 92% coverage
-            modules.insert("fs".to_string(), ModuleCoverage { unit: 70, integration: 15, e2e: 10 });
+            modules.insert(
+                "fs".to_string(),
+                ModuleCoverage {
+                    unit: 70,
+                    integration: 15,
+                    e2e: 10,
+                },
+            );
 
             // KG (graph) — 88% coverage
-            modules.insert("graph".to_string(), ModuleCoverage { unit: 55, integration: 18, e2e: 7 });
+            modules.insert(
+                "graph".to_string(),
+                ModuleCoverage {
+                    unit: 55,
+                    integration: 18,
+                    e2e: 7,
+                },
+            );
 
             // Kernel core — 85% coverage
-            modules.insert("kernel".to_string(), ModuleCoverage { unit: 95, integration: 25, e2e: 10 });
+            modules.insert(
+                "kernel".to_string(),
+                ModuleCoverage {
+                    unit: 95,
+                    integration: 25,
+                    e2e: 10,
+                },
+            );
 
             // Memory (layered) — 92% coverage
-            modules.insert("memory".to_string(), ModuleCoverage { unit: 60, integration: 20, e2e: 8 });
+            modules.insert(
+                "memory".to_string(),
+                ModuleCoverage {
+                    unit: 60,
+                    integration: 20,
+                    e2e: 8,
+                },
+            );
 
             // Scheduler — 90% coverage
-            modules.insert("scheduler".to_string(), ModuleCoverage { unit: 50, integration: 15, e2e: 8 });
+            modules.insert(
+                "scheduler".to_string(),
+                ModuleCoverage {
+                    unit: 50,
+                    integration: 15,
+                    e2e: 8,
+                },
+            );
 
             // LLM providers — 95% coverage
-            modules.insert("llm".to_string(), ModuleCoverage { unit: 40, integration: 12, e2e: 5 });
+            modules.insert(
+                "llm".to_string(),
+                ModuleCoverage {
+                    unit: 40,
+                    integration: 12,
+                    e2e: 5,
+                },
+            );
 
             // MCP adapter — 85% coverage
-            modules.insert("mcp".to_string(), ModuleCoverage { unit: 35, integration: 10, e2e: 5 });
+            modules.insert(
+                "mcp".to_string(),
+                ModuleCoverage {
+                    unit: 35,
+                    integration: 10,
+                    e2e: 5,
+                },
+            );
 
             // Intent/Executor (N21-25) — 80% coverage
-            modules.insert("intent".to_string(), ModuleCoverage { unit: 40, integration: 12, e2e: 6 });
+            modules.insert(
+                "intent".to_string(),
+                ModuleCoverage {
+                    unit: 40,
+                    integration: 12,
+                    e2e: 6,
+                },
+            );
 
             Self { modules }
         }
@@ -57,7 +120,6 @@ mod tests {
         pub fn total_tests(&self) -> usize {
             self.modules.values().map(|m| m.unit + m.integration + m.e2e).sum()
         }
-
     }
 
     impl Default for IntegrationMatrix {

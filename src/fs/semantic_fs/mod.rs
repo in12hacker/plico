@@ -15,18 +15,21 @@ use std::sync::{Arc, RwLock};
 use crate::cas::{AIObject, AIObjectMeta, CASStorage};
 use crate::fs::context_loader::ContextLoader;
 use crate::fs::embedding::EmbeddingProvider;
-use crate::fs::reranker::RerankerProvider;
-use crate::fs::search::{SemanticSearch, SearchFilter, SearchHit, SearchIndexMeta, Bm25Index};
-use crate::fs::summarizer::Summarizer;
-use crate::util::case_insensitive_contains;
 use crate::fs::graph::KnowledgeGraph;
 use crate::fs::graph::{KGEdge, KGEdgeType};
+use crate::fs::reranker::RerankerProvider;
+use crate::fs::search::{
+    Bm25Index, DiagnosedSearch, EmbeddingDegradation, EmbeddingQueryState, SearchExecution, SearchFilter, SearchHit,
+    SearchIndexMeta, SearchPath, SearchStageDegradation, SemanticSearch,
+};
+use crate::fs::summarizer::Summarizer;
 use crate::kernel::ops::cognitive_pipeline::CognitiveTask;
+use crate::util::case_insensitive_contains;
 
 // Re-export types from fs/types (single source of truth)
 pub use crate::fs::types::{
-    Query, SearchResult, AuditEntry, AuditAction, RecycleEntry, FSError,
-    EventType, EventMeta, EventRelation, EventSummary,
+    AuditAction, AuditEntry, EventMeta, EventRelation, EventSummary, EventType, FSError, Query, RecycleEntry,
+    SearchResult,
 };
 
 // ── Adaptive RRF configuration ──────────────────────────────────────────────
@@ -51,9 +54,9 @@ fn rrf_config_k() -> f32 {
 /// Static override: if `PLICO_RRF_BM25_WEIGHT` and `PLICO_RRF_VECTOR_WEIGHT` are set,
 /// adaptive logic is bypassed.
 ///
-/// Heuristic: short queries (<=3 tokens) favor BM25, long queries (>=8 tokens) favor
-/// vector search. BM25 top-1 high-score triggers an additional boost.
-fn rrf_weights(query: &str, bm25_hits: &[(String, f32)]) -> (f32, f32) {
+/// Heuristic: short queries (<=3 tokens) favor BM25, while long queries (>=8 tokens)
+/// favor vector search.
+fn rrf_weights(query: &str) -> (f32, f32) {
     // Static override
     if let (Ok(bw), Ok(vw)) = (
         std::env::var("PLICO_RRF_BM25_WEIGHT"),
@@ -77,14 +80,7 @@ fn rrf_weights(query: &str, bm25_hits: &[(String, f32)]) -> (f32, f32) {
         (1.5 - 0.7 * t, 0.8 + 0.7 * t)
     };
 
-    // BM25 exact-match boost: if top-1 BM25 score is unusually high, boost BM25
-    let bm25_boost = if let Some((_, top_score)) = bm25_hits.first() {
-        if *top_score > 5.0 { 0.3 } else { 0.0 }
-    } else {
-        0.0
-    };
-
-    (bm25_w + bm25_boost, vector_w)
+    (bm25_w, vector_w)
 }
 
 /// The semantic filesystem.
@@ -113,9 +109,13 @@ pub struct SemanticFS {
 }
 
 impl SemanticFS {
-    pub fn root(&self) -> &std::path::Path { &self.root }
+    pub fn root(&self) -> &std::path::Path {
+        &self.root
+    }
 
-    pub fn ctx_loader(&self) -> &ContextLoader { &self.ctx_loader }
+    pub fn ctx_loader(&self) -> &ContextLoader {
+        &self.ctx_loader
+    }
 
     /// Returns a clone of the internal Arc<ContextLoader>.
     pub fn summarizer(&self) -> Option<Arc<dyn Summarizer>> {
@@ -138,7 +138,15 @@ impl SemanticFS {
         summarizer: Option<Arc<dyn Summarizer>>,
         knowledge_graph: Option<Arc<dyn KnowledgeGraph>>,
     ) -> std::io::Result<Self> {
-        Self::with_reranker(root_path, cas, embedding, search_index, summarizer, knowledge_graph, None)
+        Self::with_reranker(
+            root_path,
+            cas,
+            embedding,
+            search_index,
+            summarizer,
+            knowledge_graph,
+            None,
+        )
     }
 
     pub fn with_reranker(
@@ -150,7 +158,16 @@ impl SemanticFS {
         knowledge_graph: Option<Arc<dyn KnowledgeGraph>>,
         reranker: Option<Arc<dyn RerankerProvider>>,
     ) -> std::io::Result<Self> {
-        Self::with_reranker_and_cache(root_path, cas, embedding, search_index, summarizer, knowledge_graph, reranker, None)
+        Self::with_reranker_and_cache(
+            root_path,
+            cas,
+            embedding,
+            search_index,
+            summarizer,
+            knowledge_graph,
+            reranker,
+            None,
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -200,7 +217,8 @@ impl SemanticFS {
             knowledge_graph,
             bm25_index: Arc::new(Bm25Index::new()),
             reranker,
-            search_cache: search_cache.unwrap_or_else(|| Arc::new(crate::kernel::ops::cache::SearchCache::new(256, 300))),
+            search_cache: search_cache
+                .unwrap_or_else(|| Arc::new(crate::kernel::ops::cache::SearchCache::new(256, 300))),
             config_chunking_mode: "none".into(), // Default, will be updated by AIKernel
             config_auto_summarize: false,        // Default, will be updated by AIKernel
             cognitive_pipeline: RwLock::new(None),
@@ -249,11 +267,12 @@ impl SemanticFS {
 
         if chunking_mode != crate::fs::chunking::ChunkingMode::None {
             if let Ok(text) = std::str::from_utf8(&obj.data) {
-                let emb_ref: Option<&dyn EmbeddingProvider> = if chunking_mode == crate::fs::chunking::ChunkingMode::Semantic {
-                    Some(self.embedding.as_ref())
-                } else {
-                    None
-                };
+                let emb_ref: Option<&dyn EmbeddingProvider> =
+                    if chunking_mode == crate::fs::chunking::ChunkingMode::Semantic {
+                        Some(self.embedding.as_ref())
+                    } else {
+                        None
+                    };
                 let chunks = crate::fs::chunking::chunk_document(text, chunking_mode, emb_ref);
                 if !chunks.is_empty() {
                     tracing::info!(cid = %crate::util::safe_truncate(cid, 8), count = chunks.len(), "Hierarchical chunking complete");
@@ -289,9 +308,14 @@ impl SemanticFS {
     fn rebuild_vector_index(&self) {
         let cids = match self.cas.list_cids() {
             Ok(c) => c,
-            Err(e) => { tracing::warn!("rebuild_vector_index: failed to list CIDs: {e}"); return; }
+            Err(e) => {
+                tracing::warn!("rebuild_vector_index: failed to list CIDs: {e}");
+                return;
+            }
         };
-        if cids.is_empty() { return; }
+        if cids.is_empty() {
+            return;
+        }
         tracing::info!("Rebuilding vector index for {} objects…", cids.len());
         let recycle_bin = self.recycle_bin.read().unwrap();
 
@@ -301,20 +325,29 @@ impl SemanticFS {
             tags: Vec<String>,
             content_type: String,
             created_at: u64,
+            owner_role: String,
+            namespace: String,
+            scope: crate::cas::ObjectScope,
         }
         let mut entries: Vec<Entry> = Vec::new();
         for cid in &cids {
-            if recycle_bin.contains_key(cid) { continue; }
+            if recycle_bin.contains_key(cid) {
+                continue;
+            }
             let obj = match self.cas.get_raw(cid) {
                 Ok(o) => o,
                 Err(_) => continue,
             };
-            if obj.meta.content_type.is_multimedia() { continue; }
+            if obj.meta.content_type.is_multimedia() {
+                continue;
+            }
             let text = match std::str::from_utf8(&obj.data) {
                 Ok(s) => s.trim().to_string(),
                 Err(_) => continue,
             };
-            if text.is_empty() { continue; }
+            if text.is_empty() {
+                continue;
+            }
             self.bm25_index.upsert(cid, &text);
             entries.push(Entry {
                 cid: cid.clone(),
@@ -322,6 +355,9 @@ impl SemanticFS {
                 tags: obj.meta.tags.clone(),
                 content_type: obj.meta.content_type.to_string(),
                 created_at: obj.meta.created_at,
+                owner_role: obj.meta.created_by.clone(),
+                namespace: obj.meta.tenant_id.clone(),
+                scope: obj.meta.scope.clone(),
             });
         }
 
@@ -329,24 +365,37 @@ impl SemanticFS {
         let mut indexed = 0usize;
         let mut embed_available = true;
         for chunk in entries.chunks(BATCH_SIZE) {
-            if !embed_available { break; }
+            if !embed_available {
+                break;
+            }
             let texts: Vec<&str> = chunk.iter().map(|e| e.text.as_str()).collect();
             match self.embedding.embed_batch(&texts) {
                 Ok(results) => {
                     for (entry, result) in chunk.iter().zip(results.iter()) {
-                        self.search_index.upsert(&entry.cid, &result.embedding, SearchIndexMeta {
-                            cid: entry.cid.clone(),
-                            tags: entry.tags.clone(),
-                            content_type: entry.content_type.clone(),
-                            snippet: entry.text.chars().take(256).collect(),
-                            created_at: entry.created_at,
-                            memory_type: None,
-                        });
+                        self.search_index.upsert(
+                            &entry.cid,
+                            &result.embedding,
+                            SearchIndexMeta {
+                                cid: entry.cid.clone(),
+                                tags: entry.tags.clone(),
+                                content_type: entry.content_type.clone(),
+                                snippet: entry.text.chars().take(256).collect(),
+                                created_at: entry.created_at,
+                                owner_role: entry.owner_role.clone(),
+                                namespace: entry.namespace.clone(),
+                                scope: entry.scope.clone(),
+                                memory_type: None,
+                            },
+                        );
                         indexed += 1;
                     }
                 }
-                Err(e) => {
-                    tracing::warn!("rebuild_vector_index: batch embed failed: {e}");
+                Err(error) => {
+                    tracing::warn!(
+                        error_category = error.category(),
+                        phase = "rebuild_vector_index",
+                        "batch embedding failed"
+                    );
                     embed_available = false;
                 }
             }
@@ -464,17 +513,28 @@ impl SemanticFS {
 
         // Use the precomputed embedding directly
         let text = String::from_utf8_lossy(&content);
-        let snippet = if text.len() > 200 { format!("{}...", &text[..200]) } else { text.to_string() };
+        let snippet = if text.len() > 200 {
+            format!("{}...", &text[..200])
+        } else {
+            text.to_string()
+        };
         let is_real = !precomputed_embedding.iter().all(|&v| v == 0.0);
 
-        self.search_index.upsert(&cid, &precomputed_embedding, SearchIndexMeta {
-            cid: cid.clone(),
-            tags: meta.tags.clone(),
-            snippet,
-            content_type: format!("{:?}", meta.content_type).to_lowercase(),
-            created_at: meta.created_at,
-            memory_type: None,
-        });
+        self.search_index.upsert(
+            &cid,
+            &precomputed_embedding,
+            SearchIndexMeta {
+                cid: cid.clone(),
+                tags: meta.tags.clone(),
+                snippet,
+                content_type: format!("{:?}", meta.content_type).to_lowercase(),
+                created_at: meta.created_at,
+                owner_role: meta.created_by.clone(),
+                namespace: meta.tenant_id.clone(),
+                scope: meta.scope.clone(),
+                memory_type: None,
+            },
+        );
 
         if !text.trim().is_empty() {
             self.bm25_index.upsert(&cid, &text);
@@ -502,14 +562,19 @@ impl SemanticFS {
     pub fn read(&self, query: &Query) -> std::io::Result<Vec<AIObject>> {
         match query {
             Query::ByCid(cid) => {
-                let obj = self.cas.get(cid).map_err(|e| std::io::Error::new(std::io::ErrorKind::NotFound, e.to_string()))?;
+                let obj = self
+                    .cas
+                    .get(cid)
+                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::NotFound, e.to_string()))?;
                 Ok(vec![obj])
             }
             Query::ByTags(tags) => {
                 let cids = self.resolve_tags(tags);
                 let mut objects = Vec::new();
                 for cid in cids {
-                    if let Ok(obj) = self.cas.get(&cid) { objects.push(obj); }
+                    if let Ok(obj) = self.cas.get(&cid) {
+                        objects.push(obj);
+                    }
                 }
                 Ok(objects)
             }
@@ -517,8 +582,13 @@ impl SemanticFS {
                 let filter = filter.clone().unwrap_or_default();
                 let query_emb = match self.embedding.embed_query(text) {
                     Ok(result) => result.embedding,
-                    Err(e) => {
-                        tracing::warn!("Embedding failed for query '{text}': {e}. Falling back to tag search.");
+                    Err(error) => {
+                        tracing::warn!(
+                            query_bytes = text.len(),
+                            degradation = embedding_degradation_name(EmbeddingDegradation::from(&error)),
+                            fallback = "tag_search",
+                            "Semantic read embedding degraded"
+                        );
                         let tags = text.split_whitespace().map(String::from).collect();
                         return self.read(&Query::ByTags(tags));
                     }
@@ -526,7 +596,9 @@ impl SemanticFS {
                 let hits = self.search_index.search(&query_emb, 10, &filter);
                 let mut objects = Vec::new();
                 for hit in hits {
-                    if let Ok(obj) = self.cas.get(&hit.cid) { objects.push(obj); }
+                    if let Ok(obj) = self.cas.get(&hit.cid) {
+                        objects.push(obj);
+                    }
                 }
                 Ok(objects)
             }
@@ -538,11 +610,17 @@ impl SemanticFS {
                 let cids = self.search_index.list_by_filter(&filter);
                 let mut objects = Vec::new();
                 for cid in cids {
-                    if let Ok(obj) = self.cas.get(&cid) { objects.push(obj); }
+                    if let Ok(obj) = self.cas.get(&cid) {
+                        objects.push(obj);
+                    }
                 }
                 Ok(objects)
             }
-            Query::Hybrid { tags, semantic, content_type } => {
+            Query::Hybrid {
+                tags,
+                semantic,
+                content_type,
+            } => {
                 let filter = crate::fs::search::SearchFilter {
                     require_tags: tags.clone(),
                     content_type: content_type.clone(),
@@ -552,12 +630,19 @@ impl SemanticFS {
                 if let Some(text) = semantic {
                     let query_emb = match self.embedding.embed_query(text) {
                         Ok(result) => result.embedding,
-                        Err(e) => {
-                            tracing::warn!("Embedding failed in Hybrid query: {e}. Falling back to filter scan.");
+                        Err(error) => {
+                            tracing::warn!(
+                                query_bytes = text.len(),
+                                degradation = embedding_degradation_name(EmbeddingDegradation::from(&error)),
+                                fallback = "filter_scan",
+                                "Hybrid read embedding degraded"
+                            );
                             let cids = self.search_index.list_by_filter(&filter);
                             let mut objects = Vec::new();
                             for cid in cids {
-                                if let Ok(obj) = self.cas.get(&cid) { objects.push(obj); }
+                                if let Ok(obj) = self.cas.get(&cid) {
+                                    objects.push(obj);
+                                }
                             }
                             return Ok(objects);
                         }
@@ -565,14 +650,18 @@ impl SemanticFS {
                     let hits = self.search_index.search(&query_emb, 10, &filter);
                     let mut objects = Vec::new();
                     for hit in hits {
-                        if let Ok(obj) = self.cas.get(&hit.cid) { objects.push(obj); }
+                        if let Ok(obj) = self.cas.get(&hit.cid) {
+                            objects.push(obj);
+                        }
                     }
                     Ok(objects)
                 } else {
                     let cids = self.search_index.list_by_filter(&filter);
                     let mut objects = Vec::new();
                     for cid in cids {
-                        if let Ok(obj) = self.cas.get(&cid) { objects.push(obj); }
+                        if let Ok(obj) = self.cas.get(&cid) {
+                            objects.push(obj);
+                        }
                     }
                     Ok(objects)
                 }
@@ -587,7 +676,10 @@ impl SemanticFS {
         new_tags: Option<Vec<String>>,
         agent_id: String,
     ) -> std::io::Result<String> {
-        let old_obj = self.cas.get(old_cid).map_err(|e| std::io::Error::new(std::io::ErrorKind::NotFound, e.to_string()))?;
+        let old_obj = self
+            .cas
+            .get(old_cid)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::NotFound, e.to_string()))?;
         let final_tags = new_tags.unwrap_or_else(|| old_obj.meta.tags.clone());
 
         let new_meta = AIObjectMeta {
@@ -607,21 +699,25 @@ impl SemanticFS {
         self.update_tag_index(&final_tags, &new_cid);
 
         self.search_index.delete(old_cid);
-        let embedding = self.upsert_semantic_index(&new_cid, &new_content, &new_meta).unwrap_or(None);
+        let embedding = self
+            .upsert_semantic_index(&new_cid, &new_content, &new_meta)
+            .unwrap_or(None);
 
         if let Some(ref kg) = self.knowledge_graph {
             let _ = kg.upsert_document(&new_cid, &final_tags, &old_obj.meta.created_by);
             if let Some(ref emb) = embedding {
                 self.add_similar_to_edges(kg, &new_cid, emb);
             }
-            use crate::fs::graph::types::{KGEdgeType, KGEdge};
+            use crate::fs::graph::types::{KGEdge, KGEdgeType};
             let edge = KGEdge::new(new_cid.clone(), old_cid.to_string(), KGEdgeType::Supersedes, 1.0);
             let _ = kg.add_edge(edge);
         }
 
         self.push_audit(AuditEntry {
             timestamp: now_ms(),
-            action: AuditAction::Update { previous_cid: old_cid.to_string() },
+            action: AuditAction::Update {
+                previous_cid: old_cid.to_string(),
+            },
             cid: new_cid.clone(),
             agent_id,
         });
@@ -631,16 +727,21 @@ impl SemanticFS {
 
     pub fn delete(&self, cid: &str, agent_id: String) -> std::io::Result<()> {
         let obj = self.cas.get(cid)?;
-        self.recycle_bin.write().unwrap().insert(cid.to_string(), RecycleEntry {
-            cid: cid.to_string(),
-            deleted_at: now_ms(),
-            original_meta: obj.meta.clone(),
-        });
+        self.recycle_bin.write().unwrap().insert(
+            cid.to_string(),
+            RecycleEntry {
+                cid: cid.to_string(),
+                deleted_at: now_ms(),
+                original_meta: obj.meta.clone(),
+            },
+        );
 
         self.search_index.delete(cid);
         self.bm25_index.remove(cid);
 
-        if let Some(ref kg) = self.knowledge_graph { let _ = kg.remove_node(cid); }
+        if let Some(ref kg) = self.knowledge_graph {
+            let _ = kg.remove_node(cid);
+        }
 
         self.remove_from_tag_index(&obj.meta.tags, cid);
 
@@ -708,21 +809,73 @@ impl SemanticFS {
     }
 
     pub fn search_with_filter(&self, query: &str, limit: usize, filter: SearchFilter) -> Vec<SearchResult> {
+        self.search_with_filter_internal(query, limit, filter, true).results
+    }
+
+    /// Execute a fresh search and report the retrieval paths that actually ran.
+    ///
+    /// Diagnostics bypass the result cache so the metadata describes this request
+    /// rather than an opaque earlier execution.
+    pub fn search_with_diagnostics(&self, query: &str, limit: usize, filter: SearchFilter) -> DiagnosedSearch {
+        let diagnosed = self.search_with_filter_internal(query, limit, filter.clone(), false);
+        trace_search_execution(query.len(), limit, &filter, &diagnosed);
+        diagnosed
+    }
+
+    /// Execute diagnosed search inside one trusted local role and persisted
+    /// namespace. Visibility is applied before path acceptance is counted.
+    pub(crate) fn search_visible_with_diagnostics(
+        &self,
+        query: &str,
+        limit: usize,
+        filter: SearchFilter,
+        role_id: &str,
+        namespace: &str,
+        can_read_any: bool,
+    ) -> DiagnosedSearch {
+        let filter = filter.with_access(role_id, namespace, can_read_any);
+        let diagnosed = self.search_with_filter_internal(query, limit, filter.clone(), false);
+        trace_search_execution(query.len(), limit, &filter, &diagnosed);
+        diagnosed
+    }
+
+    fn search_with_filter_internal(
+        &self,
+        query: &str,
+        limit: usize,
+        filter: SearchFilter,
+        allow_cache: bool,
+    ) -> DiagnosedSearch {
+        let provider = self.embedding.model_name();
+        let mut execution = SearchExecution::new(provider.clone());
+
         // Check search cache (TTL-based, eliminates redundant embedding + HNSW)
-        if let Some(cached) = self.search_cache.get(query, limit, "fs") {
-            if let Ok(results) = serde_json::from_str::<Vec<SearchResult>>(&cached.results_json) {
-                tracing::debug!("Search cache hit for query: {}", &query[..query.len().min(30)]);
-                return results;
+        if allow_cache && filter.is_cache_neutral() {
+            if let Some(cached) = self.search_cache.get(query, limit, "fs") {
+                if let Ok(results) = serde_json::from_str::<Vec<SearchResult>>(&cached.results_json) {
+                    tracing::debug!(query_bytes = query.len(), limit, "Search cache hit");
+                    return DiagnosedSearch { results, execution };
+                }
             }
         }
 
         // Tier 0: Temporal query detection — if the query looks temporal, try KG path first
         if is_temporal_query(query) {
             if let Some(ref kg) = self.knowledge_graph {
-                let temporal_results = self.search_temporal_via_kg(kg, query, limit);
+                let (temporal_results, temporal_candidates) = self.search_temporal_via_kg(kg, query, limit, &filter);
+                if temporal_candidates > 0 {
+                    execution.record_path(
+                        SearchPath::KnowledgeGraphTemporal,
+                        temporal_candidates,
+                        temporal_results.len(),
+                    );
+                }
                 if !temporal_results.is_empty() {
                     tracing::debug!("Temporal KG path returned {} results", temporal_results.len());
-                    return temporal_results;
+                    return DiagnosedSearch {
+                        results: temporal_results,
+                        execution,
+                    };
                 }
                 tracing::debug!("Temporal KG path returned 0 results, degrading to hybrid search");
             }
@@ -733,84 +886,115 @@ impl SemanticFS {
         let needs_ppr = is_multihop_query(query) || is_temporal_query(query);
         let mut ppr_boost: HashMap<String, f32> = HashMap::new();
         if needs_ppr {
-        if let Some(ref kg) = self.knowledge_graph {
-            let query_words: Vec<String> = query.split_whitespace()
-                .filter(|w| w.len() > 2)
-                .map(|w| w.to_lowercase())
-                .collect();
+            if let Some(ref kg) = self.knowledge_graph {
+                let query_words: Vec<String> = query
+                    .split_whitespace()
+                    .filter(|w| w.len() > 2)
+                    .map(|w| w.to_lowercase())
+                    .collect();
 
-            let all_ids = kg.all_node_ids();
-            let seed_nodes: Vec<String> = all_ids.iter()
-                .filter(|id| {
-                    let id_lower = id.to_lowercase();
-                    query_words.iter().any(|w| id_lower.contains(w))
-                })
-                .take(5)
-                .cloned()
-                .collect();
+                let all_ids = kg.all_node_ids();
+                let seed_nodes: Vec<String> = all_ids
+                    .iter()
+                    .filter(|id| {
+                        let id_lower = id.to_lowercase();
+                        query_words.iter().any(|w| id_lower.contains(w))
+                    })
+                    .take(5)
+                    .cloned()
+                    .collect();
 
-            if !seed_nodes.is_empty() {
-                match kg.personalized_pagerank(&seed_nodes, 0.15, 50, limit * 2) {
-                    Ok(ranked) => {
-                        for (node_id, score) in ranked {
-                            if let Ok(Some(node)) = kg.get_node(&node_id) {
-                                for cid in node.properties.as_object()
-                                    .and_then(|o| o.get("cids"))
-                                    .and_then(|v| v.as_array())
-                                    .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect::<Vec<_>>())
-                                    .unwrap_or_default()
-                                {
-                                    ppr_boost.insert(cid, score);
+                if !seed_nodes.is_empty() {
+                    match kg.personalized_pagerank(&seed_nodes, 0.15, 50, all_ids.len().max(1)) {
+                        Ok(ranked) => {
+                            for (node_id, score) in ranked {
+                                if let Ok(Some(node)) = kg.get_node(&node_id) {
+                                    for cid in node
+                                        .properties
+                                        .as_object()
+                                        .and_then(|o| o.get("cids"))
+                                        .and_then(|v| v.as_array())
+                                        .map(|arr| {
+                                            arr.iter()
+                                                .filter_map(|v| v.as_str().map(String::from))
+                                                .collect::<Vec<_>>()
+                                        })
+                                        .unwrap_or_default()
+                                    {
+                                        ppr_boost.insert(cid, score);
+                                    }
                                 }
                             }
+                            if !ppr_boost.is_empty() {
+                                tracing::debug!(
+                                    "PPR boosted {} documents from {} seed nodes",
+                                    ppr_boost.len(),
+                                    seed_nodes.len()
+                                );
+                            }
                         }
-                        if !ppr_boost.is_empty() {
-                            tracing::debug!("PPR boosted {} documents from {} seed nodes", ppr_boost.len(), seed_nodes.len());
+                        Err(_) => {
+                            execution.record_degradation(
+                                SearchPath::KnowledgeGraphPpr,
+                                SearchStageDegradation::ExecutionFailed,
+                            );
+                            tracing::debug!(
+                                degradation = "execution_failed",
+                                "Knowledge-graph ranking degraded to hybrid search"
+                            );
                         }
-                    }
-                    Err(e) => {
-                        tracing::debug!("PPR failed, degrading: {e}");
                     }
                 }
             }
-        }
         } // end needs_ppr
 
-        let query_emb = self.embedding.embed_query(query).ok().map(|r| r.embedding);
+        let query_emb = match self.embedding.embed_query(query) {
+            Ok(result) => {
+                execution.embedding = EmbeddingQueryState::Succeeded {
+                    provider: provider.clone(),
+                };
+                Some(result.embedding)
+            }
+            Err(error) => {
+                execution.embedding = EmbeddingQueryState::Degraded {
+                    provider,
+                    reason: EmbeddingDegradation::from(&error),
+                };
+                None
+            }
+        };
 
         let vector_hits: HashMap<String, SearchHit> = match &query_emb {
             Some(emb) => {
                 let hits = self.search_index.search(emb, limit * 10, &filter);
-                tracing::debug!(
-                    query = %crate::util::safe_truncate(query, 50),
-                    vector_count = hits.len(),
-                    "Search pipeline: vector search returned results"
-                );
                 hits.into_iter().map(|hit| (hit.cid.clone(), hit)).collect()
             }
-            None => {
-                tracing::debug!(
-                    query = %crate::util::safe_truncate(query, 50),
-                    "Search pipeline: embedding failed, no vector results"
-                );
-                HashMap::new()
-            }
+            None => HashMap::new(),
         };
+        if query_emb.is_some() {
+            execution.record_path(SearchPath::Vector, vector_hits.len(), vector_hits.len());
+        }
 
-        let bm25_hits: Vec<(String, f32)> = self.bm25_index.search(query, 1000);
-        tracing::debug!(
-            query = %crate::util::safe_truncate(query, 50),
-            bm25_count = bm25_hits.len(),
-            bm25_top3 = ?bm25_hits.iter().take(3).map(|(cid, score)| (crate::util::safe_truncate(cid, 8), score)).collect::<Vec<_>>(),
-            "Search pipeline: BM25 search results"
-        );
+        let bm25_candidates_raw = self.bm25_index.search(query, self.bm25_index.len());
+        let bm25_candidates = bm25_candidates_raw.len();
+        let bm25_hits: Vec<(String, f32)> = bm25_candidates_raw
+            .into_iter()
+            .filter(|(cid, _)| {
+                self.cas
+                    .get_raw(cid)
+                    .is_ok_and(|object| filter.matches(&search_meta_from_object(cid, &object)))
+            })
+            .collect();
 
         if vector_hits.is_empty() && bm25_hits.is_empty() {
-            return self.search_by_tags_with_filter(query, &filter);
+            execution.record_path(SearchPath::Bm25, bm25_candidates, 0);
+            let (results, tag_candidates) = self.search_by_tags_with_filter(query, &filter);
+            execution.record_path(SearchPath::TagFallback, tag_candidates, results.len());
+            return DiagnosedSearch { results, execution };
         }
 
         let rrf_k = rrf_config_k();
-        let (bm25_weight, vector_weight) = rrf_weights(query, &bm25_hits);
+        let (bm25_weight, vector_weight) = rrf_weights(query);
 
         let mut rrf_scores: HashMap<String, (f32, usize)> = HashMap::new();
 
@@ -824,6 +1008,7 @@ impl SemanticFS {
             rrf_scores.insert((*cid).clone(), (rrf, 1usize));
         }
 
+        let mut accepted_bm25 = 0;
         for (rank, (cid, _score)) in bm25_hits.iter().enumerate() {
             let mut rrf = bm25_weight / (rrf_k + rank as f32);
             // F-37: Huge boost for chunks — use vector hit meta if available, else CAS
@@ -839,42 +1024,27 @@ impl SemanticFS {
             if let Some((existing_rrf, count)) = rrf_scores.get_mut(cid) {
                 *existing_rrf += rrf;
                 *count += 1;
+                accepted_bm25 += 1;
             } else if vector_hits.contains_key(cid) {
                 // Already filtered by vector search — just insert
                 rrf_scores.insert(cid.clone(), (rrf, 1usize));
+                accepted_bm25 += 1;
             } else {
-                let obj = match self.cas.get_raw(cid) {
-                    Ok(o) => o,
-                    Err(_) => {
-                        tracing::debug!(
-                            cid = %crate::util::safe_truncate(cid, 8),
-                            "Search pipeline: BM25 hit not in CAS, skipping"
-                        );
-                        continue;
-                    }
-                };
-                let meta_for_filter = SearchIndexMeta {
-                    cid: cid.clone(),
-                    tags: obj.meta.tags.clone(),
-                    snippet: String::new(),
-                    content_type: format!("{:?}", obj.meta.content_type).to_lowercase(),
-                    created_at: obj.meta.created_at,
-                    memory_type: None,
-                };
-                if filter.matches(&meta_for_filter) {
-                    rrf_scores.insert(cid.clone(), (rrf, 1usize));
-                } else {
-                    tracing::debug!(
-                        cid = %crate::util::safe_truncate(cid, 8),
-                        tags = ?obj.meta.tags,
-                        "Search pipeline: BM25 hit rejected by filter"
-                    );
-                }
+                rrf_scores.insert(cid.clone(), (rrf, 1usize));
+                accepted_bm25 += 1;
             }
         }
+        execution.record_path(SearchPath::Bm25, bm25_candidates, accepted_bm25);
 
         // Inject PPR boost and Chunk boost into RRF scores
         for (cid, ppr_score) in &ppr_boost {
+            let Ok(candidate) = self.cas.get_raw(cid) else {
+                continue;
+            };
+            let candidate_meta = search_meta_from_object(cid, &candidate);
+            if !filter.matches(&candidate_meta) {
+                continue;
+            }
             let mut boost = ppr_score * 0.5;
 
             // F-37: Chunk boost
@@ -890,6 +1060,17 @@ impl SemanticFS {
                 rrf_scores.insert(cid.clone(), (boost, 1));
             }
         }
+        if !ppr_boost.is_empty() {
+            let accepted = ppr_boost
+                .keys()
+                .filter(|cid| {
+                    self.cas
+                        .get_raw(cid)
+                        .is_ok_and(|object| filter.matches(&search_meta_from_object(cid, &object)))
+                })
+                .count();
+            execution.record_path(SearchPath::KnowledgeGraphPpr, ppr_boost.len(), accepted);
+        }
 
         // Phase 2.4: Path discovery for multi-hop queries.
         // Map top-K RRF candidates to KG nodes, find weighted paths between pairs,
@@ -897,15 +1078,29 @@ impl SemanticFS {
         if needs_ppr {
             if let Some(ref kg) = self.knowledge_graph {
                 let kg_ref: &dyn KnowledgeGraph = kg.as_ref();
-                let path_boost = self.discover_and_inject_paths(
-                    query, kg_ref, &rrf_scores, limit,
-                );
+                let path_boost = self.discover_and_inject_paths(query, kg_ref, &rrf_scores);
+                let path_candidates = path_boost.len();
+                let mut path_accepted = 0;
                 for (cid, boost) in path_boost {
+                    if path_accepted >= limit {
+                        break;
+                    }
+                    let accepted = self
+                        .cas
+                        .get_raw(&cid)
+                        .is_ok_and(|object| filter.matches(&search_meta_from_object(&cid, &object)));
+                    if !accepted {
+                        continue;
+                    }
+                    path_accepted += 1;
                     if let Some((existing, _)) = rrf_scores.get_mut(&cid) {
                         *existing += boost;
                     } else {
                         rrf_scores.insert(cid, (boost, 1usize));
                     }
+                }
+                if path_candidates > 0 {
+                    execution.record_path(SearchPath::KnowledgeGraphPathDiscovery, path_candidates, path_accepted);
                 }
             }
         }
@@ -914,15 +1109,15 @@ impl SemanticFS {
         // boost both to preserve cause-effect chains in results.
         if let Some(ref kg) = self.knowledge_graph {
             let mut sorted_cids: Vec<(&String, &(f32, usize))> = rrf_scores.iter().collect();
-            sorted_cids.sort_by(|a, b| b.1.0.partial_cmp(&a.1.0).unwrap_or(std::cmp::Ordering::Equal));
-            let top_cids: Vec<String> = sorted_cids.iter()
-                .take(limit * 2)
-                .map(|(cid, _)| (*cid).clone())
-                .collect();
+            sorted_cids.sort_by(|a, b| b.1 .0.partial_cmp(&a.1 .0).unwrap_or(std::cmp::Ordering::Equal));
+            let top_cids: Vec<String> = sorted_cids.iter().map(|(cid, _)| (*cid).clone()).collect();
             let causal_boost = 0.1;
+            let mut causal_candidates = 0;
+            let mut causal_accepted = 0;
             for cid in &top_cids {
                 if let Ok(neighbors) = kg.get_neighbors(cid, Some(KGEdgeType::Causes), 1) {
                     for (node, _edge) in &neighbors {
+                        causal_candidates += 1;
                         if top_cids.contains(&node.id) {
                             if let Some((score, _)) = rrf_scores.get_mut(cid) {
                                 *score += causal_boost;
@@ -930,24 +1125,18 @@ impl SemanticFS {
                             if let Some((score, _)) = rrf_scores.get_mut(&node.id) {
                                 *score += causal_boost;
                             }
+                            causal_accepted += 1;
                         }
                     }
                 }
             }
+            if causal_candidates > 0 {
+                execution.record_path(SearchPath::KnowledgeGraphCausal, causal_candidates, causal_accepted);
+            }
         }
 
-        let mut sorted: Vec<(String, f32)> = rrf_scores
-            .into_iter()
-            .map(|(cid, (score, _))| (cid, score))
-            .collect();
+        let mut sorted: Vec<(String, f32)> = rrf_scores.into_iter().map(|(cid, (score, _))| (cid, score)).collect();
         sorted.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-
-        tracing::debug!(
-            query = %crate::util::safe_truncate(query, 50),
-            rrf_count = sorted.len(),
-            rrf_top5 = ?sorted.iter().take(5).map(|(cid, score)| (crate::util::safe_truncate(cid, 8), format!("{:.4}", score))).collect::<Vec<_>>(),
-            "Search pipeline: RRF fusion complete"
-        );
 
         // Reranker stage: if available, apply cross-encoder reranking on top-N RRF candidates
         if let Some(ref reranker) = self.reranker {
@@ -956,10 +1145,7 @@ impl SemanticFS {
                 .iter()
                 .filter_map(|(cid, _)| {
                     self.cas.get(cid).ok().map(|obj| {
-                        let text = String::from_utf8_lossy(
-                            &obj.data[..std::cmp::min(512, obj.data.len())],
-                        )
-                        .to_string();
+                        let text = String::from_utf8_lossy(&obj.data[..std::cmp::min(512, obj.data.len())]).to_string();
                         (cid.clone(), text)
                     })
                 })
@@ -976,24 +1162,37 @@ impl SemanticFS {
                         .into_iter()
                         .take(limit)
                         .filter_map(|r| {
-                            self.cas.get(&r.id).ok().map(|obj| {
+                            self.cas.get(&r.id).ok().and_then(|obj| {
+                                if !filter.matches(&search_meta_from_object(&r.id, &obj)) {
+                                    return None;
+                                }
                                 let snippet = String::from_utf8_lossy(
                                     &obj.data[..std::cmp::min(MAX_SNIPPET_LEN, obj.data.len())],
                                 )
                                 .to_string();
-                                SearchResult {
+                                Some(SearchResult {
                                     cid: r.id,
                                     relevance: r.score,
                                     meta: obj.meta,
                                     snippet,
-                                }
+                                })
                             })
                         })
                         .collect();
-                    return reranked_results;
+                    execution.record_path(SearchPath::Reranker, candidates.len(), reranked_results.len());
+                    return DiagnosedSearch {
+                        results: reranked_results,
+                        execution,
+                    };
                 }
-                Err(e) => {
-                    tracing::warn!("Reranker failed, degrading to RRF: {e}");
+                Err(_) => {
+                    execution.record_path(SearchPath::Reranker, candidates.len(), 0);
+                    execution.record_degradation(SearchPath::Reranker, SearchStageDegradation::ExecutionFailed);
+                    tracing::warn!(
+                        candidates = candidates.len(),
+                        degradation = "execution_failed",
+                        "Reranker degraded to RRF"
+                    );
                 }
             }
         }
@@ -1003,13 +1202,12 @@ impl SemanticFS {
         let results: Vec<SearchResult> = sorted
             .into_iter()
             .filter_map(|(cid, relevance)| {
-                self.cas.get(&cid).ok().map(|obj| {
-                    SearchResult {
-                        cid,
-                        relevance,
-                        snippet: String::from_utf8_lossy(&obj.data[..std::cmp::min(MAX_SNIPPET_LEN, obj.data.len())]).to_string(),
-                        meta: obj.meta,
-                    }
+                self.cas.get(&cid).ok().map(|obj| SearchResult {
+                    cid,
+                    relevance,
+                    snippet: String::from_utf8_lossy(&obj.data[..std::cmp::min(MAX_SNIPPET_LEN, obj.data.len())])
+                        .to_string(),
+                    meta: obj.meta,
                 })
             })
             .collect();
@@ -1020,6 +1218,11 @@ impl SemanticFS {
         let resolved = if needs_ppr && resolved.len() < limit {
             let expanded = self.iterative_retrieve(query, &resolved, limit, &filter);
             if expanded.len() > resolved.len() {
+                execution.record_path(
+                    SearchPath::Bm25,
+                    expanded.len() - resolved.len(),
+                    expanded.len() - resolved.len(),
+                );
                 tracing::debug!(
                     "Iterative retrieval expanded {} → {} results",
                     resolved.len(),
@@ -1034,16 +1237,26 @@ impl SemanticFS {
         };
 
         // Populate search cache for repeated queries
-        if let Ok(json) = serde_json::to_string(&resolved) {
-            self.search_cache.put(query, limit, "fs", crate::kernel::ops::cache::SearchCacheEntry {
-                results_json: json,
-                top_k: limit,
-                created_at: std::time::Instant::now(),
-                access_count: 0,
-            });
+        if allow_cache && filter.is_cache_neutral() {
+            if let Ok(json) = serde_json::to_string(&resolved) {
+                self.search_cache.put(
+                    query,
+                    limit,
+                    "fs",
+                    crate::kernel::ops::cache::SearchCacheEntry {
+                        results_json: json,
+                        top_k: limit,
+                        created_at: std::time::Instant::now(),
+                        access_count: 0,
+                    },
+                );
+            }
         }
 
-        resolved
+        DiagnosedSearch {
+            results: resolved,
+            execution,
+        }
     }
 
     /// If a search result is a child chunk (has `parent_cid:xxx` tag), resolve the parent
@@ -1053,7 +1266,10 @@ impl SemanticFS {
         let mut resolved = Vec::with_capacity(results.len());
 
         for r in results {
-            let parent_cid = r.meta.tags.iter()
+            let parent_cid = r
+                .meta
+                .tags
+                .iter()
                 .find(|t| t.starts_with("parent_cid:"))
                 .map(|t| t["parent_cid:".len()..].to_string());
 
@@ -1062,9 +1278,9 @@ impl SemanticFS {
                     continue;
                 }
                 if let Ok(parent_obj) = self.cas.get(pcid) {
-                    let snippet = String::from_utf8_lossy(
-                        &parent_obj.data[..std::cmp::min(500, parent_obj.data.len())]
-                    ).to_string();
+                    let snippet =
+                        String::from_utf8_lossy(&parent_obj.data[..std::cmp::min(500, parent_obj.data.len())])
+                            .to_string();
                     resolved.push(SearchResult {
                         cid: pcid.clone(),
                         relevance: r.relevance,
@@ -1087,13 +1303,9 @@ impl SemanticFS {
         _query: &str,
         kg: &dyn KnowledgeGraph,
         rrf_scores: &HashMap<String, (f32, usize)>,
-        limit: usize,
     ) -> Vec<(String, f32)> {
         // Take top-K candidates to map to KG nodes
-        let mut top_cids: Vec<(&String, &f32)> = rrf_scores
-            .iter()
-            .map(|(cid, (score, _))| (cid, score))
-            .collect();
+        let mut top_cids: Vec<(&String, &f32)> = rrf_scores.iter().map(|(cid, (score, _))| (cid, score)).collect();
         top_cids.sort_by(|a, b| b.1.partial_cmp(a.1).unwrap_or(std::cmp::Ordering::Equal));
         let top_k = 5.min(top_cids.len());
 
@@ -1119,7 +1331,9 @@ impl SemanticFS {
         let mut pair_count = 0;
         for i in 0..seed_nodes.len() {
             for j in (i + 1)..seed_nodes.len() {
-                if pair_count >= max_pairs { break; }
+                if pair_count >= max_pairs {
+                    break;
+                }
                 pair_count += 1;
 
                 if let Ok(Some(path)) = kg.find_weighted_path(&seed_nodes[i], &seed_nodes[j], 4) {
@@ -1132,7 +1346,9 @@ impl SemanticFS {
                             }
                         }
                         // CIDs from properties
-                        if let Some(cids) = node.properties.as_object()
+                        if let Some(cids) = node
+                            .properties
+                            .as_object()
                             .and_then(|o| o.get("cids"))
                             .and_then(|v| v.as_array())
                         {
@@ -1156,10 +1372,19 @@ impl SemanticFS {
             }
         }
 
-        // Deduplicate and cap
-        path_boosts.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        path_boosts.truncate(limit);
-        path_boosts
+        // Deduplicate candidates before caller-side access filtering. The
+        // authorized top-k cap is applied only after the filter has accepted a
+        // candidate, so inaccessible objects cannot consume it.
+        let mut deduplicated = HashMap::<String, f32>::new();
+        for (cid, boost) in path_boosts {
+            deduplicated
+                .entry(cid)
+                .and_modify(|current| *current = current.max(boost))
+                .or_insert(boost);
+        }
+        let mut candidates: Vec<_> = deduplicated.into_iter().collect();
+        candidates.sort_by(|left, right| right.1.partial_cmp(&left.1).unwrap_or(std::cmp::Ordering::Equal));
+        candidates
     }
 
     /// Iterative retrieval (Phase 3.1): extract key terms from first-pass results,
@@ -1187,7 +1412,9 @@ impl SemanticFS {
             }
             // Extract tags that look like entities
             for tag in &result.meta.tags {
-                if !tag.starts_with("is_") && !tag.starts_with("parent_cid:") && !tag.starts_with("chunk_idx:")
+                if !tag.starts_with("is_")
+                    && !tag.starts_with("parent_cid:")
+                    && !tag.starts_with("chunk_idx:")
                     && !key_terms.contains(tag)
                 {
                     key_terms.push(tag.clone());
@@ -1222,13 +1449,15 @@ impl SemanticFS {
                     snippet: String::new(),
                     content_type: format!("{:?}", obj.meta.content_type).to_lowercase(),
                     created_at: obj.meta.created_at,
+                    owner_role: obj.meta.created_by.clone(),
+                    namespace: obj.meta.tenant_id.clone(),
+                    scope: obj.meta.scope.clone(),
                     memory_type: None,
                 };
                 if filter.matches(&meta) {
                     seen_cids.insert(cid.clone());
-                    let snippet = String::from_utf8_lossy(
-                        &obj.data[..std::cmp::min(MAX_SNIPPET_LEN, obj.data.len())],
-                    ).to_string();
+                    let snippet = String::from_utf8_lossy(&obj.data[..std::cmp::min(MAX_SNIPPET_LEN, obj.data.len())])
+                        .to_string();
                     merged.push(SearchResult {
                         cid,
                         relevance: score * 0.5, // Lower relevance for second-pass results
@@ -1242,16 +1471,20 @@ impl SemanticFS {
         merged
     }
 
-    fn search_by_tags_with_filter(&self, query: &str, filter: &SearchFilter) -> Vec<SearchResult> {
+    fn search_by_tags_with_filter(&self, query: &str, filter: &SearchFilter) -> (Vec<SearchResult>, usize) {
         let query_lower = query.to_lowercase();
         let index = self.tag_index.read().unwrap();
         let mut results = Vec::new();
+        let mut candidates = 0;
         let limit = 50; // Cap fallback results to prevent unbounded scan
 
         for (tag, cids) in index.iter() {
             if case_insensitive_contains(tag, &query_lower) {
                 for cid in cids {
-                    if results.len() >= limit { return results; }
+                    if results.len() >= limit {
+                        return (results, candidates);
+                    }
+                    candidates += 1;
                     if let Ok(obj) = self.cas.get(cid) {
                         if filter.matches(&SearchIndexMeta {
                             cid: cid.clone(),
@@ -1259,16 +1492,26 @@ impl SemanticFS {
                             snippet: String::new(),
                             content_type: format!("{}", obj.meta.content_type),
                             created_at: obj.meta.created_at,
+                            owner_role: obj.meta.created_by.clone(),
+                            namespace: obj.meta.tenant_id.clone(),
+                            scope: obj.meta.scope.clone(),
                             memory_type: None,
                         }) {
-                            let snippet = String::from_utf8_lossy(&obj.data[..std::cmp::min(MAX_SNIPPET_LEN, obj.data.len())]).to_string();
-                            results.push(SearchResult { cid: cid.clone(), relevance: 0.8, meta: obj.meta, snippet });
+                            let snippet =
+                                String::from_utf8_lossy(&obj.data[..std::cmp::min(MAX_SNIPPET_LEN, obj.data.len())])
+                                    .to_string();
+                            results.push(SearchResult {
+                                cid: cid.clone(),
+                                relevance: 0.8,
+                                meta: obj.meta,
+                                snippet,
+                            });
                         }
                     }
                 }
             }
         }
-        results
+        (results, candidates)
     }
 
     pub fn list_tags(&self) -> Vec<String> {
@@ -1290,8 +1533,15 @@ impl SemanticFS {
                         break;
                     }
                     if let Ok(obj) = self.cas.get(cid) {
-                        let snippet = String::from_utf8_lossy(&obj.data[..std::cmp::min(MAX_SNIPPET_LEN, obj.data.len())]).to_string();
-                        results.push(SearchResult { cid: cid.clone(), relevance: 0.8, meta: obj.meta, snippet });
+                        let snippet =
+                            String::from_utf8_lossy(&obj.data[..std::cmp::min(MAX_SNIPPET_LEN, obj.data.len())])
+                                .to_string();
+                        results.push(SearchResult {
+                            cid: cid.clone(),
+                            relevance: 0.8,
+                            meta: obj.meta,
+                            snippet,
+                        });
                     }
                 }
             }
@@ -1299,7 +1549,7 @@ impl SemanticFS {
         results
     }
 
-/// F-4: Tag intersection search — ALL tags must match (AND semantics).
+    /// F-4: Tag intersection search — ALL tags must match (AND semantics).
     pub fn search_by_tags_intersection(&self, tags: &[String], limit: usize) -> Vec<SearchResult> {
         use std::collections::HashSet;
         let index = self.tag_index.read().unwrap();
@@ -1315,7 +1565,9 @@ impl SemanticFS {
                             return Vec::new();
                         }
                     }
-                    None => { candidates = Some(set); }
+                    None => {
+                        candidates = Some(set);
+                    }
                 }
             } else {
                 return Vec::new();
@@ -1329,8 +1581,14 @@ impl SemanticFS {
                     break;
                 }
                 if let Ok(obj) = self.cas.get(&cid) {
-                    let snippet = String::from_utf8_lossy(&obj.data[..std::cmp::min(MAX_SNIPPET_LEN, obj.data.len())]).to_string();
-                    results.push(SearchResult { cid: cid.clone(), relevance: 0.9, meta: obj.meta, snippet });
+                    let snippet = String::from_utf8_lossy(&obj.data[..std::cmp::min(MAX_SNIPPET_LEN, obj.data.len())])
+                        .to_string();
+                    results.push(SearchResult {
+                        cid: cid.clone(),
+                        relevance: 0.9,
+                        meta: obj.meta,
+                        snippet,
+                    });
                 }
             }
         }
@@ -1366,7 +1624,9 @@ impl SemanticFS {
 
     fn add_similar_to_edges(&self, kg: &Arc<dyn KnowledgeGraph>, cid: &str, embedding: &[f32]) {
         let filter = SearchFilter::default();
-        let similar = self.search_index.search(embedding, Self::MAX_SIMILAR_EDGES + 1, &filter);
+        let similar = self
+            .search_index
+            .search(embedding, Self::MAX_SIMILAR_EDGES + 1, &filter);
         let mut added = 0usize;
         for hit in similar {
             if hit.cid == cid || hit.score < Self::SIMILARITY_THRESHOLD {
@@ -1375,30 +1635,28 @@ impl SemanticFS {
             if added >= Self::MAX_SIMILAR_EDGES {
                 break;
             }
-            if kg.get_valid_edge_between(cid, &hit.cid, Some(KGEdgeType::SimilarTo), 0).ok().flatten().is_some() {
+            if kg
+                .get_valid_edge_between(cid, &hit.cid, Some(KGEdgeType::SimilarTo), 0)
+                .ok()
+                .flatten()
+                .is_some()
+            {
                 continue;
             }
-            let e1 = KGEdge::new_with_episode(
-                cid.to_string(),
-                hit.cid.clone(),
-                KGEdgeType::SimilarTo,
-                hit.score,
-                cid,
-            );
-            let e2 = KGEdge::new_with_episode(
-                hit.cid.clone(),
-                cid.to_string(),
-                KGEdgeType::SimilarTo,
-                hit.score,
-                cid,
-            );
+            let e1 = KGEdge::new_with_episode(cid.to_string(), hit.cid.clone(), KGEdgeType::SimilarTo, hit.score, cid);
+            let e2 = KGEdge::new_with_episode(hit.cid.clone(), cid.to_string(), KGEdgeType::SimilarTo, hit.score, cid);
             let _ = kg.add_edge(e1);
             let _ = kg.add_edge(e2);
             added += 1;
         }
     }
 
-    fn upsert_semantic_index(&self, cid: &str, content: &[u8], meta: &AIObjectMeta) -> Result<Option<Vec<f32>>, crate::fs::embedding::EmbedError> {
+    fn upsert_semantic_index(
+        &self,
+        cid: &str,
+        content: &[u8],
+        meta: &AIObjectMeta,
+    ) -> Result<Option<Vec<f32>>, crate::fs::embedding::EmbedError> {
         tracing::debug!(cid = %crate::util::safe_truncate(cid, 8), "Indexing semantic object");
         let text = String::from_utf8_lossy(content);
         let snippet = if text.trim().is_empty() {
@@ -1431,36 +1689,59 @@ impl SemanticFS {
                 Ok(result) => {
                     is_real_embedding = true;
                     if let Some(ledger) = crate::kernel::ops::cost_ledger::get_global_cost_ledger() {
-                        ledger.record_embedding_with_tokens(result.input_tokens, self.embedding.model_name(), "", &meta.created_by);
+                        ledger.record_embedding_with_tokens(
+                            result.input_tokens,
+                            &self.embedding.model_name(),
+                            "",
+                            &meta.created_by,
+                        );
                     }
                     result.embedding
                 }
-                Err(e) => {
-                    if matches!(e, crate::fs::embedding::EmbedError::InputTooLarge(_)) {
-                        return Err(e);
+                Err(error) => {
+                    if matches!(error, crate::fs::embedding::EmbedError::InputTooLarge(_)) {
+                        return Err(error);
                     }
-                    tracing::warn!(cid = %crate::util::safe_truncate(cid, 8), "Failed to embed object: {e}. Indexing with zero vector (not searchable by similarity).");
+                    tracing::warn!(
+                        cid = %crate::util::safe_truncate(cid, 8),
+                        error_category = error.category(),
+                        degradation = "lexical_only",
+                        "object embedding failed"
+                    );
                     is_real_embedding = false;
                     vec![0.0f32; self.embedding.dimension()]
                 }
             }
         };
 
-        self.search_index.upsert(cid, &embedding, SearchIndexMeta {
-            cid: cid.to_string(),
-            tags: meta.tags.clone(),
-            snippet,
-            content_type: format!("{:?}", meta.content_type).to_lowercase(),
-            created_at: meta.created_at,
-            memory_type: None,
-        });
+        self.search_index.upsert(
+            cid,
+            &embedding,
+            SearchIndexMeta {
+                cid: cid.to_string(),
+                tags: meta.tags.clone(),
+                snippet,
+                content_type: format!("{:?}", meta.content_type).to_lowercase(),
+                created_at: meta.created_at,
+                owner_role: meta.created_by.clone(),
+                namespace: meta.tenant_id.clone(),
+                scope: meta.scope.clone(),
+                memory_type: None,
+            },
+        );
 
-        if is_real_embedding { Ok(Some(embedding)) } else { Ok(None) }
+        if is_real_embedding {
+            Ok(Some(embedding))
+        } else {
+            Ok(None)
+        }
     }
 
     fn update_tag_index(&self, tags: &[String], cid: &str) {
         let mut index = self.tag_index.write().unwrap();
-        for tag in tags { index.entry(tag.clone()).or_default().push(cid.to_string()); }
+        for tag in tags {
+            index.entry(tag.clone()).or_default().push(cid.to_string());
+        }
     }
 
     /// Persist the tag index to disk (called periodically, not on every write).
@@ -1495,11 +1776,16 @@ impl SemanticFS {
         serde_json::from_slice(&json).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
     }
 
-    fn rebuild_tag_index(cas: &CASStorage, recycle_bin: &HashMap<String, RecycleEntry>) -> HashMap<String, Vec<String>> {
+    fn rebuild_tag_index(
+        cas: &CASStorage,
+        recycle_bin: &HashMap<String, RecycleEntry>,
+    ) -> HashMap<String, Vec<String>> {
         let mut index: HashMap<String, Vec<String>> = HashMap::new();
         if let Ok(cids) = cas.list_cids() {
             for cid in cids {
-                if recycle_bin.contains_key(&cid) { continue; } // F-43: skip soft-deleted
+                if recycle_bin.contains_key(&cid) {
+                    continue;
+                } // F-43: skip soft-deleted
                 if let Ok(obj) = cas.get_raw(&cid) {
                     for tag in &obj.meta.tags {
                         index.entry(tag.clone()).or_default().push(cid.clone());
@@ -1513,7 +1799,9 @@ impl SemanticFS {
     fn remove_from_tag_index(&self, tags: &[String], cid: &str) {
         let mut index = self.tag_index.write().unwrap();
         for tag in tags {
-            if let Some(cids) = index.get_mut(tag) { cids.retain(|c| c != cid); }
+            if let Some(cids) = index.get_mut(tag) {
+                cids.retain(|c| c != cid);
+            }
         }
     }
 
@@ -1536,15 +1824,101 @@ impl SemanticFS {
     }
 }
 
+fn trace_search_execution(query_bytes: usize, limit: usize, filter: &SearchFilter, diagnosed: &DiagnosedSearch) {
+    let (embedding_state, embedding_degradation) = match &diagnosed.execution.embedding {
+        EmbeddingQueryState::NotProbed { .. } => ("not_probed", "none"),
+        EmbeddingQueryState::Succeeded { .. } => ("succeeded", "none"),
+        EmbeddingQueryState::Degraded { reason, .. } => ("degraded", embedding_degradation_name(*reason)),
+    };
+
+    tracing::debug!(
+        target: "plico::object_search",
+        query_bytes,
+        limit,
+        required_tag_filters = filter.require_tags.len(),
+        excluded_tag_filters = filter.exclude_tags.len(),
+        content_type_filters = usize::from(filter.content_type.is_some()),
+        time_bound_filters = usize::from(filter.since.is_some()) + usize::from(filter.until.is_some()),
+        memory_type_filters = usize::from(filter.memory_type.is_some()),
+        result_count = diagnosed.results.len(),
+        embedding_state,
+        embedding_degradation,
+        "Object search diagnostics completed"
+    );
+
+    for path in &diagnosed.execution.paths {
+        let path_name = match path.path {
+            SearchPath::Bm25 => "bm25",
+            SearchPath::Vector => "vector",
+            SearchPath::TagFallback => "tag_fallback",
+            SearchPath::KnowledgeGraphTemporal => "knowledge_graph_temporal",
+            SearchPath::KnowledgeGraphPpr => "knowledge_graph_ppr",
+            SearchPath::KnowledgeGraphPathDiscovery => "knowledge_graph_path_discovery",
+            SearchPath::KnowledgeGraphCausal => "knowledge_graph_causal",
+            SearchPath::Reranker => "reranker",
+        };
+        let degradation = match path.degradation {
+            Some(SearchStageDegradation::ExecutionFailed) => "execution_failed",
+            None => "none",
+        };
+        tracing::debug!(
+            target: "plico::object_search",
+            query_bytes,
+            limit,
+            path = path_name,
+            candidates = path.candidates,
+            accepted = path.accepted,
+            degradation,
+            "Object search path executed"
+        );
+    }
+}
+
+fn embedding_degradation_name(reason: EmbeddingDegradation) -> &'static str {
+    match reason {
+        EmbeddingDegradation::ProviderUnavailable => "provider_unavailable",
+        EmbeddingDegradation::ModelUnavailable => "model_unavailable",
+        EmbeddingDegradation::InputRejected => "input_rejected",
+        EmbeddingDegradation::ExecutionFailed => "execution_failed",
+    }
+}
+
 /// Detect whether a query has temporal intent based on keyword matching.
 fn is_temporal_query(query: &str) -> bool {
     let q = query.to_lowercase();
     const TEMPORAL_KEYWORDS: &[&str] = &[
-        "after", "before", "when", "then", "during", "since", "until",
-        "first", "last", "next", "previous", "recent", "latest", "earliest",
-        "sequence", "timeline", "order", "chronolog",
-        "之后", "之前", "什么时候", "然后", "期间", "自从", "直到",
-        "第一次", "最后", "最近", "最早", "顺序", "时间线", "先后",
+        "after",
+        "before",
+        "when",
+        "then",
+        "during",
+        "since",
+        "until",
+        "first",
+        "last",
+        "next",
+        "previous",
+        "recent",
+        "latest",
+        "earliest",
+        "sequence",
+        "timeline",
+        "order",
+        "chronolog",
+        "之后",
+        "之前",
+        "什么时候",
+        "然后",
+        "期间",
+        "自从",
+        "直到",
+        "第一次",
+        "最后",
+        "最近",
+        "最早",
+        "顺序",
+        "时间线",
+        "先后",
     ];
     TEMPORAL_KEYWORDS.iter().any(|kw| q.contains(kw))
 }
@@ -1554,12 +1928,40 @@ fn is_temporal_query(query: &str) -> bool {
 fn is_multihop_query(query: &str) -> bool {
     let q = query.to_lowercase();
     const MULTI_KEYWORDS: &[&str] = &[
-        "why", "how", "because", "cause", "reason", "connect", "link", "relate",
-        "and then", "after that", "before that", "led to", "resulted in",
-        "what happened", "what caused", "what led", "what connects",
-        "relationship", "between", "among", "influence", "impact",
-        "为什么", "怎么", "因为", "原因", "连接", "关系", "导致", "影响",
-        "之间", "之间有什么", "什么导致", "什么引起",
+        "why",
+        "how",
+        "because",
+        "cause",
+        "reason",
+        "connect",
+        "link",
+        "relate",
+        "and then",
+        "after that",
+        "before that",
+        "led to",
+        "resulted in",
+        "what happened",
+        "what caused",
+        "what led",
+        "what connects",
+        "relationship",
+        "between",
+        "among",
+        "influence",
+        "impact",
+        "为什么",
+        "怎么",
+        "因为",
+        "原因",
+        "连接",
+        "关系",
+        "导致",
+        "影响",
+        "之间",
+        "之间有什么",
+        "什么导致",
+        "什么引起",
     ];
     MULTI_KEYWORDS.iter().any(|kw| q.contains(kw))
 }
@@ -1572,16 +1974,17 @@ impl SemanticFS {
         kg: &Arc<dyn crate::fs::graph::KnowledgeGraph>,
         query: &str,
         limit: usize,
-    ) -> Vec<SearchResult> {
-        use crate::fs::graph::{KGNodeType, KGEdgeType};
+        filter: &SearchFilter,
+    ) -> (Vec<SearchResult>, usize) {
+        use crate::fs::graph::{KGEdgeType, KGNodeType};
 
         let event_nodes = match kg.list_nodes("", Some(KGNodeType::Event)) {
             Ok(nodes) => nodes,
-            Err(_) => return vec![],
+            Err(_) => return (vec![], 0),
         };
 
         if event_nodes.is_empty() {
-            return vec![];
+            return (vec![], 0);
         }
 
         let query_lower = query.to_lowercase();
@@ -1591,14 +1994,14 @@ impl SemanticFS {
             .filter(|n| {
                 n.label.to_lowercase().contains(&query_lower)
                     || query_lower.contains(&n.label.to_lowercase())
-                    || query.split_whitespace().any(|w| {
-                        n.label.to_lowercase().contains(&w.to_lowercase())
-                    })
+                    || query
+                        .split_whitespace()
+                        .any(|w| n.label.to_lowercase().contains(&w.to_lowercase()))
             })
             .collect();
 
         if relevant_events.is_empty() {
-            return vec![];
+            return (vec![], 0);
         }
 
         relevant_events.sort_by_key(|n| n.created_at);
@@ -1622,35 +2025,49 @@ impl SemanticFS {
                     }
                 }
             }
-
-            if result_cids.len() >= limit {
-                break;
-            }
         }
 
-        result_cids.truncate(limit);
-
-        result_cids
+        let candidate_count = result_cids.len();
+        let results = result_cids
             .into_iter()
-            .enumerate()
-            .filter_map(|(i, cid)| {
-                self.cas.get(&cid).ok().map(|obj| {
-                    let snippet = String::from_utf8_lossy(
-                        &obj.data[..std::cmp::min(MAX_SNIPPET_LEN, obj.data.len())],
-                    )
-                    .to_string();
-                    SearchResult {
+            .filter_map(|cid| {
+                self.cas.get(&cid).ok().and_then(|obj| {
+                    if !filter.matches(&search_meta_from_object(&cid, &obj)) {
+                        return None;
+                    }
+                    let snippet = String::from_utf8_lossy(&obj.data[..std::cmp::min(MAX_SNIPPET_LEN, obj.data.len())])
+                        .to_string();
+                    Some(SearchResult {
                         cid,
-                        relevance: 1.0 - (i as f32 * 0.05),
+                        relevance: 1.0,
                         meta: obj.meta,
                         snippet,
-                    }
+                    })
                 })
             })
-            .collect()
+            .take(limit)
+            .enumerate()
+            .map(|(index, mut result)| {
+                result.relevance = 1.0 - (index as f32 * 0.05);
+                result
+            })
+            .collect();
+        (results, candidate_count)
+    }
+}
+
+fn search_meta_from_object(cid: &str, object: &AIObject) -> SearchIndexMeta {
+    SearchIndexMeta {
+        cid: cid.to_string(),
+        tags: object.meta.tags.clone(),
+        snippet: String::new(),
+        content_type: object.meta.content_type.to_string(),
+        created_at: object.meta.created_at,
+        owner_role: object.meta.created_by.clone(),
+        namespace: object.meta.tenant_id.clone(),
+        scope: object.meta.scope.clone(),
+        memory_type: None,
     }
 }
 
 use crate::util::now_ms;
-
-

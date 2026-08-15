@@ -30,12 +30,12 @@ fn axiom4_cross_agent_object_visibility() {
         content: "Shared knowledge: Rust is memory safe".to_string(),
         content_encoding: Default::default(),
         tags: vec!["shared".to_string(), "rust".to_string()],
+        scope: None,
         agent_id: agent_a.clone(),
         tenant_id: None,
         agent_token: None,
         intent: None,
-            scope: None,
-});
+    });
     assert!(create_resp.ok, "Agent A create failed: {:?}", create_resp.error);
     let cid = create_resp.cid.expect("should have CID");
 
@@ -45,7 +45,11 @@ fn axiom4_cross_agent_object_visibility() {
         tenant_id: None,
         agent_token: None,
     });
-    assert!(read_resp.ok, "Agent B should be able to read shared object: {:?}", read_resp.error);
+    assert!(
+        read_resp.ok,
+        "Agent B should be able to read shared object: {:?}",
+        read_resp.error
+    );
 }
 
 #[test]
@@ -66,8 +70,8 @@ fn axiom4_cross_agent_search_visibility() {
         tenant_id: None,
         agent_token: None,
         intent: None,
-            scope: None,
-});
+        scope: None,
+    });
 
     let search_resp = kernel.handle_api_request(ApiRequest::Search {
         query: "quantum".to_string(),
@@ -105,7 +109,6 @@ fn axiom4_shared_memory_across_agents() {
 
     let recall_resp = kernel.handle_api_request(ApiRequest::Recall {
         agent_id: agent_b.clone(),
-        scope: None,
         query: Some("deadline".to_string()),
         limit: Some(5),
         tier: None,
@@ -131,8 +134,8 @@ fn axiom4_tag_based_object_sharing() {
         tenant_id: None,
         agent_token: None,
         intent: None,
-            scope: None,
-});
+        scope: None,
+    });
 
     // Agent B searches by tag — should find agent A's content
     let search_resp = kernel.handle_api_request(ApiRequest::Search {

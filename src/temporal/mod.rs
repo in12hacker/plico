@@ -30,5 +30,5 @@
 mod resolver;
 mod rules;
 
-pub use resolver::{TemporalResolver, TemporalRange, StubTemporalResolver};
-pub use rules::{Granularity, TemporalRule, RULE_BASED_RESOLVER, HeuristicTemporalResolver, resolve_heuristic};
+pub use resolver::{StubTemporalResolver, TemporalRange, TemporalResolver};
+pub use rules::{resolve_heuristic, Granularity, HeuristicTemporalResolver, TemporalRule, RULE_BASED_RESOLVER};

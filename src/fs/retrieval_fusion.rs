@@ -1,30 +1,9 @@
-//! OS-level Retrieval Fusion Engine (RFE) — v31 original algorithm.
+//! Per-role retrieval tuning weights learned by `AgentProfile`.
 //!
-//! Fuses six independent signal families that only an AI-OS can provide:
-//! semantic embeddings, causal graph proximity, access patterns, tag overlap,
-//! temporal recency, and memory type alignment.
-//!
-//! FusionWeights are per-agent learnable (see AgentProfile) and ship with
-//! sensible defaults that work out-of-the-box.
+//! The retired inline-memory fusion engine no longer consumes these values;
+//! the profile keeps them as learning state for a future projection design.
 
 use serde::{Deserialize, Serialize};
-
-use crate::memory::layered::{MemoryEntry, MemoryType, now_ms};
-use crate::memory::causal::CausalGraph;
-
-/// Per-signal scores computed for a candidate retrieval result.
-#[derive(Debug, Clone)]
-pub struct RetrievalSignals {
-    pub semantic_score: f32,
-    pub causal_proximity: f32,
-    pub access_affinity: f32,
-    pub tag_overlap: f32,
-    pub temporal_recency: f32,
-    pub type_match: f32,
-    pub bm25_keyword: f32,
-    /// KG connectivity signal from multi-hop traversal (v39).
-    pub kg_multi_hop: f32,
-}
 
 /// Tunable weights for each signal dimension. Defaults sum to 1.0.
 ///
@@ -38,42 +17,27 @@ pub struct FusionWeights {
     pub tag: f32,
     pub temporal: f32,
     pub type_match: f32,
-    pub bm25_keyword: f32,
-    pub kg_multi_hop: f32,
+    pub lexical_keyword: f32,
 }
 
 impl Default for FusionWeights {
     fn default() -> Self {
         Self {
-            semantic: 0.30,
-            causal: 0.10,
-            access: 0.08,
-            tag: 0.10,
-            temporal: 0.07,
-            type_match: 0.10,
-            bm25_keyword: 0.15,
-            kg_multi_hop: 0.10,
+            semantic: 0.333,
+            causal: 0.111,
+            access: 0.089,
+            tag: 0.111,
+            temporal: 0.078,
+            type_match: 0.111,
+            lexical_keyword: 0.167,
         }
     }
 }
 
 impl FusionWeights {
-    pub fn fuse(&self, signals: &RetrievalSignals) -> f32 {
-        self.semantic * signals.semantic_score
-            + self.causal * signals.causal_proximity
-            + self.access * signals.access_affinity
-            + self.tag * signals.tag_overlap
-            + self.temporal * signals.temporal_recency
-            + self.type_match * signals.type_match
-            + self.bm25_keyword * signals.bm25_keyword
-            + self.kg_multi_hop * signals.kg_multi_hop
-    }
-
     /// Sum of all weights (should be ~1.0 after normalization).
     pub fn total(&self) -> f32 {
-        self.semantic + self.causal + self.access + self.tag
-            + self.temporal + self.type_match + self.bm25_keyword
-            + self.kg_multi_hop
+        self.semantic + self.causal + self.access + self.tag + self.temporal + self.type_match + self.lexical_keyword
     }
 
     /// Normalize weights so they sum to 1.0, preserving ratios.
@@ -86,349 +50,43 @@ impl FusionWeights {
             self.tag /= t;
             self.temporal /= t;
             self.type_match /= t;
-            self.bm25_keyword /= t;
-            self.kg_multi_hop /= t;
+            self.lexical_keyword /= t;
         }
     }
-}
-
-/// A scored retrieval result with per-signal breakdown.
-#[derive(Debug, Clone)]
-pub struct FusedResult {
-    pub entry: MemoryEntry,
-    pub fused_score: f32,
-    pub signals: RetrievalSignals,
-}
-
-/// Query context for computing signals.
-pub struct RetrievalQuery<'a> {
-    pub query_embedding: &'a [f32],
-    pub query_tags: &'a [String],
-    pub query_memory_type: Option<MemoryType>,
-    pub context_entry_id: Option<&'a str>,
-    /// Pre-computed BM25 scores keyed by entry ID (from Bm25Index::search).
-    pub bm25_scores: Option<&'a std::collections::HashMap<String, f32>>,
-}
-
-/// The Retrieval Fusion Engine.
-pub struct RetrievalFusionEngine {
-    weights: FusionWeights,
-    temporal_half_life_ms: u64,
-    /// KG connectivity signals keyed by entry ID (v39).
-    kg_signals: Option<std::collections::HashMap<String, f32>>,
-}
-
-impl RetrievalFusionEngine {
-    pub fn new(weights: FusionWeights) -> Self {
-        Self {
-            weights,
-            temporal_half_life_ms: 7 * 24 * 60 * 60 * 1000, // 7 days
-            kg_signals: None,
-        }
-    }
-
-    pub fn with_temporal_half_life(mut self, half_life_ms: u64) -> Self {
-        self.temporal_half_life_ms = half_life_ms;
-        self
-    }
-
-    pub fn weights(&self) -> &FusionWeights {
-        &self.weights
-    }
-
-    pub fn set_weights(&mut self, weights: FusionWeights) {
-        self.weights = weights;
-    }
-
-    pub fn set_kg_signals(&mut self, signals: std::collections::HashMap<String, f32>) {
-        self.kg_signals = Some(signals);
-    }
-
-    /// Compute all signals for a candidate entry and fuse them into a single score.
-    pub fn score(
-        &self,
-        candidate: &MemoryEntry,
-        query: &RetrievalQuery,
-        graph: Option<&CausalGraph>,
-    ) -> RetrievalSignals {
-        let semantic_score = if let Some(ref emb) = candidate.embedding {
-            cosine_sim(query.query_embedding, emb)
-        } else {
-            0.0
-        };
-
-        let causal_proximity = if let (Some(ctx_id), Some(g)) = (query.context_entry_id, graph) {
-            // F-39: Differentiate between direct ancestry (stronger) and generic path (weaker)
-            if let Some(d) = g.shortest_path_len(ctx_id, &candidate.id) {
-                let base = 1.0 / (1.0 + d as f32);
-                
-                // Boost direct ancestors or supersession chain
-                let is_ancestor = g.ancestors(ctx_id).contains(&candidate.id.to_string());
-                let is_version = g.supersession_chain(ctx_id).contains(&candidate.id.to_string());
-                
-                if is_ancestor || is_version {
-                    (base * 1.5).min(1.0)
-                } else {
-                    base
-                }
-            } else {
-                0.0
-            }
-        } else {
-            0.0
-        };
-
-        let access_affinity = {
-            let count = candidate.access_count as f32;
-            (count.ln_1p() / 5.0).min(1.0)
-        };
-
-        let tag_overlap = {
-            if query.query_tags.is_empty() && candidate.tags.is_empty() {
-                0.0
-            } else {
-                let q_set: std::collections::HashSet<&str> =
-                    query.query_tags.iter().map(|s| s.as_str()).collect();
-                let c_set: std::collections::HashSet<&str> =
-                    candidate.tags.iter().map(|s| s.as_str()).collect();
-                let inter = q_set.intersection(&c_set).count();
-                let union = q_set.union(&c_set).count();
-                if union == 0 { 0.0 } else { inter as f32 / union as f32 }
-            }
-        };
-
-        let temporal_recency = {
-            let now = now_ms();
-            let age_ms = now.saturating_sub(candidate.last_accessed);
-            let half = self.temporal_half_life_ms as f64;
-            if half < 1.0 { 0.0 } else { (-(age_ms as f64) / half * std::f64::consts::LN_2).exp() as f32 }
-        };
-
-        let type_match = match query.query_memory_type {
-            Some(qt) if qt == candidate.memory_type => 1.0,
-            Some(_) => 0.2,
-            None => 0.5,
-        };
-
-        let bm25_keyword = query.bm25_scores
-            .and_then(|scores| scores.get(&candidate.id).copied())
-            .unwrap_or(0.0);
-
-        let kg_multi_hop = self.kg_signals.as_ref()
-            .and_then(|scores| scores.get(&candidate.id).copied())
-            .unwrap_or(0.0);
-
-        RetrievalSignals {
-            semantic_score,
-            causal_proximity,
-            access_affinity,
-            tag_overlap,
-            temporal_recency,
-            type_match,
-            bm25_keyword,
-            kg_multi_hop,
-        }
-    }
-
-    /// Score and rank a list of candidates. Returns top-k by fused score.
-    pub fn rank(
-        &self,
-        candidates: &[MemoryEntry],
-        query: &RetrievalQuery,
-        graph: Option<&CausalGraph>,
-        top_k: usize,
-    ) -> Vec<FusedResult> {
-        let mut scored: Vec<FusedResult> = candidates
-            .iter()
-            .map(|entry| {
-                let signals = self.score(entry, query, graph);
-                let fused_score = self.weights.fuse(&signals);
-                FusedResult {
-                    entry: entry.clone(),
-                    fused_score,
-                    signals,
-                }
-            })
-            .collect();
-
-        scored.sort_by(|a, b| b.fused_score.partial_cmp(&a.fused_score).unwrap_or(std::cmp::Ordering::Equal));
-        scored.truncate(top_k);
-        scored
-    }
-}
-
-fn cosine_sim(a: &[f32], b: &[f32]) -> f32 {
-    if a.len() != b.len() || a.is_empty() {
-        return 0.0;
-    }
-    let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
-    let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
-    let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
-    if norm_a < 1e-9 || norm_b < 1e-9 {
-        return 0.0;
-    }
-    dot / (norm_a * norm_b)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::layered::{MemoryContent, MemoryScope, MemoryTier};
 
-    fn make_entry(id: &str, tags: Vec<&str>, access_count: u32, embedding: Option<Vec<f32>>) -> MemoryEntry {
-        MemoryEntry {
-            id: id.to_string(),
-            agent_id: "test".to_string(),
-            tenant_id: "default".to_string(),
-            tier: MemoryTier::LongTerm,
-            content: MemoryContent::Text(format!("content of {}", id)),
-            importance: 50,
-            access_count,
-            last_accessed: now_ms(),
-            created_at: now_ms(),
-            tags: tags.into_iter().map(String::from).collect(),
-            embedding,
-            ttl_ms: None,
-            original_ttl_ms: None,
-            scope: MemoryScope::Private,
-            memory_type: MemoryType::Semantic,
-            causal_parent: None,
-            supersedes: None,
-            superseded_by: None,
-            deleted_at: None,
-        }
+    #[test]
+    fn default_weights_sum_to_one() {
+        let weights = FusionWeights::default();
+        assert!((weights.total() - 1.0).abs() < 0.01);
     }
 
     #[test]
-    fn test_default_weights_sum_to_one() {
-        let w = FusionWeights::default();
-        assert!((w.total() - 1.0).abs() < 0.01, "weights sum to {}", w.total());
+    fn weights_roundtrip() {
+        let weights = FusionWeights::default();
+        let encoded = serde_json::to_string(&weights).unwrap();
+        let decoded: FusionWeights = serde_json::from_str(&encoded).unwrap();
+        assert!((weights.semantic - decoded.semantic).abs() < 1e-6);
+        assert!((weights.lexical_keyword - decoded.lexical_keyword).abs() < 1e-6);
     }
 
     #[test]
-    fn test_fuse_score() {
-        let w = FusionWeights::default();
-        let signals = RetrievalSignals {
-            semantic_score: 0.9,
-            causal_proximity: 0.5,
-            access_affinity: 0.3,
-            tag_overlap: 0.8,
-            temporal_recency: 0.7,
-            type_match: 1.0,
-            bm25_keyword: 0.6,
-            kg_multi_hop: 0.5,
-        };
-        let score = w.fuse(&signals);
-        assert!(score > 0.0 && score <= 1.0, "fused score = {}", score);
-    }
-
-    #[test]
-    fn test_rank_orders_by_fused_score() {
-        let engine = RetrievalFusionEngine::new(FusionWeights::default());
-        let emb = vec![1.0, 0.0, 0.0];
-        let e1 = make_entry("a", vec!["rust"], 10, Some(vec![0.9, 0.1, 0.0]));
-        let e2 = make_entry("b", vec!["python"], 0, Some(vec![0.0, 1.0, 0.0]));
-
-        let query = RetrievalQuery {
-            query_embedding: &emb,
-            query_tags: &["rust".to_string()],
-            query_memory_type: Some(MemoryType::Semantic),
-            context_entry_id: None,
-            bm25_scores: None,
-        };
-
-        let results = engine.rank(&[e1.clone(), e2.clone()], &query, None, 10);
-        assert_eq!(results[0].entry.id, "a");
-        assert!(results[0].fused_score > results[1].fused_score);
-    }
-
-    #[test]
-    fn test_bm25_signal_boosts_ranking() {
-        let engine = RetrievalFusionEngine::new(FusionWeights::default());
-        let emb = vec![1.0, 0.0, 0.0];
-        let e1 = make_entry("a", vec![], 0, Some(vec![0.5, 0.5, 0.0]));
-        let e2 = make_entry("b", vec![], 0, Some(vec![0.5, 0.5, 0.0]));
-
-        let mut bm25 = std::collections::HashMap::new();
-        bm25.insert("b".to_string(), 1.0_f32);
-
-        let query = RetrievalQuery {
-            query_embedding: &emb,
-            query_tags: &[],
-            query_memory_type: None,
-            context_entry_id: None,
-            bm25_scores: Some(&bm25),
-        };
-
-        let results = engine.rank(&[e1, e2], &query, None, 10);
-        assert_eq!(results[0].entry.id, "b", "BM25 boost should promote entry b");
-    }
-
-    #[test]
-    fn test_tag_overlap_jaccard() {
-        let engine = RetrievalFusionEngine::new(FusionWeights::default());
-        let e = make_entry("x", vec!["a", "b", "c"], 0, Some(vec![0.5; 3]));
-        let query = RetrievalQuery {
-            query_embedding: &[0.5; 3],
-            query_tags: &["a".to_string(), "b".to_string(), "d".to_string()],
-            query_memory_type: None,
-            context_entry_id: None,
-            bm25_scores: None,
-        };
-        let signals = engine.score(&e, &query, None);
-        let expected_jaccard = 2.0 / 4.0; // {a,b} / {a,b,c,d}
-        assert!((signals.tag_overlap - expected_jaccard).abs() < 0.01);
-    }
-
-    #[test]
-    fn test_weights_serialize_deserialize() {
-        let w = FusionWeights::default();
-        let json = serde_json::to_string(&w).unwrap();
-        let w2: FusionWeights = serde_json::from_str(&json).unwrap();
-        assert!((w.semantic - w2.semantic).abs() < 1e-6);
-        assert!((w.bm25_keyword - w2.bm25_keyword).abs() < 1e-6);
-    }
-
-    #[test]
-    fn test_normalize_preserves_ratios() {
-        let mut w = FusionWeights {
+    fn normalization_preserves_ratios() {
+        let mut weights = FusionWeights {
             semantic: 2.0,
             causal: 1.0,
             access: 1.0,
             tag: 1.0,
             temporal: 1.0,
             type_match: 1.0,
-            bm25_keyword: 1.0,
-            kg_multi_hop: 1.0,
+            lexical_keyword: 1.0,
         };
-        w.normalize();
-        assert!((w.total() - 1.0).abs() < 0.01);
-        assert!(w.semantic > w.causal);
-    }
-
-    #[test]
-    fn test_kg_multi_hop_boost() {
-        let engine = {
-            let mut e = RetrievalFusionEngine::new(FusionWeights::default());
-            let mut kg_sigs = std::collections::HashMap::new();
-            kg_sigs.insert("b".to_string(), 1.0);
-            e.set_kg_signals(kg_sigs);
-            e
-        };
-        
-        let emb = vec![0.5; 3];
-        let e1 = make_entry("a", vec![], 0, Some(emb.clone()));
-        let e2 = make_entry("b", vec![], 0, Some(emb.clone()));
-        
-        let query = RetrievalQuery {
-            query_embedding: &emb,
-            query_tags: &[],
-            query_memory_type: None,
-            context_entry_id: None,
-            bm25_scores: None,
-        };
-        
-        let results = engine.rank(&[e1, e2], &query, None, 10);
-        assert_eq!(results[0].entry.id, "b", "KG multi-hop boost should promote entry b");
+        weights.normalize();
+        assert!((weights.total() - 1.0).abs() < 0.01);
+        assert!(weights.semantic > weights.causal);
     }
 }

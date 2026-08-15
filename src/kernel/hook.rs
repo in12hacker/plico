@@ -102,10 +102,7 @@ impl HookRegistry {
     /// no hooks blocked, or HookResult::Block from the first blocking hook.
     pub fn run_hooks(&self, point: HookPoint, context: &HookContext) -> HookResult {
         let hooks = self.hooks.read().unwrap();
-        let mut relevant: Vec<_> = hooks
-            .iter()
-            .filter(|(p, _, _)| *p == point)
-            .collect();
+        let mut relevant: Vec<_> = hooks.iter().filter(|(p, _, _)| *p == point).collect();
         relevant.sort_by_key(|(_, prio, _)| *prio);
 
         for (_, _, handler) in relevant {
@@ -174,7 +171,11 @@ mod tests {
         registry.register(
             HookPoint::PreToolCall,
             0,
-            Arc::new(TestHandler { result: HookResult::Block { reason: "denied".into() } }),
+            Arc::new(TestHandler {
+                result: HookResult::Block {
+                    reason: "denied".into(),
+                },
+            }),
         );
         let ctx = HookContext::new("agent1", "cas.delete", serde_json::json!({}));
         let result = registry.run_hooks(HookPoint::PreToolCall, &ctx);
@@ -187,11 +188,7 @@ mod tests {
     #[test]
     fn test_hook_registry_continue_passes_through() {
         let registry = HookRegistry::new();
-        registry.register(
-            HookPoint::PreToolCall,
-            0,
-            Arc::new(NoOpHookHandler),
-        );
+        registry.register(HookPoint::PreToolCall, 0, Arc::new(NoOpHookHandler));
         let ctx = HookContext::new("agent1", "cas.read", serde_json::json!({}));
         let result = registry.run_hooks(HookPoint::PreToolCall, &ctx);
         assert!(matches!(result, HookResult::Continue));
@@ -210,7 +207,11 @@ mod tests {
             }
         }
 
-        registry.register(HookPoint::PreToolCall, 10, Arc::new(OrderHandler(call_order.clone(), 10)));
+        registry.register(
+            HookPoint::PreToolCall,
+            10,
+            Arc::new(OrderHandler(call_order.clone(), 10)),
+        );
         registry.register(HookPoint::PreToolCall, 0, Arc::new(OrderHandler(call_order.clone(), 0)));
         registry.register(HookPoint::PreToolCall, 5, Arc::new(OrderHandler(call_order.clone(), 5)));
 
@@ -218,27 +219,35 @@ mod tests {
         registry.run_hooks(HookPoint::PreToolCall, &ctx);
 
         let order = call_order.lock().unwrap();
-        assert_eq!(*order, vec![0, 5, 10], "hooks should run in priority order (low to high)");
+        assert_eq!(
+            *order,
+            vec![0, 5, 10],
+            "hooks should run in priority order (low to high)"
+        );
     }
 
     #[test]
     fn test_hook_multiple_hooks_first_block_wins() {
         let registry = HookRegistry::new();
 
-        registry.register(
-            HookPoint::PreToolCall,
-            0,
-            Arc::new(NoOpHookHandler),
-        );
+        registry.register(HookPoint::PreToolCall, 0, Arc::new(NoOpHookHandler));
         registry.register(
             HookPoint::PreToolCall,
             5,
-            Arc::new(TestHandler { result: HookResult::Block { reason: "blocked at priority 5".into() } }),
+            Arc::new(TestHandler {
+                result: HookResult::Block {
+                    reason: "blocked at priority 5".into(),
+                },
+            }),
         );
         registry.register(
             HookPoint::PreToolCall,
             10,
-            Arc::new(TestHandler { result: HookResult::Block { reason: "never reached".into() } }),
+            Arc::new(TestHandler {
+                result: HookResult::Block {
+                    reason: "never reached".into(),
+                },
+            }),
         );
 
         let ctx = HookContext::new("a", "t", serde_json::json!({}));
@@ -255,13 +264,13 @@ mod tests {
         registry.register(
             HookPoint::PreToolCall,
             0,
-            Arc::new(TestHandler { result: HookResult::Block { reason: "pre blocked".into() } }),
+            Arc::new(TestHandler {
+                result: HookResult::Block {
+                    reason: "pre blocked".into(),
+                },
+            }),
         );
-        registry.register(
-            HookPoint::PostToolCall,
-            0,
-            Arc::new(NoOpHookHandler),
-        );
+        registry.register(HookPoint::PostToolCall, 0, Arc::new(NoOpHookHandler));
 
         let pre_ctx = HookContext::new("a", "t", serde_json::json!({}));
         let post_ctx = HookContext::new("a", "t", serde_json::json!({"result": "ok"}));

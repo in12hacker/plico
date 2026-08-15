@@ -2,7 +2,8 @@
 //!
 //! Provides structured checkpoint types for agent state persistence.
 //! The actual checkpoint/restore implementation uses the existing CAS-based
-//! mechanism in agent.rs (checkpoint_agent, restore_agent_checkpoint).
+//! mechanism in agent.rs (`checkpoint_agent`). Checkpoints are immutable audit
+//! artifacts; destructive checkpoint restore is intentionally unsupported.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -10,9 +11,7 @@ use std::path::{Path, PathBuf};
 use std::sync::RwLock;
 
 use crate::cas::{AIObject, AIObjectMeta, CASStorage, ContentType};
-use crate::memory::layered::{MemoryEntry, MemoryTier, MemoryContent, MemoryScope};
-use crate::kernel::ops::distributed::{NodeId, MigrationTicket};
-use crate::kernel::persistence::atomic_write_json;
+use crate::memory::layered::{MemoryContent, MemoryEntry, MemoryScope, MemoryTier};
 
 /// Tag for checkpoint memory entries.
 pub const CHECKPOINT_TAG: &str = "plico:internal:checkpoint";
@@ -24,7 +23,7 @@ pub struct AgentCheckpoint {
     pub checkpoint_id: String,
     /// Agent this checkpoint belongs to.
     pub agent_id: String,
-    /// Tenant ID for multi-tenant isolation.
+    /// Legacy personal-vault namespace captured for migration fidelity.
     pub tenant_id: String,
     /// When this checkpoint was created.
     pub created_at_ms: u64,
@@ -135,9 +134,20 @@ impl CheckpointMemory {
                             // Fallback: construct from available fields.
                             MemoryContent::Procedure(crate::memory::layered::Procedure {
                                 name: obj.get("name").and_then(|n| n.as_str()).unwrap_or("").to_string(),
-                                description: obj.get("description").and_then(|d| d.as_str()).unwrap_or("").to_string(),
-                                steps: obj.get("steps").and_then(|s| serde_json::from_value(s.clone()).ok()).unwrap_or_default(),
-                                learned_from: obj.get("learned_from").and_then(|l| l.as_str()).unwrap_or("").to_string(),
+                                description: obj
+                                    .get("description")
+                                    .and_then(|d| d.as_str())
+                                    .unwrap_or("")
+                                    .to_string(),
+                                steps: obj
+                                    .get("steps")
+                                    .and_then(|s| serde_json::from_value(s.clone()).ok())
+                                    .unwrap_or_default(),
+                                learned_from: obj
+                                    .get("learned_from")
+                                    .and_then(|l| l.as_str())
+                                    .unwrap_or("")
+                                    .to_string(),
                             })
                         }
                     }
@@ -165,6 +175,9 @@ impl CheckpointMemory {
         };
 
         MemoryEntry {
+            memory_id: Default::default(),
+            parent_revision_id: None,
+            canonical_content_hash: Default::default(),
             id: self.id.clone(),
             agent_id: agent_id.to_string(),
             tenant_id: tenant_id.to_string(),
@@ -175,7 +188,6 @@ impl CheckpointMemory {
             last_accessed: crate::memory::layered::now_ms(),
             created_at: self.created_at_ms,
             tags: self.tags.clone(),
-            embedding: None,
             ttl_ms: None,
             original_ttl_ms: None,
             scope,
@@ -214,21 +226,13 @@ impl AgentCheckpoint {
         }
     }
 
-    /// Create a migration ticket for this checkpoint.
-    pub fn to_migration_ticket(&self, from_node: NodeId, to_node: NodeId) -> MigrationTicket {
-        MigrationTicket {
-            agent_id: self.agent_id.clone(),
-            from_node,
-            to_node,
-            checkpoint_cid: self.checkpoint_id.clone(),
-            created_at_ms: self.created_at_ms,
-        }
-    }
-
     /// Convert checkpoint to a memory entry for persistence.
     pub fn to_memory_entry(&self) -> MemoryEntry {
         let now = crate::memory::layered::now_ms();
         MemoryEntry {
+            memory_id: Default::default(),
+            parent_revision_id: None,
+            canonical_content_hash: Default::default(),
             id: format!("checkpoint-{}", self.checkpoint_id),
             agent_id: self.agent_id.clone(),
             tenant_id: self.tenant_id.clone(),
@@ -239,7 +243,6 @@ impl AgentCheckpoint {
             last_accessed: now,
             created_at: self.created_at_ms,
             tags: vec![CHECKPOINT_TAG.to_string()],
-            embedding: None,
             ttl_ms: None,
             original_ttl_ms: None,
             scope: MemoryScope::Private,
@@ -254,7 +257,8 @@ impl AgentCheckpoint {
 
 /// Find the most recent checkpoint for an agent from memory entries.
 pub fn find_latest_checkpoint(entries: &[MemoryEntry]) -> Option<AgentCheckpoint> {
-    entries.iter()
+    entries
+        .iter()
         .filter(|e| e.tags.contains(&CHECKPOINT_TAG.to_string()))
         .max_by_key(|e| e.created_at)
         .and_then(|e| {
@@ -285,14 +289,16 @@ impl CheckpointStore {
         let mut store = self.checkpoints.write().unwrap();
 
         // Evict old checkpoints for this agent if needed
-        let agent_checkpoint_ids: Vec<_> = store.iter()
+        let agent_checkpoint_ids: Vec<_> = store
+            .iter()
             .filter(|(_, c)| c.agent_id == checkpoint.agent_id)
             .map(|(k, _)| k.clone())
             .collect();
 
         if agent_checkpoint_ids.len() >= self.max_checkpoints_per_agent {
             // Get checkpoints with timestamps for sorting
-            let mut with_timestamps: Vec<_> = agent_checkpoint_ids.iter()
+            let mut with_timestamps: Vec<_> = agent_checkpoint_ids
+                .iter()
                 .map(|k| {
                     let c = store.get(k).unwrap();
                     (k.clone(), c.created_at_ms)
@@ -316,7 +322,9 @@ impl CheckpointStore {
 
     /// Get the latest checkpoint for an agent.
     pub fn latest_for_agent(&self, agent_id: &str) -> Option<AgentCheckpoint> {
-        self.checkpoints.read().unwrap()
+        self.checkpoints
+            .read()
+            .unwrap()
             .values()
             .filter(|c| c.agent_id == agent_id)
             .max_by_key(|c| c.created_at_ms)
@@ -326,7 +334,8 @@ impl CheckpointStore {
     /// Delete old checkpoints for an agent.
     pub fn prune_old(&self, agent_id: &str, keep_count: usize) {
         let mut store = self.checkpoints.write().unwrap();
-        let mut agent_checkpoints: Vec<_> = store.iter()
+        let mut agent_checkpoints: Vec<_> = store
+            .iter()
             .filter(|(_, c)| c.agent_id == agent_id)
             .map(|(k, c)| (k.clone(), c.created_at_ms))
             .collect();
@@ -342,7 +351,9 @@ impl CheckpointStore {
 
     /// List all checkpoint IDs for an agent.
     pub fn list_for_agent(&self, agent_id: &str) -> Vec<String> {
-        self.checkpoints.read().unwrap()
+        self.checkpoints
+            .read()
+            .unwrap()
             .values()
             .filter(|c| c.agent_id == agent_id)
             .map(|c| c.checkpoint_id.clone())
@@ -351,10 +362,7 @@ impl CheckpointStore {
 
     /// List all checkpoints in the store.
     pub fn list_all(&self) -> Vec<AgentCheckpoint> {
-        self.checkpoints.read().unwrap()
-            .values()
-            .cloned()
-            .collect()
+        self.checkpoints.read().unwrap().values().cloned().collect()
     }
 
     /// Path to the checkpoint index file.
@@ -366,18 +374,13 @@ impl CheckpointStore {
     ///
     /// Each checkpoint is serialized as a JSON string and stored as a CAS object.
     /// The index file maps agent_id → Vec<checkpoint_cid>.
-    pub fn persist(&self, root: &Path, cas: &CASStorage) {
-        // Load old index to collect CIDs that will be replaced
-        let old_index: HashMap<String, Vec<String>> = std::fs::read_to_string(Self::index_path(root))
-            .ok()
-            .and_then(|json| serde_json::from_str(&json).ok())
-            .unwrap_or_default();
-
+    pub fn persist(&self, root: &Path, cas: &CASStorage) -> std::io::Result<()> {
         let checkpoints = self.checkpoints.read().unwrap();
         let mut index: HashMap<String, Vec<String>> = HashMap::new();
 
         for (_id, cp) in checkpoints.iter() {
-            let json = serde_json::to_string(cp).unwrap_or_default();
+            let json = serde_json::to_string(cp)
+                .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
             let meta = AIObjectMeta {
                 content_type: ContentType::Structured,
                 tags: vec!["checkpoint".into(), format!("agent:{}", cp.agent_id)],
@@ -388,27 +391,18 @@ impl CheckpointStore {
                 scope: crate::cas::ObjectScope::default(),
             };
             let obj = AIObject::new(json.into_bytes(), meta);
-            if let Ok(cid) = cas.put(&obj) {
-                index.entry(cp.agent_id.clone()).or_default().push(cid);
-            }
+            let cid = cas
+                .put(&obj)
+                .map_err(|error| std::io::Error::other(error.to_string()))?;
+            index.entry(cp.agent_id.clone()).or_default().push(cid);
         }
 
         // Release the lock before cleanup
         drop(checkpoints);
 
-        atomic_write_json(&Self::index_path(root), &index);
-
-        // Delete old CAS objects that are no longer referenced
-        let new_cids: std::collections::HashSet<&str> = index.values()
-            .flat_map(|v| v.iter().map(|s| s.as_str()))
-            .collect();
-        for old_cids in old_index.values() {
-            for cid in old_cids {
-                if !new_cids.contains(cid.as_str()) {
-                    let _ = cas.delete(cid);
-                }
-            }
-        }
+        let bytes = serde_json::to_vec_pretty(&index)
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+        crate::kernel::persistence::atomic_write_bytes(&Self::index_path(root), &bytes)
     }
 
     /// Restore checkpoints from CAS and the index file.
@@ -424,13 +418,23 @@ impl CheckpointStore {
         let index: HashMap<String, Vec<String>> = match std::fs::read_to_string(&path) {
             Ok(json) => match serde_json::from_str(&json) {
                 Ok(idx) => idx,
-                Err(e) => {
-                    tracing::warn!("Failed to parse checkpoint index: {e}");
+                Err(_) => {
+                    tracing::warn!(
+                        phase = "restore_index",
+                        outcome = "failed",
+                        error_category = "invalid_index",
+                        "checkpoint index rejected"
+                    );
                     return Self::new(max_checkpoints_per_agent);
                 }
             },
-            Err(e) => {
-                tracing::warn!("Failed to read checkpoint index: {e}");
+            Err(_) => {
+                tracing::warn!(
+                    phase = "restore_index",
+                    outcome = "failed",
+                    error_category = "io",
+                    "checkpoint index unavailable"
+                );
                 return Self::new(max_checkpoints_per_agent);
             }
         };
@@ -444,9 +448,18 @@ impl CheckpointStore {
                             store.insert(cp.checkpoint_id.clone(), cp);
                         }
                     }
-                    Err(e) => {
-                        tracing::warn!("Failed to restore checkpoint {} for agent {}: {}",
-                            cid, agent_id, e);
+                    Err(_) => {
+                        tracing::warn!(
+                            phase = "restore_checkpoint",
+                            outcome = "failed",
+                            error_category = "cas_read",
+                            role_kind = if agent_id == crate::PERSONAL_OWNER_ROLE_ID {
+                                "personal_owner"
+                            } else {
+                                "agent_role"
+                            },
+                            "checkpoint unavailable"
+                        );
                     }
                 }
             }
@@ -467,6 +480,9 @@ mod tests {
     #[test]
     fn test_checkpoint_memory_roundtrip() {
         let entry = MemoryEntry {
+            memory_id: Default::default(),
+            parent_revision_id: None,
+            canonical_content_hash: Default::default(),
             id: "mem-1".to_string(),
             agent_id: "agent-1".to_string(),
             tenant_id: "default".to_string(),
@@ -477,7 +493,6 @@ mod tests {
             last_accessed: 1000,
             created_at: 900,
             tags: vec!["test".to_string()],
-            embedding: None,
             ttl_ms: None,
             original_ttl_ms: None,
             scope: MemoryScope::Private,
@@ -540,6 +555,9 @@ mod tests {
     #[test]
     fn test_checkpoint_memory_text_roundtrip() {
         let entry = MemoryEntry {
+            memory_id: Default::default(),
+            parent_revision_id: None,
+            canonical_content_hash: Default::default(),
             id: "mem-text".to_string(),
             agent_id: "agent-1".to_string(),
             tenant_id: "default".to_string(),
@@ -550,7 +568,6 @@ mod tests {
             last_accessed: 2000,
             created_at: 1000,
             tags: vec!["important".to_string()],
-            embedding: None,
             ttl_ms: None,
             original_ttl_ms: None,
             scope: MemoryScope::Shared,
@@ -579,6 +596,9 @@ mod tests {
     #[test]
     fn test_checkpoint_memory_object_ref_roundtrip() {
         let entry = MemoryEntry {
+            memory_id: Default::default(),
+            parent_revision_id: None,
+            canonical_content_hash: Default::default(),
             id: "mem-obj".to_string(),
             agent_id: "agent-1".to_string(),
             tenant_id: "default".to_string(),
@@ -589,7 +609,6 @@ mod tests {
             last_accessed: 1500,
             created_at: 1000,
             tags: vec![],
-            embedding: None,
             ttl_ms: None,
             original_ttl_ms: None,
             scope: MemoryScope::Private,
@@ -612,6 +631,9 @@ mod tests {
     fn test_checkpoint_memory_procedure_roundtrip() {
         use crate::memory::layered::Procedure;
         let entry = MemoryEntry {
+            memory_id: Default::default(),
+            parent_revision_id: None,
+            canonical_content_hash: Default::default(),
             id: "mem-proc".to_string(),
             agent_id: "agent-1".to_string(),
             tenant_id: "default".to_string(),
@@ -640,7 +662,6 @@ mod tests {
             last_accessed: 3000,
             created_at: 2000,
             tags: vec!["skill".to_string()],
-            embedding: None,
             ttl_ms: None,
             original_ttl_ms: None,
             scope: MemoryScope::Private,
@@ -666,6 +687,9 @@ mod tests {
     fn test_checkpoint_memory_knowledge_roundtrip() {
         use crate::memory::layered::KnowledgePiece;
         let entry = MemoryEntry {
+            memory_id: Default::default(),
+            parent_revision_id: None,
+            canonical_content_hash: Default::default(),
             id: "mem-know".to_string(),
             agent_id: "agent-1".to_string(),
             tenant_id: "default".to_string(),
@@ -681,7 +705,6 @@ mod tests {
             last_accessed: 5000,
             created_at: 4000,
             tags: vec!["knowledge".to_string()],
-            embedding: None,
             ttl_ms: None,
             original_ttl_ms: None,
             scope: MemoryScope::Private,
@@ -706,6 +729,9 @@ mod tests {
     #[test]
     fn test_checkpoint_memory_group_scope() {
         let entry = MemoryEntry {
+            memory_id: Default::default(),
+            parent_revision_id: None,
+            canonical_content_hash: Default::default(),
             id: "mem-group".to_string(),
             agent_id: "agent-1".to_string(),
             tenant_id: "default".to_string(),
@@ -716,7 +742,6 @@ mod tests {
             last_accessed: 1000,
             created_at: 1000,
             tags: vec![],
-            embedding: None,
             ttl_ms: None,
             original_ttl_ms: None,
             scope: MemoryScope::Group("team-a".to_string()),
@@ -830,6 +855,9 @@ mod tests {
     #[test]
     fn test_find_latest_checkpoint_no_matching_tags() {
         let entries = vec![MemoryEntry {
+            memory_id: Default::default(),
+            parent_revision_id: None,
+            canonical_content_hash: Default::default(),
             id: "m1".to_string(),
             agent_id: "agent-1".to_string(),
             tenant_id: "default".to_string(),
@@ -840,7 +868,6 @@ mod tests {
             last_accessed: 1000,
             created_at: 1000,
             tags: vec!["other".to_string()],
-            embedding: None,
             ttl_ms: None,
             original_ttl_ms: None,
             scope: MemoryScope::Private,
@@ -973,26 +1000,6 @@ mod tests {
 
         let all = store.list_all();
         assert_eq!(all.len(), 2);
-    }
-
-    #[test]
-    fn test_checkpoint_to_migration_ticket() {
-        let cp = AgentCheckpoint::new(
-            "agent-1".to_string(),
-            "default".to_string(),
-            crate::scheduler::AgentState::Running,
-            0,
-            vec![],
-            vec![],
-            None,
-        );
-        let ticket = cp.to_migration_ticket(
-            crate::kernel::ops::distributed::NodeId("node-a".to_string()),
-            crate::kernel::ops::distributed::NodeId("node-b".to_string()),
-        );
-        assert_eq!(ticket.agent_id, "agent-1");
-        assert_eq!(ticket.from_node.0, "node-a");
-        assert_eq!(ticket.to_node.0, "node-b");
     }
 
     #[test]

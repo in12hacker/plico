@@ -13,9 +13,9 @@
 use std::sync::Arc;
 
 use crate::fs::embedding::EmbeddingProvider;
-use crate::fs::{KnowledgeGraph, KGNode, KGNodeType, KGEdge, KGEdgeType};
-use crate::llm::{LlmProvider, ChatMessage, ChatOptions};
+use crate::fs::{KGEdge, KGEdgeType, KGNode, KGNodeType, KnowledgeGraph};
 use crate::kernel::ops::entity_resolver::EntityResolver;
+use crate::llm::{ChatMessage, ChatOptions, LlmProvider};
 
 /// A write event sent from the CAS create path to the KG builder worker.
 #[derive(Debug, Clone)]
@@ -36,7 +36,9 @@ struct ExtractedPreference {
     confidence: f32,
 }
 
-fn default_confidence() -> f32 { 0.7 }
+fn default_confidence() -> f32 {
+    0.7
+}
 
 /// Extracted SPO triple from LLM output.
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -119,7 +121,10 @@ pub fn start_kg_builder(
         })
         .expect("failed to spawn kg-builder thread");
 
-    KgBuilderHandle { tx: Some(tx), join_handle: Some(handle) }
+    KgBuilderHandle {
+        tx: Some(tx),
+        join_handle: Some(handle),
+    }
 }
 
 fn kg_builder_loop(
@@ -171,7 +176,9 @@ fn process_batch(
     event_bus: &Arc<crate::kernel::event_bus::EventBus>,
     embedder: &Option<Arc<dyn EmbeddingProvider>>,
 ) {
-    let resolver = embedder.as_ref().map(|e| EntityResolver::new(kg.clone(), e.clone(), 0.85));
+    let resolver = embedder
+        .as_ref()
+        .map(|e| EntityResolver::new(kg.clone(), e.clone(), 0.85));
 
     for event in batch {
         if event.text.trim().is_empty() || event.text.len() < 20 {
@@ -182,12 +189,18 @@ fn process_batch(
                 for pref in &preferences {
                     tracing::debug!(
                         "Preference extracted for agent={}: [{}] {} (conf={:.2})",
-                        event.agent_id, pref.category, pref.preference, pref.confidence
+                        event.agent_id,
+                        pref.category,
+                        pref.preference,
+                        pref.confidence
                     );
                 }
             }
             Err(e) => {
-                tracing::warn!("KG extraction failed for CID={}: {e}", &event.cid[..8.min(event.cid.len())]);
+                tracing::warn!(
+                    "KG extraction failed for CID={}: {e}",
+                    &event.cid[..8.min(event.cid.len())]
+                );
             }
         }
     }
@@ -229,7 +242,10 @@ fn extract_and_insert(
         ChatMessage::system("You are a knowledge graph and preference extraction engine. Output only valid JSON."),
         ChatMessage::user(prompt),
     ];
-    let opts = ChatOptions { temperature: 0.0, max_tokens: Some(1024) };
+    let opts = ChatOptions {
+        temperature: 0.0,
+        max_tokens: Some(1024),
+    };
 
     let (response, _input_tokens, _output_tokens) = llm.chat(&messages, &opts)?;
 
@@ -281,9 +297,15 @@ fn extract_and_insert(
             }
         } else {
             // Fallback: exact match only (no embedder available)
-            let id = kg.list_nodes(&event.agent_id, Some(src_node_type))
+            let id = kg
+                .list_nodes(&event.agent_id, Some(src_node_type))
                 .ok()
-                .and_then(|nodes| nodes.iter().find(|n| n.label.eq_ignore_ascii_case(&triple.subject)).map(|n| n.id.clone()))
+                .and_then(|nodes| {
+                    nodes
+                        .iter()
+                        .find(|n| n.label.eq_ignore_ascii_case(&triple.subject))
+                        .map(|n| n.id.clone())
+                })
                 .unwrap_or_else(|| format!("ent:{}", triple.subject));
             (id, None)
         };
@@ -299,9 +321,15 @@ fn extract_and_insert(
                 }
             }
         } else {
-            let id = kg.list_nodes(&event.agent_id, Some(dst_node_type))
+            let id = kg
+                .list_nodes(&event.agent_id, Some(dst_node_type))
                 .ok()
-                .and_then(|nodes| nodes.iter().find(|n| n.label.eq_ignore_ascii_case(&triple.object)).map(|n| n.id.clone()))
+                .and_then(|nodes| {
+                    nodes
+                        .iter()
+                        .find(|n| n.label.eq_ignore_ascii_case(&triple.object))
+                        .map(|n| n.id.clone())
+                })
                 .unwrap_or_else(|| format!("ent:{}", triple.object));
             (id, None)
         };
@@ -345,30 +373,18 @@ fn extract_and_insert(
             if let Some(ref emb) = src_emb {
                 let expected_id = format!("ent:{}", triple.subject);
                 if src_id != expected_id {
-                    let _ = resolver.link_and_store(
-                        &expected_id, &triple.subject, &src_id, emb,
-                        &event.agent_id,
-                    );
+                    let _ = resolver.link_and_store(&expected_id, &triple.subject, &src_id, emb, &event.agent_id);
                 }
             }
             if let Some(ref emb) = dst_emb {
                 let expected_id = format!("ent:{}", triple.object);
                 if dst_id != expected_id {
-                    let _ = resolver.link_and_store(
-                        &expected_id, &triple.object, &dst_id, emb,
-                        &event.agent_id,
-                    );
+                    let _ = resolver.link_and_store(&expected_id, &triple.object, &dst_id, emb, &event.agent_id);
                 }
             }
         }
 
-        let mut edge = KGEdge::new_with_episode(
-            src_id.clone(),
-            dst_id.clone(),
-            edge_type,
-            0.8,
-            event.cid.clone(),
-        );
+        let mut edge = KGEdge::new_with_episode(src_id.clone(), dst_id.clone(), edge_type, 0.8, event.cid.clone());
 
         // F-37: If predicate is "is" or "alias", also add IsAliasOf edge
         if triple.predicate.to_lowercase() == "is" || triple.predicate.to_lowercase() == "alias" {
@@ -378,9 +394,13 @@ fn extract_and_insert(
         // F-37: Temporal Consolidation & Conflict Detection
         if let Ok(existing_edges) = kg.list_edges(&event.agent_id) {
             for mut old_edge in existing_edges {
-                if old_edge.src == src_id && old_edge.edge_type == edge.edge_type && old_edge.dst != dst_id && old_edge.invalid_at.is_none() {
+                if old_edge.src == src_id
+                    && old_edge.edge_type == edge.edge_type
+                    && old_edge.dst != dst_id
+                    && old_edge.invalid_at.is_none()
+                {
                     tracing::info!(src = %src_id, old = %old_edge.dst, new = %dst_id, type = ?edge.edge_type, "Cognitive conflict/update detected");
-                    
+
                     // Invalidate old fact (Temporal Consolidation)
                     old_edge.invalid_at = Some(event.created_at);
                     let _ = kg.add_edge(old_edge.clone());
@@ -389,7 +409,10 @@ fn extract_and_insert(
                     event_bus.emit(crate::kernel::event_bus::KernelEvent::VerificationFailed {
                         tool_name: "KgBuilder".into(),
                         operation: "ConflictDetection".into(),
-                        reason: format!("Entity {} has conflicting {:?} targets: {} vs {}", src_id, edge.edge_type, old_edge.dst, dst_id),
+                        reason: format!(
+                            "Entity {} has conflicting {:?} targets: {} vs {}",
+                            src_id, edge.edge_type, old_edge.dst, dst_id
+                        ),
                         agent_id: event.agent_id.clone(),
                     });
                 }
@@ -442,19 +465,9 @@ fn temporal_link_pass(kg: &Arc<dyn KnowledgeGraph>) -> Result<(), Box<dyn std::e
         let prev = pair[0];
         let next = pair[1];
 
-        let existing = kg.get_valid_edge_between(
-            &prev.id,
-            &next.id,
-            Some(KGEdgeType::Follows),
-            next.created_at,
-        )?;
+        let existing = kg.get_valid_edge_between(&prev.id, &next.id, Some(KGEdgeType::Follows), next.created_at)?;
         if existing.is_none() {
-            let edge = KGEdge::new(
-                prev.id.clone(),
-                next.id.clone(),
-                KGEdgeType::Follows,
-                0.9,
-            );
+            let edge = KGEdge::new(prev.id.clone(), next.id.clone(), KGEdgeType::Follows, 0.9);
             let _ = kg.add_edge(edge);
         }
     }
@@ -493,13 +506,14 @@ fn parse_extraction(response: &str) -> ExtractionResult {
 
     // Fallback: try parsing as a plain array of triples (backward compatible)
     let triples = match (first_bracket, trimmed.rfind(']')) {
-        (Some(s), Some(e)) if e > s => {
-            serde_json::from_str::<Vec<Triple>>(&trimmed[s..=e]).unwrap_or_default()
-        }
+        (Some(s), Some(e)) if e > s => serde_json::from_str::<Vec<Triple>>(&trimmed[s..=e]).unwrap_or_default(),
         _ => Vec::new(),
     };
 
-    ExtractionResult { triples, preferences: Vec::new() }
+    ExtractionResult {
+        triples,
+        preferences: Vec::new(),
+    }
 }
 
 fn map_relation_type(type_hint: Option<&str>, predicate: &str) -> KGEdgeType {
@@ -566,14 +580,13 @@ mod tests {
     // ── Test helpers ──────────────────────────────────────────────────────────
 
     use crate::fs::graph::PetgraphBackend;
-    use crate::llm::stub::StubProvider;
     use crate::kernel::event_bus::EventBus;
+    use crate::llm::stub::StubProvider;
 
     fn make_test_kg() -> Arc<dyn KnowledgeGraph> {
-        Arc::new(PetgraphBackend::open(std::env::temp_dir().join(format!(
-            "plico_test_kg_builder_{}",
-            std::process::id()
-        ))))
+        Arc::new(PetgraphBackend::open(
+            std::env::temp_dir().join(format!("plico_test_kg_builder_{}", std::process::id())),
+        ))
     }
 
     fn make_event_bus() -> Arc<EventBus> {
@@ -625,7 +638,10 @@ mod tests {
         assert_eq!(map_relation_type(Some("member_of"), ""), KGEdgeType::PartOf);
 
         // HasParticipant group
-        assert_eq!(map_relation_type(Some("has_participant"), ""), KGEdgeType::HasParticipant);
+        assert_eq!(
+            map_relation_type(Some("has_participant"), ""),
+            KGEdgeType::HasParticipant
+        );
         assert_eq!(map_relation_type(Some("involves"), ""), KGEdgeType::HasParticipant);
         assert_eq!(map_relation_type(Some("participated"), ""), KGEdgeType::HasParticipant);
 
@@ -752,7 +768,10 @@ mod tests {
         let kg = make_test_kg();
         let llm: Arc<dyn LlmProvider> = Arc::new(StubProvider::new(llm_response_with_triples()));
         let event_bus = make_event_bus();
-        let event = make_write_event("abcdef1234567890", "This is a long enough text for extraction testing purposes here.");
+        let event = make_write_event(
+            "abcdef1234567890",
+            "This is a long enough text for extraction testing purposes here.",
+        );
 
         let result = extract_and_insert(&event, &kg, &llm, &event_bus, &None);
         assert!(result.is_ok());
@@ -770,7 +789,10 @@ mod tests {
         let kg = make_test_kg();
         let llm: Arc<dyn LlmProvider> = Arc::new(StubProvider::new(llm_response_with_triples()));
         let event_bus = make_event_bus();
-        let event = make_write_event("cid_entity_test_001", "This is a long enough text for entity extraction testing purposes here.");
+        let event = make_write_event(
+            "cid_entity_test_001",
+            "This is a long enough text for entity extraction testing purposes here.",
+        );
 
         extract_and_insert(&event, &kg, &llm, &event_bus, &None).unwrap();
 
@@ -779,7 +801,10 @@ mod tests {
         assert!(rust_node.is_some(), "Entity node 'rust' should be created");
 
         let lang_node = kg.get_node("ent:programming language").unwrap();
-        assert!(lang_node.is_some(), "Entity node 'programming language' should be created");
+        assert!(
+            lang_node.is_some(),
+            "Entity node 'programming language' should be created"
+        );
     }
 
     #[test]
@@ -787,7 +812,10 @@ mod tests {
         let kg = make_test_kg();
         let llm: Arc<dyn LlmProvider> = Arc::new(StubProvider::new(llm_response_with_triples()));
         let event_bus = make_event_bus();
-        let event = make_write_event("cid_edge_test_0001", "This is a long enough text for edge extraction testing purposes here.");
+        let event = make_write_event(
+            "cid_edge_test_0001",
+            "This is a long enough text for edge extraction testing purposes here.",
+        );
 
         extract_and_insert(&event, &kg, &llm, &event_bus, &None).unwrap();
 
@@ -797,7 +825,10 @@ mod tests {
 
         // Should have the triple edge and Mentions edges to doc node
         let mentions_edges: Vec<_> = edges.iter().filter(|e| e.edge_type == KGEdgeType::Mentions).collect();
-        assert!(!mentions_edges.is_empty(), "Mentions edges to doc node should be created");
+        assert!(
+            !mentions_edges.is_empty(),
+            "Mentions edges to doc node should be created"
+        );
     }
 
     #[test]
@@ -805,7 +836,10 @@ mod tests {
         let kg = make_test_kg();
         let llm: Arc<dyn LlmProvider> = Arc::new(StubProvider::new(llm_response_empty()));
         let event_bus = make_event_bus();
-        let event = make_write_event("cid_empty_resp_001", "This is a long enough text for empty response testing purposes here.");
+        let event = make_write_event(
+            "cid_empty_resp_001",
+            "This is a long enough text for empty response testing purposes here.",
+        );
 
         let result = extract_and_insert(&event, &kg, &llm, &event_bus, &None);
         assert!(result.is_ok());
@@ -815,36 +849,43 @@ mod tests {
     #[test]
     fn test_extract_and_insert_alias_predicate() {
         let kg = make_test_kg();
-        let response = r#"{"triples":[{"subject":"alice","predicate":"is","object":"bob","type":"related_to"}],"preferences":[]}"#;
+        let response =
+            r#"{"triples":[{"subject":"alice","predicate":"is","object":"bob","type":"related_to"}],"preferences":[]}"#;
         let llm: Arc<dyn LlmProvider> = Arc::new(StubProvider::new(response.to_string()));
         let event_bus = make_event_bus();
-        let event = make_write_event("cid_alias_pred_001", "This is a long enough text for alias predicate testing purposes here.");
+        let event = make_write_event(
+            "cid_alias_pred_001",
+            "This is a long enough text for alias predicate testing purposes here.",
+        );
 
         extract_and_insert(&event, &kg, &llm, &event_bus, &None).unwrap();
 
         // The "is" predicate should be converted to IsAliasOf edge type
         let edges = kg.list_edges("test_agent").unwrap();
-        let alias_edges: Vec<_> = edges.iter()
-            .filter(|e| e.edge_type == KGEdgeType::IsAliasOf)
-            .collect();
+        let alias_edges: Vec<_> = edges.iter().filter(|e| e.edge_type == KGEdgeType::IsAliasOf).collect();
         assert!(!alias_edges.is_empty(), "Predicate 'is' should produce IsAliasOf edge");
     }
 
     #[test]
     fn test_extract_and_insert_alias_keyword_predicate() {
         let kg = make_test_kg();
-        let response = r#"{"triples":[{"subject":"x","predicate":"alias","object":"y","type":"related_to"}],"preferences":[]}"#;
+        let response =
+            r#"{"triples":[{"subject":"x","predicate":"alias","object":"y","type":"related_to"}],"preferences":[]}"#;
         let llm: Arc<dyn LlmProvider> = Arc::new(StubProvider::new(response.to_string()));
         let event_bus = make_event_bus();
-        let event = make_write_event("cid_alias_kw_0001", "This is a long enough text for alias keyword testing purposes here.");
+        let event = make_write_event(
+            "cid_alias_kw_0001",
+            "This is a long enough text for alias keyword testing purposes here.",
+        );
 
         extract_and_insert(&event, &kg, &llm, &event_bus, &None).unwrap();
 
         let edges = kg.list_edges("test_agent").unwrap();
-        let alias_edges: Vec<_> = edges.iter()
-            .filter(|e| e.edge_type == KGEdgeType::IsAliasOf)
-            .collect();
-        assert!(!alias_edges.is_empty(), "Predicate 'alias' should produce IsAliasOf edge");
+        let alias_edges: Vec<_> = edges.iter().filter(|e| e.edge_type == KGEdgeType::IsAliasOf).collect();
+        assert!(
+            !alias_edges.is_empty(),
+            "Predicate 'alias' should produce IsAliasOf edge"
+        );
     }
 
     #[test]
@@ -852,7 +893,10 @@ mod tests {
         let kg = make_test_kg();
         let llm: Arc<dyn LlmProvider> = Arc::new(StubProvider::new(llm_response_with_triples()));
         let event_bus = make_event_bus();
-        let event = make_write_event("cid_prefs_000001", "This is a long enough text for preferences extraction testing purposes here.");
+        let event = make_write_event(
+            "cid_prefs_000001",
+            "This is a long enough text for preferences extraction testing purposes here.",
+        );
 
         let prefs = extract_and_insert(&event, &kg, &llm, &event_bus, &None).unwrap();
         assert_eq!(prefs.len(), 1);
@@ -867,7 +911,10 @@ mod tests {
         // The function returns Ok even with empty extraction
         let llm: Arc<dyn LlmProvider> = Arc::new(StubProvider::new("not valid json at all".to_string()));
         let event_bus = make_event_bus();
-        let event = make_write_event("cid_llm_err_0001", "This is a long enough text for LLM error testing purposes here.");
+        let event = make_write_event(
+            "cid_llm_err_0001",
+            "This is a long enough text for LLM error testing purposes here.",
+        );
 
         let result = extract_and_insert(&event, &kg, &llm, &event_bus, &None);
         assert!(result.is_ok(), "Should handle invalid LLM response gracefully");
@@ -894,7 +941,10 @@ mod tests {
         // First extraction: rust → related_to → python
         let response1 = r#"{"triples":[{"subject":"rust","predicate":"related_to","object":"python","type":"related_to"}],"preferences":[]}"#;
         let llm: Arc<dyn LlmProvider> = Arc::new(StubProvider::new(response1.to_string()));
-        let event1 = make_write_event("cid_conflict_001", "This is a long enough text for conflict detection testing purposes here.");
+        let event1 = make_write_event(
+            "cid_conflict_001",
+            "This is a long enough text for conflict detection testing purposes here.",
+        );
         extract_and_insert(&event1, &kg, &llm, &event_bus, &None).unwrap();
 
         // Second extraction: rust → related_to → go (same src + edge_type, different dst)
@@ -911,12 +961,16 @@ mod tests {
 
         // The old edge should be invalidated
         let edges = kg.list_edges("test_agent").unwrap();
-        let old_edges: Vec<_> = edges.iter()
+        let old_edges: Vec<_> = edges
+            .iter()
             .filter(|e| e.src == "ent:rust" && e.edge_type == KGEdgeType::RelatedTo && e.dst == "ent:python")
             .collect();
         // The old edge should have invalid_at set
         for edge in &old_edges {
-            assert!(edge.invalid_at.is_some(), "Old edge should be invalidated after conflict");
+            assert!(
+                edge.invalid_at.is_some(),
+                "Old edge should be invalidated after conflict"
+            );
         }
     }
 
@@ -964,10 +1018,15 @@ mod tests {
 
         // Should create a Follows edge from evt:1 → evt:2
         let edges = kg.list_edges("").unwrap();
-        let follows: Vec<_> = edges.iter()
+        let follows: Vec<_> = edges
+            .iter()
             .filter(|e| e.edge_type == KGEdgeType::Follows && e.src == "evt:1" && e.dst == "evt:2")
             .collect();
-        assert_eq!(follows.len(), 1, "Should create Follows edge between consecutive events");
+        assert_eq!(
+            follows.len(),
+            1,
+            "Should create Follows edge between consecutive events"
+        );
     }
 
     #[test]
@@ -995,7 +1054,8 @@ mod tests {
 
         // Should still only have one Follows edge (not duplicated)
         let edges = kg.list_edges("").unwrap();
-        let follows: Vec<_> = edges.iter()
+        let follows: Vec<_> = edges
+            .iter()
             .filter(|e| e.edge_type == KGEdgeType::Follows && e.src == "evt:s1" && e.dst == "evt:s2")
             .collect();
         assert_eq!(follows.len(), 1, "Should not duplicate existing Follows edge");
@@ -1024,9 +1084,7 @@ mod tests {
         temporal_link_pass(&kg).unwrap();
 
         let edges = kg.list_edges("").unwrap();
-        let follows: Vec<_> = edges.iter()
-            .filter(|e| e.edge_type == KGEdgeType::Follows)
-            .collect();
+        let follows: Vec<_> = edges.iter().filter(|e| e.edge_type == KGEdgeType::Follows).collect();
 
         // Should link o1→o2 and o2→o3 (sorted by valid_at)
         let o1_o2 = follows.iter().any(|e| e.src == "evt:o1" && e.dst == "evt:o2");
@@ -1075,7 +1133,10 @@ mod tests {
         let llm: Arc<dyn LlmProvider> = Arc::new(StubProvider::new(llm_response_with_triples()));
         let event_bus = make_event_bus();
 
-        let event = make_write_event("cid_batch_valid1", "This is a long enough text for batch processing testing purposes here.");
+        let event = make_write_event(
+            "cid_batch_valid1",
+            "This is a long enough text for batch processing testing purposes here.",
+        );
         let batch = vec![event];
 
         process_batch(&batch, &kg, &llm, &event_bus, &None);
@@ -1090,7 +1151,10 @@ mod tests {
     #[test]
     fn test_kg_builder_handle_notify_disabled() {
         // Handle with None tx should be a no-op
-        let handle = KgBuilderHandle { tx: None, join_handle: None };
+        let handle = KgBuilderHandle {
+            tx: None,
+            join_handle: None,
+        };
         let event = make_write_event("cid_notify_001", "text");
         handle.notify(event); // should not panic
     }

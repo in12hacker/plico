@@ -1,18 +1,18 @@
 //! E2E test for LocalEmbeddingBackend — spawns Python subprocess and validates
 //! JSON-RPC protocol + vector output.
 //!
-//! This is an E2E smoke test only. The Python script and model are NOT production
-//! deliverables; they are test infrastructure for validating the decoupled embedding
-//! pipeline.
+//! The test executes the same compile-time embedded worker source used by the
+//! production `LocalEmbeddingBackend`. The model download/runtime remains optional
+//! E2E infrastructure; Local has no publishable P3 builder identity.
 //!
 //! Run with:  cargo test -F e2e --test embedding_test
 //!
 //! Requires: pip install transformers huggingface_hub onnxruntime
 
-use std::sync::mpsc;
-use std::thread;
 use std::io::Write;
 use std::process::{Command, Stdio};
+use std::sync::mpsc;
+use std::thread;
 
 // ─── JSON-RPC types (mirrors embedding.rs) ────────────────────────────────
 
@@ -44,12 +44,14 @@ struct JsonRpcError {
 
 // ─── Protocol helpers ────────────────────────────────────────────────────────
 
-type EmbedServerHandle = (std::process::Child, mpsc::Sender<String>, mpsc::Receiver<Result<String, std::io::Error>>);
+type EmbedServerHandle = (
+    std::process::Child,
+    mpsc::Sender<String>,
+    mpsc::Receiver<Result<String, std::io::Error>>,
+);
 
 fn spawn_embed_server() -> std::io::Result<EmbedServerHandle> {
-    let manifest_dir = std::env!("CARGO_MANIFEST_DIR");
-    let script_path = format!("{}/tests/e2e/embed_server.py", manifest_dir);
-    let script = std::fs::read_to_string(&script_path)?;
+    let script = include_str!("../src/fs/embedding/local_worker.py");
 
     let mut child = Command::new("python3")
         .arg("-c")
@@ -57,7 +59,7 @@ fn spawn_embed_server() -> std::io::Result<EmbedServerHandle> {
         .env("EMBEDDING_MODEL_ID", "BAAI/bge-small-en-v1.5")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::null())
         .spawn()?;
 
     let stdin = child.stdin.take().unwrap();
@@ -142,20 +144,25 @@ fn test_embed_info_probe() {
     let (mut child, to_stdin, from_stdout) = spawn_embed_server().expect("spawn embed server");
 
     // Probe dimension
-    let resp = send_rpc(&to_stdin, &from_stdout, 0, "info", serde_json::Value::Null)
-        .expect("info rpc failed");
+    let resp = send_rpc(&to_stdin, &from_stdout, 0, "info", serde_json::Value::Null).expect("info rpc failed");
 
     assert!(resp.result.is_some(), "info returned error: {:?}", resp.error);
     let result = resp.result.unwrap();
 
-    let dimension = result.get("dimension")
+    assert_eq!(
+        result.get("schema").and_then(|value| value.as_str()),
+        Some("plico.embedding.local-worker-info/v1")
+    );
+    let dimension = result
+        .get("raw_dimension")
         .and_then(|d| d.as_u64())
-        .expect("dimension field missing");
+        .expect("raw_dimension field missing");
     assert_eq!(dimension, 384, "bge-small-en-v1.5 should be 384d");
 
-    let model = result.get("model")
+    let model = result
+        .get("model_id")
         .and_then(|m| m.as_str())
-        .expect("model field missing");
+        .expect("model_id field missing");
     assert!(model.contains("bge-small"), "expected bge-small model, got: {}", model);
 
     drop(to_stdin);
@@ -178,12 +185,14 @@ fn test_embed_single_text() {
         1,
         "embed",
         serde_json::json!({ "text": "hello world" }),
-    ).expect("embed rpc failed");
+    )
+    .expect("embed rpc failed");
 
     assert!(resp.result.is_some(), "embed returned error: {:?}", resp.error);
     let result = resp.result.unwrap();
 
-    let embedding = result.get("embedding")
+    let embedding = result
+        .get("embedding")
         .and_then(|e| e.as_array())
         .cloned()
         .expect("embedding field missing");
@@ -210,10 +219,22 @@ fn test_embed_deterministic() {
 
     let text = "the quick brown fox jumps over the lazy dog";
 
-    let resp1 = send_rpc(&to_stdin, &from_stdout, 10, "embed", serde_json::json!({ "text": text }))
-        .expect("embed rpc failed");
-    let resp2 = send_rpc(&to_stdin, &from_stdout, 11, "embed", serde_json::json!({ "text": text }))
-        .expect("embed rpc failed");
+    let resp1 = send_rpc(
+        &to_stdin,
+        &from_stdout,
+        10,
+        "embed",
+        serde_json::json!({ "text": text }),
+    )
+    .expect("embed rpc failed");
+    let resp2 = send_rpc(
+        &to_stdin,
+        &from_stdout,
+        11,
+        "embed",
+        serde_json::json!({ "text": text }),
+    )
+    .expect("embed rpc failed");
 
     let emb1_result = resp1.result.unwrap();
     let emb2_result = resp2.result.unwrap();
@@ -240,10 +261,22 @@ fn test_embed_different_texts_different_vectors() {
 
     let (mut child, to_stdin, from_stdout) = spawn_embed_server().expect("spawn embed server");
 
-    let resp1 = send_rpc(&to_stdin, &from_stdout, 20, "embed", serde_json::json!({ "text": "apple" }))
-        .expect("embed rpc failed");
-    let resp2 = send_rpc(&to_stdin, &from_stdout, 21, "embed", serde_json::json!({ "text": "banana" }))
-        .expect("embed rpc failed");
+    let resp1 = send_rpc(
+        &to_stdin,
+        &from_stdout,
+        20,
+        "embed",
+        serde_json::json!({ "text": "apple" }),
+    )
+    .expect("embed rpc failed");
+    let resp2 = send_rpc(
+        &to_stdin,
+        &from_stdout,
+        21,
+        "embed",
+        serde_json::json!({ "text": "banana" }),
+    )
+    .expect("embed rpc failed");
 
     let emb1_result = resp1.result.unwrap();
     let emb2_result = resp2.result.unwrap();
@@ -251,7 +284,8 @@ fn test_embed_different_texts_different_vectors() {
     let emb2 = emb2_result.get("embedding").unwrap().as_array().unwrap();
 
     // Cosine similarity: normalize both vectors then compute dot product
-    let dot: f64 = emb1.iter()
+    let dot: f64 = emb1
+        .iter()
         .zip(emb2.iter())
         .map(|(a, b)| a.as_f64().unwrap() * b.as_f64().unwrap())
         .sum();
@@ -261,7 +295,10 @@ fn test_embed_different_texts_different_vectors() {
 
     // "apple" and "banana" share fruit semantics — expect moderate positive similarity
     assert!(cos_sim > 0.0, "expected positive cosine similarity, got {}", cos_sim);
-    assert!(cos_sim < 0.99, "different texts should not have near-identical embeddings");
+    assert!(
+        cos_sim < 0.99,
+        "different texts should not have near-identical embeddings"
+    );
 
     drop(to_stdin);
     let _ = child.wait();
@@ -277,13 +314,8 @@ fn test_embed_invalid_method() {
 
     let (mut child, to_stdin, from_stdout) = spawn_embed_server().expect("spawn embed server");
 
-    let resp = send_rpc(
-        &to_stdin,
-        &from_stdout,
-        99,
-        "unknown_method",
-        serde_json::json!({}),
-    ).expect("embed rpc failed");
+    let resp =
+        send_rpc(&to_stdin, &from_stdout, 99, "unknown_method", serde_json::json!({})).expect("embed rpc failed");
 
     // Server should return an error response for unknown method
     assert!(resp.error.is_some(), "expected error response for unknown method");

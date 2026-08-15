@@ -1,17 +1,18 @@
 //! System status operations — runtime kernel metrics.
 
-use crate::api::semantic::{
-    SystemStatus, CacheStatsDto, ClusterStatusDto, NodeInfoDto, IntentCacheStatsDto,
-    HealthIndicators,
-};
+use crate::api::semantic::{CacheStatsDto, HealthIndicators, IntentCacheStatsDto, SystemStatus};
 
 impl crate::kernel::AIKernel {
     /// Build runtime kernel metrics from live system state.
     pub fn system_status(&self) -> SystemStatus {
-        let kg_node_count = self.knowledge_graph.as_ref()
+        let kg_node_count = self
+            .knowledge_graph
+            .as_ref()
             .map(|kg| kg.node_count().unwrap_or(0))
             .unwrap_or(0);
-        let kg_edge_count = self.knowledge_graph.as_ref()
+        let kg_edge_count = self
+            .knowledge_graph
+            .as_ref()
             .map(|kg| kg.edge_count().unwrap_or(0))
             .unwrap_or(0);
 
@@ -83,10 +84,8 @@ impl crate::kernel::AIKernel {
 
         // Cache health — average hit rate across all tiers
         let cache_stats = self.cache_stats();
-        let avg_hit_rate = (cache_stats.embedding_hit_rate
-            + cache_stats.kg_hit_rate
-            + cache_stats.search_hit_rate)
-            / 3.0;
+        let avg_hit_rate =
+            (cache_stats.embedding_hit_rate + cache_stats.kg_hit_rate + cache_stats.search_hit_rate) / 3.0;
         let cache_hit_rate_percent = avg_hit_rate * 100.0;
         let cache_healthy = avg_hit_rate > 0.3;
 
@@ -101,8 +100,7 @@ impl crate::kernel::AIKernel {
         let scheduler_healthy = scheduler_active_agents < 100;
 
         // Overall health
-        let overall_healthy =
-            memory_healthy && cache_healthy && eventbus_healthy && scheduler_healthy;
+        let overall_healthy = memory_healthy && cache_healthy && eventbus_healthy && scheduler_healthy;
 
         // Health score: 1.0 if all healthy, 0.5 if only critical subsystems unhealthy, 0.0 otherwise
         let health_score = if overall_healthy {
@@ -132,48 +130,6 @@ impl crate::kernel::AIKernel {
             scheduler_pending_intents,
             overall_healthy,
             health_score,
-        }
-    }
-
-    /// Get cluster status (v20.0).
-    pub fn cluster_status(&self) -> ClusterStatusDto {
-        let stats = self.cluster.cluster_stats();
-        let membership = self.cluster.membership();
-
-        let known_nodes: Vec<NodeInfoDto> = membership.known_nodes
-            .values()
-            .map(|n| NodeInfoDto {
-                node_id: n.node_id.0.clone(),
-                host: n.host.clone(),
-                port: n.port,
-                is_seed: n.is_seed,
-                last_heartbeat_ms: n.last_heartbeat_ms,
-                is_stale: n.is_stale(15000), // 15 second threshold
-            })
-            .collect();
-
-        ClusterStatusDto {
-            cluster_name: stats.cluster_name,
-            total_nodes: stats.total_nodes,
-            local_node_id: stats.local_node_id.0,
-            is_seed: stats.is_seed,
-            version: stats.version,
-            pending_migrations: stats.pending_migrations,
-            known_nodes,
-        }
-    }
-
-    /// Join a cluster by connecting to a seed node (v20.0).
-    pub fn cluster_join(&self, seed_host: &str, seed_port: u16) {
-        self.cluster.add_seed_node(seed_host.to_string(), seed_port);
-    }
-
-    /// Leave the current cluster (v20.0).
-    pub fn cluster_leave(&self) {
-        // Clear all non-local nodes from membership
-        let membership = self.cluster.membership();
-        for node in membership.other_nodes() {
-            self.cluster.membership().remove_node(&node.node_id);
         }
     }
 
@@ -237,8 +193,7 @@ impl crate::kernel::AIKernel {
         // Count active sessions across all agents
         let active_sessions = self.session_store.total_active_count();
 
-        // Roundtrip test — simple CAS read/write roundtrip
-        let (roundtrip_ok, roundtrip_ms) = self.health_roundtrip();
+        let (cas_probe_ok, cas_probe_ms) = self.cas_read_probe();
 
         HealthReport {
             healthy: degradations.iter().all(|d| d.severity != "high"),
@@ -254,68 +209,32 @@ impl crate::kernel::AIKernel {
                 "stub (BM25 only)".to_string()
             },
             degradations,
-            roundtrip_ok,
-            roundtrip_ms,
+            cas_probe_ok,
+            cas_probe_ms,
         }
     }
 
     /// Check if LLM is available by sending a minimal probe request.
     fn llm_available(&self) -> bool {
-        use crate::llm::{LlmProvider, ChatMessage, ChatOptions};
-        self.llm_provider.chat(
-            &[ChatMessage::user("ping")],
-            &ChatOptions { max_tokens: Some(1), ..ChatOptions::default() },
-        ).is_ok()
+        use crate::llm::{ChatMessage, ChatOptions, LlmProvider};
+        self.llm_provider
+            .chat(
+                &[ChatMessage::user("ping")],
+                &ChatOptions {
+                    max_tokens: Some(1),
+                    ..ChatOptions::default()
+                },
+            )
+            .is_ok()
     }
 
-    /// Simple roundtrip test: write and read a CAS object.
-    fn health_roundtrip(&self) -> (bool, u64) {
+    /// Non-mutating CAS directory/read probe.
+    fn cas_read_probe(&self) -> (bool, u64) {
         use std::time::Instant;
-        use crate::cas::object::{AIObject, AIObjectMeta};
 
         let start = Instant::now();
-        let test_content = format!("health-check-{}", std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis());
-
-        let obj = AIObject::new(test_content.into_bytes(), AIObjectMeta::text(["health-check"]));
-        match self.cas.put(&obj) {
-            Ok(cid) => {
-                let ms = start.elapsed().as_millis() as u64;
-                // Clean up the test object
-                let _ = self.cas.delete(&cid);
-                (true, ms)
-            }
-            Err(_) => (false, start.elapsed().as_millis() as u64),
-        }
-    }
-
-    /// Ping a remote node and return latency in ms (v20.0).
-    pub fn node_ping(&self, target_host: &str, target_port: u16) -> Result<u64, String> {
-        use std::time::Instant;
-        use std::net::TcpStream;
-        use std::io::{Read, Write};
-
-        let addr = format!("{}:{}", target_host, target_port);
-        let start = Instant::now();
-
-        // Try to connect (simplified - real impl would use proper protocol)
-        match TcpStream::connect_timeout(
-            &addr.parse().map_err(|e: std::net::AddrParseError| e.to_string())?,
-            std::time::Duration::from_secs(5),
-        ) {
-            Ok(mut stream) => {
-                // Send a simple ping
-                let ping = b"PING\r\n";
-                if stream.write_all(ping).is_ok() {
-                    let mut buf = [0u8; 64];
-                    let _ = stream.read(&mut buf);
-                }
-                Ok(start.elapsed().as_millis() as u64)
-            }
-            Err(e) => Err(format!("Failed to ping {}: {}", addr, e)),
-        }
+        let ok = self.cas.list_cids().is_ok();
+        (ok, start.elapsed().as_millis() as u64)
     }
 }
 
@@ -505,26 +424,15 @@ mod tests {
         let (kernel, _dir) = make_kernel();
         let report = kernel.health_report();
         // With stub backend, should have embedding degradation
-        let has_embedding_deg = report.degradations.iter()
-            .any(|d| d.component == "embedding");
+        let has_embedding_deg = report.degradations.iter().any(|d| d.component == "embedding");
         assert!(has_embedding_deg, "stub backend should produce embedding degradation");
     }
 
     #[test]
-    fn test_health_report_roundtrip_test() {
+    fn test_health_report_cas_read_probe() {
         let (kernel, _dir) = make_kernel();
         let report = kernel.health_report();
-        // Roundtrip should succeed in test environment
-        let _ = report.roundtrip_ms;
-    }
-
-    // ─── Node Ping ──────────────────────────────────────────────────────────
-
-    #[test]
-    fn test_node_ping_invalid_address() {
-        let (kernel, _dir) = make_kernel();
-        let result = kernel.node_ping("invalid-host-that-does-not-exist", 9999);
-        // Should fail gracefully
-        assert!(result.is_err(), "ping to invalid host should fail");
+        assert!(report.cas_probe_ok);
+        let _ = report.cas_probe_ms;
     }
 }

@@ -36,8 +36,6 @@ fn test_ai_agent_multi_session_experience() {
             ApiRequest::StartSession {
                 agent_id: "agent-a".into(),
                 agent_token: None,
-                intent_hint: None,
-                load_tiers: vec![],
                 last_seen_seq: None,
             },
         );
@@ -53,12 +51,12 @@ fn test_ai_agent_multi_session_experience() {
                 content: "ADR: decision 1".into(),
                 content_encoding: ContentEncoding::Utf8,
                 tags: vec!["shared".into()],
+                scope: Some(plico::cas::ObjectScope::default()),
                 agent_id: "agent-a".into(),
                 tenant_id: None,
                 agent_token: None,
                 intent: None,
-            scope: None,
-},
+            },
         );
         assert!(create_resp.ok, "Create should succeed: {:?}", create_resp.error);
 
@@ -71,11 +69,7 @@ fn test_ai_agent_multi_session_experience() {
                 tenant_id: None,
             },
         );
-        assert!(
-            remember_resp.ok,
-            "Remember should succeed: {:?}",
-            remember_resp.error
-        );
+        assert!(remember_resp.ok, "Remember should succeed: {:?}", remember_resp.error);
 
         // End session
         let end_resp = call_api(
@@ -83,7 +77,6 @@ fn test_ai_agent_multi_session_experience() {
             ApiRequest::EndSession {
                 agent_id: "agent-a".into(),
                 session_id: session_id_a,
-                auto_checkpoint: true,
             },
         );
         assert!(
@@ -119,8 +112,6 @@ fn test_ai_agent_multi_session_experience() {
             ApiRequest::StartSession {
                 agent_id: agent_b_id.clone(),
                 agent_token: None,
-                intent_hint: None,
-                load_tiers: vec![],
                 last_seen_seq: None,
             },
         );
@@ -174,7 +165,6 @@ fn test_ai_agent_multi_session_experience() {
         kernel.handle_api_request(ApiRequest::EndSession {
             agent_id: agent_b_id,
             session_id: session_id_b,
-            auto_checkpoint: true,
         });
     }
 
@@ -187,8 +177,6 @@ fn test_ai_agent_multi_session_experience() {
             ApiRequest::StartSession {
                 agent_id: "agent-a".into(),
                 agent_token: None,
-                intent_hint: None,
-                load_tiers: vec![],
                 last_seen_seq: None,
             },
         );
@@ -202,22 +190,18 @@ fn test_ai_agent_multi_session_experience() {
             changes_count
         );
 
-        // C-3: Agent A's recall and CAS persistence should work
-        // Note: EndSession calls clear_agent which clears ALL memory tiers,
-        // so ephemeral memory from Remember is lost. However, CAS objects
-        // (created via Create) persist across sessions.
-        let recall_resp = call_api(&kernel, ApiRequest::Recall {
-        tier: None,
-            agent_id: "agent-a".into(),
-            scope: None,
-            query: None,
-            limit: None,
-        });
-        assert!(
-            recall_resp.ok,
-            "Recall should succeed: {:?}",
-            recall_resp.error
+        // C-3: Agent A's recall and CAS persistence should work without
+        // destructively clearing canonical memory at a session boundary.
+        let recall_resp = call_api(
+            &kernel,
+            ApiRequest::Recall {
+                tier: None,
+                agent_id: "agent-a".into(),
+                query: None,
+                limit: None,
+            },
         );
+        assert!(recall_resp.ok, "Recall should succeed: {:?}", recall_resp.error);
 
         // Verify CAS object (ADR: decision 1) is still accessible via Search
         // This tests C-2: cross-agent CAS persistence
@@ -237,11 +221,7 @@ fn test_ai_agent_multi_session_experience() {
                 intent_context: None,
             },
         );
-        assert!(
-            search_resp.ok,
-            "Search should succeed: {:?}",
-            search_resp.error
-        );
+        assert!(search_resp.ok, "Search should succeed: {:?}", search_resp.error);
         tracing::info!(
             "Search results after restart: ok={}, results={:?}",
             search_resp.ok,
@@ -284,8 +264,6 @@ fn test_explicit_agent_registration_and_usage() {
         ApiRequest::StartSession {
             agent_id: agent_id.clone(),
             agent_token: None,
-            intent_hint: None,
-            load_tiers: vec![],
             last_seen_seq: None,
         },
     );
@@ -295,13 +273,8 @@ fn test_explicit_agent_registration_and_usage() {
     );
 
     // AgentUsage should work for the explicitly registered agent
-    let usage_resp = call_api(&kernel, ApiRequest::AgentUsage {
-        agent_id,
-    });
-    assert!(
-        usage_resp.ok,
-        "AgentUsage should work for registered agent"
-    );
+    let usage_resp = call_api(&kernel, ApiRequest::AgentUsage { agent_id });
+    assert!(usage_resp.ok, "AgentUsage should work for registered agent");
 
     tracing::info!("test_explicit_agent_registration_and_usage PASSED");
 }
@@ -324,8 +297,6 @@ fn test_session_checkpoint_persistence() {
             ApiRequest::StartSession {
                 agent_id: "checkpoint-agent".into(),
                 agent_token: None,
-                intent_hint: None,
-                load_tiers: vec![],
                 last_seen_seq: None,
             },
         );
@@ -344,19 +315,21 @@ fn test_session_checkpoint_persistence() {
                 tenant_id: None,
                 agent_token: None,
                 intent: None,
-            scope: None,
-},
+                scope: None,
+            },
         );
 
         // End with checkpoint
-        let end_resp = call_api(&kernel, ApiRequest::EndSession {
-            agent_id: "checkpoint-agent".into(),
-            session_id: session_id.clone(),
-            auto_checkpoint: true,
-        });
+        let end_resp = call_api(
+            &kernel,
+            ApiRequest::EndSession {
+                agent_id: "checkpoint-agent".into(),
+                session_id: session_id.clone(),
+            },
+        );
         assert!(
             end_resp.ok || end_resp.session_ended.is_some(),
-            "EndSession with checkpoint should succeed"
+            "EndSession should succeed"
         );
     }
     // Kernel dropped
@@ -370,36 +343,31 @@ fn test_session_checkpoint_persistence() {
             ApiRequest::StartSession {
                 agent_id: "checkpoint-agent".into(),
                 agent_token: None,
-                intent_hint: None,
-                load_tiers: vec![],
                 last_seen_seq: None,
             },
         );
 
         let started = resp.session_started.expect("session should resume");
-        // Checkpoint should have been restored
-        if let Some(restored) = &started.restored_checkpoint {
-            tracing::info!("Checkpoint restored: {:?}", restored.checkpoint_id);
-        }
+        assert!(!started.session_id.is_empty());
 
         // Data from session 1 should still be searchable
-        let search_resp = call_api(&kernel, ApiRequest::Search {
-            query: "checkpoint".into(),
-            agent_id: "checkpoint-agent".into(),
-            tenant_id: None,
-            agent_token: None,
-            limit: Some(10),
-            offset: None,
-            require_tags: vec![],
-            exclude_tags: vec![],
-            since: None,
-            until: None,
-            intent_context: None,
-        });
-        tracing::info!(
-            "Search after checkpoint restore: ok={}",
-            search_resp.ok
+        let search_resp = call_api(
+            &kernel,
+            ApiRequest::Search {
+                query: "checkpoint".into(),
+                agent_id: "checkpoint-agent".into(),
+                tenant_id: None,
+                agent_token: None,
+                limit: Some(10),
+                offset: None,
+                require_tags: vec![],
+                exclude_tags: vec![],
+                since: None,
+                until: None,
+                intent_context: None,
+            },
         );
+        tracing::info!("Search after checkpoint restore: ok={}", search_resp.ok);
     }
 
     tracing::info!("test_session_checkpoint_persistence PASSED");

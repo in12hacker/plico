@@ -3,9 +3,8 @@
 use std::sync::Arc;
 
 use super::{
-    CognitiveResult, KnowledgeItem, OperationRecord,
-    SkillCandidate, SkillType,
-    SessionCognitiveState, TrajectoryTracker, TrajectoryPoint,
+    CognitiveResult, KnowledgeItem, OperationRecord, SessionCognitiveState, SkillCandidate, SkillType, TrajectoryPoint,
+    TrajectoryTracker,
 };
 
 /// 经验挖掘器
@@ -49,11 +48,7 @@ impl ExperienceMiner {
     }
 
     /// 从单次操作中提取技能候选 — 查找该操作在历史中的重复模式
-    pub async fn extract(
-        &self,
-        agent_id: &str,
-        operation: &str,
-    ) -> CognitiveResult<Vec<SkillCandidate>> {
+    pub async fn extract(&self, agent_id: &str, operation: &str) -> CognitiveResult<Vec<SkillCandidate>> {
         let tracker = match &self.trajectory_tracker {
             Some(t) => t,
             None => return Ok(Vec::new()),
@@ -126,10 +121,7 @@ impl ExperienceMiner {
     }
 
     /// 从操作记录序列中提取重复模式（滑动窗口）
-    pub async fn extract_patterns(
-        &self,
-        operations: &[OperationRecord],
-    ) -> CognitiveResult<Vec<SkillCandidate>> {
+    pub async fn extract_patterns(&self, operations: &[OperationRecord]) -> CognitiveResult<Vec<SkillCandidate>> {
         if operations.len() < 2 {
             return Ok(Vec::new());
         }
@@ -138,14 +130,15 @@ impl ExperienceMiner {
 
         // Extract operation name sequences with sliding windows of size 2-5
         for window_size in 2..=5.min(operations.len()) {
-            let mut seq_counts: std::collections::HashMap<Vec<String>, (usize, usize)> = std::collections::HashMap::new();
+            let mut seq_counts: std::collections::HashMap<Vec<String>, (usize, usize)> =
+                std::collections::HashMap::new();
 
             for window in operations.windows(window_size) {
                 let ops: Vec<String> = window.iter().map(|o| o.operation.clone()).collect();
                 let success_count = window.iter().filter(|o| o.success).count();
                 let entry = seq_counts.entry(ops).or_insert((0, 0));
-                entry.0 += 1;  // total occurrences
-                entry.1 += success_count;  // success count
+                entry.0 += 1; // total occurrences
+                entry.1 += success_count; // success count
             }
 
             for (seq, &(count, successes)) in &seq_counts {
@@ -158,7 +151,9 @@ impl ExperienceMiner {
                         name: format!("Repeated pattern: {}", seq.join(" → ")),
                         description: format!(
                             "Operation sequence '{}' repeated {} times with {:.0}% success rate",
-                            seq.join(" → "), count, success_rate * 100.0
+                            seq.join(" → "),
+                            count,
+                            success_rate * 100.0
                         ),
                         skill_type: SkillType::Knowledge,
                         source_operations: seq.clone(),
@@ -169,7 +164,11 @@ impl ExperienceMiner {
         }
 
         // Sort by confidence descending
-        candidates.sort_by(|a, b| b.confidence.partial_cmp(&a.confidence).unwrap_or(std::cmp::Ordering::Equal));
+        candidates.sort_by(|a, b| {
+            b.confidence
+                .partial_cmp(&a.confidence)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         Ok(candidates)
     }
 }
@@ -228,7 +227,9 @@ mod tests {
         let miner = ExperienceMiner::new().with_tracker(tracker);
         let candidates = miner.extract("agent1", "search").await.unwrap();
         assert!(!candidates.is_empty());
-        assert!(candidates.iter().any(|c| c.source_operations.contains(&"search".to_string())));
+        assert!(candidates
+            .iter()
+            .any(|c| c.source_operations.contains(&"search".to_string())));
     }
 
     #[tokio::test]

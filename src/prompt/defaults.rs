@@ -16,7 +16,8 @@ pub fn register_defaults(reg: &mut PromptRegistry) {
              Do these two statements contradict each other? Answer ONLY 'yes' or 'no'.\n\
              Answer:",
             &["old_content", "new_content"],
-        ).with_max_tokens(8),
+        )
+        .with_max_tokens(8),
     );
 
     reg.register_default(
@@ -28,7 +29,8 @@ pub fn register_defaults(reg: &mut PromptRegistry) {
              Memories:\n{{entries_text}}\n\n\
              Summary:",
             &["entries_text"],
-        ).with_max_tokens(512),
+        )
+        .with_max_tokens(512),
     );
 
     reg.register_default(
@@ -59,7 +61,8 @@ pub fn register_defaults(reg: &mut PromptRegistry) {
              Predict what information the agent will most likely need next.\n\
              List up to 5 topics/keywords, one per line.",
             &["intent_description", "recent_memories"],
-        ).with_max_tokens(256),
+        )
+        .with_max_tokens(256),
     );
 
     reg.register_default(
@@ -72,7 +75,8 @@ pub fn register_defaults(reg: &mut PromptRegistry) {
              Output format: one line per split, format: TYPE|CONTENT\n\
              Types: episodic, semantic, procedural",
             &["content", "intent_hits"],
-        ).with_max_tokens(512),
+        )
+        .with_max_tokens(512),
     );
 
     reg.register_default(
@@ -83,7 +87,8 @@ pub fn register_defaults(reg: &mut PromptRegistry) {
              Memory B: \"{{memory_b}}\"\n\n\
              Output ONLY the merged content, nothing else.",
             &["memory_a", "memory_b"],
-        ).with_max_tokens(256),
+        )
+        .with_max_tokens(256),
     );
 
     reg.register_default(
@@ -94,7 +99,8 @@ pub fn register_defaults(reg: &mut PromptRegistry) {
              New: \"{{new_content}}\"\n\n\
              Fuse them into a single accurate memory. Output ONLY the fused content.",
             &["old_content", "new_content"],
-        ).with_max_tokens(256),
+        )
+        .with_max_tokens(256),
     );
 
     reg.register_default(
@@ -106,17 +112,16 @@ pub fn register_defaults(reg: &mut PromptRegistry) {
              Original query: {{query}}\n\n\
              Rewritten query:",
             &["query"],
-        ).with_max_tokens(128),
+        )
+        .with_max_tokens(128),
     );
 
-    reg.register_default(
-        PromptTemplate::new(
-            "causal_context",
-            "Causal chain (oldest → newest):\n{{causal_chain}}\n\
+    reg.register_default(PromptTemplate::new(
+        "causal_context",
+        "Causal chain (oldest → newest):\n{{causal_chain}}\n\
              → Current [{{target_id}}]: {{target_content}}",
-            &["causal_chain", "target_id", "target_content"],
-        ),
-    );
+        &["causal_chain", "target_id", "target_content"],
+    ));
 
     reg.register_default(
         PromptTemplate::new(
@@ -127,7 +132,8 @@ pub fn register_defaults(reg: &mut PromptRegistry) {
              Remove agent-specific details but preserve the actionable steps.\n\
              Output ONLY the generalized skill description, nothing else.",
             &["content"],
-        ).with_max_tokens(256),
+        )
+        .with_max_tokens(256),
     );
 
     reg.register_default(
@@ -147,7 +153,8 @@ pub fn register_defaults(reg: &mut PromptRegistry) {
              - extract preferences only when the user clearly states or implies a preference\n\n\
              Text: {{text}}",
             &["text"],
-        ).with_max_tokens(1024),
+        )
+        .with_max_tokens(1024),
     );
 
     reg.register_default(
@@ -163,7 +170,8 @@ pub fn register_defaults(reg: &mut PromptRegistry) {
             "summarizer_l0_user",
             "Summarize this briefly:\n\n{{content}}",
             &["content"],
-        ).with_max_tokens(128),
+        )
+        .with_max_tokens(128),
     );
 
     reg.register_default(
@@ -179,7 +187,8 @@ pub fn register_defaults(reg: &mut PromptRegistry) {
             "summarizer_l1_user",
             "Summarize this in detail:\n\n{{content}}",
             &["content"],
-        ).with_max_tokens(512),
+        )
+        .with_max_tokens(512),
     );
 
     // ── Intent-specific answer generation prompts ──
@@ -197,7 +206,8 @@ pub fn register_defaults(reg: &mut PromptRegistry) {
              - Be concise but complete — include all relevant details\n\
              - If the information is not in the memories, say \"I don't know\"",
             &["context", "question"],
-        ).with_max_tokens(200),
+        )
+        .with_max_tokens(200),
     );
 
     reg.register_default(
@@ -214,7 +224,8 @@ pub fn register_defaults(reg: &mut PromptRegistry) {
              - Pay attention to date formats like [YYYY-MM-DD] at the start of each memory\n\
              - If the memories don't contain enough date information, say \"I don't know\"",
             &["context", "question"],
-        ).with_max_tokens(200),
+        )
+        .with_max_tokens(200),
     );
 
     reg.register_default(
@@ -279,7 +290,7 @@ pub fn register_defaults(reg: &mut PromptRegistry) {
              Output one sub-question per line, nothing else. Each sub-question should be self-contained \
              and searchable independently.",
             &["question"],
-        ).with_max_tokens(200),
+        )
+        .with_max_tokens(200),
     );
-
 }

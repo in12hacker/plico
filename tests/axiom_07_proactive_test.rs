@@ -20,11 +20,7 @@ fn make_kernel() -> (Arc<AIKernel>, tempfile::TempDir) {
 fn axiom7_event_subscription_delivers_notifications() {
     let (kernel, _dir) = make_kernel();
     let agent_id = kernel.register_agent("proactive-agent".into()).unwrap();
-    kernel.permission_grant(
-        &agent_id,
-        plico::api::permission::PermissionAction::Write,
-        None, None,
-    );
+    kernel.permission_grant(&agent_id, plico::api::permission::PermissionAction::Write, None, None);
 
     let sub_resp = kernel.handle_api_request(ApiRequest::EventSubscribe {
         agent_id: agent_id.clone(),
@@ -43,8 +39,8 @@ fn axiom7_event_subscription_delivers_notifications() {
         tenant_id: None,
         agent_token: None,
         intent: None,
-            scope: None,
-});
+        scope: None,
+    });
 
     let poll_resp = kernel.handle_api_request(ApiRequest::EventPoll {
         subscription_id: sub_id,
@@ -58,16 +54,8 @@ fn axiom7_event_subscription_delivers_notifications() {
 fn axiom7_context_assembly_prewarming() {
     let (kernel, _dir) = make_kernel();
     let agent_id = kernel.register_agent("assembly-agent".into()).unwrap();
-    kernel.permission_grant(
-        &agent_id,
-        plico::api::permission::PermissionAction::Write,
-        None, None,
-    );
-    kernel.permission_grant(
-        &agent_id,
-        plico::api::permission::PermissionAction::Read,
-        None, None,
-    );
+    kernel.permission_grant(&agent_id, plico::api::permission::PermissionAction::Write, None, None);
+    kernel.permission_grant(&agent_id, plico::api::permission::PermissionAction::Read, None, None);
 
     for i in 0..3 {
         kernel.handle_api_request(ApiRequest::Create {
@@ -80,7 +68,7 @@ fn axiom7_context_assembly_prewarming() {
             agent_token: None,
             intent: None,
             scope: None,
-});
+        });
     }
 
     let assemble_resp = kernel.handle_api_request(ApiRequest::ContextAssemble {
@@ -95,16 +83,8 @@ fn axiom7_context_assembly_prewarming() {
 fn axiom7_declare_intent_triggers_prefetch() {
     let (kernel, _dir) = make_kernel();
     let agent_id = kernel.register_agent("declare-agent".into()).unwrap();
-    kernel.permission_grant(
-        &agent_id,
-        plico::api::permission::PermissionAction::Write,
-        None, None,
-    );
-    kernel.permission_grant(
-        &agent_id,
-        plico::api::permission::PermissionAction::Read,
-        None, None,
-    );
+    kernel.permission_grant(&agent_id, plico::api::permission::PermissionAction::Write, None, None);
+    kernel.permission_grant(&agent_id, plico::api::permission::PermissionAction::Read, None, None);
 
     kernel.handle_api_request(ApiRequest::Create {
         api_version: None,
@@ -115,8 +95,8 @@ fn axiom7_declare_intent_triggers_prefetch() {
         tenant_id: None,
         agent_token: None,
         intent: None,
-            scope: None,
-});
+        scope: None,
+    });
 
     let declare_resp = kernel.handle_api_request(ApiRequest::DeclareIntent {
         agent_id: agent_id.clone(),
@@ -125,18 +105,17 @@ fn axiom7_declare_intent_triggers_prefetch() {
         budget_tokens: 4000,
     });
     assert!(declare_resp.ok, "DeclareIntent failed: {:?}", declare_resp.error);
-    assert!(declare_resp.assembly_id.is_some(), "DeclareIntent should return an assembly_id for prefetch");
+    assert!(
+        declare_resp.assembly_id.is_some(),
+        "DeclareIntent should return an assembly_id for prefetch"
+    );
 }
 
 #[test]
 fn axiom7_proactive_latency_within_budget() {
     let (kernel, _dir) = make_kernel();
     let agent_id = kernel.register_agent("latency-agent".into()).unwrap();
-    kernel.permission_grant(
-        &agent_id,
-        plico::api::permission::PermissionAction::Write,
-        None, None,
-    );
+    kernel.permission_grant(&agent_id, plico::api::permission::PermissionAction::Write, None, None);
 
     let start = std::time::Instant::now();
     let sub_resp = kernel.handle_api_request(ApiRequest::EventSubscribe {
@@ -146,5 +125,9 @@ fn axiom7_proactive_latency_within_budget() {
     });
     let latency = start.elapsed();
     assert!(sub_resp.ok);
-    assert!(latency.as_millis() < 50, "EventSubscribe should be <50ms, got {}ms", latency.as_millis());
+    assert!(
+        latency.as_millis() < 50,
+        "EventSubscribe should be <50ms, got {}ms",
+        latency.as_millis()
+    );
 }

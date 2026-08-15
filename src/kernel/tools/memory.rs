@@ -4,7 +4,12 @@ use crate::kernel::AIKernel;
 use crate::tool::ToolResult;
 use serde_json::json;
 
-pub(in crate::kernel) fn handle(kernel: &AIKernel, name: &str, params: &serde_json::Value, agent_id: &str) -> ToolResult {
+pub(in crate::kernel) fn handle(
+    kernel: &AIKernel,
+    name: &str,
+    params: &serde_json::Value,
+    agent_id: &str,
+) -> ToolResult {
     match name {
         "memory.store" => handle_store(kernel, params, agent_id),
         "memory.recall" => handle_recall(kernel, params, agent_id),
@@ -21,28 +26,25 @@ pub(in crate::kernel) fn handle(kernel: &AIKernel, name: &str, params: &serde_js
 fn handle_store(kernel: &AIKernel, params: &serde_json::Value, agent_id: &str) -> ToolResult {
     let content = params.get("content").and_then(|v| v.as_str()).unwrap_or("").to_string();
     let tier = params.get("tier").and_then(|v| v.as_str()).unwrap_or("working");
-    let tags: Vec<String> = params.get("tags")
+    let tags: Vec<String> = params
+        .get("tags")
         .and_then(|v| v.as_array())
         .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
         .unwrap_or_default();
     let importance = params.get("importance").and_then(|v| v.as_u64()).unwrap_or(50) as u8;
 
     match tier {
-        "working" => {
-            match kernel.remember_working(agent_id, "default", content, tags) {
-                Ok(()) => ToolResult::ok(json!({"id": "", "tier": "working"})),
-                Err(e) => ToolResult::error(e.to_string()),
+        "working" => match kernel.remember_working(agent_id, "default", content, tags) {
+            Ok(entry) => ToolResult::ok(json!({"id": entry.id, "tier": "working"})),
+            Err(e) => ToolResult::error(e.to_string()),
+        },
+        "long-term" => match kernel.remember_long_term(agent_id, "default", content, tags.clone(), importance) {
+            Ok(id) => {
+                kernel.link_memory_to_kg(&id, agent_id, "default", &tags);
+                ToolResult::ok(json!({"id": id, "tier": "long-term"}))
             }
-        }
-        "long-term" => {
-            match kernel.remember_long_term(agent_id, "default", content, tags.clone(), importance) {
-                Ok(id) => {
-                    kernel.link_memory_to_kg(&id, agent_id, "default", &tags);
-                    ToolResult::ok(json!({"id": id, "tier": "long-term"}))
-                }
-                Err(e) => ToolResult::error(e.to_string()),
-            }
-        }
+            Err(e) => ToolResult::error(e.to_string()),
+        },
         "procedural" => {
             let steps = vec![crate::memory::layered::ProcedureStep {
                 step_number: 0,
@@ -50,9 +52,17 @@ fn handle_store(kernel: &AIKernel, params: &serde_json::Value, agent_id: &str) -
                 action: content.clone(),
                 expected_outcome: String::new(),
             }];
-            match kernel.remember_procedural(agent_id, "default", crate::kernel::ops::memory::ProceduralEntry {
-                name: "tool-procedure".into(), description: content, steps, learned_from: "tool".into(), tags: tags.clone(),
-            }) {
+            match kernel.remember_procedural(
+                agent_id,
+                "default",
+                crate::kernel::ops::memory::ProceduralEntry {
+                    name: "tool-procedure".into(),
+                    description: content,
+                    steps,
+                    learned_from: "tool".into(),
+                    tags: tags.clone(),
+                },
+            ) {
                 Ok(id) => {
                     kernel.link_memory_to_kg(&id, agent_id, "default", &tags);
                     ToolResult::ok(json!({"id": id, "tier": "procedural"}))
@@ -65,6 +75,9 @@ fn handle_store(kernel: &AIKernel, params: &serde_json::Value, agent_id: &str) -
             let entry_id = uuid::Uuid::new_v4().to_string();
             let now = crate::memory::layered::now_ms();
             let entry = crate::memory::MemoryEntry {
+                memory_id: Default::default(),
+                parent_revision_id: None,
+                canonical_content_hash: Default::default(),
                 id: entry_id.clone(),
                 agent_id: agent_id.to_string(),
                 tenant_id: "default".to_string(),
@@ -75,25 +88,23 @@ fn handle_store(kernel: &AIKernel, params: &serde_json::Value, agent_id: &str) -
                 last_accessed: now,
                 created_at: now,
                 tags: tags.clone(),
-                embedding: None,
                 ttl_ms,
                 original_ttl_ms: ttl_ms,
                 scope: crate::memory::MemoryScope::Private,
                 memory_type: crate::memory::MemoryType::default(),
                 causal_parent: None,
                 supersedes: None,
-            superseded_by: None,
-            deleted_at: None,
+                superseded_by: None,
+                deleted_at: None,
             };
             let aid = crate::scheduler::AgentId(agent_id.to_string());
-            let quota = kernel.scheduler.get_resources(&aid)
+            let quota = kernel
+                .scheduler
+                .get_resources(&aid)
                 .map(|r| r.memory_quota)
                 .unwrap_or(0);
             match kernel.memory.store_checked(entry, quota) {
-                Ok(()) => {
-                    kernel.persist_memories();
-                    ToolResult::ok(json!({"id": entry_id, "tier": "ephemeral"}))
-                }
+                Ok(()) => ToolResult::ok(json!({"id": entry_id, "tier": "ephemeral"})),
                 Err(e) => ToolResult::error(e.to_string()),
             }
         }
@@ -131,39 +142,69 @@ fn handle_recall(kernel: &AIKernel, params: &serde_json::Value, agent_id: &str) 
         }
         None => memories,
     };
-    let dto: Vec<serde_json::Value> = filtered.into_iter().map(|m| json!({
-        "id": m.id,
-        "tier": m.tier.name(),
-        "content": m.content.display(),
-        "importance": m.importance,
-        "access_count": m.access_count,
-        "tags": m.tags,
-    })).collect();
+    let dto: Vec<serde_json::Value> = filtered
+        .into_iter()
+        .map(|m| {
+            json!({
+                "id": m.id,
+                "tier": m.tier.name(),
+                "content": m.content.display(),
+                "importance": m.importance,
+                "access_count": m.access_count,
+                "tags": m.tags,
+            })
+        })
+        .collect();
     ToolResult::ok(json!({"memories": dto}))
 }
 
 fn handle_store_procedure(kernel: &AIKernel, params: &serde_json::Value, agent_id: &str) -> ToolResult {
     let name = params.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let description = params.get("description").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let learned_from = params.get("learned_from").and_then(|v| v.as_str()).unwrap_or("manual").to_string();
-    let tags: Vec<String> = params.get("tags")
+    let description = params
+        .get("description")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let learned_from = params
+        .get("learned_from")
+        .and_then(|v| v.as_str())
+        .unwrap_or("manual")
+        .to_string();
+    let tags: Vec<String> = params
+        .get("tags")
         .and_then(|v| v.as_array())
         .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
         .unwrap_or_default();
-    let steps: Vec<crate::memory::layered::ProcedureStep> = params.get("steps")
+    let steps: Vec<crate::memory::layered::ProcedureStep> = params
+        .get("steps")
         .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().enumerate().map(|(i, s)| {
-            crate::memory::layered::ProcedureStep {
-                step_number: (i + 1) as u32,
-                description: s.get("description").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                action: s.get("action").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                expected_outcome: s.get("expected_outcome").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-            }
-        }).collect())
+        .map(|arr| {
+            arr.iter()
+                .enumerate()
+                .map(|(i, s)| crate::memory::layered::ProcedureStep {
+                    step_number: (i + 1) as u32,
+                    description: s.get("description").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                    action: s.get("action").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                    expected_outcome: s
+                        .get("expected_outcome")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                })
+                .collect()
+        })
         .unwrap_or_default();
-    match kernel.remember_procedural(agent_id, "default", crate::kernel::ops::memory::ProceduralEntry {
-        name, description, steps, learned_from, tags,
-    }) {
+    match kernel.remember_procedural(
+        agent_id,
+        "default",
+        crate::kernel::ops::memory::ProceduralEntry {
+            name,
+            description,
+            steps,
+            learned_from,
+            tags,
+        },
+    ) {
         Ok(entry_id) => ToolResult::ok(json!({"entry_id": entry_id, "stored": true})),
         Err(e) => ToolResult::error(e),
     }
@@ -172,8 +213,9 @@ fn handle_store_procedure(kernel: &AIKernel, params: &serde_json::Value, agent_i
 fn handle_recall_procedure(kernel: &AIKernel, params: &serde_json::Value, agent_id: &str) -> ToolResult {
     let name = params.get("name").and_then(|v| v.as_str());
     let entries = kernel.recall_procedural(agent_id, "default", name);
-    let data: Vec<serde_json::Value> = entries.iter().map(|e| {
-        match &e.content {
+    let data: Vec<serde_json::Value> = entries
+        .iter()
+        .map(|e| match &e.content {
             crate::memory::MemoryContent::Procedure(p) => {
                 json!({
                     "id": e.id,
@@ -190,9 +232,9 @@ fn handle_recall_procedure(kernel: &AIKernel, params: &serde_json::Value, agent_
                     "importance": e.importance,
                 })
             }
-            _ => json!({"id": e.id, "content": e.content.display(), "tags": e.tags, "importance": e.importance})
-        }
-    }).collect();
+            _ => json!({"id": e.id, "content": e.content.display(), "tags": e.tags, "importance": e.importance}),
+        })
+        .collect();
     ToolResult::ok(json!({"procedures": data, "count": data.len()}))
 }
 
@@ -206,34 +248,51 @@ mod tests {
     fn test_memory_store_working() {
         let (kernel, _tmp) = make_kernel();
         let params = json!({"content": "test memory", "tier": "working", "tags": ["test"]});
-        let result = handle(&*kernel, "memory.store", &params, "test");
-        assert!(result.error.is_none(), "store working should succeed: {:?}", result.error);
+        let result = handle(&kernel, "memory.store", &params, "test");
+        assert!(
+            result.error.is_none(),
+            "store working should succeed: {:?}",
+            result.error
+        );
     }
 
     #[test]
     fn test_memory_store_long_term() {
         let (kernel, _tmp) = make_kernel();
         let params = json!({"content": "important fact", "tier": "long-term", "tags": ["fact"], "importance": 80});
-        let result = handle(&*kernel, "memory.store", &params, "test");
-        assert!(result.error.is_none(), "store long-term should succeed: {:?}", result.error);
+        let result = handle(&kernel, "memory.store", &params, "test");
+        assert!(
+            result.error.is_none(),
+            "store long-term should succeed: {:?}",
+            result.error
+        );
         let data = result.output;
         assert_eq!(data["tier"], "long-term");
-        assert!(data["id"].as_str().unwrap().len() > 0);
+        assert!(!data["id"].as_str().unwrap().is_empty());
     }
 
     #[test]
     fn test_memory_store_ephemeral() {
         let (kernel, _tmp) = make_kernel();
         let params = json!({"content": "temp data", "tier": "ephemeral"});
-        let result = handle(&*kernel, "memory.store", &params, "test");
-        assert!(result.error.is_none(), "store ephemeral should succeed: {:?}", result.error);
+        let result = handle(&kernel, "memory.store", &params, "test");
+        assert!(
+            result.error.is_none(),
+            "store ephemeral should succeed: {:?}",
+            result.error
+        );
     }
 
     #[test]
     fn test_memory_recall() {
         let (kernel, _tmp) = make_kernel();
-        handle(&*kernel, "memory.store", &json!({"content": "recall me", "tier": "working"}), "test");
-        let result = handle(&*kernel, "memory.recall", &json!({}), "test");
+        handle(
+            &kernel,
+            "memory.store",
+            &json!({"content": "recall me", "tier": "working"}),
+            "test",
+        );
+        let result = handle(&kernel, "memory.recall", &json!({}), "test");
         assert!(result.error.is_none());
         let memories = result.output["memories"].as_array().unwrap();
         assert!(!memories.is_empty());
@@ -242,10 +301,20 @@ mod tests {
     #[test]
     fn test_memory_recall_with_tier_filter() {
         let (kernel, _tmp) = make_kernel();
-        handle(&*kernel, "memory.store", &json!({"content": "working mem", "tier": "working"}), "test");
-        handle(&*kernel, "memory.store", &json!({"content": "lt mem", "tier": "long-term"}), "test");
+        handle(
+            &kernel,
+            "memory.store",
+            &json!({"content": "working mem", "tier": "working"}),
+            "test",
+        );
+        handle(
+            &kernel,
+            "memory.store",
+            &json!({"content": "lt mem", "tier": "long-term"}),
+            "test",
+        );
 
-        let result = handle(&*kernel, "memory.recall", &json!({"tier": "long-term"}), "test");
+        let result = handle(&kernel, "memory.recall", &json!({"tier": "long-term"}), "test");
         assert!(result.error.is_none());
         let memories = result.output["memories"].as_array().unwrap();
         for m in memories {
@@ -256,14 +325,14 @@ mod tests {
     #[test]
     fn test_memory_recall_invalid_tier() {
         let (kernel, _tmp) = make_kernel();
-        let result = handle(&*kernel, "memory.recall", &json!({"tier": "nonexistent"}), "test");
+        let result = handle(&kernel, "memory.recall", &json!({"tier": "nonexistent"}), "test");
         assert!(result.error.is_some());
     }
 
     #[test]
     fn test_memory_forget() {
         let (kernel, _tmp) = make_kernel();
-        let result = handle(&*kernel, "memory.forget", &json!({}), "test");
+        let result = handle(&kernel, "memory.forget", &json!({}), "test");
         assert!(result.error.is_none());
         assert_eq!(result.output["forgotten"], true);
     }
@@ -280,20 +349,29 @@ mod tests {
             ],
             "tags": ["test"]
         });
-        let result = handle(&*kernel, "memory.store_procedure", &params, "test");
-        assert!(result.error.is_none(), "store_procedure should succeed: {:?}", result.error);
+        let result = handle(&kernel, "memory.store_procedure", &params, "test");
+        assert!(
+            result.error.is_none(),
+            "store_procedure should succeed: {:?}",
+            result.error
+        );
     }
 
     #[test]
     fn test_memory_recall_procedure() {
         let (kernel, _tmp) = make_kernel();
-        handle(&*kernel, "memory.store_procedure", &json!({
-            "name": "my_proc",
-            "description": "desc",
-            "steps": [{"description": "s1", "action": "a1", "expected_outcome": "o1"}]
-        }), "test");
+        handle(
+            &kernel,
+            "memory.store_procedure",
+            &json!({
+                "name": "my_proc",
+                "description": "desc",
+                "steps": [{"description": "s1", "action": "a1", "expected_outcome": "o1"}]
+            }),
+            "test",
+        );
 
-        let result = handle(&*kernel, "memory.recall_procedure", &json!({}), "test");
+        let result = handle(&kernel, "memory.recall_procedure", &json!({}), "test");
         assert!(result.error.is_none());
         let procs = result.output["procedures"].as_array().unwrap();
         assert!(!procs.is_empty());
@@ -302,7 +380,7 @@ mod tests {
     #[test]
     fn test_memory_unknown_tool() {
         let (kernel, _tmp) = make_kernel();
-        let result = handle(&*kernel, "memory.nonexistent", &json!({}), "test");
+        let result = handle(&kernel, "memory.nonexistent", &json!({}), "test");
         assert!(result.error.is_some());
     }
 }

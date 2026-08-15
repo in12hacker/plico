@@ -2,7 +2,10 @@
 
 use std::sync::{Arc, OnceLock};
 
-use crate::fs::embedding::types::{EmbedError, EmbeddingProvider, EmbedResult};
+use crate::fs::embedding::types::{
+    EmbedError, EmbedResult, EmbeddingBuilderIdentity, EmbeddingIdentityError, EmbeddingProvider,
+    OllamaIdentityEvidence,
+};
 
 /// Ollama daemon backend for text embeddings.
 ///
@@ -15,6 +18,21 @@ pub struct OllamaBackend {
     url: String,
     model: String,
     dimension: OnceLock<usize>,
+    verified_document: OnceLock<VerifiedOllamaDocumentProvider>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct VerifiedOllamaDocumentProvider {
+    evidence: OllamaIdentityEvidence,
+    identity: EmbeddingBuilderIdentity,
+}
+
+#[derive(serde::Deserialize)]
+struct OllamaTagModel {
+    name: String,
+    digest: String,
+    #[serde(flatten)]
+    _ignored: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
 impl OllamaBackend {
@@ -25,12 +43,12 @@ impl OllamaBackend {
     pub fn new(url: &str, model: &str) -> Result<Self, EmbedError> {
         let rt = match tokio::runtime::Handle::try_current() {
             Ok(_) => None,
-            Err(_) => {
-                Some(Arc::new(tokio::runtime::Builder::new_multi_thread()
+            Err(_) => Some(Arc::new(
+                tokio::runtime::Builder::new_multi_thread()
                     .worker_threads(1)
                     .enable_all()
-                    .build()?))
-            }
+                    .build()?,
+            )),
         };
 
         let client = reqwest::Client::builder()
@@ -44,110 +62,200 @@ impl OllamaBackend {
             url: url.to_string(),
             model: model.to_string(),
             dimension: OnceLock::new(),
+            verified_document: OnceLock::new(),
         })
     }
 
     fn block_on_async<F: std::future::Future>(&self, fut: F) -> F::Output {
         match tokio::runtime::Handle::try_current() {
             Ok(handle) => tokio::task::block_in_place(|| handle.block_on(fut)),
-            Err(_) => self.rt.as_ref()
+            Err(_) => self
+                .rt
+                .as_ref()
                 .expect("rt must exist when no Tokio runtime is active")
                 .block_on(fut),
         }
     }
 
-    fn get_dimension(&self) -> usize {
+    fn get_dimension(&self) -> Result<usize, EmbedError> {
         if let Some(d) = self.dimension.get() {
-            return *d;
+            return Ok(*d);
         }
-        let dim = self.block_on_async(Self::probe(&self.client, &self.url, &self.model))
-            .unwrap_or_else(|e| {
-                tracing::warn!("Ollama probe failed: {e}. Using default dimension 384.");
-                384
-            });
+        let dim = self
+            .verified_document()
+            .map_err(|_| EmbedError::ServerUnavailable("embedding builder identity unavailable".into()))?
+            .evidence
+            .raw_dimension as usize;
         self.dimension.set(dim).ok();
-        dim
-    }
-
-    async fn probe(client: &reqwest::Client, url: &str, model: &str) -> Result<usize, EmbedError> {
-        let tags_url = format!("{}/api/tags", url.trim_end_matches('/'));
-        let resp: serde_json::Value = client
-            .get(&tags_url)
-            .send()
-            .await
-            .map_err(|_| EmbedError::ServerUnavailable(url.to_string()))?
-            .json()
-            .await
-            .map_err(EmbedError::Http)?;
-
-        let models = resp
-            .get("models")
-            .and_then(|m| m.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|m| m.get("name").and_then(|n| n.as_str()))
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-
-        if !models.iter().any(|m| m.starts_with(model)) {
-            return Err(EmbedError::ModelNotFound(format!(
-                "model '{}' not found. Available: {:?}",
-                model, models
-            )));
-        }
-
-        let dim = match model {
-            m if m.contains("all-minilm") => 384,
-            m if m.contains("nomic-embed") => 768,
-            m if m.contains("e5") => 1024,
-            m if m.contains("bge-large") => 1024,
-            m if m.contains("bge-") => 768,
-            _ => 384,
-        };
         Ok(dim)
     }
 
-    async fn embed_async(&self, text: &str) -> Result<EmbedResult, EmbedError> {
+    fn verified_document(&self) -> Result<&VerifiedOllamaDocumentProvider, EmbeddingIdentityError> {
+        if let Some(verified) = self.verified_document.get() {
+            return Ok(verified);
+        }
+        let verified = self.resolve_verified_document()?;
+        self.verified_document.set(verified).ok();
+        self.verified_document
+            .get()
+            .ok_or(EmbeddingIdentityError::ProviderProbeFailed)
+    }
+
+    fn resolve_verified_document(&self) -> Result<VerifiedOllamaDocumentProvider, EmbeddingIdentityError> {
+        let before = self
+            .block_on_async(self.read_identity_evidence())
+            .map_err(|_| EmbeddingIdentityError::ProviderProbeFailed)?;
+        let probe = self
+            .block_on_async(self.embed_document_request(&before.model_tag, "plico document identity probe v1"))
+            .map_err(|_| EmbeddingIdentityError::ProviderProbeFailed)?;
+        let after = self
+            .block_on_async(self.read_identity_evidence())
+            .map_err(|_| EmbeddingIdentityError::ProviderProbeFailed)?;
+        if before != after {
+            return Err(EmbeddingIdentityError::ProviderChanged);
+        }
+        let raw_dimension = u32::try_from(probe.embedding.len())
+            .ok()
+            .filter(|dimension| *dimension > 0 && *dimension <= 65_536)
+            .ok_or(EmbeddingIdentityError::InvalidIdentityEvidence)?;
+        let mut evidence = before;
+        evidence.raw_dimension = raw_dimension;
+        let identity = EmbeddingBuilderIdentity::from_ollama_evidence(&evidence)?;
+        Ok(VerifiedOllamaDocumentProvider { evidence, identity })
+    }
+
+    async fn read_identity_evidence(&self) -> Result<OllamaIdentityEvidence, EmbedError> {
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct TagsResponse {
+            models: Vec<OllamaTagModel>,
+        }
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct VersionResponse {
+            version: String,
+        }
+
+        let base = self.url.trim_end_matches('/');
+        let tags_response = self
+            .client
+            .get(format!("{base}/api/tags"))
+            .send()
+            .await
+            .map_err(|_| EmbedError::ServerUnavailable("embedding provider unavailable".into()))?;
+        if !tags_response.status().is_success() {
+            return Err(EmbedError::Api(format!(
+                "provider identity endpoint returned HTTP status {}",
+                tags_response.status().as_u16()
+            )));
+        }
+        let tags = tags_response
+            .json::<TagsResponse>()
+            .await
+            .map_err(|_| EmbedError::Api("provider response parse failed".into()))?;
+        let version_response = self
+            .client
+            .get(format!("{base}/api/version"))
+            .send()
+            .await
+            .map_err(|_| EmbedError::ServerUnavailable("embedding provider unavailable".into()))?;
+        if !version_response.status().is_success() {
+            return Err(EmbedError::Api(format!(
+                "provider identity endpoint returned HTTP status {}",
+                version_response.status().as_u16()
+            )));
+        }
+        let version = version_response
+            .json::<VersionResponse>()
+            .await
+            .map_err(|_| EmbedError::Api("provider response parse failed".into()))?;
+        let model = exact_ollama_tag(&self.model, &tags.models)
+            .ok_or_else(|| EmbedError::ModelNotFound("configured embedding model".into()))?;
+        Ok(OllamaIdentityEvidence {
+            schema: "plico.embedding.ollama-evidence/v1".to_string(),
+            model_tag: model.name.clone(),
+            model_digest: model.digest.clone(),
+            server_version: version.version,
+            api_contract: "ollama-api-embed-truncate-false/v1".to_string(),
+            raw_dimension: 0,
+        })
+    }
+
+    async fn embed_document_request(&self, model: &str, text: &str) -> Result<EmbedResult, EmbedError> {
         #[derive(serde::Serialize)]
         struct Request<'a> {
             model: &'a str,
-            prompt: &'a str,
+            input: &'a str,
+            truncate: bool,
         }
         #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
         struct Response {
-            embedding: Vec<f32>,
+            model: String,
+            embeddings: Vec<Vec<f32>>,
+            #[serde(default)]
+            prompt_eval_count: u32,
+            #[serde(default)]
+            total_duration: u64,
+            #[serde(default)]
+            load_duration: u64,
         }
 
-        let resp = self
+        let response = self
             .client
-            .post(format!("{}/api/embeddings", self.url.trim_end_matches('/')))
+            .post(format!("{}/api/embed", self.url.trim_end_matches('/')))
             .json(&Request {
-                model: &self.model,
-                prompt: text,
+                model,
+                input: text,
+                truncate: false,
             })
             .send()
             .await
-            .map_err(|e| {
-                if e.is_connect() {
-                    EmbedError::ServerUnavailable(self.url.clone())
-                } else {
-                    EmbedError::Http(e)
-                }
-            })?;
-
-        let status = resp.status();
-        let body_bytes = resp.bytes().await.map_err(EmbedError::Http)?;
-
+            .map_err(|_| EmbedError::ServerUnavailable("embedding provider unavailable".into()))?;
+        let status = response.status();
         if !status.is_success() {
-            let body_str = String::from_utf8_lossy(&body_bytes);
-            return Err(EmbedError::ollama(format!("status={} body={}", status, body_str)));
+            return Err(EmbedError::Ollama(format!(
+                "provider returned HTTP status {}",
+                status.as_u16()
+            )));
         }
+        let mut parsed = response
+            .json::<Response>()
+            .await
+            .map_err(|_| EmbedError::Ollama("provider response parse failed".into()))?;
+        if parsed.model != model
+            || parsed.embeddings.len() != 1
+            || parsed.embeddings[0].is_empty()
+            || parsed.embeddings[0].iter().any(|component| !component.is_finite())
+            || parsed.embeddings[0].iter().all(|component| *component == 0.0)
+        {
+            return Err(EmbedError::Ollama("provider returned invalid embedding count".into()));
+        }
+        let _provider_timings = (parsed.total_duration, parsed.load_duration);
+        Ok(EmbedResult::new(parsed.embeddings.remove(0), parsed.prompt_eval_count))
+    }
 
-        let Response { embedding } = serde_json::from_slice(&body_bytes)
-            .map_err(|e| EmbedError::ollama(format!("parse error: {e}")))?;
-        let estimated_tokens = (text.len() / 4).max(1) as u32;
-        Ok(EmbedResult::new(embedding, estimated_tokens))
+    fn guarded_embed_document(&self, text: &str) -> Result<EmbedResult, EmbedError> {
+        let verified = self
+            .verified_document()
+            .map_err(|_| EmbedError::ServerUnavailable("embedding builder identity unavailable".into()))?
+            .clone();
+        let before = self.block_on_async(self.read_identity_evidence())?;
+        if !same_ollama_provider(&verified.evidence, &before) {
+            return Err(EmbedError::ServerUnavailable(
+                "embedding provider identity changed".into(),
+            ));
+        }
+        let result = self.block_on_async(self.embed_document_request(&verified.evidence.model_tag, text))?;
+        let after = self.block_on_async(self.read_identity_evidence())?;
+        if !same_ollama_provider(&verified.evidence, &after)
+            || result.embedding.len() != verified.evidence.raw_dimension as usize
+        {
+            return Err(EmbedError::ServerUnavailable(
+                "embedding provider identity changed".into(),
+            ));
+        }
+        Ok(result)
     }
 
     /// Send a chat request to Ollama with JSON structured output mode.
@@ -186,9 +294,15 @@ impl OllamaBackend {
 
         let mut messages = Vec::new();
         if let Some(sys) = system {
-            messages.push(ChatMessage { role: "system", content: sys });
+            messages.push(ChatMessage {
+                role: "system",
+                content: sys,
+            });
         }
-        messages.push(ChatMessage { role: "user", content: prompt });
+        messages.push(ChatMessage {
+            role: "user",
+            content: prompt,
+        });
 
         let req = ChatRequest {
             model,
@@ -207,65 +321,71 @@ impl OllamaBackend {
             .json(&req)
             .send()
             .await
-            .map_err(|e| {
-                if e.is_connect() {
-                    EmbedError::ServerUnavailable(self.url.clone())
-                } else {
-                    EmbedError::Http(e)
-                }
-            })?;
+            .map_err(|_| EmbedError::ServerUnavailable("embedding provider unavailable".into()))?;
 
         let status = resp.status();
-        let body_bytes = resp.bytes().await.map_err(EmbedError::Http)?;
+        let body_bytes = resp
+            .bytes()
+            .await
+            .map_err(|_| EmbedError::Ollama("provider response read failed".into()))?;
 
         if !status.is_success() {
             return Err(EmbedError::Ollama(format!(
-                "chat API returned {}: {}",
-                status,
-                String::from_utf8_lossy(&body_bytes)
+                "provider returned HTTP status {}",
+                status.as_u16()
             )));
         }
 
         let parsed: ChatResponse = serde_json::from_slice(&body_bytes)
-            .map_err(|e| EmbedError::Ollama(format!("failed to parse chat response: {e}")))?;
+            .map_err(|_| EmbedError::Ollama("provider response parse failed".into()))?;
 
         Ok(parsed.message.content)
     }
 
     /// Synchronous wrapper for `chat_async`.
-    pub fn chat(
-        &self,
-        prompt: &str,
-        system: Option<&str>,
-        model_override: Option<&str>,
-    ) -> Result<String, EmbedError> {
+    pub fn chat(&self, prompt: &str, system: Option<&str>, model_override: Option<&str>) -> Result<String, EmbedError> {
         self.block_on_async(self.chat_async(prompt, system, model_override))
     }
 }
 
 impl EmbeddingProvider for OllamaBackend {
     fn embed(&self, text: &str) -> Result<EmbedResult, EmbedError> {
-        self.block_on_async(self.embed_async(text))
+        self.guarded_embed_document(text)
     }
 
     fn embed_batch(&self, texts: &[&str]) -> Result<Vec<EmbedResult>, EmbedError> {
-        let this = self.clone();
-        let texts: Vec<String> = texts.iter().map(|s| s.to_string()).collect();
-        self.block_on_async(async move {
-            let mut results = Vec::with_capacity(texts.len());
-            for text in &texts {
-                results.push(this.embed_async(text).await?);
-            }
-            Ok(results)
-        })
+        texts.iter().map(|text| self.guarded_embed_document(text)).collect()
+    }
+
+    fn embed_query(&self, text: &str) -> Result<EmbedResult, EmbedError> {
+        self.guarded_embed_document(text)
+    }
+
+    fn embed_document(&self, text: &str) -> Result<EmbedResult, EmbedError> {
+        self.guarded_embed_document(text)
+    }
+
+    fn embed_document_batch(&self, texts: &[&str]) -> Result<Vec<EmbedResult>, EmbedError> {
+        texts.iter().map(|text| self.guarded_embed_document(text)).collect()
     }
 
     fn dimension(&self) -> usize {
-        self.get_dimension()
+        self.get_dimension().unwrap_or_default()
     }
 
-    fn model_name(&self) -> &str {
-        &self.model
+    fn builder_identity(&self) -> Result<EmbeddingBuilderIdentity, EmbeddingIdentityError> {
+        let verified = self.verified_document()?.clone();
+        let current = self
+            .block_on_async(self.read_identity_evidence())
+            .map_err(|_| EmbeddingIdentityError::ProviderProbeFailed)?;
+        if !same_ollama_provider(&verified.evidence, &current) {
+            return Err(EmbeddingIdentityError::ProviderChanged);
+        }
+        Ok(verified.identity)
+    }
+
+    fn model_name(&self) -> String {
+        self.model.clone()
     }
 }
 
@@ -277,47 +397,26 @@ impl Clone for OllamaBackend {
             url: self.url.clone(),
             model: self.model.clone(),
             dimension: OnceLock::new(),
+            verified_document: OnceLock::new(),
         }
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_ollama_backend_new() {
-        let backend = OllamaBackend::new("http://localhost:11434", "nomic-embed-text");
-        assert!(backend.is_ok());
-        let b = backend.unwrap();
-        assert_eq!(b.model_name(), "nomic-embed-text");
+fn exact_ollama_tag<'a>(configured: &str, models: &'a [OllamaTagModel]) -> Option<&'a OllamaTagModel> {
+    if !configured.contains(':') {
+        return None;
     }
-
-    #[test]
-    fn test_ollama_backend_url_preserved() {
-        let backend = OllamaBackend::new("http://localhost:11434", "model").unwrap();
-        assert_eq!(backend.url, "http://localhost:11434");
-    }
-
-    #[test]
-    fn test_ollama_backend_clone() {
-        let backend = OllamaBackend::new("http://localhost:11434", "model").unwrap();
-        let cloned = backend.clone();
-        assert_eq!(cloned.model_name(), backend.model_name());
-    }
-
-    #[test]
-    fn test_ollama_embed_unreachable() {
-        let backend = OllamaBackend::new("http://127.0.0.1:1", "model").unwrap();
-        let result = backend.embed("test");
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_ollama_dimension_default() {
-        let backend = OllamaBackend::new("http://127.0.0.1:1", "model").unwrap();
-        // dimension() calls probe which may fail on unreachable server, returns 0 or cached
-        let _dim = backend.dimension();
-        // dimension() returns usize (always >= 0), no assert needed
-    }
+    let mut matches = models.iter().filter(|model| model.name == configured);
+    let selected = matches.next()?;
+    matches.next().is_none().then_some(selected)
 }
+
+fn same_ollama_provider(expected: &OllamaIdentityEvidence, actual: &OllamaIdentityEvidence) -> bool {
+    expected.model_tag == actual.model_tag
+        && expected.model_digest == actual.model_digest
+        && expected.server_version == actual.server_version
+}
+
+#[cfg(test)]
+#[path = "ollama/tests.rs"]
+mod tests;

@@ -25,6 +25,18 @@ Status: stable | Fan-in: 5 | Fan-out: 0
 - Fix CID computation → modify `src/cas/object.rs` AIObject::compute_cid
 - Change storage layout → modify `src/cas/storage.rs` shard_dir/object_path
 - Add metadata field → modify `src/cas/object.rs` AIObjectMeta + all callers
+- Change offline migration lock/copy/exchange → modify `offline_migration.rs`; binaries must not touch host files directly
+
+## P3-A vault/storage core boundary
+
+ADR-0005 requires one `PersonalVaultStorage` to own the existing parent-level exclusive lock for the
+runtime lifetime, then issue fixed handles for `memory-ledger`, the single
+`projection-store/{manifest,artifacts}` lifecycle, and object CAS. Opening another
+`ImmutableLedgerStorage` for the same vault is not an allowed projection design. The sealed projection
+core uses staging + whole-parent `NOREPLACE`/`RENAME_EXCHANGE`, a two-phase reset marker, and bounded
+NOFOLLOW/NO_XDEV quarantine recovery; it never exposes a direct live-create writer or recursively deletes
+an untrusted exchanged tree. Artifact bytes must be owner-only, durable and hash-verified before the
+projection manifest root pointer can publish Ready; unsupported atomic exchange remains fail closed.
 
 ## Public API
 
@@ -35,6 +47,7 @@ Status: stable | Fan-in: 5 | Fan-out: 0
 | `ContentType` | `object.rs` | Content classification enum (Text/Image/Audio/Video/etc.) |
 | `CASStorage` | `storage.rs` | Disk-backed content-addressed store |
 | `CASError` | `storage.rs` | Typed errors (NotFound, IntegrityFailed, Io, Serialization) |
+| `OfflineMigrationVault` | `offline_migration.rs` | Feature-gated lock, exact reads, bounded copy, seal verification, exchange and rollback backup |
 
 ## Files
 
@@ -42,6 +55,8 @@ Status: stable | Fan-in: 5 | Fan-out: 0
 |------|-------|---------|
 | `object.rs` | ~213 | AIObject, AIObjectMeta, ContentType definitions |
 | `storage.rs` | ~254 | CASStorage engine: put/get/delete/list with sharding |
+| `ledger_store.rs` | Generic immutable object/root-slot storage used by canonical memory |
+| `offline_migration.rs` | CAS-owned offline migration filesystem boundary |
 | `mod.rs` | ~18 | Re-exports |
 
 ## Dependencies (Fan-out: 0)
@@ -61,3 +76,4 @@ None — CAS is the lowest layer, depends only on std + external crates (sha2, s
 - Unit: `src/cas/object.rs` mod tests, `src/cas/storage.rs` mod tests
 - Integration: `tests/kernel_test.rs` (exercises CAS through kernel)
 - Critical: `test_put_and_get`, `test_deduplication`, `test_cid_is_content_hash`
+- Migration failure injection: `src/cas/offline_migration.rs` inline tests

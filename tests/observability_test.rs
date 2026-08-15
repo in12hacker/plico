@@ -6,9 +6,9 @@
 //! - Metrics counter increment
 //! - Metrics latency histogram
 
-use std::sync::Arc;
+use plico::kernel::ops::observability::{CorrelationId, KernelMetrics, LatencyHistogram, OpType, OperationTimer};
 use plico::kernel::AIKernel;
-use plico::kernel::ops::observability::{CorrelationId, KernelMetrics, OpType, OperationTimer, LatencyHistogram};
+use std::sync::Arc;
 use std::time::Duration;
 
 fn make_kernel() -> (Arc<AIKernel>, tempfile::TempDir) {
@@ -18,7 +18,6 @@ fn make_kernel() -> (Arc<AIKernel>, tempfile::TempDir) {
     let kernel = AIKernel::new(dir.path().to_path_buf()).expect("kernel init");
     (kernel, dir)
 }
-
 
 #[test]
 fn test_correlation_id_generation() {
@@ -100,7 +99,7 @@ fn test_metrics_latency_histogram() {
     let hist = LatencyHistogram::new();
 
     // Record various latencies
-    hist.record(500);   // 500us
+    hist.record(500); // 500us
     hist.record(1_000); // 1ms
     hist.record(5_000); // 5ms
     hist.record(50_000); // 50ms
@@ -146,14 +145,12 @@ fn test_kernel_metrics_integration() {
             vec!["test".to_string()],
             "TestAgent",
             None,
-            plico::cas::ObjectScope::default()
+            plico::cas::ObjectScope::default(),
         )
         .expect("create failed");
 
     // Read it back
-    let _ = kernel
-        .get_object(&cid, "TestAgent", "default")
-        .expect("get failed");
+    let _ = kernel.get_object(&cid, "TestAgent", "default").expect("get failed");
 
     // Check metrics were recorded
     let snap = metrics.get_metrics();
@@ -178,7 +175,7 @@ fn test_kernel_metrics_multiple_operations() {
             vec![format!("tag{}", i)],
             "TestAgent",
             None,
-            plico::cas::ObjectScope::default()
+            plico::cas::ObjectScope::default(),
         );
     }
 
@@ -220,11 +217,11 @@ fn test_latency_histogram_buckets() {
     let hist = LatencyHistogram::new();
 
     // Record at different bucket boundaries
-    hist.record(50);      // < 100us bucket
-    hist.record(100);    // 100us bucket
-    hist.record(500);    // 500us bucket
-    hist.record(1_000);  // 1ms bucket
-    hist.record(5_000);  // 5ms bucket
+    hist.record(50); // < 100us bucket
+    hist.record(100); // 100us bucket
+    hist.record(500); // 500us bucket
+    hist.record(1_000); // 1ms bucket
+    hist.record(5_000); // 5ms bucket
     hist.record(10_000); // 10ms bucket
     hist.record(50_000); // 50ms bucket
     hist.record(100_000); // 100ms bucket

@@ -21,9 +21,8 @@ All handlers are `pub(in crate::kernel)` — called only from `kernel/mod.rs` di
 | `tools` | `tools.rs` | ListTools, CallTool, RegisterTool |
 | `messaging` | `messaging.rs` | SendMessage, ListMessages, Broadcast |
 | `permission` | `permission.rs` | GrantPermission, RevokePermission, CheckPermission |
-| `tenant` | `tenant.rs` | CreateTenant, SwitchTenant, ListTenants |
 | `model` | `model.rs` | HotSwapModel, ListModels |
-| `storage` | `storage.rs` | StorageStats, ColdEvict |
+| `storage` | `storage.rs` | ObjectUsage, StorageStats |
 | `prompt` | `prompt.rs` | RegisterPrompt, ListPrompts |
 | `import` | `import.rs` | ImportFile, ImportDirectory |
 | `core_ops` | `core_ops.rs` | BatchCreate, BatchDelete, CompositeOps |
@@ -55,7 +54,7 @@ All handlers are `pub(in crate::kernel)` — called only from `kernel/mod.rs` di
 |--------|------|
 | Add new handler file | Low — register in mod.rs, add dispatch arm |
 | Change handler signature | Medium — affects kernel dispatch |
-| Change ApiResponse shape | High — affects all consumers (CLI, MCP, SSE) |
+| Change ApiResponse shape | High — affects all consumers (CLI, MCP) |
 
 ## Task Routing
 
@@ -70,9 +69,8 @@ All handlers are `pub(in crate::kernel)` — called only from `kernel/mod.rs` di
 | Fix tool registration/call | `tools.rs` |
 | Fix inter-agent messaging | `messaging.rs` |
 | Fix permission checks | `permission.rs` |
-| Fix tenant isolation | `tenant.rs` |
 | Fix model hot-swap | `model.rs` |
-| Fix storage stats/eviction | `storage.rs` |
+| Fix storage stats | `storage.rs` |
 | Fix file import | `import.rs` |
 | Fix batch/composite ops | `core_ops.rs` |
 

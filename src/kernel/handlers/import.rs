@@ -5,7 +5,14 @@ use crate::fs::chunking::ChunkingMode;
 
 impl crate::kernel::AIKernel {
     pub(crate) fn handle_import(&self, req: ApiRequest) -> ApiResponse {
-        let ApiRequest::ImportFiles { paths, agent_id, tags, chunking, tenant_id } = req else {
+        let ApiRequest::ImportFiles {
+            paths,
+            agent_id,
+            tags,
+            chunking,
+            tenant_id,
+        } = req
+        else {
             return ApiResponse::error("expected ImportFiles request");
         };
 
@@ -47,9 +54,7 @@ impl crate::kernel::AIKernel {
                 mode
             };
 
-            let filename = path.file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("unknown");
+            let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("unknown");
 
             let mut file_tags = tags.clone();
             file_tags.push(format!("source:{}", filename));
@@ -58,7 +63,7 @@ impl crate::kernel::AIKernel {
                 file_tags.push(format!("type:{ext}"));
             }
 
-            let create_resp = self.handle_api_request(ApiRequest::Create {
+            let create_resp = self.handle_internal_api_request(ApiRequest::Create {
                 api_version: None,
                 content: content.clone(),
                 content_encoding: Default::default(),
@@ -81,7 +86,7 @@ impl crate::kernel::AIKernel {
                         "is_chunk:true".to_string(),
                         format!("source:{filename}"),
                     ];
-                    let _ = self.handle_api_request(ApiRequest::Create {
+                    let _ = self.handle_internal_api_request(ApiRequest::Create {
                         api_version: None,
                         content: chunk.text.clone(),
                         content_encoding: Default::default(),
@@ -118,8 +123,8 @@ impl crate::kernel::AIKernel {
 
 #[cfg(test)]
 mod tests {
-    use crate::kernel::tests::make_kernel;
     use crate::api::semantic::ApiRequest;
+    use crate::kernel::tests::make_kernel;
 
     #[test]
     fn test_import_single_file() {

@@ -50,32 +50,46 @@ impl InMemoryBackend {
 
     /// Export all index entries for persistence.
     pub fn snapshot(&self) -> Vec<SearchIndexEntry> {
-        self.entries.read().unwrap().values().map(|e| SearchIndexEntry {
-            cid: e.cid.clone(),
-            embedding: e.embedding.clone(),
-            tags: e.meta.tags.clone(),
-            snippet: e.meta.snippet.clone(),
-            content_type: e.meta.content_type.clone(),
-            created_at: e.meta.created_at,
-        }).collect()
+        self.entries
+            .read()
+            .unwrap()
+            .values()
+            .map(|e| SearchIndexEntry {
+                cid: e.cid.clone(),
+                embedding: e.embedding.clone(),
+                tags: e.meta.tags.clone(),
+                snippet: e.meta.snippet.clone(),
+                content_type: e.meta.content_type.clone(),
+                created_at: e.meta.created_at,
+                owner_role: e.meta.owner_role.clone(),
+                namespace: e.meta.namespace.clone(),
+                scope: e.meta.scope.clone(),
+            })
+            .collect()
     }
 
     /// Bulk-load entries from a persisted snapshot (upsert semantics).
     pub fn restore(&self, entries: Vec<SearchIndexEntry>) {
         let mut store = self.entries.write().unwrap();
         for e in entries {
-            store.insert(e.cid.clone(), IndexEntry {
-                cid: e.cid.clone(),
-                embedding: e.embedding,
-                meta: SearchIndexMeta {
-                    cid: e.cid,
-                    tags: e.tags,
-                    snippet: e.snippet,
-                    content_type: e.content_type,
-                    created_at: e.created_at,
-                    memory_type: None,
+            store.insert(
+                e.cid.clone(),
+                IndexEntry {
+                    cid: e.cid.clone(),
+                    embedding: e.embedding,
+                    meta: SearchIndexMeta {
+                        cid: e.cid,
+                        tags: e.tags,
+                        snippet: e.snippet,
+                        content_type: e.content_type,
+                        created_at: e.created_at,
+                        owner_role: e.owner_role,
+                        namespace: e.namespace,
+                        scope: e.scope,
+                        memory_type: None,
+                    },
                 },
-            });
+            );
         }
     }
 }
@@ -99,11 +113,14 @@ impl SemanticSearch for InMemoryBackend {
             return;
         }
 
-        entries.insert(cid.to_string(), IndexEntry {
-            cid: cid.to_string(),
-            embedding: embedding.to_vec(),
-            meta,
-        });
+        entries.insert(
+            cid.to_string(),
+            IndexEntry {
+                cid: cid.to_string(),
+                embedding: embedding.to_vec(),
+                meta,
+            },
+        );
     }
 
     fn delete(&self, cid: &str) {
@@ -159,10 +176,8 @@ impl SemanticSearch for InMemoryBackend {
         }
         let path = dir.join("search_index.jsonl");
         let tmp = path.with_extension("jsonl.tmp");
-        std::fs::write(&tmp, lines.join("\n"))
-            .map_err(|e| format!("Failed to persist search index: {e}"))?;
-        std::fs::rename(&tmp, &path)
-            .map_err(|e| format!("Failed to rename search index: {e}"))?;
+        std::fs::write(&tmp, lines.join("\n")).map_err(|e| format!("Failed to persist search index: {e}"))?;
+        std::fs::rename(&tmp, &path).map_err(|e| format!("Failed to rename search index: {e}"))?;
         tracing::info!("Persisted {} search index entries", entries.len());
         Ok(())
     }
@@ -174,7 +189,8 @@ impl SemanticSearch for InMemoryBackend {
         }
         match std::fs::read_to_string(&path) {
             Ok(data) => {
-                let entries: Vec<SearchIndexEntry> = data.lines()
+                let entries: Vec<SearchIndexEntry> = data
+                    .lines()
                     .filter(|line| !line.trim().is_empty())
                     .filter_map(|line| serde_json::from_str(line).ok())
                     .collect();
@@ -226,6 +242,9 @@ mod tests {
                 snippet: "Rust AI systems".to_string(),
                 content_type: "text".to_string(),
                 created_at: 0,
+                owner_role: "owner".to_string(),
+                namespace: "default".to_string(),
+                scope: crate::cas::ObjectScope::Shared,
                 memory_type: None,
             },
         );
@@ -238,6 +257,9 @@ mod tests {
                 snippet: "Python web app".to_string(),
                 content_type: "text".to_string(),
                 created_at: 0,
+                owner_role: "owner".to_string(),
+                namespace: "default".to_string(),
+                scope: crate::cas::ObjectScope::Shared,
                 memory_type: None,
             },
         );
@@ -255,22 +277,36 @@ mod tests {
         let backend = InMemoryBackend::new();
         let dim = 4;
 
-        backend.upsert("cid1", &sample_embedding(dim, 1.0), SearchIndexMeta {
-            cid: "cid1".to_string(),
-            tags: vec!["rust".to_string()],
-            snippet: "".to_string(),
-            content_type: "text".to_string(),
-            created_at: 0,
-            memory_type: None,
-        });
-        backend.upsert("cid2", &sample_embedding(dim, 2.0), SearchIndexMeta {
-            cid: "cid2".to_string(),
-            tags: vec!["python".to_string()],
-            snippet: "".to_string(),
-            content_type: "text".to_string(),
-            created_at: 0,
-            memory_type: None,
-        });
+        backend.upsert(
+            "cid1",
+            &sample_embedding(dim, 1.0),
+            SearchIndexMeta {
+                cid: "cid1".to_string(),
+                tags: vec!["rust".to_string()],
+                snippet: "".to_string(),
+                content_type: "text".to_string(),
+                created_at: 0,
+                owner_role: "owner".to_string(),
+                namespace: "default".to_string(),
+                scope: crate::cas::ObjectScope::Shared,
+                memory_type: None,
+            },
+        );
+        backend.upsert(
+            "cid2",
+            &sample_embedding(dim, 2.0),
+            SearchIndexMeta {
+                cid: "cid2".to_string(),
+                tags: vec!["python".to_string()],
+                snippet: "".to_string(),
+                content_type: "text".to_string(),
+                created_at: 0,
+                owner_role: "owner".to_string(),
+                namespace: "default".to_string(),
+                scope: crate::cas::ObjectScope::Shared,
+                memory_type: None,
+            },
+        );
 
         let filter = SearchFilter {
             require_tags: vec!["rust".to_string()],
@@ -286,14 +322,21 @@ mod tests {
         let backend = InMemoryBackend::new();
         let dim = 4;
 
-        backend.upsert("cid1", &sample_embedding(dim, 1.0), SearchIndexMeta {
-            cid: "cid1".to_string(),
-            tags: vec![],
-            snippet: "".to_string(),
-            content_type: "text".to_string(),
-            created_at: 0,
-            memory_type: None,
-        });
+        backend.upsert(
+            "cid1",
+            &sample_embedding(dim, 1.0),
+            SearchIndexMeta {
+                cid: "cid1".to_string(),
+                tags: vec![],
+                snippet: "".to_string(),
+                content_type: "text".to_string(),
+                created_at: 0,
+                owner_role: "owner".to_string(),
+                namespace: "default".to_string(),
+                scope: crate::cas::ObjectScope::Shared,
+                memory_type: None,
+            },
+        );
 
         assert_eq!(backend.len(), 1);
         backend.delete("cid1");
@@ -304,22 +347,36 @@ mod tests {
     fn test_upsert_replaces_existing() {
         let backend = InMemoryBackend::new();
 
-        backend.upsert("cid1", &[1.0, 0.0, 0.0, 0.0], SearchIndexMeta {
-            cid: "cid1".to_string(),
-            tags: vec!["old".to_string()],
-            snippet: "old".to_string(),
-            content_type: "text".to_string(),
-            created_at: 0,
-            memory_type: None,
-        });
-        backend.upsert("cid1", &[0.0, 1.0, 0.0, 0.0], SearchIndexMeta {
-            cid: "cid1".to_string(),
-            tags: vec!["new".to_string()],
-            snippet: "new".to_string(),
-            content_type: "text".to_string(),
-            created_at: 0,
-            memory_type: None,
-        });
+        backend.upsert(
+            "cid1",
+            &[1.0, 0.0, 0.0, 0.0],
+            SearchIndexMeta {
+                cid: "cid1".to_string(),
+                tags: vec!["old".to_string()],
+                snippet: "old".to_string(),
+                content_type: "text".to_string(),
+                created_at: 0,
+                owner_role: "owner".to_string(),
+                namespace: "default".to_string(),
+                scope: crate::cas::ObjectScope::Shared,
+                memory_type: None,
+            },
+        );
+        backend.upsert(
+            "cid1",
+            &[0.0, 1.0, 0.0, 0.0],
+            SearchIndexMeta {
+                cid: "cid1".to_string(),
+                tags: vec!["new".to_string()],
+                snippet: "new".to_string(),
+                content_type: "text".to_string(),
+                created_at: 0,
+                owner_role: "owner".to_string(),
+                namespace: "default".to_string(),
+                scope: crate::cas::ObjectScope::Shared,
+                memory_type: None,
+            },
+        );
 
         assert_eq!(backend.len(), 1);
         let filter = SearchFilter::default();

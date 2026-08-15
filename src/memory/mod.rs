@@ -12,24 +12,23 @@
 //! # Design
 //!
 //! Memory is managed per-agent. Each AI agent has its own memory hierarchy.
-//! The memory manager handles tier promotion (L0→L1→L2) and retrieval.
+//! The memory manager keeps L0 runtime-only and commits durable tier changes as revisions.
 
-pub mod layered;
-pub mod persist;
-pub mod relevance;
-pub mod context_snapshot;
-pub mod forgetting;
-pub mod distillation;
 pub mod causal;
-pub mod topology;
-pub mod cross_agent;
 pub mod foresight;
-pub mod pressure;
-pub mod meta_memory;
-pub mod temporal_causal;
-pub mod contradiction;
-pub mod consolidation;
+pub mod layered;
+pub mod ledger;
+pub(crate) mod projection;
+pub mod relevance;
 
-pub use layered::{LayeredMemory, MemoryTier, MemoryType, MemoryEntry, MemoryContent, MemoryError, MemoryScope};
-pub use persist::{MemoryPersister, CASPersister, MemoryLoader, PersistError, PersistenceIndex, PersistedTier};
-
+pub use layered::{
+    CanonicalContentHash, DurableMemoryMutationError, LayeredMemory, MemoryContent, MemoryEntry, MemoryError, MemoryId,
+    MemoryRevisionId, MemoryScope, MemoryTier, MemoryType,
+};
+pub(crate) use ledger::{
+    CASCanonicalLedger, CanonicalLedger, CanonicalProjectionGuard, CanonicalProjectionSnapshot,
+    CanonicalProjectionSource,
+};
+pub use ledger::{
+    CanonicalRevision, CurrentView, ExpectedHead, LedgerCommit, LedgerError, LedgerRoot, PolicyMode, PolicyRecord,
+};

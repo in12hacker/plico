@@ -6,18 +6,25 @@ Status: active | Fan-in: 1 | Fan-out: 0
 
 ## Public API
 
-All ops are `impl AIKernel` extension blocks — no standalone exports. Key operation groups:
+Most legacy ops are `impl AIKernel` extension blocks. Projection orchestration uses sealed crate-local
+runtime/controller types owned only by `AIKernel`.
 
 | Group | File | Key Methods |
 |-------|------|-------------|
-| Storage | `fs.rs` | `search()`, `storage_stats()`, `cold_evict()` |
+| Storage | `fs.rs` | `search()`, object CRUD, `get_storage_stats()` |
 | Agent | `agent.rs` | `register_agent()`, `ensure_registered()`, `discover_agents()` |
 | Memory | `memory.rs` | `memory_recall()`, `memory_store()`, `promote_memory()` |
-| Session | `session.rs` | `start_session()`, `end_session()`, `compound_response()` |
+| Projection runtime | `projection_runtime.rs` | lifecycle, wake queue, worker health, owner maintenance |
+| Projection controller | `projection_controller/` | canonical guard, reconciliation, lease, artifact and Ready sequencing |
+| Readiness | `readiness.rs` | side-effect-free canonical/persister/worker/provider configuration state |
+| Session | `session.rs` | durable `start_session()`, `end_session()`, timeout cleanup, `compound_response()` |
 | Graph | `graph.rs` | `kg_add_node()`, `kg_traverse()`, `kg_impact()`, `causal_path()` |
-| Checkpoint | `checkpoint.rs` | `checkpoint_save()`, `checkpoint_restore()` |
+| Checkpoint | `checkpoint.rs` | internal checkpoint capture/store; live-memory restore is unsupported |
 | Observability | `observability.rs` | `metrics_snapshot()`, `health_indicators()` |
 | Prefetch | `prefetch.rs` | `prefetch_for_intent()`, `feedback_score()` |
+
+The durable `memory_embedding` manifest is the sole retry/lease/status truth; the memory queue is only
+a wake-up hint. There is no inline embedding state, runtime-only retry truth, v1 reader or dual write.
 
 ## Dependencies (Fan-out: 0)
 
@@ -25,19 +32,20 @@ All ops depend on `AIKernel` fields (self-referencing). No external module depen
 
 ## Dependents (Fan-in: 1)
 
-- `src/kernel/mod.rs` → all ops are `impl AIKernel` extension blocks, called from `handle_api_request` dispatch
+- `src/kernel/mod.rs` → owns operation state and the sole projection runtime; public operations dispatch through `public_service.rs`
 
 ## Task Routing
 
 | Task | File |
 |------|------|
-| Fix search / CRUD / storage stats / cold eviction | `fs.rs` |
+| Fix search / CRUD / storage stats | `fs.rs` |
 | Agent register / ensure_registered / suspend / resume | `agent.rs` |
 | Memory recall / store / promote / compress | `memory.rs` |
+| Projection lifecycle / owner maintenance | `projection_runtime.rs` |
+| Projection reconcile / worker sequencing | `projection_controller/` |
 | Session start / end / orchestrate / compound response | `session.rs` |
 | Delta change tracking / watch CIDs / watch tags | `delta.rs` |
 | Intent prefetch / feedback / async assembly | `prefetch.rs` |
-| Hybrid Graph-RAG retrieval | `hybrid.rs` |
 | KG node/edge CRUD / traverse / impact / causal_path | `graph.rs` |
 | Event bus / event log operations | `events.rs` |
 | Dispatch loop / result consumer | `dispatch.rs` |
@@ -49,24 +57,21 @@ All ops depend on `AIKernel` fields (self-referencing). No external module depen
 | Multi-layer caching (intent/search/embedding) | `cache.rs` |
 | Batch multi-object CRUD | `batch.rs` |
 | Agent state checkpoint / restore | `checkpoint.rs` |
-| Tenant isolation | `tenant.rs` |
 | Task delegation between agents | `task.rs` |
 | Metrics / telemetry / performance counters | `observability.rs` |
 | Memory tier TTL / promotion maintenance | `tier_maintenance.rs` |
-| Distributed operation stubs | `distributed.rs` |
 
 ## Files
 
 | File | Lines | Purpose |
 |------|-------|---------|
 | `mod.rs` | ~28 | Re-exports |
-| `fs.rs` | ~412 | Search, CRUD, storage stats, cold eviction |
+| `fs.rs` | Search, CRUD, storage stats |
 | `agent.rs` | ~489 | Agent lifecycle (register, ensure_registered, discover) |
-| `memory.rs` | ~617 | Memory tier operations (recall, store, promote, shared) |
-| `session.rs` | ~752 | Session lifecycle + compound response orchestration |
+| `memory.rs` | Canonical memory writes, lexical recall, and procedural memory operations |
+| `session.rs` | Session store, durable lifecycle primitives, profile helpers |
 | `delta.rs` | ~255 | Delta tracking (changes since seq) |
 | `prefetch.rs` | ⚠ ~1842 | Intent prefetcher + feedback + async assembly — needs split |
-| `hybrid.rs` | ~355 | Graph-RAG hybrid retrieval (vector + KG fusion) |
 | `graph.rs` | ~784 | KG node/edge CRUD, traverse, impact, causal_path |
 | `events.rs` | ~69 | Event bus + event log operations |
 | `dispatch.rs` | ~95 | Dispatch loop + result consumer |
@@ -78,24 +83,24 @@ All ops depend on `AIKernel` fields (self-referencing). No external module depen
 | `cache.rs` | ~458 | Multi-layer caching (intent, search, embedding) |
 | `batch.rs` | ~238 | Batch operations (multi-object CRUD) |
 | `checkpoint.rs` | ~475 | Agent state checkpoint / restore |
-| `tenant.rs` | ~324 | Tenant isolation operations |
 | `task.rs` | ~504 | Task delegation between agents |
 | `observability.rs` | ~753 | Metrics, telemetry, performance counters |
 | `tier_maintenance.rs` | ~222 | Memory tier TTL / promotion |
-| `distributed.rs` | ~439 | Distributed operation stubs |
+| `projection_runtime.rs` | Projection lifecycle, bounded wakes, worker shutdown and readiness |
+| `projection_controller/` | Typed reconcile/claim/embed/complete pipeline over the manifest core |
+| `readiness.rs` | <220 | Read-only runtime readiness and structured component-state logging without provider or storage probes |
 
 ## Modification Risk
 
-- All files are `impl AIKernel` blocks — changes affect kernel's public surface
-- `session.rs` changes affect compound session_start response (MCP + CLI)
+- Operation extensions and the sealed projection runtime are owned by `AIKernel`; changes can affect the public service
+- `session.rs` changes affect durable session state and EventBus watermark responses (MCP + CLI)
 - `prefetch.rs` changes affect all intent-based context assembly
-- `hybrid.rs` changes affect MCP + CLI hybrid retrieval
 
 ## Interface Contract
 
-- All ops methods are `pub` or `pub(crate)` on `AIKernel`
-- Each file adds methods to `AIKernel` via `impl AIKernel { ... }` blocks
-- No standalone types — ops use types from `api/semantic.rs` and subsystem modules
+- Legacy operation methods are on `AIKernel`; projection controller/store writers are not public capabilities.
+- Public dispatch uses `api/public` typed commands. Internal semantic commands do not enter transports.
+- Projection lock order is runtime lifecycle → canonical proof → projection store.
 
 ## Tests
 

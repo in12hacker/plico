@@ -9,4 +9,4 @@ pub mod client;
 #[cfg(test)]
 mod tests;
 
-pub use client::{McpClient, McpToolDef, McpError};
+pub use client::{McpClient, McpError, McpToolDef};

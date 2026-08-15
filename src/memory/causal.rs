@@ -7,8 +7,8 @@
 //! The `CausalGraph` provides efficient traversal: ancestors, descendants,
 //! supersession chains, and root-cause analysis.
 
-use std::collections::{HashMap, HashSet, VecDeque};
 use crate::memory::layered::MemoryEntry;
+use std::collections::{HashMap, HashSet, VecDeque};
 
 /// Relationship type between two memories.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -119,14 +119,11 @@ impl CausalGraph {
         visited.insert(current.clone());
 
         loop {
-            let next = self
-                .children
-                .get(&current)
-                .and_then(|kids| {
-                    kids.iter()
-                        .find(|(_, edge)| *edge == CausalEdge::Supersedes)
-                        .map(|(id, _)| id.clone())
-                });
+            let next = self.children.get(&current).and_then(|kids| {
+                kids.iter()
+                    .find(|(_, edge)| *edge == CausalEdge::Supersedes)
+                    .map(|(id, _)| id.clone())
+            });
             match next {
                 Some(id) if visited.insert(id.clone()) => current = id,
                 _ => break,
@@ -156,18 +153,12 @@ impl CausalGraph {
 
     /// Return the direct children of an entry with their edge types.
     pub fn direct_children(&self, entry_id: &str) -> Vec<(String, CausalEdge)> {
-        self.children
-            .get(entry_id)
-            .cloned()
-            .unwrap_or_default()
+        self.children.get(entry_id).cloned().unwrap_or_default()
     }
 
     /// Return the direct parents of an entry with their edge types.
     pub fn direct_parents(&self, entry_id: &str) -> Vec<(String, CausalEdge)> {
-        self.parents
-            .get(entry_id)
-            .cloned()
-            .unwrap_or_default()
+        self.parents.get(entry_id).cloned().unwrap_or_default()
     }
 
     /// BFS shortest path distance between two entries (undirected, all edge types).
@@ -185,7 +176,11 @@ impl CausalGraph {
         visited.insert(from.to_string());
 
         while let Some((current, dist)) = queue.pop_front() {
-            let neighbors = self.children.get(&current).into_iter().flatten()
+            let neighbors = self
+                .children
+                .get(&current)
+                .into_iter()
+                .flatten()
                 .chain(self.parents.get(&current).into_iter().flatten());
             for (neighbor_id, _) in neighbors {
                 if neighbor_id == to {
@@ -239,15 +234,9 @@ impl CausalGraph {
 /// Build a causal chain prompt for LLM context injection.
 /// Given a target memory and its ancestor chain, produces a string
 /// that explains the causal reasoning path.
-pub fn causal_context_prompt(
-    target: &MemoryEntry,
-    ancestors: &[MemoryEntry],
-) -> String {
+pub fn causal_context_prompt(target: &MemoryEntry, ancestors: &[MemoryEntry]) -> String {
     if ancestors.is_empty() {
-        return format!(
-            "Memory: {}",
-            target.content.display()
-        );
+        return format!("Memory: {}", target.content.display());
     }
 
     let mut lines = Vec::with_capacity(ancestors.len() + 2);
@@ -255,11 +244,7 @@ pub fn causal_context_prompt(
     for (i, ancestor) in ancestors.iter().enumerate() {
         lines.push(format!("  {}. [{}] {}", i + 1, ancestor.id, ancestor.content.display()));
     }
-    lines.push(format!(
-        "  → Current [{}]: {}",
-        target.id,
-        target.content.display()
-    ));
+    lines.push(format!("  → Current [{}]: {}", target.id, target.content.display()));
     lines.join("\n")
 }
 

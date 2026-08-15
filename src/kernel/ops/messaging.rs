@@ -1,17 +1,12 @@
 //! Agent-to-agent messaging operations.
 
-use crate::api::permission::{PermissionContext, PermissionAction};
-use crate::scheduler::{AgentId, IntentPriority};
+use crate::api::permission::{PermissionAction, PermissionContext};
 use crate::kernel::event_bus::KernelEvent;
+use crate::scheduler::{AgentId, IntentPriority};
 
 impl crate::kernel::AIKernel {
     /// Send a message from one agent to another.
-    pub fn send_message(
-        &self,
-        from: &str,
-        to: &str,
-        payload: serde_json::Value,
-    ) -> std::io::Result<String> {
+    pub fn send_message(&self, from: &str, to: &str, payload: serde_json::Value) -> std::io::Result<String> {
         let ctx = PermissionContext::new(from.to_string(), crate::DEFAULT_TENANT.to_string());
         self.permissions.check(&ctx, PermissionAction::SendMessage)?;
         let msg_id = self.message_bus.send(from, to, payload);
@@ -50,18 +45,15 @@ impl crate::kernel::AIKernel {
         priority: IntentPriority,
     ) -> Result<(String, String), String> {
         let to_aid = AgentId(to.to_string());
-        let target = self.scheduler.get(&to_aid)
+        let target = self
+            .scheduler
+            .get(&to_aid)
             .ok_or_else(|| format!("Target agent not found: {}", to))?;
         if target.state().is_terminal() {
             return Err(format!("Target agent {} is in terminal state {:?}", to, target.state()));
         }
 
-        let intent_id = self.submit_intent(
-            priority,
-            description.clone(),
-            action.clone(),
-            Some(to.to_string()),
-        )?;
+        let intent_id = self.submit_intent(priority, description.clone(), action.clone(), Some(to.to_string()))?;
 
         let payload = serde_json::json!({
             "type": "delegation",
@@ -69,8 +61,7 @@ impl crate::kernel::AIKernel {
             "intent_id": intent_id,
             "description": description,
         });
-        let msg_id = self.send_message("kernel", to, payload)
-            .map_err(|e| e.to_string())?;
+        let msg_id = self.send_message("kernel", to, payload).map_err(|e| e.to_string())?;
 
         self.event_bus.emit(KernelEvent::IntentSubmitted {
             intent_id: intent_id.clone(),
@@ -84,8 +75,8 @@ impl crate::kernel::AIKernel {
 
 #[cfg(test)]
 mod tests {
-    use crate::kernel::tests::make_kernel;
     use crate::api::permission::PermissionAction;
+    use crate::kernel::tests::make_kernel;
 
     #[test]
     fn test_send_message() {
@@ -93,7 +84,9 @@ mod tests {
         kernel.register_agent("sender".to_string()).unwrap();
         kernel.register_agent("receiver".to_string()).unwrap();
         kernel.permission_grant("sender", PermissionAction::SendMessage, None, None);
-        let msg_id = kernel.send_message("sender", "receiver", serde_json::json!({"text": "hello"})).unwrap();
+        let msg_id = kernel
+            .send_message("sender", "receiver", serde_json::json!({"text": "hello"}))
+            .unwrap();
         assert!(!msg_id.is_empty());
     }
 
@@ -102,7 +95,9 @@ mod tests {
         let (kernel, _tmp) = make_kernel();
         kernel.register_agent("reader".to_string()).unwrap();
         kernel.permission_grant("kernel", PermissionAction::SendMessage, None, None);
-        kernel.send_message("kernel", "reader", serde_json::json!({"text": "msg1"})).unwrap();
+        kernel
+            .send_message("kernel", "reader", serde_json::json!({"text": "msg1"}))
+            .unwrap();
         let msgs = kernel.read_messages("reader", false);
         assert!(!msgs.is_empty());
     }
@@ -112,7 +107,9 @@ mod tests {
         let (kernel, _tmp) = make_kernel();
         kernel.register_agent("r2".to_string()).unwrap();
         kernel.permission_grant("kernel", PermissionAction::SendMessage, None, None);
-        kernel.send_message("kernel", "r2", serde_json::json!({"text": "msg1"})).unwrap();
+        kernel
+            .send_message("kernel", "r2", serde_json::json!({"text": "msg1"}))
+            .unwrap();
         let unread = kernel.read_messages("r2", true);
         assert!(!unread.is_empty());
     }

@@ -5,9 +5,8 @@
 //!
 //! Design: Section 5 "崩溃恢复（MVP 整体验收）" in docs/design-node4-collaborative-ecosystem.md
 
-use plico::kernel::AIKernel;
 use plico::api::semantic::TaskStatus;
-use plico::memory::MemoryScope;
+use plico::kernel::AIKernel;
 
 /// Security articles for testing.
 fn security_articles() -> Vec<(&'static str, &'static str, Vec<String>)> {
@@ -47,13 +46,15 @@ fn test_crash_recovery_cas_data_persists() {
 
     let mut cids = Vec::new();
     for (title, content, tags) in security_articles() {
-        let cid = kernel1.semantic_create(
-            content.as_bytes().to_vec(),
-            tags,
-            &agent_id,
-            Some(title.to_string()),
-            plico::cas::ObjectScope::default()
-        ).expect("semantic_create should succeed");
+        let cid = kernel1
+            .semantic_create(
+                content.as_bytes().to_vec(),
+                tags,
+                &agent_id,
+                Some(title.to_string()),
+                plico::cas::ObjectScope::default(),
+            )
+            .expect("semantic_create should succeed");
         cids.push(cid);
     }
     assert_eq!(cids.len(), 10, "Should have 10 CIDs");
@@ -96,33 +97,55 @@ fn test_crash_recovery_kg_data_persists() {
     kernel1.permission_grant(&agent_id, PermissionAction::Write, None, None);
 
     // Create KG structure
-    let sql_injection = kernel1.kg_add_node(
-        "SQL Injection",
-        plico::fs::KGNodeType::Entity,
-        serde_json::json!({"severity": "high"}),
-        &agent_id,
-        "default",
-    ).expect("kg_add_node should succeed");
+    let sql_injection = kernel1
+        .kg_add_node(
+            "SQL Injection",
+            plico::fs::KGNodeType::Entity,
+            serde_json::json!({"severity": "high"}),
+            &agent_id,
+            "default",
+        )
+        .expect("kg_add_node should succeed");
 
-    let waf = kernel1.kg_add_node(
-        "WAF",
-        plico::fs::KGNodeType::Entity,
-        serde_json::json!({"type": "defense"}),
-        &agent_id,
-        "default",
-    ).expect("kg_add_node should succeed");
+    let waf = kernel1
+        .kg_add_node(
+            "WAF",
+            plico::fs::KGNodeType::Entity,
+            serde_json::json!({"type": "defense"}),
+            &agent_id,
+            "default",
+        )
+        .expect("kg_add_node should succeed");
 
-    let cve = kernel1.kg_add_node(
-        "CVE-2024-21762",
-        plico::fs::KGNodeType::Fact,
-        serde_json::json!({"severity": "critical"}),
-        &agent_id,
-        "default",
-    ).expect("kg_add_node should succeed");
+    let cve = kernel1
+        .kg_add_node(
+            "CVE-2024-21762",
+            plico::fs::KGNodeType::Fact,
+            serde_json::json!({"severity": "critical"}),
+            &agent_id,
+            "default",
+        )
+        .expect("kg_add_node should succeed");
 
-    kernel1.kg_add_edge(&sql_injection, &waf, plico::fs::KGEdgeType::HasResolution, Some(0.9), &agent_id, "default")
+    kernel1
+        .kg_add_edge(
+            &sql_injection,
+            &waf,
+            plico::fs::KGEdgeType::HasResolution,
+            Some(0.9),
+            &agent_id,
+            "default",
+        )
         .expect("kg_add_edge should succeed");
-    kernel1.kg_add_edge(&cve, &sql_injection, plico::fs::KGEdgeType::Causes, Some(0.95), &agent_id, "default")
+    kernel1
+        .kg_add_edge(
+            &cve,
+            &sql_injection,
+            plico::fs::KGEdgeType::Causes,
+            Some(0.95),
+            &agent_id,
+            "default",
+        )
         .expect("kg_add_edge should succeed");
 
     let node_ids = vec![sql_injection.clone(), waf.clone(), cve.clone()];
@@ -137,7 +160,10 @@ fn test_crash_recovery_kg_data_persists() {
     }
 
     let neighbors = kernel2.graph_explore(&sql_injection, None, 1);
-    assert!(!neighbors.is_empty(), "SQL Injection should have neighbors after restart");
+    assert!(
+        !neighbors.is_empty(),
+        "SQL Injection should have neighbors after restart"
+    );
 
     tracing::info!("test_crash_recovery_kg_data_persists PASSED");
 }
@@ -162,21 +188,24 @@ fn test_crash_recovery_memories_persist() {
     kernel1.permission_grant(&agent_id, PermissionAction::Write, None, None);
 
     // Store memories
-    kernel1.remember_long_term_scoped(
-        &agent_id,
-        "default",
-        "Important finding about SQL injection".to_string(),
-        vec!["security".into(), "finding".into()],
-        85,
-        MemoryScope::Shared,
-    ).expect("remember_long_term should succeed");
+    kernel1
+        .remember_long_term(
+            &agent_id,
+            "default",
+            "Important finding about SQL injection".to_string(),
+            vec!["security".into(), "finding".into()],
+            85,
+        )
+        .expect("remember_long_term should succeed");
 
-    kernel1.remember_working(
-        &agent_id,
-        "default",
-        "User is researching security topics".to_string(),
-        vec!["context".into()],
-    ).expect("remember_working should succeed");
+    kernel1
+        .remember_working(
+            &agent_id,
+            "default",
+            "User is researching security topics".to_string(),
+            vec!["context".into()],
+        )
+        .expect("remember_working should succeed");
 
     drop(kernel1);
 
@@ -187,7 +216,10 @@ fn test_crash_recovery_memories_persist() {
     let memories = kernel2.recall(&agent_id, "default");
     assert!(!memories.is_empty(), "Memories should be recoverable after restart");
 
-    tracing::info!("test_crash_recovery_memories_persist PASSED: {} memories recovered", memories.len());
+    tracing::info!(
+        "test_crash_recovery_memories_persist PASSED: {} memories recovered",
+        memories.len()
+    );
 }
 
 // ─── Crash Recovery: Task State (Within Session) ─────────────────────────────────
@@ -214,6 +246,27 @@ fn test_crash_recovery_task_operations_within_session() {
     kernel1.permission_grant(&worker, PermissionAction::Read, None, None);
     kernel1.permission_grant(&worker, PermissionAction::Write, None, None);
 
+    let denied = kernel1.handle_api_request(plico::api::semantic::ApiRequest::DelegateTask {
+        task_id: "session-task-denied".to_string(),
+        from_agent: coordinator.clone(),
+        to_agent: worker.clone(),
+        intent: "Must not be stored without permission".to_string(),
+        context_cids: vec![],
+        deadline_ms: None,
+    });
+    assert!(!denied.ok, "DelegateTask must fail closed without SendMessage");
+    assert!(
+        denied.error.as_deref().unwrap_or_default().contains("SendMessage"),
+        "denial should identify the missing capability: {:?}",
+        denied.error
+    );
+    let missing = kernel1.handle_api_request(plico::api::semantic::ApiRequest::QueryTaskStatus {
+        task_id: "session-task-denied".to_string(),
+    });
+    assert!(!missing.ok, "denied delegation must not create task state");
+
+    kernel1.permission_grant(&coordinator, PermissionAction::SendMessage, None, None);
+
     // Create and start task
     let resp = kernel1.handle_api_request(plico::api::semantic::ApiRequest::DelegateTask {
         task_id: "session-task".to_string(),
@@ -221,10 +274,13 @@ fn test_crash_recovery_task_operations_within_session() {
         to_agent: worker.clone(),
         intent: "Task within session".to_string(),
         context_cids: vec![],
-        deadline_ms: Some(std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as u64 + 60000),
+        deadline_ms: Some(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis() as u64
+                + 60000,
+        ),
     });
     assert!(resp.ok, "DelegateTask should succeed");
 
@@ -267,42 +323,57 @@ fn test_full_ingest_kg_query_sequence() {
     // Phase 1: Ingest 10 articles
     let mut cids = Vec::new();
     for (title, content, tags) in security_articles() {
-        let cid = kernel.semantic_create(
-            content.as_bytes().to_vec(),
-            tags,
-            &agent_id,
-            Some(title.to_string()),
-            plico::cas::ObjectScope::default()
-        ).expect("semantic_create should succeed");
+        let cid = kernel
+            .semantic_create(
+                content.as_bytes().to_vec(),
+                tags,
+                &agent_id,
+                Some(title.to_string()),
+                plico::cas::ObjectScope::default(),
+            )
+            .expect("semantic_create should succeed");
         cids.push(cid);
     }
     assert_eq!(cids.len(), 10, "Should have 10 articles");
     tracing::info!("Phase 1: Ingested {} articles", cids.len());
 
     // Phase 2: Build KG
-    let sql_node = kernel.kg_add_node(
-        "SQL Injection",
-        plico::fs::KGNodeType::Entity,
-        serde_json::json!({}),
-        &agent_id,
-        "default",
-    ).expect("kg_add_node should succeed");
+    let sql_node = kernel
+        .kg_add_node(
+            "SQL Injection",
+            plico::fs::KGNodeType::Entity,
+            serde_json::json!({}),
+            &agent_id,
+            "default",
+        )
+        .expect("kg_add_node should succeed");
 
-    let cve_node = kernel.kg_add_node(
-        "CVE-2024-21762",
-        plico::fs::KGNodeType::Fact,
-        serde_json::json!({}),
-        &agent_id,
-        "default",
-    ).expect("kg_add_node should succeed");
+    let cve_node = kernel
+        .kg_add_node(
+            "CVE-2024-21762",
+            plico::fs::KGNodeType::Fact,
+            serde_json::json!({}),
+            &agent_id,
+            "default",
+        )
+        .expect("kg_add_node should succeed");
 
-    kernel.kg_add_edge(&cve_node, &sql_node, plico::fs::KGEdgeType::Causes, Some(0.9), &agent_id, "default")
+    kernel
+        .kg_add_edge(
+            &cve_node,
+            &sql_node,
+            plico::fs::KGEdgeType::Causes,
+            Some(0.9),
+            &agent_id,
+            "default",
+        )
         .expect("kg_add_edge should succeed");
 
     tracing::info!("Phase 2: Built KG with causal relationship");
 
     // Phase 3: Verify data integrity
-    let all_nodes = kernel.kg_list_nodes(None, &agent_id, "default")
+    let all_nodes = kernel
+        .kg_list_nodes(None, &agent_id, "default")
         .expect("kg_list_nodes should work");
     assert!(!all_nodes.is_empty(), "KG nodes should exist");
 

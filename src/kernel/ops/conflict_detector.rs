@@ -9,7 +9,7 @@
 use std::sync::Arc;
 
 use crate::fs::embedding::EmbeddingProvider;
-use crate::fs::graph::{KnowledgeGraph, KGEdgeType, KGNodeType};
+use crate::fs::graph::{KGEdgeType, KGNodeType, KnowledgeGraph};
 
 /// Cosine similarity between two f32 vectors.
 fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
@@ -59,10 +59,7 @@ pub struct ConflictDetector {
 }
 
 impl ConflictDetector {
-    pub fn new(
-        kg: Arc<dyn KnowledgeGraph>,
-        embedder: Option<Arc<dyn EmbeddingProvider>>,
-    ) -> Self {
+    pub fn new(kg: Arc<dyn KnowledgeGraph>, embedder: Option<Arc<dyn EmbeddingProvider>>) -> Self {
         Self {
             kg,
             embedder,
@@ -89,7 +86,8 @@ impl ConflictDetector {
         if has_temporal {
             // Find and invalidate the older edge in conflicting groups
             if let Ok(edges) = self.kg.list_edges(agent_id) {
-                let active: Vec<_> = edges.iter()
+                let active: Vec<_> = edges
+                    .iter()
                     .filter(|e| e.invalid_at.is_none() && e.expired_at.is_none())
                     .collect();
 
@@ -107,7 +105,11 @@ impl ConflictDetector {
                         let mut sorted = group.clone();
                         sorted.sort_by_key(|e| std::cmp::Reverse(e.created_at));
                         for older in &sorted[1..] {
-                            if self.kg.invalidate_edge(&older.src, &older.dst, older.edge_type).unwrap_or(false) {
+                            if self
+                                .kg
+                                .invalidate_edge(&older.src, &older.dst, older.edge_type)
+                                .unwrap_or(false)
+                            {
                                 repairs += 1;
                             }
                         }
@@ -179,10 +181,7 @@ impl ConflictDetector {
         let mut with_emb: Vec<(&crate::fs::graph::KGNode, Vec<f32>)> = Vec::new();
         for node in &nodes {
             if let Some(emb_val) = node.properties.get("embedding").and_then(|v| v.as_array()) {
-                let emb: Vec<f32> = emb_val
-                    .iter()
-                    .filter_map(|v| v.as_f64().map(|f| f as f32))
-                    .collect();
+                let emb: Vec<f32> = emb_val.iter().filter_map(|v| v.as_f64().map(|f| f as f32)).collect();
                 if !emb.is_empty() {
                     with_emb.push((node, emb));
                 }
@@ -239,9 +238,9 @@ mod tests {
     use crate::fs::graph::{KGEdge, KGEdgeType, KGNode, KGNodeType, PetgraphBackend};
 
     fn setup() -> (ConflictDetector, Arc<PetgraphBackend>) {
-        let kg: Arc<PetgraphBackend> = Arc::new(PetgraphBackend::open(std::env::temp_dir().join(
-            format!("plico_test_conflict_{}", std::process::id()),
-        )));
+        let kg: Arc<PetgraphBackend> = Arc::new(PetgraphBackend::open(
+            std::env::temp_dir().join(format!("plico_test_conflict_{}", std::process::id())),
+        ));
         let detector = ConflictDetector::new(kg.clone(), None);
         (detector, kg)
     }
@@ -318,7 +317,11 @@ mod tests {
 
         // After repair, only one edge should be valid
         let remaining = detector.detect_temporal_conflicts("agent1");
-        assert!(remaining.is_empty(), "Expected no conflicts after repair, got {}", remaining.len());
+        assert!(
+            remaining.is_empty(),
+            "Expected no conflicts after repair, got {}",
+            remaining.len()
+        );
     }
 
     #[test]
@@ -327,7 +330,11 @@ mod tests {
 
         // No nodes or edges added — detect_all should return empty
         let conflicts = detector.detect_all("agent_empty");
-        assert!(conflicts.is_empty(), "Expected no conflicts on empty graph, got {}", conflicts.len());
+        assert!(
+            conflicts.is_empty(),
+            "Expected no conflicts on empty graph, got {}",
+            conflicts.len()
+        );
     }
 
     #[test]
@@ -339,8 +346,10 @@ mod tests {
         kg.add_node(make_node("z", "agent2")).unwrap();
 
         // Two valid edges from x with same type but different dst
-        kg.add_edge(KGEdge::new("x".into(), "y".into(), KGEdgeType::SimilarTo, 0.9)).unwrap();
-        kg.add_edge(KGEdge::new("x".into(), "z".into(), KGEdgeType::SimilarTo, 0.85)).unwrap();
+        kg.add_edge(KGEdge::new("x".into(), "y".into(), KGEdgeType::SimilarTo, 0.9))
+            .unwrap();
+        kg.add_edge(KGEdge::new("x".into(), "z".into(), KGEdgeType::SimilarTo, 0.85))
+            .unwrap();
 
         let conflicts = detector.detect_all("agent2");
         assert_eq!(conflicts.len(), 1);
@@ -357,7 +366,8 @@ mod tests {
         kg.add_node(make_node("q", "agent3")).unwrap();
 
         // Single valid edge — no conflict
-        kg.add_edge(KGEdge::new("p".into(), "q".into(), KGEdgeType::RelatedTo, 0.5)).unwrap();
+        kg.add_edge(KGEdge::new("p".into(), "q".into(), KGEdgeType::RelatedTo, 0.5))
+            .unwrap();
 
         let (conflicts, repairs) = detector.detect_and_repair("agent3");
         assert!(conflicts.is_empty(), "Expected no conflicts, got {}", conflicts.len());
@@ -373,11 +383,13 @@ mod tests {
         kg.add_node(make_node("n2", "agent4")).unwrap();
 
         // Two valid edges from m with same type — creates temporal conflict
-        kg.add_edge(KGEdge::new("m".into(), "n1".into(), KGEdgeType::RelatedTo, 0.9)).unwrap();
+        kg.add_edge(KGEdge::new("m".into(), "n1".into(), KGEdgeType::RelatedTo, 0.9))
+            .unwrap();
 
         std::thread::sleep(std::time::Duration::from_millis(10));
 
-        kg.add_edge(KGEdge::new("m".into(), "n2".into(), KGEdgeType::RelatedTo, 0.7)).unwrap();
+        kg.add_edge(KGEdge::new("m".into(), "n2".into(), KGEdgeType::RelatedTo, 0.7))
+            .unwrap();
 
         let (conflicts, repairs) = detector.detect_and_repair("agent4");
         assert!(!conflicts.is_empty(), "Expected at least one conflict");
@@ -385,6 +397,10 @@ mod tests {
 
         // After repair, re-running should find no more conflicts
         let (remaining, _) = detector.detect_and_repair("agent4");
-        assert!(remaining.is_empty(), "Expected no conflicts after repair, got {}", remaining.len());
+        assert!(
+            remaining.is_empty(),
+            "Expected no conflicts after repair, got {}",
+            remaining.len()
+        );
     }
 }

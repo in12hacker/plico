@@ -46,8 +46,7 @@ impl AgentProfile {
         if self.total_queries == 1 {
             self.avg_retrieval_latency_ms = latency_ms;
         } else {
-            self.avg_retrieval_latency_ms =
-                ALPHA * latency_ms + (1.0 - ALPHA) * self.avg_retrieval_latency_ms;
+            self.avg_retrieval_latency_ms = ALPHA * latency_ms + (1.0 - ALPHA) * self.avg_retrieval_latency_ms;
         }
     }
 
@@ -80,8 +79,7 @@ impl AgentProfile {
             tag: 0.15,
             temporal: 0.10,
             type_match: 0.15,
-            bm25_keyword: 0.15,
-            kg_multi_hop: 0.05,
+            lexical_keyword: 0.20,
         };
 
         for fb in used_signals {
@@ -91,7 +89,7 @@ impl AgentProfile {
             nudge.tag += fb.tag_was_high as u8 as f32;
             nudge.temporal += fb.temporal_was_high as u8 as f32;
             nudge.type_match += fb.type_was_match as u8 as f32;
-            nudge.bm25_keyword += fb.bm25_was_high as u8 as f32;
+            nudge.lexical_keyword += fb.lexical_was_high as u8 as f32;
         }
 
         let n = used_signals.len() as f32;
@@ -102,7 +100,7 @@ impl AgentProfile {
         w.tag += learning_rate * (nudge.tag / n - 0.5);
         w.temporal += learning_rate * (nudge.temporal / n - 0.5);
         w.type_match += learning_rate * (nudge.type_match / n - 0.5);
-        w.bm25_keyword += learning_rate * (nudge.bm25_keyword / n - 0.5);
+        w.lexical_keyword += learning_rate * (nudge.lexical_keyword / n - 0.5);
 
         let clamp = |v: f32| v.max(0.02);
         w.semantic = clamp(w.semantic);
@@ -111,7 +109,7 @@ impl AgentProfile {
         w.tag = clamp(w.tag);
         w.temporal = clamp(w.temporal);
         w.type_match = clamp(w.type_match);
-        w.bm25_keyword = clamp(w.bm25_keyword);
+        w.lexical_keyword = clamp(w.lexical_keyword);
 
         w.normalize();
     }
@@ -134,7 +132,7 @@ pub struct SignalFeedback {
     pub tag_was_high: bool,
     pub temporal_was_high: bool,
     pub type_was_match: bool,
-    pub bm25_was_high: bool,
+    pub lexical_was_high: bool,
 }
 
 /// Thread-safe store for all agent profiles.
@@ -163,7 +161,8 @@ impl AgentProfileStore {
         drop(profiles);
 
         let mut profiles = self.profiles.write().unwrap();
-        profiles.entry(agent_id.to_string())
+        profiles
+            .entry(agent_id.to_string())
             .or_insert_with(|| AgentProfile::new(agent_id))
             .clone()
     }
@@ -213,17 +212,15 @@ mod tests {
         let mut p = AgentProfile::new("test");
         p.total_queries = 10;
 
-        let feedback = vec![
-            SignalFeedback {
-                semantic_was_high: true,
-                causal_was_high: false,
-                access_was_high: false,
-                tag_was_high: true,
-                temporal_was_high: false,
-                type_was_match: true,
-                bm25_was_high: false,
-            },
-        ];
+        let feedback = vec![SignalFeedback {
+            semantic_was_high: true,
+            causal_was_high: false,
+            access_was_high: false,
+            tag_was_high: true,
+            temporal_was_high: false,
+            type_was_match: true,
+            lexical_was_high: false,
+        }];
         p.learn_weights(&feedback);
 
         let w = &p.retrieval_weights;

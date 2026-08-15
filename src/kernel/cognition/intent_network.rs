@@ -119,15 +119,16 @@ impl IntentSemanticNetwork {
             let intent = &point.intent;
             let mut nodes = self.nodes.write().await;
             if !nodes.contains_key(intent) {
-                let embedding = self.embedding.embed(intent)
-                    .map(|r| r.embedding)
-                    .unwrap_or_default();
-                nodes.insert(intent.clone(), SemanticNode {
-                    id: intent.clone(),
-                    embedding,
-                    node_type: NodeType::Intent,
-                    metadata: serde_json::json!({"created_at": point.timestamp_ms}),
-                });
+                let embedding = self.embedding.embed(intent).map(|r| r.embedding).unwrap_or_default();
+                nodes.insert(
+                    intent.clone(),
+                    SemanticNode {
+                        id: intent.clone(),
+                        embedding,
+                        node_type: NodeType::Intent,
+                        metadata: serde_json::json!({"created_at": point.timestamp_ms}),
+                    },
+                );
                 report.new_nodes += 1;
             }
         }
@@ -137,7 +138,8 @@ impl IntentSemanticNetwork {
             let from = &window[0].intent;
             let to = &window[1].intent;
             if from != to {
-                self.add_or_strengthen_edge(from, to, SemanticRelation::Precedes).await?;
+                self.add_or_strengthen_edge(from, to, SemanticRelation::Precedes)
+                    .await?;
                 report.new_edges += 1;
             }
         }
@@ -169,17 +171,11 @@ impl IntentSemanticNetwork {
     }
 
     /// 为给定意图查找相关上下文
-    pub async fn find_related(
-        &self,
-        agent_id: &str,
-        intent: &str,
-    ) -> CognitiveResult<Vec<RelatedContext>> {
+    pub async fn find_related(&self, agent_id: &str, intent: &str) -> CognitiveResult<Vec<RelatedContext>> {
         let mut results = Vec::new();
 
         // 1. 语义相似匹配
-        let intent_embedding = self.embedding.embed(intent)
-            .map(|r| r.embedding)
-            .unwrap_or_default();
+        let intent_embedding = self.embedding.embed(intent).map(|r| r.embedding).unwrap_or_default();
         let similar = self.find_semantically_similar(&intent_embedding, 0.75).await?;
 
         for (node_id, score) in similar {
@@ -282,7 +278,9 @@ impl IntentSemanticNetwork {
     ) -> CognitiveResult<Vec<ExperienceAssociation>> {
         let mut associations = Vec::new();
 
-        let intent_embedding = self.embedding.embed(current_intent)
+        let intent_embedding = self
+            .embedding
+            .embed(current_intent)
             .map(|r| r.embedding)
             .unwrap_or_default();
 
@@ -300,7 +298,9 @@ impl IntentSemanticNetwork {
                     continue;
                 }
 
-                let past_embedding = self.embedding.embed(&past_intent)
+                let past_embedding = self
+                    .embedding
+                    .embed(&past_intent)
                     .map(|r| r.embedding)
                     .unwrap_or_default();
 
@@ -309,7 +309,8 @@ impl IntentSemanticNetwork {
                     let successes: Vec<_> = points.iter().filter(|p| p.success).collect();
                     let failures: Vec<_> = points.iter().filter(|p| !p.success).collect();
 
-                    let suggested_skills: Vec<String> = successes.iter()
+                    let suggested_skills: Vec<String> = successes
+                        .iter()
                         .map(|p| p.operation.clone())
                         .collect::<std::collections::HashSet<_>>()
                         .into_iter()
@@ -333,17 +334,9 @@ impl IntentSemanticNetwork {
     }
 
     /// 判断两个意图是否在语义上相关
-    pub async fn is_semantically_related(
-        &self,
-        intent_a: &str,
-        intent_b: &str,
-    ) -> CognitiveResult<bool> {
-        let emb_a = self.embedding.embed(intent_a)
-            .map(|r| r.embedding)
-            .unwrap_or_default();
-        let emb_b = self.embedding.embed(intent_b)
-            .map(|r| r.embedding)
-            .unwrap_or_default();
+    pub async fn is_semantically_related(&self, intent_a: &str, intent_b: &str) -> CognitiveResult<bool> {
+        let emb_a = self.embedding.embed(intent_a).map(|r| r.embedding).unwrap_or_default();
+        let emb_b = self.embedding.embed(intent_b).map(|r| r.embedding).unwrap_or_default();
 
         let similarity = cosine_similarity(&emb_a, &emb_b);
         Ok(similarity > 0.6)
@@ -351,19 +344,14 @@ impl IntentSemanticNetwork {
 
     // --- Private helpers ---
 
-    async fn add_or_strengthen_edge(
-        &self,
-        from: &str,
-        to: &str,
-        relation: SemanticRelation,
-    ) -> CognitiveResult<()> {
+    async fn add_or_strengthen_edge(&self, from: &str, to: &str, relation: SemanticRelation) -> CognitiveResult<()> {
         let mut edges = self.edges.write().await;
         let edge_list = edges.entry(relation.clone()).or_default();
 
         if let Some(existing) = edge_list.iter_mut().find(|e| e.from == from && e.to == to) {
             existing.evidence_count += 1;
-            existing.strength = (existing.strength * (existing.evidence_count - 1) as f32 + 1.0)
-                / existing.evidence_count as f32;
+            existing.strength =
+                (existing.strength * (existing.evidence_count - 1) as f32 + 1.0) / existing.evidence_count as f32;
         } else {
             edge_list.push(SemanticEdge {
                 from: from.to_string(),
@@ -396,10 +384,7 @@ impl IntentSemanticNetwork {
         Ok(results)
     }
 
-    async fn expand_by_relation(
-        &self,
-        intent: &str,
-    ) -> CognitiveResult<Vec<(String, SemanticRelation, f32)>> {
+    async fn expand_by_relation(&self, intent: &str) -> CognitiveResult<Vec<(String, SemanticRelation, f32)>> {
         let mut results = Vec::new();
         let edges = self.edges.read().await;
 
@@ -414,11 +399,7 @@ impl IntentSemanticNetwork {
         Ok(results)
     }
 
-    async fn find_from_trajectory(
-        &self,
-        agent_id: &str,
-        current_intent: &str,
-    ) -> CognitiveResult<Vec<(String, f32)>> {
+    async fn find_from_trajectory(&self, agent_id: &str, current_intent: &str) -> CognitiveResult<Vec<(String, f32)>> {
         let mut results = Vec::new();
         let trajectories = self.trajectories.read().await;
 
@@ -443,11 +424,7 @@ impl IntentSemanticNetwork {
         Ok(results)
     }
 
-    fn compute_transition_probs(
-        &self,
-        trajectory: &[TrajectoryPoint],
-        current_intent: &str,
-    ) -> Vec<(String, f32)> {
+    fn compute_transition_probs(&self, trajectory: &[TrajectoryPoint], current_intent: &str) -> Vec<(String, f32)> {
         let mut counts: HashMap<String, usize> = HashMap::new();
         let mut total = 0;
 
@@ -462,9 +439,7 @@ impl IntentSemanticNetwork {
             return Vec::new();
         }
 
-        let mut results: Vec<_> = counts.into_iter()
-            .map(|(k, v)| (k, v as f32 / total as f32))
-            .collect();
+        let mut results: Vec<_> = counts.into_iter().map(|(k, v)| (k, v as f32 / total as f32)).collect();
         results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
         results
     }
@@ -492,12 +467,13 @@ impl IntentSemanticNetwork {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
     use super::*;
-    use crate::fs::embedding::{EmbedResult, EmbedError, EmbeddingProvider};
+    use crate::fs::embedding::{
+        EmbedError, EmbedResult, EmbeddingBuilderIdentity, EmbeddingIdentityError, EmbeddingProvider,
+    };
+    use std::sync::Arc;
 
     struct MockEmbeddingProvider;
 
@@ -525,8 +501,12 @@ mod tests {
             8
         }
 
-        fn model_name(&self) -> &str {
-            "mock"
+        fn builder_identity(&self) -> Result<EmbeddingBuilderIdentity, EmbeddingIdentityError> {
+            Ok(EmbeddingBuilderIdentity::test_deterministic("mock", 8, "mock-v1"))
+        }
+
+        fn model_name(&self) -> String {
+            "mock".into()
         }
     }
 
@@ -563,10 +543,7 @@ mod tests {
     #[tokio::test]
     async fn learn_from_history_creates_nodes() {
         let network = IntentSemanticNetwork::new(mock_provider());
-        let traj = vec![
-            traj_point("search", "op1", true),
-            traj_point("store", "op2", true),
-        ];
+        let traj = vec![traj_point("search", "op1", true), traj_point("store", "op2", true)];
         let report = network.learn_from_history("agent1", &traj).await.unwrap();
         assert_eq!(report.new_nodes, 2);
     }
@@ -574,10 +551,7 @@ mod tests {
     #[tokio::test]
     async fn learn_from_history_creates_precedes_edges() {
         let network = IntentSemanticNetwork::new(mock_provider());
-        let traj = vec![
-            traj_point("A", "op1", true),
-            traj_point("B", "op2", false),
-        ];
+        let traj = vec![traj_point("A", "op1", true), traj_point("B", "op2", false)];
         let report = network.learn_from_history("agent1", &traj).await.unwrap();
         assert_eq!(report.new_edges, 1); // Only Precedes
     }
@@ -585,10 +559,7 @@ mod tests {
     #[tokio::test]
     async fn learn_from_history_creates_causes_edges() {
         let network = IntentSemanticNetwork::new(mock_provider());
-        let traj = vec![
-            traj_point("A", "op1", true),
-            traj_point("B", "op2", true),
-        ];
+        let traj = vec![traj_point("A", "op1", true), traj_point("B", "op2", true)];
         let report = network.learn_from_history("agent1", &traj).await.unwrap();
         // 1 Precedes + 1 Causes = 2 new edges
         assert_eq!(report.new_edges, 2);
@@ -604,10 +575,7 @@ mod tests {
     #[tokio::test]
     async fn find_related_finds_precedes() {
         let network = IntentSemanticNetwork::new(mock_provider());
-        let traj = vec![
-            traj_point("A", "op1", true),
-            traj_point("B", "op2", true),
-        ];
+        let traj = vec![traj_point("A", "op1", true), traj_point("B", "op2", true)];
         network.learn_from_history("agent1", &traj).await.unwrap();
         let related = network.find_related("agent1", "A").await.unwrap();
         let has_b = related.iter().any(|r| r.cid == "B");
@@ -617,10 +585,7 @@ mod tests {
     #[tokio::test]
     async fn predict_next_context_returns_followers() {
         let network = IntentSemanticNetwork::new(mock_provider());
-        let traj = vec![
-            traj_point("A", "op1", true),
-            traj_point("B", "op2", true),
-        ];
+        let traj = vec![traj_point("A", "op1", true), traj_point("B", "op2", true)];
         network.learn_from_history("agent1", &traj).await.unwrap();
         let predictions = network.predict_next_context("agent1", "A").await.unwrap();
         assert_eq!(predictions.len(), 1);

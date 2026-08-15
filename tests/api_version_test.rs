@@ -4,9 +4,7 @@
 //! - ApiVersion parsing and comparison
 //! - Serialization/deserialization
 
-use plico::api::semantic::{
-    ApiVersion, ApiRequest, ApiResponse,
-};
+use plico::api::semantic::{ApiRequest, ApiResponse, ApiVersion};
 
 #[test]
 fn test_api_version_parsing() {

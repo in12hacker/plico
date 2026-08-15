@@ -6,13 +6,15 @@
 //! All tests verify Soul 3.0 axioms: Token economy (F-37), Intent accuracy (F-36),
 //! Memory integrity (F-39), Operational continuity (F-38).
 
-use plico::fs::search::Bm25Index;
-use plico::fs::embedding::circuit_breaker::EmbeddingCircuitBreaker;
-use plico::fs::embedding::{EmbeddingProvider, EmbedResult};
-use plico::kernel::ops::checkpoint::CheckpointMemory;
-use plico::memory::layered::{MemoryEntry, MemoryTier, MemoryContent, MemoryScope, Procedure, ProcedureStep, KnowledgePiece};
 use plico::api::semantic::SearchResultDto;
 use plico::cas::{AIObject, AIObjectMeta, ContentType};
+use plico::fs::embedding::circuit_breaker::EmbeddingCircuitBreaker;
+use plico::fs::embedding::{EmbedResult, EmbeddingProvider};
+use plico::fs::search::Bm25Index;
+use plico::kernel::ops::checkpoint::CheckpointMemory;
+use plico::memory::layered::{
+    KnowledgePiece, MemoryContent, MemoryEntry, MemoryScope, MemoryTier, Procedure, ProcedureStep,
+};
 
 /// F-36: BM25 score normalization — top-1 should score close to 1.0, noise < 0.2.
 #[test]
@@ -20,8 +22,14 @@ fn test_bm25_score_normalization() {
     let index = Bm25Index::new();
 
     // Insert two documents with very different relevance to "login auth"
-    index.upsert("cid1", "authentication failure in login module: user credentials rejected");
-    index.upsert("cid2", "unrelated cooking recipe for chocolate cake with flour and sugar");
+    index.upsert(
+        "cid1",
+        "authentication failure in login module: user credentials rejected",
+    );
+    index.upsert(
+        "cid2",
+        "unrelated cooking recipe for chocolate cake with flour and sugar",
+    );
     index.upsert("cid3", "another auth bug: password expired in auth service handler");
 
     let results = index.search("login auth", 10);
@@ -47,7 +55,8 @@ fn test_bm25_relevance_discrimination() {
     index.upsert("auth_fix", "fix authentication by updating credentials validation");
 
     let results = index.search("auth", 10);
-    let auth_scores: Vec<f32> = results.iter()
+    let auth_scores: Vec<f32> = results
+        .iter()
         .filter(|(cid, _)| cid.starts_with("auth"))
         .map(|(_, s)| *s)
         .collect();
@@ -93,8 +102,15 @@ fn test_circuit_breaker_opens_after_threshold() {
         fn embed_batch(&self, texts: &[&str]) -> Result<Vec<EmbedResult>, plico::fs::embedding::EmbedError> {
             texts.iter().map(|t| self.embed(t)).collect()
         }
-        fn dimension(&self) -> usize { 384 }
-        fn model_name(&self) -> &str { "failing" }
+        fn dimension(&self) -> usize {
+            384
+        }
+        fn builder_identity(&self) -> Result<plico::fs::EmbeddingBuilderIdentity, plico::fs::EmbeddingIdentityError> {
+            Err(plico::fs::EmbeddingIdentityError::ProviderProbeFailed)
+        }
+        fn model_name(&self) -> String {
+            "failing".into()
+        }
     }
 
     let inner = std::sync::Arc::new(FailingProvider);
@@ -120,7 +136,11 @@ fn test_circuit_breaker_recovery() {
         calls: std::sync::atomic::AtomicU32,
     }
     impl OnceFailingProvider {
-        fn new() -> Self { Self { calls: std::sync::atomic::AtomicU32::new(0) } }
+        fn new() -> Self {
+            Self {
+                calls: std::sync::atomic::AtomicU32::new(0),
+            }
+        }
     }
     impl EmbeddingProvider for OnceFailingProvider {
         fn embed(&self, _: &str) -> Result<EmbedResult, plico::fs::embedding::EmbedError> {
@@ -134,8 +154,15 @@ fn test_circuit_breaker_recovery() {
         fn embed_batch(&self, texts: &[&str]) -> Result<Vec<EmbedResult>, plico::fs::embedding::EmbedError> {
             texts.iter().map(|t| self.embed(t)).collect()
         }
-        fn dimension(&self) -> usize { 384 }
-        fn model_name(&self) -> &str { "once-failing" }
+        fn dimension(&self) -> usize {
+            384
+        }
+        fn builder_identity(&self) -> Result<plico::fs::EmbeddingBuilderIdentity, plico::fs::EmbeddingIdentityError> {
+            Err(plico::fs::EmbeddingIdentityError::ProviderProbeFailed)
+        }
+        fn model_name(&self) -> String {
+            "once-failing".into()
+        }
     }
 
     let inner = std::sync::Arc::new(OnceFailingProvider::new());
@@ -156,6 +183,9 @@ fn test_circuit_breaker_recovery() {
 #[test]
 fn test_checkpoint_text_roundtrip() {
     let entry = MemoryEntry {
+        memory_id: Default::default(),
+        parent_revision_id: None,
+        canonical_content_hash: Default::default(),
         id: "mem-1".to_string(),
         agent_id: "agent-1".to_string(),
         tenant_id: "default".to_string(),
@@ -166,7 +196,6 @@ fn test_checkpoint_text_roundtrip() {
         last_accessed: 1000,
         created_at: 900,
         tags: vec!["test".to_string()],
-        embedding: None,
         ttl_ms: None,
         original_ttl_ms: None,
         scope: MemoryScope::Private,
@@ -192,6 +221,9 @@ fn test_checkpoint_text_roundtrip() {
 #[test]
 fn test_checkpoint_procedure_roundtrip() {
     let entry = MemoryEntry {
+        memory_id: Default::default(),
+        parent_revision_id: None,
+        canonical_content_hash: Default::default(),
         id: "proc-1".to_string(),
         agent_id: "agent-1".to_string(),
         tenant_id: "default".to_string(),
@@ -199,14 +231,12 @@ fn test_checkpoint_procedure_roundtrip() {
         content: MemoryContent::Procedure(Procedure {
             name: "test_procedure".to_string(),
             description: "a test procedure".to_string(),
-            steps: vec![
-                ProcedureStep {
-                    step_number: 1,
-                    description: "do thing".to_string(),
-                    action: "do_action".to_string(),
-                    expected_outcome: "success".to_string(),
-                },
-            ],
+            steps: vec![ProcedureStep {
+                step_number: 1,
+                description: "do thing".to_string(),
+                action: "do_action".to_string(),
+                expected_outcome: "success".to_string(),
+            }],
             learned_from: "test".to_string(),
         }),
         importance: 80,
@@ -214,7 +244,6 @@ fn test_checkpoint_procedure_roundtrip() {
         last_accessed: 2000,
         created_at: 1900,
         tags: vec!["procedure".to_string()],
-        embedding: None,
         ttl_ms: None,
         original_ttl_ms: None,
         scope: MemoryScope::Shared,
@@ -230,8 +259,11 @@ fn test_checkpoint_procedure_roundtrip() {
 
     assert_eq!(restored.id, entry.id);
     // F-39: Must restore as Procedure type, not Structured
-    assert!(matches!(restored.content, MemoryContent::Procedure(_)),
-            "restored content should be Procedure, got {:?}", restored.content);
+    assert!(
+        matches!(restored.content, MemoryContent::Procedure(_)),
+        "restored content should be Procedure, got {:?}",
+        restored.content
+    );
     if let MemoryContent::Procedure(p) = restored.content {
         assert_eq!(p.name, "test_procedure");
         assert_eq!(p.steps.len(), 1);
@@ -242,6 +274,9 @@ fn test_checkpoint_procedure_roundtrip() {
 #[test]
 fn test_checkpoint_knowledge_roundtrip() {
     let entry = MemoryEntry {
+        memory_id: Default::default(),
+        parent_revision_id: None,
+        canonical_content_hash: Default::default(),
         id: "know-1".to_string(),
         agent_id: "agent-1".to_string(),
         tenant_id: "default".to_string(),
@@ -257,7 +292,6 @@ fn test_checkpoint_knowledge_roundtrip() {
         last_accessed: 3000,
         created_at: 2900,
         tags: vec!["knowledge".to_string()],
-        embedding: None,
         ttl_ms: None,
         original_ttl_ms: None,
         scope: MemoryScope::Shared,
@@ -273,8 +307,11 @@ fn test_checkpoint_knowledge_roundtrip() {
 
     assert_eq!(restored.id, entry.id);
     // F-39: Must restore as Knowledge type, not Structured
-    assert!(matches!(restored.content, MemoryContent::Knowledge(_)),
-            "restored content should be Knowledge, got {:?}", restored.content);
+    assert!(
+        matches!(restored.content, MemoryContent::Knowledge(_)),
+        "restored content should be Knowledge, got {:?}",
+        restored.content
+    );
     if let MemoryContent::Knowledge(k) = restored.content {
         assert_eq!(k.subject, "auth bug");
         assert!(k.confidence > 0.9);
@@ -285,6 +322,9 @@ fn test_checkpoint_knowledge_roundtrip() {
 #[test]
 fn test_checkpoint_objectref_roundtrip() {
     let entry = MemoryEntry {
+        memory_id: Default::default(),
+        parent_revision_id: None,
+        canonical_content_hash: Default::default(),
         id: "ref-1".to_string(),
         agent_id: "agent-1".to_string(),
         tenant_id: "default".to_string(),
@@ -295,7 +335,6 @@ fn test_checkpoint_objectref_roundtrip() {
         last_accessed: 500,
         created_at: 400,
         tags: vec!["reference".to_string()],
-        embedding: None,
         ttl_ms: None,
         original_ttl_ms: None,
         scope: MemoryScope::Private,
@@ -320,6 +359,9 @@ fn test_checkpoint_structured_roundtrip() {
         "nested": { "a": 1, "b": 2 }
     });
     let entry = MemoryEntry {
+        memory_id: Default::default(),
+        parent_revision_id: None,
+        canonical_content_hash: Default::default(),
         id: "struct-1".to_string(),
         agent_id: "agent-1".to_string(),
         tenant_id: "default".to_string(),
@@ -330,7 +372,6 @@ fn test_checkpoint_structured_roundtrip() {
         last_accessed: 1500,
         created_at: 1400,
         tags: vec!["structured".to_string()],
-        embedding: None,
         ttl_ms: None,
         original_ttl_ms: None,
         scope: MemoryScope::Private,
@@ -362,7 +403,15 @@ fn test_search_does_not_inflate_access_count() {
     // Create an object
     let obj = AIObject::new(
         b"test content for search".to_vec(),
-        AIObjectMeta { content_type: ContentType::Text, tags: vec!["test".to_string()], created_by: "test".to_string(), created_at: 0, intent: None, tenant_id: "default".to_string(), scope: plico::cas::ObjectScope::default() },
+        AIObjectMeta {
+            content_type: ContentType::Text,
+            tags: vec!["test".to_string()],
+            created_by: "test".to_string(),
+            created_at: 0,
+            intent: None,
+            tenant_id: "default".to_string(),
+            scope: plico::cas::ObjectScope::default(),
+        },
     );
     let cid = storage.put(&obj).unwrap();
 
@@ -372,36 +421,48 @@ fn test_search_does_not_inflate_access_count() {
 
     // Access via get_raw does NOT increment
     let _ = storage.get_raw(&cid);
-    assert_eq!(storage.object_usage(&cid).unwrap().access_count, 1,
-            "get_raw should not inflate access_count");
+    assert_eq!(
+        storage.object_usage(&cid).unwrap().access_count,
+        1,
+        "get_raw should not inflate access_count"
+    );
 }
 
 /// F-36+F-37 integration: BM25 search returns results with snippet.
 #[test]
 fn test_bm25_integration_with_search_result() {
-    use plico::fs::semantic_fs::SemanticFS;
     use plico::fs::embedding::StubEmbeddingProvider;
     use plico::fs::search::InMemoryBackend;
-    use tempfile::tempdir;
+    use plico::fs::semantic_fs::SemanticFS;
     use std::sync::Arc;
+    use tempfile::tempdir;
 
     let dir = tempdir().unwrap();
     let stub_emb = Arc::new(StubEmbeddingProvider::new()) as Arc<dyn EmbeddingProvider>;
     let search_idx = Arc::new(InMemoryBackend::new()) as Arc<dyn plico::fs::search::SemanticSearch>;
 
     let cas = Arc::new(plico::cas::storage::CASStorage::new(dir.path().join("cas")).unwrap());
-    let fs = SemanticFS::new(
-        dir.path().to_path_buf(),
-        cas,
-        stub_emb,
-        search_idx,
-        None,
-        None,
-    ).unwrap();
+    let fs = SemanticFS::new(dir.path().to_path_buf(), cas, stub_emb, search_idx, None, None).unwrap();
 
     // Create test objects
-    let _cid1 = fs.create(b"login authentication failure in module".to_vec(), vec!["auth".to_string()], "test".to_string(), None, plico::cas::ObjectScope::default()).unwrap();
-    let _cid2 = fs.create(b"unrelated cooking recipe chocolate cake".to_vec(), vec!["cooking".to_string()], "test".to_string(), None, plico::cas::ObjectScope::default()).unwrap();
+    let _cid1 = fs
+        .create(
+            b"login authentication failure in module".to_vec(),
+            vec!["auth".to_string()],
+            "test".to_string(),
+            None,
+            plico::cas::ObjectScope::default(),
+        )
+        .unwrap();
+    let _cid2 = fs
+        .create(
+            b"unrelated cooking recipe chocolate cake".to_vec(),
+            vec!["cooking".to_string()],
+            "test".to_string(),
+            None,
+            plico::cas::ObjectScope::default(),
+        )
+        .unwrap();
 
     let results = fs.search("login auth", 10);
 

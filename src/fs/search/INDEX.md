@@ -16,6 +16,7 @@ Status: active | Fan-in: 2 | Fan-out: 0
 | `InMemoryBackend` | `memory.rs` | Brute-force cosine similarity (MVP) |
 | `HnswBackend` | `hnsw.rs` | HNSW approximate nearest neighbor (production) |
 | `Bm25Index` | `bm25.rs` | BM25 keyword search index |
+| `DiagnosedSearch` / `SearchExecution` | `mod.rs` | Search results with actual BM25/vector/tag/KG/reranker execution evidence |
 
 ## Dependencies (Fan-out: 0)
 
@@ -33,6 +34,7 @@ External crates only: `serde`, `usearch`, `bm25`.
 - `HnswBackend`: persistent to disk via `persist_to()` / `restore_from()`; usearch Index is Send+Sync, metadata via `RwLock`
 - `InMemoryBackend`: no persistence; O(n) cosine scan; suitable for small datasets
 - `Bm25Index`: BM25 with k1=1.2, b=0.75 (TREC/SIGIR defaults); `RwLock`-protected
+- `SemanticFS::search_with_diagnostics()`: bypasses opaque result cache and reports only paths executed for that request; embedding failures use typed degradation reasons; structured logs contain query byte/count metadata, never query text or raw provider errors
 
 ## Modification Risk
 
@@ -54,10 +56,11 @@ External crates only: `serde`, `usearch`, `bm25`.
 | `mod.rs` | ~147 | `SemanticSearch` trait, types, `SearchFilter` |
 | `memory.rs` | ~332 | `InMemoryBackend` — brute-force cosine |
 | `hnsw.rs` | ~310 | `HnswBackend` — HNSW ANN via usearch (f16 quantization, SIMD) |
-| `bm25.rs` | ~83 | `Bm25Index` — keyword search |
+| `bm25.rs` | ~220 | `Bm25Index` — keyword search |
 
 ## Tests
 
 - Unit: `memory.rs` (5 tests), `hnsw.rs` (10 tests)
 - Integration: `tests/semantic_search_test.rs`
-- Untested: `mod.rs` (trait def + filter logic), `bm25.rs`
+- Unit coverage: `bm25.rs` (upsert/replace/remove/count/ranking/identifier scenarios)
+- Untested: `mod.rs` (trait definition)

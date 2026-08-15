@@ -63,9 +63,7 @@ mod tests {
         use plico::kernel::cognition::{IntentSemanticNetwork, TrajectoryPoint};
         let rt = tokio::runtime::Runtime::new().unwrap();
 
-        let network = IntentSemanticNetwork::new(
-            std::sync::Arc::new(plico::fs::embedding::StubEmbeddingProvider),
-        );
+        let network = IntentSemanticNetwork::new(std::sync::Arc::new(plico::fs::embedding::StubEmbeddingProvider));
 
         rt.block_on(async {
             let trajectory = vec![
@@ -85,7 +83,10 @@ mod tests {
                 },
             ];
 
-            let report = network.learn_from_history("agent-1", &trajectory).await.unwrap_or_default();
+            let report = network
+                .learn_from_history("agent-1", &trajectory)
+                .await
+                .unwrap_or_default();
             assert!(report.new_nodes > 0, "should create intent nodes");
             assert!(report.new_edges > 0, "should create precedence edges");
         });
@@ -128,40 +129,56 @@ mod tests {
         kernel.permission_grant(&agent_id, plico::api::permission::PermissionAction::Read, None, None);
 
         // Step 2: Store memories with relevant tags
-        kernel.semantic_create(
-            b"Fix authentication bug in login module".to_vec(),
-            vec!["auth".to_string(), "login".to_string(), "bug".to_string()],
-            &agent_id,
-            None,
-            plico::cas::ObjectScope::default()
-        ).expect("create auth doc failed");
+        kernel
+            .semantic_create(
+                b"Fix authentication bug in login module".to_vec(),
+                vec!["auth".to_string(), "login".to_string(), "bug".to_string()],
+                &agent_id,
+                None,
+                plico::cas::ObjectScope::default(),
+            )
+            .expect("create auth doc failed");
 
-        kernel.semantic_create(
-            b"Deploy production API server".to_vec(),
-            vec!["deploy".to_string(), "api".to_string(), "production".to_string()],
-            &agent_id,
-            None,
-            plico::cas::ObjectScope::default()
-        ).expect("create deploy doc failed");
+        kernel
+            .semantic_create(
+                b"Deploy production API server".to_vec(),
+                vec!["deploy".to_string(), "api".to_string(), "production".to_string()],
+                &agent_id,
+                None,
+                plico::cas::ObjectScope::default(),
+            )
+            .expect("create deploy doc failed");
 
         // Add KG nodes
-        let node1 = kernel.kg_add_node(
-            "auth-fix",
-            plico::fs::graph::KGNodeType::Fact,
-            serde_json::json!({"description": "auth bug fix task"}),
-            &agent_id,
-            "default",
-        ).expect("node1 add failed");
+        let node1 = kernel
+            .kg_add_node(
+                "auth-fix",
+                plico::fs::graph::KGNodeType::Fact,
+                serde_json::json!({"description": "auth bug fix task"}),
+                &agent_id,
+                "default",
+            )
+            .expect("node1 add failed");
 
-        let node2 = kernel.kg_add_node(
-            "deploy-plan",
-            plico::fs::graph::KGNodeType::Fact,
-            serde_json::json!({"description": "deployment plan"}),
-            &agent_id,
-            "default",
-        ).expect("node2 add failed");
+        let node2 = kernel
+            .kg_add_node(
+                "deploy-plan",
+                plico::fs::graph::KGNodeType::Fact,
+                serde_json::json!({"description": "deployment plan"}),
+                &agent_id,
+                "default",
+            )
+            .expect("node2 add failed");
 
-        kernel.kg_add_edge(&node1, &node2, plico::fs::graph::KGEdgeType::Causes, None, &agent_id, "default")
+        kernel
+            .kg_add_edge(
+                &node1,
+                &node2,
+                plico::fs::graph::KGEdgeType::Causes,
+                None,
+                &agent_id,
+                "default",
+            )
             .expect("causal edge failed");
 
         // Step 3: Declare intent (triggers async prefetch + CognitiveLoop)
@@ -171,7 +188,11 @@ mod tests {
             related_cids: vec![],
             budget_tokens: 2048,
         });
-        assert!(declare_resp.ok, "declare_intent should succeed: {:?}", declare_resp.error);
+        assert!(
+            declare_resp.ok,
+            "declare_intent should succeed: {:?}",
+            declare_resp.error
+        );
         let assembly_id = declare_resp.assembly_id.expect("no assembly_id returned");
 
         // Step 4: Fetch assembled context (wait for async prefetch)
@@ -181,8 +202,11 @@ mod tests {
             assembly_id: assembly_id.clone(),
         });
         if !fetch_resp.ok {
-            assert!(fetch_resp.error.as_ref().unwrap().contains("failed to embed"),
-                "expected embedding failure in stub mode, got: {:?}", fetch_resp.error);
+            assert!(
+                fetch_resp.error.as_ref().unwrap().contains("failed to embed"),
+                "expected embedding failure in stub mode, got: {:?}",
+                fetch_resp.error
+            );
         }
 
         // Step 5: Submit intent
@@ -195,15 +219,18 @@ mod tests {
         assert!(submit_resp.ok, "submit_intent should succeed: {:?}", submit_resp.error);
 
         // Step 6: Verify KG causal edges
-        let edges = kernel.kg_list_edges(&agent_id, "default", None)
+        let edges = kernel
+            .kg_list_edges(&agent_id, "default", None)
             .expect("kg_list_edges failed");
-        let causal_edges: Vec<_> = edges.into_iter()
+        let causal_edges: Vec<_> = edges
+            .into_iter()
             .filter(|e| matches!(e.edge_type, plico::fs::graph::KGEdgeType::Causes))
             .collect();
         assert!(!causal_edges.is_empty(), "should have at least one Causes edge");
 
         // Step 7: Verify KG nodes
-        let nodes = kernel.kg_list_nodes(None, &agent_id, "default")
+        let nodes = kernel
+            .kg_list_nodes(None, &agent_id, "default")
             .expect("kg_list_nodes failed");
         assert!(nodes.len() >= 2, "should have at least 2 KG nodes, got {}", nodes.len());
 
@@ -227,11 +254,16 @@ mod tests {
         assert!(search_resp.ok, "search should succeed: {:?}", search_resp.error);
 
         // Step 10: Verify recall
-        kernel.remember_working(&agent_id, "default", "e2e test memory".to_string(), vec!["test".to_string()])
+        kernel
+            .remember_working(
+                &agent_id,
+                "default",
+                "e2e test memory".to_string(),
+                vec!["test".to_string()],
+            )
             .expect("remember failed");
         let recall_resp = kernel.handle_api_request(plico::api::semantic::ApiRequest::Recall {
             agent_id: agent_id.clone(),
-            scope: None,
             query: None,
             limit: None,
             tier: None,
@@ -241,18 +273,30 @@ mod tests {
         assert!(!memories.is_empty(), "should have at least one remembered memory");
 
         // Step 11: Verify CognitiveLoop trajectory tracking (Soul v3.0)
-        let cognitive_loop = kernel.prefetch.cognitive_loop.get()
+        let cognitive_loop = kernel
+            .prefetch
+            .cognitive_loop
+            .get()
             .expect("CognitiveLoop should be initialized");
         let trajectory: Vec<plico::kernel::cognition::TrajectoryPoint> = rt.block_on(async {
-            cognitive_loop.trajectory_tracker.get_recent_trajectory(&agent_id, 100).await
+            cognitive_loop
+                .trajectory_tracker
+                .get_recent_trajectory(&agent_id, 100)
+                .await
         });
-        assert!(!trajectory.is_empty(), "TrajectoryTracker should record intent declarations");
+        assert!(
+            !trajectory.is_empty(),
+            "TrajectoryTracker should record intent declarations"
+        );
 
         // Step 12: Verify IntentSemanticNetwork learning (Soul v3.0)
         let intent_network = &cognitive_loop.intent_network;
-        let report = rt.block_on(async {
-            intent_network.learn_from_history(&agent_id, &trajectory).await
-        }).unwrap_or_default();
-        println!("IntentSemanticNetwork: {} nodes, {} edges learned", report.new_nodes, report.new_edges);
+        let report = rt
+            .block_on(async { intent_network.learn_from_history(&agent_id, &trajectory).await })
+            .unwrap_or_default();
+        println!(
+            "IntentSemanticNetwork: {} nodes, {} edges learned",
+            report.new_nodes, report.new_edges
+        );
     }
 }

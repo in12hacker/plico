@@ -155,7 +155,7 @@ pub struct KGNode {
     pub content_cid: Option<String>,
     pub properties: serde_json::Value,
     pub agent_id: String,
-    /// Tenant ID for multi-tenant isolation.
+    /// Legacy namespace within this personal vault; retained for migration.
     #[serde(default)]
     pub tenant_id: String,
     pub created_at: u64,
@@ -402,13 +402,23 @@ mod tests {
 
     #[test]
     fn test_kg_node_is_active() {
-        let node = KGNode::new("Test".to_string(), KGNodeType::Entity, "agent".to_string(), "default".to_string());
+        let node = KGNode::new(
+            "Test".to_string(),
+            KGNodeType::Entity,
+            "agent".to_string(),
+            "default".to_string(),
+        );
         assert!(node.is_active());
     }
 
     #[test]
     fn test_kg_node_is_valid_at() {
-        let node = KGNode::new("Test".to_string(), KGNodeType::Entity, "agent".to_string(), "default".to_string());
+        let node = KGNode::new(
+            "Test".to_string(),
+            KGNodeType::Entity,
+            "agent".to_string(),
+            "default".to_string(),
+        );
         // Node created now, should be valid at current time
         let now = now_ms();
         assert!(node.is_valid_at(now));
@@ -418,7 +428,12 @@ mod tests {
 
     #[test]
     fn test_kg_node_json_serialization() {
-        let node = KGNode::new("Test".to_string(), KGNodeType::Fact, "agent".to_string(), "tenant".to_string());
+        let node = KGNode::new(
+            "Test".to_string(),
+            KGNodeType::Fact,
+            "agent".to_string(),
+            "tenant".to_string(),
+        );
         let json = serde_json::to_string(&node).unwrap();
         let deserialized: KGNode = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.label, node.label);
@@ -429,12 +444,7 @@ mod tests {
 
     #[test]
     fn test_kg_edge_new() {
-        let edge = KGEdge::new(
-            "node1".to_string(),
-            "node2".to_string(),
-            KGEdgeType::RelatedTo,
-            0.8,
-        );
+        let edge = KGEdge::new("node1".to_string(), "node2".to_string(), KGEdgeType::RelatedTo, 0.8);
         assert_eq!(edge.src, "node1");
         assert_eq!(edge.dst, "node2");
         assert_eq!(edge.edge_type, KGEdgeType::RelatedTo);
@@ -469,13 +479,7 @@ mod tests {
 
     #[test]
     fn test_kg_edge_json_serialization() {
-        let edge = KGEdge::new_with_episode(
-            "src".to_string(),
-            "dst".to_string(),
-            KGEdgeType::HasFact,
-            0.9,
-            "ep1",
-        );
+        let edge = KGEdge::new_with_episode("src".to_string(), "dst".to_string(), KGEdgeType::HasFact, 0.9, "ep1");
         let json = serde_json::to_string(&edge).unwrap();
         let deserialized: KGEdge = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.src, edge.src);
@@ -502,7 +506,12 @@ mod tests {
 
     #[test]
     fn test_kg_search_hit_clone() {
-        let node = KGNode::new("Test".to_string(), KGNodeType::Entity, "agent".to_string(), "tenant".to_string());
+        let node = KGNode::new(
+            "Test".to_string(),
+            KGNodeType::Entity,
+            "agent".to_string(),
+            "tenant".to_string(),
+        );
         let hit = KGSearchHit {
             node,
             edge_type: Some(KGEdgeType::RelatedTo),
@@ -519,11 +528,7 @@ mod tests {
 
     #[test]
     fn test_disk_graph_type_alias() {
-        let graph: DiskGraph = (
-            HashMap::new(),
-            HashMap::new(),
-            HashMap::new(),
-        );
+        let graph: DiskGraph = (HashMap::new(), HashMap::new(), HashMap::new());
         assert_eq!(graph.0.len(), 0);
         assert_eq!(graph.1.len(), 0);
         assert_eq!(graph.2.len(), 0);

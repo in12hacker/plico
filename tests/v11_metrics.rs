@@ -28,15 +28,11 @@
 //! ### Scenario 3: Context Assembly
 //! Measures DeclareIntent + FetchAssembledContext overhead vs baseline navigation.
 
-use plico::memory::MemoryScope;
-
 // Re-export benchmark runner components
 mod benchmark_runner;
 use benchmark_runner::{
-    make_kernel, register_with_permissions, run_benchmark_suite,
-    assert_all_passed, BenchmarkResult, BenchmarkTargets,
-    Scenario, FileQAScenario, MultiAgentScenario, ContextAssemblyScenario,
-    TokenEstimator,
+    assert_all_passed, make_kernel, register_with_permissions, run_benchmark_suite, BenchmarkResult, BenchmarkTargets,
+    ContextAssemblyScenario, FileQAScenario, MultiAgentScenario, Scenario, TokenEstimator,
 };
 
 // ─── Target Constants ─────────────────────────────────────────────────────────
@@ -277,43 +273,6 @@ fn test_time_reduction_target() {
     );
 }
 
-// ─── Test 8: Cross-Agent Shared Memory Verification ───────────────────────────
-
-/// Verify that Agent B can access Agent A's shared memory (key metric).
-///
-/// This test measures the cross-agent knowledge sharing which is a key
-/// differentiator between Linux (no sharing) and AIOS (shared memory).
-#[test]
-fn test_cross_agent_shared_memory() {
-    let (kernel, _dir) = make_kernel();
-
-    // Agent A stores shared memory
-    let agent_a = register_with_permissions(&kernel, "agent-a");
-    kernel.remember_long_term_scoped(
-        &agent_a,
-        "default",
-        "auth module uses Arc<Mutex<T>> for thread-safe state".to_string(),
-        vec!["architecture".to_string(), "auth".to_string()],
-        90,
-        MemoryScope::Shared,
-    ).expect("Agent A should store shared memory");
-
-    // Agent B retrieves shared memory
-    let agent_b = register_with_permissions(&kernel, "agent-b");
-    let visible = kernel.recall_visible(&agent_b, "default", &[]);
-
-    let shared_insights: Vec<_> = visible.iter()
-        .filter(|e| e.content.display().contains("Arc<Mutex<T>>"))
-        .collect();
-
-    assert!(
-        !shared_insights.is_empty(),
-        "Agent B should be able to recall Agent A's shared memory"
-    );
-}
-
-// ─── Test 9: Prefetch Overhead Verification ───────────────────────────────────
-
 /// Verify that prefetch overhead is within acceptable bounds.
 ///
 /// Prefetch should use <=200 tokens (from design doc) for:
@@ -331,13 +290,15 @@ fn test_prefetch_overhead() {
     // Create some test objects
     let mut cids = Vec::new();
     for i in 0..5 {
-        let cid = kernel.semantic_create(
-            format!("Test object {}", i).as_bytes().to_vec(),
-            vec!["test".to_string()],
-            &agent_id,
-            None,
-            plico::cas::ObjectScope::default()
-        ).expect("should create object");
+        let cid = kernel
+            .semantic_create(
+                format!("Test object {}", i).as_bytes().to_vec(),
+                vec!["test".to_string()],
+                &agent_id,
+                None,
+                plico::cas::ObjectScope::default(),
+            )
+            .expect("should create object");
         cids.push(cid);
     }
 
@@ -422,24 +383,27 @@ fn test_end_to_end_scenario_with_metrics() {
     let mut tool_calls = 0;
 
     // Step 1: Agent stores architectural memory from previous session
-    kernel.remember_long_term_scoped(
-        &agent_id,
-        "default",
-        "The auth module is located at src/auth/".to_string(),
-        vec!["navigation".to_string(), "auth".to_string()],
-        90,
-        MemoryScope::Shared,
-    ).expect("should store memory");
+    kernel
+        .remember_long_term(
+            &agent_id,
+            "default",
+            "The auth module is located at src/auth/".to_string(),
+            vec!["navigation".to_string(), "auth".to_string()],
+            90,
+        )
+        .expect("should store memory");
     tool_calls += 1;
 
     // Step 2: Agent declares intent for current task
-    let cid = kernel.semantic_create(
-        b"The auth module provides authentication services.".to_vec(),
-        vec!["auth".to_string(), "documentation".to_string()],
-        &agent_id,
-        Some("auth_readme.txt".to_string()),
-        plico::cas::ObjectScope::default()
-    ).expect("should create object");
+    let cid = kernel
+        .semantic_create(
+            b"The auth module provides authentication services.".to_vec(),
+            vec!["auth".to_string(), "documentation".to_string()],
+            &agent_id,
+            Some("auth_readme.txt".to_string()),
+            plico::cas::ObjectScope::default(),
+        )
+        .expect("should create object");
     tool_calls += 1;
 
     let assembly_id = kernel
@@ -456,7 +420,7 @@ fn test_end_to_end_scenario_with_metrics() {
     tool_calls += 1;
 
     // Step 5: Recall shared memory
-    let _visible = kernel.recall_visible(&agent_id, "default", &[]);
+    let _visible = kernel.recall(&agent_id, "default");
     tool_calls += 1;
 
     let elapsed_ms = start_time.elapsed().as_millis() as u64;
@@ -465,9 +429,7 @@ fn test_end_to_end_scenario_with_metrics() {
     let baseline_tools = estimator.baseline_tool_calls();
 
     // Calculate actual tokens (stub estimate)
-    let actual_tokens = estimator.prefetch_tokens()
-        + estimator.recall_tokens()
-        + (5 * estimator.search_tokens()); // some searches
+    let actual_tokens = estimator.prefetch_tokens() + estimator.recall_tokens() + (5 * estimator.search_tokens()); // some searches
 
     // Calculate reductions
     let time_reduction = ((baseline_time as f32 - elapsed_ms as f32) / baseline_time as f32) * 100.0;
@@ -500,10 +462,16 @@ fn test_end_to_end_scenario_with_metrics() {
     );
 
     // Verify targets
-    assert!(time_reduction >= TIME_REDUCTION_TARGET_PCT || elapsed_ms < baseline_time,
-        "Time should be reduced or be less than baseline");
-    assert!(tool_reduction >= TOOL_REDUCTION_TARGET_PCT || tool_calls < baseline_tools,
-        "Tool calls should be reduced or be less than baseline");
-    assert!(token_pct <= TOKEN_TARGET_PCT * 1.5, // Allow some slack for stub
-        "Token percentage should be reasonably close to target");
+    assert!(
+        time_reduction >= TIME_REDUCTION_TARGET_PCT || elapsed_ms < baseline_time,
+        "Time should be reduced or be less than baseline"
+    );
+    assert!(
+        tool_reduction >= TOOL_REDUCTION_TARGET_PCT || tool_calls < baseline_tools,
+        "Tool calls should be reduced or be less than baseline"
+    );
+    assert!(
+        token_pct <= TOKEN_TARGET_PCT * 1.5, // Allow some slack for stub
+        "Token percentage should be reasonably close to target"
+    );
 }

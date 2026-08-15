@@ -16,8 +16,8 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
-use crate::cas::CASStorage;
 use super::summarizer::{Summarizer, SummaryLayer};
+use crate::cas::CASStorage;
 
 /// Context loading layer level.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -82,7 +82,9 @@ pub struct LoadedContext {
     pub degradation_reason: Option<String>,
 }
 
-fn not_false(b: &bool) -> bool { !*b }
+fn not_false(b: &bool) -> bool {
+    !*b
+}
 
 /// Context loader — manages L0/L1/L2 summaries for stored objects.
 pub struct ContextLoader {
@@ -101,11 +103,7 @@ impl ContextLoader {
     /// `cas` — shared CAS storage for L2 full-content loading.
     /// If `summarizer` is `None`, `compute_l0` uses a simple heuristic
     /// (first + last N words) instead of an LLM.
-    pub fn new(
-        root: PathBuf,
-        summarizer: Option<Arc<dyn Summarizer>>,
-        cas: Arc<CASStorage>,
-    ) -> std::io::Result<Self> {
+    pub fn new(root: PathBuf, summarizer: Option<Arc<dyn Summarizer>>, cas: Arc<CASStorage>) -> std::io::Result<Self> {
         fs::create_dir_all(root.join("l0"))?;
         fs::create_dir_all(root.join("l1"))?;
         Ok(Self {
@@ -128,10 +126,7 @@ impl ContextLoader {
     /// Store a pre-computed L0 summary for a CID.
     pub fn store_l0(&self, cid: &str, summary: String) -> std::io::Result<()> {
         // Update cache
-        self.l0_cache
-            .write()
-            .unwrap()
-            .insert(cid.to_string(), summary.clone());
+        self.l0_cache.write().unwrap().insert(cid.to_string(), summary.clone());
 
         // Persist to disk — create shard directory first
         let path = self.l0_path(cid);
@@ -149,8 +144,12 @@ impl ContextLoader {
         if let Some(ref summarizer) = self.summarizer {
             match summarizer.summarize(content, SummaryLayer::L0) {
                 Ok(summary) => return summary,
-                Err(e) => {
-                    tracing::warn!("LLM summarization failed: {e}. Falling back to heuristic.");
+                Err(_) => {
+                    tracing::warn!(
+                        outcome = "degraded",
+                        error_category = "llm_summarization_failed",
+                        "LLM summarization failed; using heuristic"
+                    );
                 }
             }
         }
@@ -196,38 +195,49 @@ impl ContextLoader {
             Ok(s) => (s, ContextLayer::L0, false, None),
             Err(_) => {
                 // Compute L0 from CAS full content (handles LLM + heuristic fallback).
-                let raw = self.cas.get(cid)
+                let raw = self
+                    .cas
+                    .get(cid)
                     .map(|obj| String::from_utf8_lossy(&obj.data).into_owned())
                     .unwrap_or_default();
                 let words: Vec<&str> = raw.split_whitespace().collect();
 
                 if words.len() <= 20 {
                     // Short content: return full text as L2 (degraded)
-                    (raw.clone(), ContextLayer::L2, true,
-                     Some("Content too short for summarization; returning full text".into()))
+                    (
+                        raw.clone(),
+                        ContextLayer::L2,
+                        true,
+                        Some("Content too short for summarization; returning full text".into()),
+                    )
                 } else if let Some(ref summarizer) = self.summarizer {
                     match summarizer.summarize(&raw, SummaryLayer::L0) {
                         Ok(summary) => (summary, ContextLayer::L0, false, None),
                         Err(e) => {
                             let heuristic = Self::heuristic_summary(&raw);
-                            (heuristic, ContextLayer::L0, true,
-                             Some(format!("LLM summarizer failed: {}; using heuristic", e)))
+                            (
+                                heuristic,
+                                ContextLayer::L0,
+                                true,
+                                Some(format!("LLM summarizer failed: {}; using heuristic", e)),
+                            )
                         }
                     }
                 } else {
                     let heuristic = Self::heuristic_summary(&raw);
-                    (heuristic, ContextLayer::L0, true,
-                     Some("No LLM summarizer available; using heuristic (first+last 10 words)".into()))
+                    (
+                        heuristic,
+                        ContextLayer::L0,
+                        true,
+                        Some("No LLM summarizer available; using heuristic (first+last 10 words)".into()),
+                    )
                 }
             }
         };
         let tokens_estimate = content.split_whitespace().count() * 3 / 4;
 
         // Populate cache
-        self.l0_cache
-            .write()
-            .unwrap()
-            .insert(cid.to_string(), content.clone());
+        self.l0_cache.write().unwrap().insert(cid.to_string(), content.clone());
 
         Ok(LoadedContext {
             cid: cid.to_string(),
@@ -256,7 +266,9 @@ impl ContextLoader {
         let content = match fs::read_to_string(&path) {
             Ok(s) => s,
             Err(_) => {
-                let raw = self.cas.get(cid)
+                let raw = self
+                    .cas
+                    .get(cid)
                     .map(|obj| String::from_utf8_lossy(&obj.data).into_owned())
                     .unwrap_or_default();
 
@@ -269,7 +281,11 @@ impl ContextLoader {
                             summary
                         }
                         Err(e) => {
-                            tracing::warn!("L1 summarization failed for {}: {}. Falling back to prefix.", &cid[..8.min(cid.len())], e);
+                            tracing::warn!(
+                                "L1 summarization failed for {}: {}. Falling back to prefix.",
+                                &cid[..8.min(cid.len())],
+                                e
+                            );
                             Self::prefix_truncate(&raw, L1_CHAR_LIMIT)
                         }
                     }
@@ -291,14 +307,19 @@ impl ContextLoader {
     }
 
     fn prefix_truncate(raw: &str, limit: usize) -> String {
-        if raw.len() <= limit { raw.to_string() } else { raw[..limit].to_string() }
+        if raw.len() <= limit {
+            raw.to_string()
+        } else {
+            raw[..limit].to_string()
+        }
     }
 
     fn load_l2(&self, cid: &str) -> std::io::Result<LoadedContext> {
         // L2 = full content, loaded directly from CAS.
-        let obj = self.cas.get(cid).map_err(|e| {
-            std::io::Error::new(std::io::ErrorKind::NotFound, e.to_string())
-        })?;
+        let obj = self
+            .cas
+            .get(cid)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::NotFound, e.to_string()))?;
         let content = String::from_utf8_lossy(&obj.data).into_owned();
         let tokens_estimate = content.split_whitespace().count() * 3 / 4;
         Ok(LoadedContext {
@@ -440,7 +461,8 @@ mod tests {
             temp_dir.path().to_path_buf(),
             None, // no summarizer
             Arc::new(crate::cas::CASStorage::new(temp_dir.path().join("cas")).unwrap()),
-        ).unwrap();
+        )
+        .unwrap();
 
         let content = (0..50).map(|i| format!("word{}", i)).collect::<Vec<_>>().join(" ");
         let summary = loader.compute_l0(&content);

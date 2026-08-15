@@ -4,9 +4,8 @@
 //!
 //! Design: F-14 in docs/design-node4-collaborative-ecosystem.md
 
-use plico::kernel::AIKernel;
 use plico::api::semantic::TaskStatus;
-use plico::memory::MemoryScope;
+use plico::kernel::AIKernel;
 use std::sync::Arc;
 use tempfile::tempdir;
 
@@ -40,13 +39,15 @@ fn test_g3_task_delegation_end_to_end() {
     tracing::info!("G-3: Registered coordinator={}, worker={}", coordinator, worker);
 
     // Step 1: Coordinator creates some content for context
-    let doc_cid = kernel.semantic_create(
-        b"Important security analysis document about SQL injection vulnerabilities".to_vec(),
-        vec!["security".into(), "analysis".into()],
-        &coordinator,
-        Some("Security Analysis".into()),
-        plico::cas::ObjectScope::default()
-    ).expect("semantic_create should succeed");
+    let doc_cid = kernel
+        .semantic_create(
+            b"Important security analysis document about SQL injection vulnerabilities".to_vec(),
+            vec!["security".into(), "analysis".into()],
+            &coordinator,
+            Some("Security Analysis".into()),
+            plico::cas::ObjectScope::default(),
+        )
+        .expect("semantic_create should succeed");
 
     tracing::info!("G-3: Coordinator created document cid={}", doc_cid);
 
@@ -57,10 +58,13 @@ fn test_g3_task_delegation_end_to_end() {
         to_agent: worker.clone(),
         intent: "Analyze the security document and summarize findings".to_string(),
         context_cids: vec![doc_cid.clone()],
-        deadline_ms: Some(std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as u64 + 60000), // 60 seconds from now
+        deadline_ms: Some(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis() as u64
+                + 60000,
+        ), // 60 seconds from now
     });
 
     assert!(resp.ok, "DelegateTask should succeed: {:?}", resp.error);
@@ -70,7 +74,11 @@ fn test_g3_task_delegation_end_to_end() {
     assert_eq!(task_result.status, TaskStatus::Pending, "New task should be Pending");
     assert_eq!(task_result.agent_id, worker, "Task should be assigned to worker");
 
-    tracing::info!("G-3: Task delegated: task_id={}, status={}", task_result.task_id, task_result.status);
+    tracing::info!(
+        "G-3: Task delegated: task_id={}, status={}",
+        task_result.task_id,
+        task_result.status
+    );
 
     // Step 3: Worker queries task status
     let resp = kernel.handle_api_request(plico::api::semantic::ApiRequest::QueryTaskStatus {
@@ -125,7 +133,11 @@ fn test_g3_task_delegation_end_to_end() {
     assert_eq!(task.status, TaskStatus::Completed, "Task should be Completed");
     assert!(!task.result_cids.is_empty(), "Task should have result CIDs");
     // Verify the result CID is recorded (content verification would require shared storage)
-    assert_eq!(task.result_cids.first(), Some(&analysis_cid), "Result CID should be recorded");
+    assert_eq!(
+        task.result_cids.first(),
+        Some(&analysis_cid),
+        "Result CID should be recorded"
+    );
 
     tracing::info!("G-3 PASSED: Task delegation end-to-end verified");
 }
@@ -140,6 +152,7 @@ fn test_g3_task_delegation_state_transitions() {
     use plico::api::permission::PermissionAction;
     kernel.permission_grant(&coordinator, PermissionAction::Read, None, None);
     kernel.permission_grant(&coordinator, PermissionAction::Write, None, None);
+    kernel.permission_grant(&coordinator, PermissionAction::SendMessage, None, None);
     kernel.permission_grant(&worker, PermissionAction::Read, None, None);
     kernel.permission_grant(&worker, PermissionAction::Write, None, None);
 
@@ -184,6 +197,7 @@ fn test_g3_task_delegation_wrong_agent_cannot_complete() {
     use plico::api::permission::PermissionAction;
     kernel.permission_grant(&coordinator, PermissionAction::Read, None, None);
     kernel.permission_grant(&coordinator, PermissionAction::Write, None, None);
+    kernel.permission_grant(&coordinator, PermissionAction::SendMessage, None, None);
     kernel.permission_grant(&worker_a, PermissionAction::Read, None, None);
     kernel.permission_grant(&worker_a, PermissionAction::Write, None, None);
     kernel.permission_grant(&worker_b, PermissionAction::Read, None, None);
@@ -238,6 +252,7 @@ fn test_g3_task_persist_and_restore() {
     use plico::api::permission::PermissionAction;
     kernel.permission_grant(&coordinator, PermissionAction::Read, None, None);
     kernel.permission_grant(&coordinator, PermissionAction::Write, None, None);
+    kernel.permission_grant(&coordinator, PermissionAction::SendMessage, None, None);
     kernel.permission_grant(&worker, PermissionAction::Read, None, None);
     kernel.permission_grant(&worker, PermissionAction::Write, None, None);
 
@@ -260,13 +275,15 @@ fn test_g3_task_persist_and_restore() {
     assert!(resp.ok);
 
     // Complete task
-    let _result_cid = kernel.semantic_create(
-        b"Task result content".to_vec(),
-        vec!["task-result".into()],
-        &worker,
-        Some("Task Result".into()),
-        plico::cas::ObjectScope::default()
-    ).expect("semantic_create should succeed");
+    let _result_cid = kernel
+        .semantic_create(
+            b"Task result content".to_vec(),
+            vec!["task-result".into()],
+            &worker,
+            Some("Task Result".into()),
+            plico::cas::ObjectScope::default(),
+        )
+        .expect("semantic_create should succeed");
 
     let resp = kernel.handle_api_request(plico::api::semantic::ApiRequest::TaskComplete {
         task_id: "task-persist".to_string(),
@@ -288,84 +305,6 @@ fn test_g3_task_persist_and_restore() {
 }
 
 #[test]
-fn test_g3_knowledge_event_propagation() {
-    let (kernel, _dir) = make_kernel();
-
-    let agent_a = kernel.register_agent("agent-a".to_string()).unwrap();
-    let agent_b = kernel.register_agent("agent-b".to_string()).unwrap();
-
-    use plico::api::permission::PermissionAction;
-    kernel.permission_grant(&agent_a, PermissionAction::Read, None, None);
-    kernel.permission_grant(&agent_a, PermissionAction::Write, None, None);
-    kernel.permission_grant(&agent_b, PermissionAction::Read, None, None);
-    kernel.permission_grant(&agent_b, PermissionAction::Write, None, None);
-
-    // Agent B subscribes to KnowledgeShared events
-    let resp = kernel.handle_api_request(plico::api::semantic::ApiRequest::EventSubscribe {
-        agent_id: agent_b.clone(),
-        event_types: Some(vec!["KnowledgeShared".to_string()]),
-        agent_ids: None,
-    });
-    assert!(resp.ok, "EventSubscribe should succeed");
-    let sub_id = resp.subscription_id.unwrap();
-
-    tracing::info!("G-3: Agent B subscribed to KnowledgeShared, sub_id={}", sub_id);
-
-    // Agent A stores Shared memory (should emit KnowledgeShared)
-    kernel.remember_long_term_scoped(
-        &agent_a,
-        "default",
-        "Important security finding: SQL injection in login form".to_string(),
-        vec!["security".into(), "finding".into()],
-        90,
-        MemoryScope::Shared,
-    ).expect("remember_long_term_scoped should succeed");
-
-    // Agent A stores Private memory (should NOT emit KnowledgeShared)
-    kernel.remember_long_term_scoped(
-        &agent_a,
-        "default",
-        "My private notes about the analysis".to_string(),
-        vec!["private".into()],
-        50,
-        MemoryScope::Private,
-    ).expect("remember_long_term_scoped should succeed");
-
-    // Agent B polls for events
-    let resp = kernel.handle_api_request(plico::api::semantic::ApiRequest::EventPoll {
-        subscription_id: sub_id.clone(),
-    });
-
-    assert!(resp.ok, "EventPoll should succeed");
-    let events = resp.kernel_events.unwrap();
-
-    // Verify KnowledgeShared event received (not Private memory)
-    let shared_events: Vec<_> = events.iter()
-        .filter(|e| matches!(e, plico::kernel::event_bus::KernelEvent::KnowledgeShared { .. }))
-        .collect();
-
-    assert!(!shared_events.is_empty(), "Agent B should receive KnowledgeShared event");
-
-    // Verify the shared event has non-empty summary
-    if let plico::kernel::event_bus::KernelEvent::KnowledgeShared { summary, .. } = &shared_events[0] {
-        assert!(!summary.is_empty(), "KnowledgeShared summary should be non-empty");
-    }
-
-    // Verify private memory is NOT in events
-    let private_content = "My private notes";
-    assert!(!events.iter().any(|e| {
-        match e {
-            plico::kernel::event_bus::KernelEvent::KnowledgeShared { summary, .. } => {
-                summary.contains(private_content)
-            }
-            _ => false,
-        }
-    }), "Agent B should NOT receive Private memory events");
-
-    tracing::info!("G-3: KnowledgeShared event propagation verified");
-}
-
-#[test]
 fn test_g3_task_delegated_event_emitted() {
     let (kernel, _dir) = make_kernel();
 
@@ -375,6 +314,7 @@ fn test_g3_task_delegated_event_emitted() {
     use plico::api::permission::PermissionAction;
     kernel.permission_grant(&coordinator, PermissionAction::Read, None, None);
     kernel.permission_grant(&coordinator, PermissionAction::Write, None, None);
+    kernel.permission_grant(&coordinator, PermissionAction::SendMessage, None, None);
     kernel.permission_grant(&worker, PermissionAction::Read, None, None);
     kernel.permission_grant(&worker, PermissionAction::Write, None, None);
 
@@ -405,13 +345,20 @@ fn test_g3_task_delegated_event_emitted() {
     assert!(resp.ok);
     let events = resp.kernel_events.unwrap();
 
-    let delegated_events: Vec<_> = events.iter()
+    let delegated_events: Vec<_> = events
+        .iter()
         .filter(|e| matches!(e, plico::kernel::event_bus::KernelEvent::TaskDelegated { .. }))
         .collect();
 
     assert!(!delegated_events.is_empty(), "Should receive TaskDelegated event");
 
-    if let plico::kernel::event_bus::KernelEvent::TaskDelegated { task_id, from_agent, to_agent, .. } = &delegated_events[0] {
+    if let plico::kernel::event_bus::KernelEvent::TaskDelegated {
+        task_id,
+        from_agent,
+        to_agent,
+        ..
+    } = &delegated_events[0]
+    {
         assert_eq!(task_id, "task-event");
         assert_eq!(from_agent, &coordinator);
         assert_eq!(to_agent, &worker);

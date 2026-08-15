@@ -36,10 +36,7 @@ fn f32_to_binary(emb: &[f32]) -> Vec<u8> {
 
 /// Hamming distance between two binary vectors (count of differing bits).
 fn hamming_distance(a: &[u8], b: &[u8]) -> u32 {
-    a.iter()
-        .zip(b.iter())
-        .map(|(x, y)| (x ^ y).count_ones())
-        .sum()
+    a.iter().zip(b.iter()).map(|(x, y)| (x ^ y).count_ones()).sum()
 }
 
 /// Cosine similarity between two f32 vectors.
@@ -188,11 +185,7 @@ impl SemanticSearch for HnswBackend {
 
     fn search(&self, query: &[f32], k: usize, filter: &SearchFilter) -> Vec<SearchHit> {
         if query.len() != self.dim {
-            tracing::warn!(
-                "Query dimension mismatch: expected {}, got {}",
-                self.dim,
-                query.len()
-            );
+            tracing::warn!("Query dimension mismatch: expected {}, got {}", self.dim, query.len());
             return Vec::new();
         }
 
@@ -222,9 +215,7 @@ impl SemanticSearch for HnswBackend {
                 .iter()
                 .filter(|(cid, _)| {
                     if has_filter {
-                        entries
-                            .get(*cid)
-                            .is_some_and(|e| filter.matches(&e.meta))
+                        entries.get(*cid).is_some_and(|e| filter.matches(&e.meta))
                     } else {
                         true
                     }
@@ -249,11 +240,7 @@ impl SemanticSearch for HnswBackend {
                 })
                 .collect();
 
-            results.sort_unstable_by(|a, b| {
-                b.score
-                    .partial_cmp(&a.score)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
+            results.sort_unstable_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
             results.truncate(k);
             return results;
         }
@@ -324,6 +311,9 @@ impl SemanticSearch for HnswBackend {
                     snippet: e.meta.snippet.clone(),
                     content_type: e.meta.content_type.clone(),
                     created_at: e.meta.created_at,
+                    owner_role: e.meta.owner_role.clone(),
+                    namespace: e.meta.namespace.clone(),
+                    scope: e.meta.scope.clone(),
                 })
                 .ok()
             })
@@ -331,10 +321,8 @@ impl SemanticSearch for HnswBackend {
 
         let path = dir.join("hnsw_index.jsonl");
         let tmp = path.with_extension("jsonl.tmp");
-        std::fs::write(&tmp, lines.join("\n"))
-            .map_err(|e| format!("Failed to persist HNSW index: {e}"))?;
-        std::fs::rename(&tmp, &path)
-            .map_err(|e| format!("Failed to rename HNSW index: {e}"))?;
+        std::fs::write(&tmp, lines.join("\n")).map_err(|e| format!("Failed to persist HNSW index: {e}"))?;
+        std::fs::rename(&tmp, &path).map_err(|e| format!("Failed to rename HNSW index: {e}"))?;
         tracing::info!("Persisted {} HNSW index entries", lines.len());
         Ok(())
     }
@@ -345,8 +333,7 @@ impl SemanticSearch for HnswBackend {
             return Ok(());
         }
 
-        let data = std::fs::read_to_string(&path)
-            .map_err(|e| format!("Failed to read HNSW index: {e}"))?;
+        let data = std::fs::read_to_string(&path).map_err(|e| format!("Failed to read HNSW index: {e}"))?;
 
         let loaded: Vec<SearchIndexEntry> = data
             .lines()
@@ -394,6 +381,9 @@ impl SemanticSearch for HnswBackend {
                         snippet: e.snippet,
                         content_type: e.content_type,
                         created_at: e.created_at,
+                        owner_role: e.owner_role,
+                        namespace: e.namespace,
+                        scope: e.scope,
                         memory_type: None,
                     },
                 },
@@ -434,9 +424,7 @@ mod tests {
     use super::*;
 
     fn sample_embedding(dim: usize, seed: f32) -> Vec<f32> {
-        (0..dim)
-            .map(|i| (seed * (i + 1) as f32).sin())
-            .collect()
+        (0..dim).map(|i| (seed * (i + 1) as f32).sin()).collect()
     }
 
     fn make_meta(cid: &str, tags: Vec<&str>) -> SearchIndexMeta {
@@ -446,6 +434,9 @@ mod tests {
             snippet: String::new(),
             content_type: "text".to_string(),
             created_at: 0,
+            owner_role: "owner".to_string(),
+            namespace: "default".to_string(),
+            scope: crate::cas::ObjectScope::Shared,
             memory_type: None,
         }
     }
@@ -456,21 +447,9 @@ mod tests {
         let dim = backend.dim();
         assert_eq!(dim, 32);
 
-        backend.upsert(
-            "cid1",
-            &sample_embedding(dim, 1.0),
-            make_meta("cid1", vec!["rust"]),
-        );
-        backend.upsert(
-            "cid2",
-            &sample_embedding(dim, 2.0),
-            make_meta("cid2", vec!["python"]),
-        );
-        backend.upsert(
-            "cid3",
-            &sample_embedding(dim, 3.0),
-            make_meta("cid3", vec!["go"]),
-        );
+        backend.upsert("cid1", &sample_embedding(dim, 1.0), make_meta("cid1", vec!["rust"]));
+        backend.upsert("cid2", &sample_embedding(dim, 2.0), make_meta("cid2", vec!["python"]));
+        backend.upsert("cid3", &sample_embedding(dim, 3.0), make_meta("cid3", vec!["go"]));
 
         assert_eq!(backend.len(), 3);
 
@@ -485,16 +464,8 @@ mod tests {
         let backend = HnswBackend::with_dim(32);
         let dim = backend.dim();
 
-        backend.upsert(
-            "cid1",
-            &sample_embedding(dim, 1.0),
-            make_meta("cid1", vec!["rust"]),
-        );
-        backend.upsert(
-            "cid2",
-            &sample_embedding(dim, 2.0),
-            make_meta("cid2", vec!["python"]),
-        );
+        backend.upsert("cid1", &sample_embedding(dim, 1.0), make_meta("cid1", vec!["rust"]));
+        backend.upsert("cid2", &sample_embedding(dim, 2.0), make_meta("cid2", vec!["python"]));
 
         let filter = SearchFilter {
             require_tags: vec!["rust".to_string()],
@@ -512,16 +483,8 @@ mod tests {
 
         {
             let backend = HnswBackend::with_dim(dim);
-            backend.upsert(
-                "cid1",
-                &sample_embedding(dim, 1.0),
-                make_meta("cid1", vec!["rust"]),
-            );
-            backend.upsert(
-                "cid2",
-                &sample_embedding(dim, 2.0),
-                make_meta("cid2", vec!["python"]),
-            );
+            backend.upsert("cid1", &sample_embedding(dim, 1.0), make_meta("cid1", vec!["rust"]));
+            backend.upsert("cid2", &sample_embedding(dim, 2.0), make_meta("cid2", vec!["python"]));
             backend.persist_to(dir.path()).unwrap();
         }
 
@@ -530,8 +493,7 @@ mod tests {
             backend.restore_from(dir.path()).unwrap();
             assert_eq!(backend.len(), 2);
 
-            let results =
-                backend.search(&sample_embedding(dim, 1.0), 2, &SearchFilter::default());
+            let results = backend.search(&sample_embedding(dim, 1.0), 2, &SearchFilter::default());
             assert!(!results.is_empty());
             assert_eq!(results[0].cid, "cid1");
         }
@@ -567,11 +529,7 @@ mod tests {
 
         let query = sample_embedding(dim, 1.0);
         backend.upsert("cid1", &query, make_meta("cid1", vec![]));
-        backend.upsert(
-            "cid2",
-            &sample_embedding(dim, 5.0),
-            make_meta("cid2", vec![]),
-        );
+        backend.upsert("cid2", &sample_embedding(dim, 5.0), make_meta("cid2", vec![]));
 
         let results = backend.search(&query, 2, &SearchFilter::default());
         assert_eq!(results.len(), 2);
@@ -584,16 +542,8 @@ mod tests {
         let backend = HnswBackend::with_dim(32);
         let dim = backend.dim();
 
-        backend.upsert(
-            "cid1",
-            &sample_embedding(dim, 1.0),
-            make_meta("cid1", vec!["rust"]),
-        );
-        backend.upsert(
-            "cid2",
-            &sample_embedding(dim, 2.0),
-            make_meta("cid2", vec!["python"]),
-        );
+        backend.upsert("cid1", &sample_embedding(dim, 1.0), make_meta("cid1", vec!["rust"]));
+        backend.upsert("cid2", &sample_embedding(dim, 2.0), make_meta("cid2", vec!["python"]));
 
         let filter = SearchFilter {
             require_tags: vec!["python".to_string()],
@@ -655,7 +605,11 @@ mod tests {
         let t0 = std::time::Instant::now();
         backend.persist_to(dir.path()).unwrap();
         let elapsed = t0.elapsed();
-        assert!(elapsed.as_millis() < 500, "persist 1K vectors should take <500ms, got {}ms", elapsed.as_millis());
+        assert!(
+            elapsed.as_millis() < 500,
+            "persist 1K vectors should take <500ms, got {}ms",
+            elapsed.as_millis()
+        );
     }
 
     #[test]
@@ -701,7 +655,11 @@ mod tests {
         assert_eq!(results.len(), 5);
         // First result should be cid_0000 (exact match)
         assert_eq!(results[0].cid, "cid_0000");
-        assert!(results[0].score > 0.99, "exact match score should be ~1.0, got {}", results[0].score);
+        assert!(
+            results[0].score > 0.99,
+            "exact match score should be ~1.0, got {}",
+            results[0].score
+        );
         // Results should be sorted by score descending
         for i in 1..results.len() {
             assert!(results[i].score <= results[i - 1].score);

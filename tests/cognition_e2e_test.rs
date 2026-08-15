@@ -2,17 +2,15 @@
 //!
 //! 验证技能流水线：操作历史 → 技能提取 → 验证 → 注册 → 推荐 → 执行
 
-use std::sync::Arc;
-use plico::kernel::cognition::{
-    CognitiveLoop, ContextQualityEngine, IntentSemanticNetwork,
-    SkillForge, TrajectoryTracker, Skill, KnowledgeSkill, KnowledgeItem,
-    ValidationStatus, SkillUsageStats, TriggerCondition, ExperienceSource,
-    SkillExecutionResult,
-};
-use plico::fs::embedding::{EmbeddingProvider, EmbedResult, EmbedError};
-use plico::fs::search::memory::InMemoryBackend;
-use plico::memory::LayeredMemory;
 use plico::cas::CASStorage;
+use plico::fs::embedding::{EmbedError, EmbedResult, EmbeddingProvider};
+use plico::fs::search::memory::InMemoryBackend;
+use plico::kernel::cognition::{
+    CognitiveLoop, ContextQualityEngine, ExperienceSource, IntentSemanticNetwork, KnowledgeItem, KnowledgeSkill, Skill,
+    SkillExecutionResult, SkillForge, SkillUsageStats, TrajectoryTracker, TriggerCondition, ValidationStatus,
+};
+use plico::memory::LayeredMemory;
+use std::sync::Arc;
 
 struct MockEmbedding;
 impl EmbeddingProvider for MockEmbedding {
@@ -23,14 +21,25 @@ impl EmbeddingProvider for MockEmbedding {
             vec[i % dim] += byte as f32;
         }
         let norm = vec.iter().map(|x| x * x).sum::<f32>().sqrt();
-        if norm > 0.0 { for v in &mut vec { *v /= norm; } }
+        if norm > 0.0 {
+            for v in &mut vec {
+                *v /= norm;
+            }
+        }
         Ok(EmbedResult::new(vec, text.len() as u32 / 4))
     }
     fn embed_batch(&self, texts: &[&str]) -> Result<Vec<EmbedResult>, EmbedError> {
         texts.iter().map(|t| self.embed(t)).collect()
     }
-    fn dimension(&self) -> usize { 8 }
-    fn model_name(&self) -> &str { "mock" }
+    fn dimension(&self) -> usize {
+        8
+    }
+    fn builder_identity(&self) -> Result<plico::fs::EmbeddingBuilderIdentity, plico::fs::EmbeddingIdentityError> {
+        Err(plico::fs::EmbeddingIdentityError::StubProvider)
+    }
+    fn model_name(&self) -> String {
+        "mock".into()
+    }
 }
 
 fn make_test_cognitive_loop() -> (CognitiveLoop, tempfile::TempDir) {
@@ -39,19 +48,15 @@ fn make_test_cognitive_loop() -> (CognitiveLoop, tempfile::TempDir) {
     let search = Arc::new(InMemoryBackend::new());
     let memory = Arc::new(LayeredMemory::new());
     let cas = Arc::new(CASStorage::new(dir.path().join("cas")).unwrap());
-    let context_analyzer = Arc::new(ContextQualityEngine::new(
-        embedding.clone(), search, memory, cas,
-    ));
+    let context_analyzer = Arc::new(ContextQualityEngine::new(embedding.clone(), search, memory, cas));
     let intent_network = Arc::new(IntentSemanticNetwork::new(embedding.clone()));
     let tracker = Arc::new(TrajectoryTracker::new());
     let skill_forge = Arc::new(
         SkillForge::new()
             .with_trajectory_tracker(tracker.clone())
-            .with_embedding(embedding)
+            .with_embedding(embedding),
     );
-    let cognitive_loop = CognitiveLoop::with_shared_tracker(
-        context_analyzer, intent_network, skill_forge, tracker,
-    );
+    let cognitive_loop = CognitiveLoop::with_shared_tracker(context_analyzer, intent_network, skill_forge, tracker);
     (cognitive_loop, dir)
 }
 
@@ -70,12 +75,25 @@ async fn test_session_lifecycle_tracks_trajectory() {
     let (loop_, _dir) = make_test_cognitive_loop();
 
     loop_.register_session("agent-1", "session-1").await;
-    loop_.on_intent_declared("agent-1", "session-1", "search code", &[]).await.unwrap();
-    loop_.on_operation_completed("agent-1", "grep", true, &[], &[]).await.unwrap();
-    loop_.on_operation_completed("agent-1", "read_file", true, &[], &[]).await.unwrap();
+    loop_
+        .on_intent_declared("agent-1", "session-1", "search code", &[])
+        .await
+        .unwrap();
+    loop_
+        .on_operation_completed("agent-1", "grep", true, &[], &[])
+        .await
+        .unwrap();
+    loop_
+        .on_operation_completed("agent-1", "read_file", true, &[], &[])
+        .await
+        .unwrap();
 
     let traj = loop_.trajectory_tracker.get_recent_trajectory("agent-1", 10).await;
-    assert!(traj.len() >= 2, "expected at least 2 trajectory points, got {}", traj.len());
+    assert!(
+        traj.len() >= 2,
+        "expected at least 2 trajectory points, got {}",
+        traj.len()
+    );
 
     loop_.end_session("agent-1", "session-1").await;
 }
@@ -85,7 +103,10 @@ async fn test_failure_tracking_with_session_id() {
     let (loop_, _dir) = make_test_cognitive_loop();
 
     loop_.register_session("agent-1", "session-42").await;
-    loop_.on_operation_completed("agent-1", "failed_op", false, &[], &[]).await.unwrap();
+    loop_
+        .on_operation_completed("agent-1", "failed_op", false, &[], &[])
+        .await
+        .unwrap();
 
     let failures = loop_.trajectory_tracker.get_recent_failures("agent-1", 10).await;
     assert_eq!(failures.len(), 1);
@@ -105,12 +126,19 @@ async fn test_skill_pipeline_extract_validate_register_recommend_execute() {
 
     // Extract candidates from trajectory
     let candidates = forge.extract_candidate("agent-1", "search").await.unwrap();
-    assert!(!candidates.is_empty(), "should extract skill candidates from repeated pattern");
+    assert!(
+        !candidates.is_empty(),
+        "should extract skill candidates from repeated pattern"
+    );
 
     // Validate first candidate
     let candidate = &candidates[0];
     let validation = forge.validate_skill("agent-1", candidate).await.unwrap();
-    assert!(validation.passed, "candidate should pass validation: {:?}", validation.issues);
+    assert!(
+        validation.passed,
+        "candidate should pass validation: {:?}",
+        validation.issues
+    );
 
     // Register as a knowledge skill with wildcard trigger
     let skill = Skill::Knowledge(KnowledgeSkill {
@@ -126,12 +154,16 @@ async fn test_skill_pipeline_extract_validate_register_recommend_execute() {
             condition: "search → read → create".into(),
             action: "Follow this workflow".into(),
         }],
-        sources: candidate.source_operations.iter().map(|op| ExperienceSource {
-            session_id: "test".into(),
-            operation: op.clone(),
-            timestamp_ms: plico::util::now_ms(),
-            success: true,
-        }).collect(),
+        sources: candidate
+            .source_operations
+            .iter()
+            .map(|op| ExperienceSource {
+                session_id: "test".into(),
+                operation: op.clone(),
+                timestamp_ms: plico::util::now_ms(),
+                success: true,
+            })
+            .collect(),
         validation: ValidationStatus::Validated {
             validated_at_ms: plico::util::now_ms(),
             test_pass_rate: validation.test_pass_rate,
@@ -147,7 +179,10 @@ async fn test_skill_pipeline_extract_validate_register_recommend_execute() {
     assert!(recs[0].confidence >= 0.6);
 
     // Execute the knowledge skill
-    let result = forge.execute_skill("agent-1", &skill_id, serde_json::json!({})).await.unwrap();
+    let result = forge
+        .execute_skill("agent-1", &skill_id, serde_json::json!({}))
+        .await
+        .unwrap();
     match result {
         SkillExecutionResult::Knowledge { items } => {
             assert_eq!(items.len(), 1);
@@ -176,10 +211,17 @@ async fn test_intent_network_learns_and_predicts() {
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
     // Predict next context after "search"
-    let predictions = loop_.intent_network.predict_next_context("agent-1", "search").await.unwrap();
+    let predictions = loop_
+        .intent_network
+        .predict_next_context("agent-1", "search")
+        .await
+        .unwrap();
     assert!(!predictions.is_empty(), "should predict 'read' after 'search'");
-    assert!(predictions.iter().any(|p| p.cid == "read"),
-        "expected 'read' in predictions: {:?}", predictions);
+    assert!(
+        predictions.iter().any(|p| p.cid == "read"),
+        "expected 'read' in predictions: {:?}",
+        predictions
+    );
 }
 
 #[tokio::test]
@@ -188,9 +230,10 @@ async fn test_context_quality_optimization_report() {
 
     loop_.register_session("agent-1", "s1").await;
 
-    let report = loop_.on_intent_declared(
-        "agent-1", "s1", "test intent", &[]
-    ).await.unwrap();
+    let report = loop_
+        .on_intent_declared("agent-1", "s1", "test intent", &[])
+        .await
+        .unwrap();
 
     assert_eq!(report.agent_id, "agent-1");
     assert_eq!(report.session_id, "s1");
@@ -243,30 +286,35 @@ async fn test_skill_validator_conflict_detection() {
 
 #[tokio::test]
 async fn test_dsl_template_substitution_e2e() {
-    use plico::kernel::cognition::dsl_interpreter::{DslInterpreter, DslSkill, DslStep, DslOutput};
+    use plico::kernel::cognition::dsl_interpreter::{DslInterpreter, DslOutput, DslSkill, DslStep};
 
     let dsl = DslSkill {
         version: "1.0".into(),
         name: "url_builder".into(),
         description: "builds a URL from components".into(),
         inputs: vec![],
-        steps: vec![
-            DslStep::Store {
-                key: "url".into(),
-                value: serde_json::json!("http://${host}:${port}/api"),
-                tags: vec![],
-            },
-        ],
-        outputs: vec![
-            DslOutput { name: "url".into(), dtype: "string".into() },
-        ],
+        steps: vec![DslStep::Store {
+            key: "url".into(),
+            value: serde_json::json!("http://${host}:${port}/api"),
+            tags: vec![],
+        }],
+        outputs: vec![DslOutput {
+            name: "url".into(),
+            dtype: "string".into(),
+        }],
     };
 
     let interpreter = DslInterpreter::new();
-    let result = interpreter.execute(&dsl, serde_json::json!({
-        "host": "localhost",
-        "port": 8080
-    }), None).unwrap();
+    let result = interpreter
+        .execute(
+            &dsl,
+            serde_json::json!({
+                "host": "localhost",
+                "port": 8080
+            }),
+            None,
+        )
+        .unwrap();
 
     let url_entry = result.get("url").unwrap();
     let url_value = url_entry.get("value").unwrap().as_str().unwrap();

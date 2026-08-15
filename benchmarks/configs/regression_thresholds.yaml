@@ -1,0 +1,17 @@
+schema: plico.benchmark.regression-thresholds/v1
+status: shadow
+reason: no_approved_protocol_v2_repeated_run_baseline
+independent_runs_required: 5
+quality:
+  rule: paired_bootstrap_noninferiority
+  approved_baseline_run_ids: []
+  margins: {}
+performance:
+  rule: paired_fresh_vault_p95_ratio
+  approved_baseline_run_ids: []
+  maximum_ratios: {}
+exact_gates:
+  protocol_and_artifact_integrity: 1.0
+  stable_sample_id_uniqueness: 1.0
+  completed_sample_accounting: 1.0
+  required_projection_ready_rate: 1.0

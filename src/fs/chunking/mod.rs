@@ -10,8 +10,8 @@
 //!
 //! Controlled by `PLICO_CHUNKING` env var: `semantic` | `fixed` | `none` (default).
 
+use crate::fs::embedding::{EmbedError, EmbeddingProvider};
 use crate::util::cosine_similarity;
-use crate::fs::embedding::{EmbeddingProvider, EmbedError};
 
 /// A produced chunk with its text and byte offset within the parent document.
 #[derive(Debug, Clone)]
@@ -42,8 +42,7 @@ impl ChunkingMode {
     }
 
     pub fn from_env() -> Self {
-        let mode = std::env::var("PLICO_CHUNKING")
-            .unwrap_or_else(|_| "none".to_string());
+        let mode = std::env::var("PLICO_CHUNKING").unwrap_or_else(|_| "none".to_string());
         Self::parse(&mode)
     }
 }
@@ -60,11 +59,7 @@ const SEMANTIC_BOUNDARY_THRESHOLD: f32 = 0.5;
 ///
 /// In `Semantic` mode, uses embedding similarity to detect topic shifts.
 /// In `Fixed` mode, splits purely by character count at sentence boundaries.
-pub fn chunk_document(
-    text: &str,
-    mode: ChunkingMode,
-    embedding: Option<&dyn EmbeddingProvider>,
-) -> Vec<Chunk> {
+pub fn chunk_document(text: &str, mode: ChunkingMode, embedding: Option<&dyn EmbeddingProvider>) -> Vec<Chunk> {
     if mode == ChunkingMode::None || text.len() < MIN_CHUNK_CHARS * 2 {
         return vec![];
     }
@@ -76,9 +71,7 @@ pub fn chunk_document(
 
     match mode {
         ChunkingMode::Markdown => markdown_chunk(text),
-        ChunkingMode::Semantic if embedding.is_some() => {
-            semantic_chunk(text, &sentences, embedding.unwrap())
-        }
+        ChunkingMode::Semantic if embedding.is_some() => semantic_chunk(text, &sentences, embedding.unwrap()),
         _ => fixed_chunk(text, &sentences),
     }
 }
@@ -90,9 +83,7 @@ pub fn split_sentences(text: &str) -> Vec<(usize, usize)> {
 
     for (i, c) in text.char_indices() {
         let byte_after = i + c.len_utf8();
-        if (c == '.' || c == '!' || c == '?' || c == '\n')
-            && byte_after < text.len()
-        {
+        if (c == '.' || c == '!' || c == '?' || c == '\n') && byte_after < text.len() {
             let next = text[byte_after..].chars().next();
             if c == '\n' || next.is_none_or(|nc| nc.is_whitespace() || nc.is_uppercase()) {
                 let end = byte_after;
@@ -152,11 +143,7 @@ fn fixed_chunk(text: &str, sentences: &[(usize, usize)]) -> Vec<Chunk> {
 }
 
 /// Semantic chunking: detect topic boundaries using embedding similarity.
-fn semantic_chunk(
-    text: &str,
-    sentences: &[(usize, usize)],
-    embedding: &dyn EmbeddingProvider,
-) -> Vec<Chunk> {
+fn semantic_chunk(text: &str, sentences: &[(usize, usize)], embedding: &dyn EmbeddingProvider) -> Vec<Chunk> {
     let sentence_texts: Vec<&str> = sentences.iter().map(|&(s, e)| &text[s..e]).collect();
 
     let embeddings: Vec<Vec<f32>> = match embed_sentences(embedding, &sentence_texts) {
@@ -294,10 +281,7 @@ fn line_offsets(text: &str) -> Vec<(usize, &str)> {
     result
 }
 
-fn embed_sentences(
-    embedding: &dyn EmbeddingProvider,
-    sentences: &[&str],
-) -> Result<Vec<Vec<f32>>, EmbedError> {
+fn embed_sentences(embedding: &dyn EmbeddingProvider, sentences: &[&str]) -> Result<Vec<Vec<f32>>, EmbedError> {
     let batch_size = 32;
     let mut all_embeddings = Vec::with_capacity(sentences.len());
 
@@ -310,7 +294,6 @@ fn embed_sentences(
 
     Ok(all_embeddings)
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -353,9 +336,17 @@ mod tests {
             .map(|i| format!("This is sentence number {}. ", i))
             .collect::<String>();
         let chunks = chunk_document(&long_text, ChunkingMode::Fixed, None);
-        assert!(chunks.len() >= 2, "long text should produce multiple chunks: {}", chunks.len());
+        assert!(
+            chunks.len() >= 2,
+            "long text should produce multiple chunks: {}",
+            chunks.len()
+        );
         for chunk in &chunks {
-            assert!(chunk.text.len() >= MIN_CHUNK_CHARS, "chunk too small: {}", chunk.text.len());
+            assert!(
+                chunk.text.len() >= MIN_CHUNK_CHARS,
+                "chunk too small: {}",
+                chunk.text.len()
+            );
         }
     }
 
@@ -380,7 +371,11 @@ mod tests {
     fn test_markdown_chunking_splits_on_headings() {
         let md = "# Introduction\n\nThis is the introduction with enough text to meet the minimum chunk size requirement for chunking to actually work properly.\n\n## Methods\n\nThis section describes the methods used in detail, with sufficient content to form a valid chunk on its own.\n\n## Results\n\nThe results section contains findings from the analysis, presented with enough detail to be meaningful.\n";
         let chunks = chunk_document(md, ChunkingMode::Markdown, None);
-        assert!(chunks.len() >= 2, "markdown should split on headings: got {}", chunks.len());
+        assert!(
+            chunks.len() >= 2,
+            "markdown should split on headings: got {}",
+            chunks.len()
+        );
         assert!(chunks[0].text.contains("Introduction"));
     }
 
@@ -397,7 +392,11 @@ mod tests {
         let section = "This is a substantial section of text that contains enough characters to exceed the minimum chunk size threshold. It discusses various topics in detail to ensure the content is realistic and meaningful for testing purposes. We need to make sure each section is long enough on its own.";
         let md = format!("{section}\n\n---\n\n{section}\n");
         let chunks = chunk_document(&md, ChunkingMode::Markdown, None);
-        assert!(chunks.len() >= 2, "should split on thematic break: got {}", chunks.len());
+        assert!(
+            chunks.len() >= 2,
+            "should split on thematic break: got {}",
+            chunks.len()
+        );
     }
 
     #[test]
@@ -409,8 +408,10 @@ mod tests {
         let reconstructed: String = chunks.iter().map(|c| c.text.clone()).collect::<Vec<_>>().join(" ");
         for i in 0..50 {
             assert!(
-                reconstructed.contains(&format!("Sentence {}", i)) || long_text[..MIN_CHUNK_CHARS].contains(&format!("Sentence {}", i)),
-                "chunk should preserve sentence {}", i,
+                reconstructed.contains(&format!("Sentence {}", i))
+                    || long_text[..MIN_CHUNK_CHARS].contains(&format!("Sentence {}", i)),
+                "chunk should preserve sentence {}",
+                i,
             );
         }
     }

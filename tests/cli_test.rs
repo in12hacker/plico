@@ -1,378 +1,148 @@
-//! CLI E2E tests — test the aicli binary as an external process.
-//!
-//! Exercises the full binary: put → get → update → delete roundtrip,
-//! agent registration, memory (remember/recall), and error paths.
+//! Black-box checks for the typed `plico.personal.v2` CLI boundary.
 
 use std::process::{Command, Output};
+
 use tempfile::tempdir;
 
-/// Path to the aicli binary.
-fn aicli() -> String {
-    // CARGO_MANIFEST_DIR = /home/leo/work/Plico (package root)
-    let manifest_dir = env!("CARGO_MANIFEST_DIR");
-    format!("{}/target/debug/aicli", manifest_dir)
-}
-
-/// Run aicli with the given args, using `root` as the kernel data directory.
 fn run(root: &std::path::Path, args: &[&str]) -> Output {
-    let mut cmd = Command::new(aicli());
-    cmd.arg("--embedded").arg("--root").arg(root);
-    cmd.env("EMBEDDING_BACKEND", "stub");
-    cmd.env("AICLI_OUTPUT", "human");
-    for arg in args {
-        cmd.arg(arg);
-    }
-    cmd.output().expect("failed to spawn aicli")
+    Command::new(env!("CARGO_BIN_EXE_aicli"))
+        .args(["--embedded", "--root"])
+        .arg(root)
+        .args(args)
+        .env("EMBEDDING_BACKEND", "stub")
+        .env("LLM_BACKEND", "stub")
+        .env("RUST_LOG", "off")
+        .output()
+        .expect("run aicli")
 }
 
-/// Run aicli with JSON output (default since Node 18 F-1)
-fn run_json(root: &std::path::Path, args: &[&str]) -> Output {
-    let mut cmd = Command::new(aicli());
-    cmd.arg("--embedded").arg("--root").arg(root);
-    cmd.env("EMBEDDING_BACKEND", "stub");
-    for arg in args {
-        cmd.arg(arg);
-    }
-    cmd.output().expect("failed to spawn aicli")
-}
-
-/// Extract CID from human-format "CID: <hex>" output
-fn extract_cid(output: &Output) -> Option<String> {
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    stdout
-        .lines()
-        .find(|l| l.starts_with("CID:"))
-        .map(|l| l.trim_start_matches("CID:").trim().to_string())
-}
-
-/// Extract CID from JSON output {"cid": "..."}
-fn extract_cid_json(output: &Output) -> Option<String> {
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    serde_json::from_str::<serde_json::Value>(&stdout)
-        .ok()
-        .and_then(|v| v.get("cid").and_then(|c| c.as_str().map(String::from)))
-}
-
-/// Assert that stdout contains the given substring.
-fn assert_contains(output: &Output, needle: &str) {
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let combined = format!("{}\n{}", stdout, stderr);
-    assert!(
-        combined.contains(needle),
-        "expected output to contain {:?}, got:\nstdout: {}\nstderr: {}",
-        needle,
-        stdout,
-        stderr
-    );
-}
-
-#[test]
-fn test_put_and_get_roundtrip() {
-    let root = tempdir().unwrap();
-    let output = run(root.path(), &[
-        "put",
-        "--content", "Rust async meeting notes",
-        "--tags", "meeting,rust",
-        "--intent", "Q1 planning",
-    ]);
+fn success_json(output: Output) -> serde_json::Value {
     assert!(
         output.status.success(),
-        "put failed: {}",
+        "aicli failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+    serde_json::from_slice(&output.stdout).expect("typed JSON response")
+}
 
-    let cid = extract_cid(&output).expect("no CID in put output");
-    assert_eq!(cid.len(), 64, "CID should be 64-char SHA-256 hex");
+fn result<'a>(response: &'a serde_json::Value, operation: &str) -> &'a serde_json::Value {
+    assert_eq!(response["protocol"], "plico.personal.v2");
+    assert_eq!(response["ok"], true);
+    assert_eq!(response["data"]["operation"], operation);
+    &response["data"]["result"]
+}
 
-    // GET the object we just stored
-    let get_output = run(root.path(), &["get", &cid]);
-    assert!(
-        get_output.status.success(),
-        "get failed: {}",
-        String::from_utf8_lossy(&get_output.stderr)
+#[test]
+fn catalog_and_object_roundtrip_use_the_typed_surface() {
+    let root = tempdir().unwrap();
+    let catalog = success_json(run(root.path(), &["capabilities.describe"]));
+    let operations = result(&catalog, "capabilities.describe")["operations"]
+        .as_array()
+        .unwrap();
+    assert_eq!(operations.len(), 14);
+    assert!(!operations.iter().any(|operation| operation == "agent.register"));
+
+    let put = success_json(run(
+        root.path(),
+        &["object.put", "--content", "canonical searchable note", "--tag", "note"],
+    ));
+    let cid = result(&put, "object.put")["cid"].as_str().unwrap().to_string();
+
+    let get = success_json(run(root.path(), &["object.get", "--cid", &cid]));
+    assert_eq!(result(&get, "object.get")["cid"], cid);
+
+    let search = success_json(run(
+        root.path(),
+        &["object.search", "--query", "searchable note", "--limit", "5"],
+    ));
+    let search_result = result(&search, "object.search");
+    assert!(search_result["hits"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|hit| hit["cid"] == cid));
+    assert!(search_result["retrieval"].is_array());
+}
+
+#[test]
+fn working_memory_correction_and_forgetting_survive_process_boundaries() {
+    let root = tempdir().unwrap();
+    let created = success_json(run(
+        root.path(),
+        &[
+            "memory.create",
+            "--content",
+            "the meeting is Friday",
+            "--tag",
+            "calendar",
+        ],
+    ));
+    let original = result(&created, "memory.create")["entry"]["entry_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let recalled = success_json(run(root.path(), &["memory.recall", "--query", "meeting Friday"]));
+    assert!(result(&recalled, "memory.recall")["hits"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|hit| hit["entry"]["entry_id"] == original));
+
+    let updated = success_json(run(
+        root.path(),
+        &[
+            "memory.update",
+            "--entry-id",
+            &original,
+            "--content",
+            "the meeting is Saturday",
+        ],
+    ));
+    let current = result(&updated, "memory.update")["entry"]["entry_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_ne!(current, original);
+
+    let deleted = success_json(run(root.path(), &["memory.delete", "--entry-id", &current]));
+    assert_eq!(result(&deleted, "memory.delete")["entry_id"], current);
+
+    let missing = run(root.path(), &["memory.get", "--entry-id", &current]);
+    assert_eq!(missing.status.code(), Some(1));
+    let response: serde_json::Value = serde_json::from_slice(&missing.stdout).unwrap();
+    assert_eq!(response["error"]["code"], "NOT_FOUND");
+}
+
+#[test]
+fn cli_rejects_identity_injection_and_legacy_commands_without_state_change() {
+    let root = tempdir().unwrap();
+    let forged = run(
+        root.path(),
+        &["memory.create", "--content", "must not persist", "--agent", "forged"],
     );
-    assert_contains(&get_output, "Rust async meeting notes");
+    assert_eq!(forged.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&forged.stderr).contains("unexpected arguments"));
+
+    let legacy = run(root.path(), &["remember", "--content", "legacy"]);
+    assert_eq!(legacy.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&legacy.stderr).contains("unsupported operation"));
+
+    let recalled = success_json(run(root.path(), &["memory.recall", "--query", "persist"]));
+    assert!(result(&recalled, "memory.recall")["hits"]
+        .as_array()
+        .unwrap()
+        .is_empty());
 }
 
 #[test]
-fn test_put_get_different_root_isolated() {
-    let root1 = tempdir().unwrap();
-    let root2 = tempdir().unwrap();
-
-    // Put in root1
-    let out1 = run(root1.path(), &["put", "--content", "in root1", "--tags", "test"]);
-    let cid1 = extract_cid(&out1).expect("no CID");
-
-    // Same CID content would deduplicate, so use different content
-    let out2 = run(root2.path(), &["put", "--content", "in root2", "--tags", "test"]);
-    let cid2 = extract_cid(&out2).expect("no CID");
-
-    // CIDs must be different (different content)
-    assert_ne!(cid1, cid2);
-
-    // root2 cannot see root1's object
-    let get2 = run(root2.path(), &["get", &cid1]);
-    assert_contains(&get2, "not found");
-}
-
-#[test]
-fn test_agent_register_shows_id() {
+fn session_boundary_returns_real_typed_watermarks() {
     let root = tempdir().unwrap();
-    let output = run(root.path(), &["agent", "--register", "TestAgent"]);
-    assert!(output.status.success(), "agent register failed: {}", String::from_utf8_lossy(&output.stderr));
-    assert_contains(&output, "Agent ID:");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let has_uuid = stdout.lines().any(|l| l.contains('-') && l.len() > 30);
-    assert!(has_uuid, "expected UUID in agent output: {}", stdout);
-}
+    let started = success_json(run(root.path(), &["session.start"]));
+    let start = result(&started, "session.start");
+    let session_id = start["session_id"].as_str().unwrap().to_string();
+    let watermark = start["watermark"].as_u64().unwrap();
 
-#[test]
-fn test_remember_and_recall() {
-    let root = tempdir().unwrap();
-
-    // Register an agent first
-    let reg = run(root.path(), &["agent", "--register", "MemoryAgent"]);
-    assert!(reg.status.success());
-
-    // Remember something
-    let remember = run(root.path(), &[
-        "remember",
-        "--agent", "MemoryAgent",
-        "--content", "Remember to review the PR",
-    ]);
-    assert!(remember.status.success(), "remember failed: {}", String::from_utf8_lossy(&remember.stderr));
-
-    // Recall it — same kernel instance so in-memory
-    let recall = run(root.path(), &["recall", "--agent", "MemoryAgent"]);
-    assert!(
-        recall.status.success(),
-        "recall failed: {}",
-        String::from_utf8_lossy(&recall.stderr)
-    );
-    // Note: recall may return empty if memory is not persisted in same session
-    // but should not crash
-}
-
-#[test]
-fn test_get_nonexistent_cid() {
-    let root = tempdir().unwrap();
-    let fake_cid = "0000000000000000000000000000000000000000000000000000000000000000";
-    let output = run(root.path(), &["get", fake_cid]);
-    // Should exit with error but produce a meaningful message
-    assert_contains(&output, "not found");
-}
-
-#[test]
-fn test_delete_requires_permission() {
-    let root = tempdir().unwrap();
-    // Put an object
-    let put = run(root.path(), &["put", "--content", "secret", "--tags", "private"]);
-    let cid = extract_cid(&put).expect("no CID");
-
-    // Delete as 'cli' — should fail with permission denied (default policy)
-    let delete = run(root.path(), &["delete", "--cid", &cid]);
-    assert_contains(&delete, "permission");
-}
-
-#[test]
-fn test_unknown_command_shows_help() {
-    let root = tempdir().unwrap();
-    let output = run(root.path(), &["unknown-command"]);
-    assert_contains(&output, "Unknown command");
-    assert_contains(&output, "--help");
-}
-
-#[test]
-fn test_tags_empty_filesystem() {
-    let root = tempdir().unwrap();
-    let output = run(root.path(), &["tags"]);
-    assert!(output.status.success());
-    assert_contains(&output, "No tags");
-}
-
-/// M3: Dogfood CRUD — full chain with non-default agent (plico-dev scenario)
-/// Tests: put → search → get → update → delete
-/// Corresponds to v0.6 Task A: non-default agent full CRUD automation
-#[test]
-fn test_dogfood_crud_chain_with_agent() {
-    let root = tempdir().unwrap();
-    let agent = "plico-dev";
-
-    // Step 1: CREATE (put with custom agent)
-    let put = run(root.path(), &[
-        "put",
-        "--content", "Dogfood milestone v0.5 notes",
-        "--tags", "plico,milestone,v0.5",
-        "--agent", agent,
-    ]);
-    assert!(put.status.success(), "put failed: {}", String::from_utf8_lossy(&put.stderr));
-    let cid = extract_cid(&put).expect("no CID in put output");
-    assert_eq!(cid.len(), 64);
-
-    // Step 2: SEARCH with tag filter + agent
-    let search = run(root.path(), &[
-        "search",
-        "--query", "milestone",
-        "--require-tags", "plico,v0.5",
-        "--agent", agent,
-    ]);
-    assert!(search.status.success(), "search failed: {}", String::from_utf8_lossy(&search.stderr));
-    let search_stdout = String::from_utf8_lossy(&search.stdout);
-    assert!(search_stdout.contains(&cid), "search should contain our CID");
-
-    // Step 3: READ with same agent (should succeed - owner matches)
-    let get = run(root.path(), &["get", &cid, "--agent", agent]);
-    assert!(get.status.success(), "get failed: {}", String::from_utf8_lossy(&get.stderr));
-    assert_contains(&get, "Dogfood milestone v0.5 notes");
-    assert_contains(&get, "plico");
-    assert_contains(&get, "v0.5");
-
-    // Step 4: UPDATE with same agent
-    let update = run(root.path(), &[
-        "update",
-        "--cid", &cid,
-        "--content", "Dogfood milestone v0.5 COMPLETED",
-        "--tags", "plico,milestone,v0.5,completed",
-        "--agent", agent,
-    ]);
-    assert!(update.status.success(), "update failed: {}", String::from_utf8_lossy(&update.stderr));
-    let new_cid = extract_cid(&update).expect("no CID in update output");
-
-    let get_updated = run(root.path(), &["get", &new_cid, "--agent", agent]);
-    assert!(get_updated.status.success(), "get updated failed");
-    assert_contains(&get_updated, "COMPLETED");
-
-    // Step 5: DELETE without grant — expected to fail (permission denied)
-    // This is documented behavior: delete requires explicit grant
-    let delete = run(root.path(), &["delete", "--cid", &new_cid, "--agent", agent]);
-    let delete_stdout = String::from_utf8_lossy(&delete.stdout);
-    let delete_stderr = String::from_utf8_lossy(&delete.stderr);
-    let combined = format!("{}\n{}", delete_stdout, delete_stderr);
-    // Delete should fail with permission error
-    assert!(
-        combined.contains("permission") || combined.contains("Permission"),
-        "delete without grant should fail with permission error, got: {}",
-        combined
-    );
-}
-
-/// M3: Verify dogfood read bug fix — get with --agent flag works
-/// Historical bug: cmd_read hardcoded "cli" ignoring --agent parameter
-#[test]
-fn test_get_with_agent_flag_works() {
-    let root = tempdir().unwrap();
-    let agent = "dogfood-test";
-
-    // Create with custom agent
-    let put = run(root.path(), &[
-        "put",
-        "--content", "Agent-owned content",
-        "--tags", "test",
-        "--agent", agent,
-    ]);
-    let cid = extract_cid(&put).expect("no CID");
-
-    // Get WITHOUT agent flag — should fail (owner is not 'cli')
-    let get_default = run(root.path(), &["get", &cid]);
-    let default_stdout = String::from_utf8_lossy(&get_default.stdout);
-    let default_stderr = String::from_utf8_lossy(&get_default.stderr);
-    let default_combined = format!("{}\n{}", default_stdout, default_stderr);
-    // Should fail because 'cli' is not the owner
-    // Note: aicli exits 0 even on API error; check combined output for "cannot access"
-    assert!(
-        default_combined.contains("cannot access"),
-        "get without agent should fail for non-owned object, got: {}",
-        default_combined
-    );
-
-// Get WITH correct agent flag — should succeed
-    let get_agent = run(root.path(), &["get", &cid, "--agent", agent]);
-    assert!(get_agent.status.success(), "get with correct agent should succeed");
-    assert_contains(&get_agent, "Agent-owned content");
-}
-
-// ─── JSON Output Tests (Node 18 F-1: JSON-First) ─────────────────────────────────
-
-/// Verify that JSON is the default output format (F-1)
-#[test]
-fn test_json_default_output_is_json() {
-    let root = tempdir().unwrap();
-    let output = run_json(root.path(), &["put", "--content", "JSON test", "--tags", "json"]);
-    assert!(output.status.success());
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    // Must be valid JSON parseable
-    let parsed = serde_json::from_str::<serde_json::Value>(&stdout)
-        .expect("default output should be valid JSON");
-    assert!(parsed.get("cid").is_some(), "JSON should contain cid field");
-}
-
-/// Verify JSON output contains version field
-#[test]
-fn test_json_output_contains_version() {
-    let root = tempdir().unwrap();
-    let output = run_json(root.path(), &["put", "--content", "version test", "--tags", "test"]);
-    assert!(output.status.success());
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let parsed: serde_json::Value = serde_json::from_str(&stdout).expect("valid JSON");
-    assert!(parsed.get("version").is_some(), "JSON should contain version field");
-}
-
-/// Verify JSON output for search contains results array
-#[test]
-fn test_json_search_output_structure() {
-    let root = tempdir().unwrap();
-    // First put some content
-    let put = run_json(root.path(), &["put", "--content", "searchable content", "--tags", "findme"]);
-    let cid = extract_cid_json(&put).expect("no CID");
-
-    // Search should return JSON with results array
-    let search = run_json(root.path(), &["search", "--query", "searchable"]);
-    assert!(search.status.success());
-
-    let stdout = String::from_utf8_lossy(&search.stdout);
-    let parsed: serde_json::Value = serde_json::from_str(&stdout).expect("valid JSON");
-
-    // Results should be an array
-    let results = parsed.get("results").expect("JSON should have results field");
-    assert!(results.is_array(), "results should be an array");
-
-    // Should contain our CID
-    let results_arr = results.as_array().unwrap();
-    let has_cid = results_arr.iter().any(|r| r.get("cid").and_then(|c| c.as_str()) == Some(cid.as_str()));
-    assert!(has_cid, "search results should contain our CID");
-}
-
-/// Verify both human and JSON produce same semantic result
-#[test]
-fn test_human_and_json_produce_same_cid() {
-    let root = tempdir().unwrap();
-    let content = "Consistency test";
-    let tags = "consistent";
-
-    let human_out = run(root.path(), &["put", "--content", content, "--tags", tags]);
-    let json_out = run_json(root.path(), &["put", "--content", content, "--tags", tags]);
-
-    let human_cid = extract_cid(&human_out).expect("no CID from human");
-    let json_cid = extract_cid_json(&json_out).expect("no CID from JSON");
-
-    // Same content + tags = same CID
-    assert_eq!(human_cid, json_cid, "human and JSON should produce same CID for same content");
-}
-
-/// Verify JSON error response has proper structure
-#[test]
-fn test_json_error_response_structure() {
-    let root = tempdir().unwrap();
-    let fake_cid = "0000000000000000000000000000000000000000000000000000000000000000";
-    let output = run_json(root.path(), &["get", fake_cid]);
-
-    // Should still be JSON even on error
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let parsed: serde_json::Value = serde_json::from_str(&stdout).expect("error response should be valid JSON");
-    // Error response should have ok=false
-    let ok = parsed.get("ok").and_then(|v| v.as_bool()).unwrap_or(true);
-    assert!(!ok, "error response should have ok=false");
+    let ended = success_json(run(root.path(), &["session.end", "--session-id", &session_id]));
+    assert!(result(&ended, "session.end")["last_seq"].as_u64().unwrap() >= watermark);
 }

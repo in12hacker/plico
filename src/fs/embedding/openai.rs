@@ -5,7 +5,9 @@
 
 use std::sync::{Arc, OnceLock};
 
-use crate::fs::embedding::types::{EmbedError, EmbeddingProvider, EmbedResult};
+use crate::fs::embedding::types::{
+    EmbedError, EmbedResult, EmbeddingBuilderIdentity, EmbeddingIdentityError, EmbeddingProvider,
+};
 
 pub struct OpenAIEmbeddingBackend {
     /// Only created when no Tokio runtime is active (standalone/CLI mode).
@@ -29,12 +31,12 @@ impl OpenAIEmbeddingBackend {
     pub fn new(base_url: &str, model: &str, api_key: Option<String>) -> Result<Self, EmbedError> {
         let rt = match tokio::runtime::Handle::try_current() {
             Ok(_) => None,
-            Err(_) => {
-                Some(Arc::new(tokio::runtime::Builder::new_multi_thread()
+            Err(_) => Some(Arc::new(
+                tokio::runtime::Builder::new_multi_thread()
                     .worker_threads(1)
                     .enable_all()
-                    .build()?))
-            }
+                    .build()?,
+            )),
         };
 
         let client = reqwest::Client::builder()
@@ -71,7 +73,9 @@ impl OpenAIEmbeddingBackend {
         let probe = Self::probe_dimension(&self.client, &self.base_url, &self.model, self.api_key.as_deref());
         let dim = match tokio::runtime::Handle::try_current() {
             Ok(handle) => tokio::task::block_in_place(|| handle.block_on(probe))?,
-            Err(_) => self.rt.as_ref()
+            Err(_) => self
+                .rt
+                .as_ref()
                 .expect("rt must exist when no Tokio runtime is active")
                 .block_on(probe)?,
         };
@@ -106,32 +110,22 @@ impl OpenAIEmbeddingBackend {
             "input": input,
         });
 
-        let mut req = client
-            .post(format!("{}/embeddings", base_url))
-            .json(&body);
+        let mut req = client.post(format!("{}/embeddings", base_url)).json(&body);
 
         if let Some(key) = api_key {
             req = req.header("Authorization", format!("Bearer {key}"));
         }
 
-        let resp = req.send().await.map_err(|e| {
-            if e.is_connect() {
-                EmbedError::ServerUnavailable(base_url.to_string())
-            } else {
-                EmbedError::Http(e)
-            }
-        })?;
+        let resp = req.send().await.map_err(|_| provider_request_error())?;
 
         let status = resp.status();
-        let body_bytes = resp.bytes().await.map_err(EmbedError::Http)?;
+        let body_bytes = resp
+            .bytes()
+            .await
+            .map_err(|_| EmbedError::Api("provider response read failed".into()))?;
 
         if !status.is_success() {
-            let body_str = String::from_utf8_lossy(&body_bytes);
-            if body_str.contains("too large") || body_str.contains("batch size") || body_str.contains("too many tokens") || body_str.contains("context_length_exceeded") {
-                tracing::info!("Detected 'Input too large' error from embedding server, triggering self-healing.");
-                return Err(EmbedError::InputTooLarge(body_str.to_string()));
-            }
-            return Err(EmbedError::Api(format!("status={status} body={body_str}")));
+            return Err(provider_status_error(status, &body_bytes));
         }
 
         parse_embedding_response(&body_bytes)
@@ -153,28 +147,37 @@ impl OpenAIEmbeddingBackend {
             req = req.header("Authorization", format!("Bearer {key}"));
         }
 
-        let resp = req.send().await.map_err(|e| {
-            if e.is_connect() {
-                EmbedError::ServerUnavailable(self.base_url.clone())
-            } else {
-                EmbedError::Http(e)
-            }
-        })?;
+        let resp = req.send().await.map_err(|_| provider_request_error())?;
 
         let status = resp.status();
-        let body_bytes = resp.bytes().await.map_err(EmbedError::Http)?;
+        let body_bytes = resp
+            .bytes()
+            .await
+            .map_err(|_| EmbedError::Api("provider response read failed".into()))?;
 
         if !status.is_success() {
-            let body_str = String::from_utf8_lossy(&body_bytes);
-            if body_str.contains("too large") || body_str.contains("batch size") || body_str.contains("too many tokens") || body_str.contains("context_length_exceeded") {
-                tracing::info!("Detected 'Input too large' error from embedding server, triggering self-healing.");
-                return Err(EmbedError::InputTooLarge(body_str.to_string()));
-            }
-            return Err(EmbedError::Api(format!("status={status} body={body_str}")));
+            return Err(provider_status_error(status, &body_bytes));
         }
 
         parse_embedding_batch_response(&body_bytes)
     }
+}
+
+fn provider_status_error(status: reqwest::StatusCode, body: &[u8]) -> EmbedError {
+    let body = String::from_utf8_lossy(body).to_ascii_lowercase();
+    if body.contains("too large")
+        || body.contains("batch size")
+        || body.contains("too many tokens")
+        || body.contains("context_length_exceeded")
+    {
+        EmbedError::InputTooLarge("provider rejected input size".into())
+    } else {
+        EmbedError::Api(format!("provider returned HTTP status {}", status.as_u16()))
+    }
+}
+
+fn provider_request_error() -> EmbedError {
+    EmbedError::ServerUnavailable("embedding provider unavailable".into())
 }
 
 fn parse_embedding_response(body: &[u8]) -> Result<EmbedResult, EmbedError> {
@@ -192,8 +195,8 @@ fn parse_embedding_response(body: &[u8]) -> Result<EmbedResult, EmbedError> {
         prompt_tokens: u32,
     }
 
-    let parsed: Response = serde_json::from_slice(body)
-        .map_err(|e| EmbedError::Api(format!("response parse error: {e}")))?;
+    let parsed: Response =
+        serde_json::from_slice(body).map_err(|e| EmbedError::Api(format!("response parse error: {e}")))?;
 
     let embedding = parsed
         .data
@@ -221,27 +224,31 @@ fn parse_embedding_batch_response(body: &[u8]) -> Result<Vec<EmbedResult>, Embed
         prompt_tokens: u32,
     }
 
-    let parsed: Response = serde_json::from_slice(body)
-        .map_err(|e| EmbedError::Api(format!("batch response parse error: {e}")))?;
+    let parsed: Response =
+        serde_json::from_slice(body).map_err(|e| EmbedError::Api(format!("batch response parse error: {e}")))?;
 
     let total_tokens = parsed.usage.map(|u| u.prompt_tokens).unwrap_or(0);
     let count = parsed.data.len();
     let tokens_per = if count == 0 { 0 } else { total_tokens / count as u32 };
 
-    Ok(parsed.data.into_iter().map(|d| EmbedResult::new(d.embedding, tokens_per)).collect())
+    Ok(parsed
+        .data
+        .into_iter()
+        .map(|d| EmbedResult::new(d.embedding, tokens_per))
+        .collect())
 }
 
 impl EmbeddingProvider for OpenAIEmbeddingBackend {
     fn embed(&self, text: &str) -> Result<EmbedResult, EmbedError> {
         match tokio::runtime::Handle::try_current() {
-            Ok(handle) => {
-                tokio::task::block_in_place(|| handle.block_on(self.embed_async(text)))
-            }
+            Ok(handle) => tokio::task::block_in_place(|| handle.block_on(self.embed_async(text))),
             Err(_) => {
                 if let Some(ref rt) = self.rt {
                     rt.block_on(self.embed_async(text))
                 } else {
-                    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build()
+                    let rt = tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
                         .map_err(EmbedError::Runtime)?;
                     rt.block_on(self.embed_async(text))
                 }
@@ -262,14 +269,14 @@ impl EmbeddingProvider for OpenAIEmbeddingBackend {
     fn embed_batch(&self, texts: &[&str]) -> Result<Vec<EmbedResult>, EmbedError> {
         let owned: Vec<String> = texts.iter().map(|s| s.to_string()).collect();
         match tokio::runtime::Handle::try_current() {
-            Ok(handle) => {
-                tokio::task::block_in_place(|| handle.block_on(self.embed_batch_async(&owned)))
-            }
+            Ok(handle) => tokio::task::block_in_place(|| handle.block_on(self.embed_batch_async(&owned))),
             Err(_) => {
                 if let Some(ref rt) = self.rt {
                     rt.block_on(self.embed_batch_async(&owned))
                 } else {
-                    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build()
+                    let rt = tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
                         .map_err(EmbedError::Runtime)?;
                     rt.block_on(self.embed_batch_async(&owned))
                 }
@@ -278,11 +285,15 @@ impl EmbeddingProvider for OpenAIEmbeddingBackend {
     }
 
     fn dimension(&self) -> usize {
-        self.get_dimension().unwrap_or(384)
+        self.get_dimension().unwrap_or_default()
     }
 
-    fn model_name(&self) -> &str {
-        &self.model
+    fn builder_identity(&self) -> Result<EmbeddingBuilderIdentity, EmbeddingIdentityError> {
+        Err(EmbeddingIdentityError::UnpinnedRemoteModel)
+    }
+
+    fn model_name(&self) -> String {
+        self.model.clone()
     }
 }
 
@@ -330,6 +341,31 @@ mod tests {
     }
 
     #[test]
+    fn provider_status_errors_do_not_expose_response_body() {
+        const BODY_CANARY: &str = "EMBEDDING_RESPONSE_PERSONAL_CANARY_7c31";
+        const ENDPOINT_CANARY: &str = "http://local-private-path/ENDPOINT_CANARY_4e29";
+        let error = provider_status_error(
+            reqwest::StatusCode::BAD_REQUEST,
+            format!("too large {BODY_CANARY}").as_bytes(),
+        )
+        .to_string();
+        assert!(matches!(
+            provider_status_error(reqwest::StatusCode::BAD_REQUEST, b"too large"),
+            EmbedError::InputTooLarge(_)
+        ));
+        assert!(!error.contains(BODY_CANARY));
+
+        let error =
+            provider_status_error(reqwest::StatusCode::INTERNAL_SERVER_ERROR, BODY_CANARY.as_bytes()).to_string();
+        assert!(error.contains("status 500"));
+        assert!(!error.contains(BODY_CANARY));
+
+        let request_error = provider_request_error().to_string();
+        assert!(!request_error.contains(ENDPOINT_CANARY));
+        assert_eq!(request_error, "Server unavailable at embedding provider unavailable");
+    }
+
+    #[test]
     fn test_parse_embedding_batch_response() {
         let json = br#"{"object":"list","data":[{"object":"embedding","index":0,"embedding":[0.1,0.2]},{"object":"embedding","index":1,"embedding":[0.3,0.4]}],"model":"test"}"#;
         let result = parse_embedding_batch_response(json);
@@ -351,15 +387,20 @@ mod tests {
     fn test_openai_embedding_llama_server() {
         let backend = match OpenAIEmbeddingBackend::new(&llama_embedding_url(), &llama_embedding_model(), None) {
             Ok(b) => b,
-            Err(e) => {
-                eprintln!("llama-server not available, skipping: {e}");
+            Err(_) => {
+                eprintln!("llama-server not available; skipping live-provider test");
                 return;
             }
         };
         let result = backend.embed("Hello world");
         match result {
-            Err(ref e) if e.to_string().to_lowercase().contains("unavailable") || e.to_string().contains("connect") || e.to_string().contains("501") || e.to_string().contains("not_supported") => {
-                eprintln!("llama-server embedding not available, skipping: {e}");
+            Err(ref e)
+                if e.to_string().to_lowercase().contains("unavailable")
+                    || e.to_string().contains("connect")
+                    || e.to_string().contains("501")
+                    || e.to_string().contains("not_supported") =>
+            {
+                eprintln!("llama-server embedding not available; skipping live-provider test");
                 return;
             }
             _ => {}
@@ -367,7 +408,11 @@ mod tests {
         assert!(result.is_ok(), "embed should succeed: {:?}", result);
         let emb = result.unwrap();
         assert!(!emb.embedding.is_empty(), "embedding should not be empty");
-        assert!(emb.embedding.len() > 10, "embedding dimension should be reasonable, got {}", emb.embedding.len());
+        assert!(
+            emb.embedding.len() > 10,
+            "embedding dimension should be reasonable, got {}",
+            emb.embedding.len()
+        );
         println!("[llama-embedding] dim={}", emb.embedding.len());
     }
 
@@ -375,15 +420,20 @@ mod tests {
     fn test_openai_embedding_llama_server_batch() {
         let backend = match OpenAIEmbeddingBackend::new(&llama_embedding_url(), &llama_embedding_model(), None) {
             Ok(b) => b,
-            Err(e) => {
-                eprintln!("llama-server not available, skipping: {e}");
+            Err(_) => {
+                eprintln!("llama-server not available; skipping live-provider test");
                 return;
             }
         };
         let result = backend.embed_batch(&["Hello", "World"]);
         match result {
-            Err(ref e) if e.to_string().to_lowercase().contains("unavailable") || e.to_string().contains("connect") || e.to_string().contains("501") || e.to_string().contains("not_supported") => {
-                eprintln!("llama-server embedding not available, skipping: {e}");
+            Err(ref e)
+                if e.to_string().to_lowercase().contains("unavailable")
+                    || e.to_string().contains("connect")
+                    || e.to_string().contains("501")
+                    || e.to_string().contains("not_supported") =>
+            {
+                eprintln!("llama-server embedding not available; skipping live-provider test");
                 return;
             }
             _ => {}

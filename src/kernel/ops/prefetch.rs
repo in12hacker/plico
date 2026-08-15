@@ -15,8 +15,7 @@
 //! Step 2: Concurrent multi-path recall (4 paths)
 //!   path_a = semantic_search(intent_vec, limit=20)  → semantic neighbors
 //!   path_b = kg.neighbors(cids, depth=2)            → KG topology
-//!   path_c = recall_shared(tier=Procedural)        → shared procedural memory
-//!   path_d = event_log.recent(tags=[], n=10)        → recent related events
+//!   path_c = event_log.recent(tags=[], n=10)        → recent related events
 //!
 //! Step 3: RRF fusion (Reciprocal Rank Fusion, k=60)
 //!
@@ -24,12 +23,12 @@
 //! ```
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, RwLock};
 use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
-use tokio::time::timeout;
 use tokio::task::spawn_blocking;
+use tokio::time::timeout;
 
 use crate::fs::context_budget::{self, BudgetAllocation, ContextCandidate};
 use crate::fs::context_loader::ContextLoader;
@@ -39,11 +38,10 @@ use crate::fs::search::SearchFilter;
 use crate::kernel::event_bus::EventBus;
 use crate::kernel::ops::session::AgentProfile;
 use crate::memory::LayeredMemory;
-use crate::memory::MemoryTier;
 
+use super::prefetch_cache::IntentAssemblyCache;
 pub use super::prefetch_cache::IntentCacheStats;
 pub use super::prefetch_profile::AgentProfileStore;
-use super::prefetch_cache::IntentAssemblyCache;
 use super::prefetch_profile::{IntentFeedbackEntry, DEFAULT_MAX_FEEDBACK_ENTRIES};
 
 // ── Soul v3.0: Cognitive Loop integration ──
@@ -57,7 +55,6 @@ const PATH_LIMIT: usize = 20;
 
 /// Timeout per recall path (500ms).
 const PATH_TIMEOUT_MS: u64 = 500;
-
 
 pub(crate) use crate::util::now_ms;
 
@@ -123,7 +120,9 @@ impl PrefetchHandle {
                 STATE_FAILED | STATE_USED | STATE_UNUSED | STATE_CANCELLED => {
                     return None;
                 }
-                _ => { return None; }
+                _ => {
+                    return None;
+                }
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
@@ -166,7 +165,9 @@ struct AllocationCache {
 
 impl AllocationCache {
     fn new() -> Self {
-        Self { cache: RwLock::new(HashMap::new()) }
+        Self {
+            cache: RwLock::new(HashMap::new()),
+        }
     }
 
     fn insert(&self, assembly_id: String, allocation: BudgetAllocation) {
@@ -311,10 +312,12 @@ impl IntentPrefetcher {
                 tracing::warn!("cost ledger persist failed: {}", e);
             }
         }
-        tracing::debug!("prefetch state persisted ({} cache, {} profiles, {} feedback)",
+        tracing::debug!(
+            "prefetch state persisted ({} cache, {} profiles, {} feedback)",
             self.intent_cache.stats().entries,
             self.profile_store.len(),
-            feedback.len());
+            feedback.len()
+        );
         Ok(())
     }
 
@@ -322,11 +325,10 @@ impl IntentPrefetcher {
     pub fn get_session_cost(&self, session_id: &str) -> (u32, u32) {
         let ledger_guard = self.cost_ledger.read().unwrap();
         match &*ledger_guard {
-            Some(ledger) => {
-                ledger.session_summary(session_id)
-                    .map(|s| (s.total_input_tokens as u32, s.total_output_tokens as u32))
-                    .unwrap_or((0, 0))
-            }
+            Some(ledger) => ledger
+                .session_summary(session_id)
+                .map(|s| (s.total_input_tokens as u32, s.total_output_tokens as u32))
+                .unwrap_or((0, 0)),
             None => (0, 0),
         }
     }
@@ -344,8 +346,8 @@ impl IntentPrefetcher {
         let feedback_path = prefetch_dir.join("feedback.json");
         if feedback_path.exists() {
             let json = std::fs::read_to_string(&feedback_path)?;
-            let loaded: Vec<IntentFeedbackEntry> = serde_json::from_str(&json)
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+            let loaded: Vec<IntentFeedbackEntry> =
+                serde_json::from_str(&json).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
             let mut feedback = self.feedback_history.write().unwrap();
             // Keep most recent entries up to max_feedback_entries
             *feedback = loaded.into_iter().rev().take(self.max_feedback_entries).rev().collect();
@@ -357,8 +359,11 @@ impl IntentPrefetcher {
                 tracing::warn!("cost ledger restore failed (ok if first run): {}", e);
             }
         }
-        tracing::info!("prefetch state restored: {} cache entries, {} profiles",
-            cache_count, profile_count);
+        tracing::info!(
+            "prefetch state restored: {} cache entries, {} profiles",
+            cache_count,
+            profile_count
+        );
         Ok(())
     }
 
@@ -385,12 +390,13 @@ impl IntentPrefetcher {
         let input_tokens = embed_result.as_ref().map(|r| r.input_tokens).unwrap_or(0);
 
         // F-2: Record embedding cost with actual token count if cost ledger is available
-        self.record_embedding_cost_with_tokens(intent, model_name, input_tokens);
+        self.record_embedding_cost_with_tokens(intent, &model_name, input_tokens);
 
         if let Some(cached_allocation) = self.intent_cache.lookup(intent, &intent_embedding) {
             // B51 Fix: Cache hit! Store allocation in allocation_cache so fetch_assembled_context
             // can return it immediately (before async prefetch completes).
-            self.allocation_cache.insert(assembly_id.clone(), cached_allocation.clone());
+            self.allocation_cache
+                .insert(assembly_id.clone(), cached_allocation.clone());
 
             // Also store as Ready assembly in assemblies map
             let assembly = Assembly {
@@ -424,15 +430,18 @@ impl IntentPrefetcher {
         }
 
         // F-15: Build feedback boost map from historical usage before spawning thread
-        let feedback_boost: HashMap<String, f32> =
-            if let Some((used, unused)) = self.get_similar_feedback(intent) {
-                let mut boost = HashMap::new();
-                for cid in used   { boost.insert(cid, 1.5); } // boost historically used
-                for cid in unused { boost.insert(cid, 0.3); } // demote historically unused
-                boost
-            } else {
-                HashMap::new()
-            };
+        let feedback_boost: HashMap<String, f32> = if let Some((used, unused)) = self.get_similar_feedback(intent) {
+            let mut boost = HashMap::new();
+            for cid in used {
+                boost.insert(cid, 1.5);
+            } // boost historically used
+            for cid in unused {
+                boost.insert(cid, 0.3);
+            } // demote historically unused
+            boost
+        } else {
+            HashMap::new()
+        };
 
         // Soul v3.0: CognitiveLoop proactive optimization
         let enhanced_cids = related_cids;
@@ -467,10 +476,17 @@ impl IntentPrefetcher {
             rt.block_on(async move {
                 // Soul v3.0: Query CognitiveLoop for proactive context recommendations
                 if let Some(ref cognitive_loop) = cognitive_loop {
-                    match cognitive_loop.on_intent_declared(&agent_id_clone, &session_id, &intent_clone, &related_cids_clone).await {
+                    match cognitive_loop
+                        .on_intent_declared(&agent_id_clone, &session_id, &intent_clone, &related_cids_clone)
+                        .await
+                    {
                         Ok(report) => {
-                            tracing::debug!("CognitiveLoop: intent '{}' optimized with {} actions, token savings: {}",
-                                intent_clone, report.optimizations.len(), report.token_savings);
+                            tracing::debug!(
+                                "CognitiveLoop: intent '{}' optimized with {} actions, token savings: {}",
+                                intent_clone,
+                                report.optimizations.len(),
+                                report.token_savings
+                            );
                             // Merge CognitiveLoop's prefetched CIDs into related_cids
                             for opt in &report.optimizations {
                                 if let OptimizationAction::ContextPrefetched { cids, .. } = opt {
@@ -489,10 +505,23 @@ impl IntentPrefetcher {
                 }
 
                 Self::run_prefetch(
-                    assemblies, Some(allocation_cache), search, kg, memory, event_bus, embedding, ctx_loader,
-                    assembly_id_clone, intent_clone, related_cids_clone, budget_tokens, max_age,
-                    Some(intent_cache), feedback_boost,
-                ).await;
+                    assemblies,
+                    Some(allocation_cache),
+                    search,
+                    kg,
+                    memory,
+                    event_bus,
+                    embedding,
+                    ctx_loader,
+                    assembly_id_clone,
+                    intent_clone,
+                    related_cids_clone,
+                    budget_tokens,
+                    max_age,
+                    Some(intent_cache),
+                    feedback_boost,
+                )
+                .await;
             });
         });
 
@@ -522,14 +551,15 @@ impl IntentPrefetcher {
         let input_tokens = embed_result.as_ref().map(|r| r.input_tokens).unwrap_or(0);
 
         // F-2: Record embedding cost with actual token count if cost ledger is available
-        self.record_embedding_cost_with_tokens(intent, model_name, input_tokens);
+        self.record_embedding_cost_with_tokens(intent, &model_name, input_tokens);
 
         // F-4: Track intent cache lookups and hits
         self.total_lookups.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
         if let Some(cached_allocation) = self.intent_cache.lookup(intent, &intent_embedding) {
             self.cache_hits.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            self.allocation_cache.insert(assembly_id.clone(), cached_allocation.clone());
+            self.allocation_cache
+                .insert(assembly_id.clone(), cached_allocation.clone());
             let alloc_clone = cached_allocation.clone();
             let assembly = Assembly {
                 assembly_id: assembly_id.clone(),
@@ -575,15 +605,18 @@ impl IntentPrefetcher {
         }
 
         // F-15: Build feedback boost map from historical usage before spawning thread
-        let feedback_boost: HashMap<String, f32> =
-            if let Some((used, unused)) = self.get_similar_feedback(intent) {
-                let mut boost = HashMap::new();
-                for cid in used   { boost.insert(cid, 1.5); } // boost historically used
-                for cid in unused { boost.insert(cid, 0.3); } // demote historically unused
-                boost
-            } else {
-                HashMap::new()
-            };
+        let feedback_boost: HashMap<String, f32> = if let Some((used, unused)) = self.get_similar_feedback(intent) {
+            let mut boost = HashMap::new();
+            for cid in used {
+                boost.insert(cid, 1.5);
+            } // boost historically used
+            for cid in unused {
+                boost.insert(cid, 0.3);
+            } // demote historically unused
+            boost
+        } else {
+            HashMap::new()
+        };
 
         // Clone all data needed for the background thread
         let assemblies = Arc::clone(&self.assemblies);
@@ -612,11 +645,23 @@ impl IntentPrefetcher {
 
             rt.block_on(async move {
                 Self::run_prefetch(
-                    assemblies.clone(), Some(allocation_cache.clone()), search.clone(), kg.clone(),
-                    memory.clone(), event_bus.clone(), embedding.clone(), ctx_loader.clone(),
-                    assembly_id_clone.clone(), intent_clone.clone(), related_cids_clone.clone(),
-                    budget_tokens, max_age, Some(intent_cache), feedback_boost,
-                ).await;
+                    assemblies.clone(),
+                    Some(allocation_cache.clone()),
+                    search.clone(),
+                    kg.clone(),
+                    memory.clone(),
+                    event_bus.clone(),
+                    embedding.clone(),
+                    ctx_loader.clone(),
+                    assembly_id_clone.clone(),
+                    intent_clone.clone(),
+                    related_cids_clone.clone(),
+                    budget_tokens,
+                    max_age,
+                    Some(intent_cache),
+                    feedback_boost,
+                )
+                .await;
 
                 // Update handle state by checking assembly state
                 let assemblies = assemblies.read().unwrap();
@@ -759,11 +804,9 @@ impl IntentPrefetcher {
         let next_tag_key = next_intent.and_then(|n| self.profile_store.extract_tag_key(n, known_tags));
 
         // Record in profile and get prediction
-        let predicted_next = self.profile_store.record_intent_complete(
-            agent_id,
-            current_tag_key.as_deref(),
-            next_tag_key.as_deref(),
-        );
+        let predicted_next =
+            self.profile_store
+                .record_intent_complete(agent_id, current_tag_key.as_deref(), next_tag_key.as_deref());
 
         if let Some(ref predicted) = predicted_next {
             tracing::debug!(
@@ -786,7 +829,9 @@ impl IntentPrefetcher {
             let agent_id = agent_id.to_string();
             let intent = intent.to_string();
             tokio::spawn(async move {
-                let _ = cognitive_loop.on_operation_completed(&agent_id, &intent, true, &[], &[]).await;
+                let _ = cognitive_loop
+                    .on_operation_completed(&agent_id, &intent, true, &[], &[])
+                    .await;
             });
         }
 
@@ -822,7 +867,7 @@ impl IntentPrefetcher {
         let intent_embedding: Option<Vec<f32>> = self.embedding.embed(&predicted_intent).ok().map(|r| r.embedding);
 
         // F-2: Record embedding cost if cost ledger is available
-        self.record_embedding_cost(&predicted_intent, model_name);
+        self.record_embedding_cost(&predicted_intent, &model_name);
 
         if self.intent_cache.lookup(&predicted_intent, &intent_embedding).is_some() {
             tracing::debug!("F-10: predicted intent already cached, skipping prefetch");
@@ -833,11 +878,15 @@ impl IntentPrefetcher {
         let assembly_id = self.declare_intent(
             agent_id,
             &predicted_intent,
-            vec![],  // no related cids for predicted intent
+            vec![], // no related cids for predicted intent
             budget,
         );
 
-        tracing::debug!("F-10: triggered silent prefetch for '{}', assembly_id={}", predicted_tag_key, assembly_id);
+        tracing::debug!(
+            "F-10: triggered silent prefetch for '{}', assembly_id={}",
+            predicted_tag_key,
+            assembly_id
+        );
         Some(assembly_id)
     }
 
@@ -985,10 +1034,8 @@ impl IntentPrefetcher {
         intent_cache: Option<Arc<IntentAssemblyCache>>,
         feedback_boost: HashMap<String, f32>,
     ) {
-        let result = Self::multi_path_recall_async(
-            &search, &kg, &memory, &event_bus, &embedding,
-            &intent, &related_cids,
-        ).await;
+        let result =
+            Self::multi_path_recall_async(&search, &kg, &memory, &event_bus, &embedding, &intent, &related_cids).await;
 
         let now = crate::memory::layered::now_ms();
         let mut assemblies_guard = assemblies.write().unwrap();
@@ -1007,11 +1054,14 @@ impl IntentPrefetcher {
                         }
                     }
                     candidates.sort_by(|a, b| {
-                        b.relevance.partial_cmp(&a.relevance).unwrap_or(std::cmp::Ordering::Equal)
+                        b.relevance
+                            .partial_cmp(&a.relevance)
+                            .unwrap_or(std::cmp::Ordering::Equal)
                     });
                     tracing::debug!(
                         "F-15: applied feedback boost ({} boosted/demoted) for intent '{}'",
-                        feedback_boost.len(), intent
+                        feedback_boost.len(),
+                        intent
                     );
                 }
                 let allocation = context_budget::assemble(&ctx_loader, &candidates, budget_tokens);
@@ -1019,10 +1069,7 @@ impl IntentPrefetcher {
                 // F-9: Store in intent cache for future hits
                 if let Some(ref cache) = intent_cache {
                     // Get embedding for cache storage (Path A)
-                    let intent_embedding: Option<Vec<f32>> = embedding
-                        .embed(&intent)
-                        .ok()
-                        .map(|r| r.embedding);
+                    let intent_embedding: Option<Vec<f32>> = embedding.embed(&intent).ok().map(|r| r.embedding);
                     cache.store(intent, intent_embedding, allocation.clone(), related_cids);
                 }
 
@@ -1050,7 +1097,7 @@ impl IntentPrefetcher {
     async fn multi_path_recall_async(
         search: &Arc<dyn crate::fs::SemanticSearch>,
         kg: &Option<Arc<dyn KnowledgeGraph>>,
-        memory: &Arc<LayeredMemory>,
+        _memory: &Arc<LayeredMemory>,
         event_bus: &Arc<EventBus>,
         embedding: &Arc<dyn EmbeddingProvider>,
         intent: &str,
@@ -1061,7 +1108,8 @@ impl IntentPrefetcher {
             let embedding = Arc::clone(embedding);
             let intent = intent.to_string();
             move || embedding.embed(&intent)
-        }).await
+        })
+        .await
         .map_err(|e| format!("embed task panicked: {}", e))?
         .map_err(|e| format!("failed to embed intent: {}", e))?;
         let emb_slice: Vec<f32> = emb.embedding;
@@ -1072,17 +1120,18 @@ impl IntentPrefetcher {
         let intent_owned2 = intent.to_string(); // Second owned copy for events path
         let search = Arc::clone(search);
         let kg = kg.clone();
-        let memory = Arc::clone(memory);
         let event_bus = Arc::clone(event_bus);
         let emb_for_sem = emb_slice.clone();
 
         // Step 2: Four-path recall CONCURRENTLY with 500ms timeout each
         let timeout_duration = Duration::from_millis(PATH_TIMEOUT_MS);
 
-        let (path_a, path_b, path_c, path_d) = tokio::join!(
+        let (path_a, path_b, path_c) = tokio::join!(
             timeout(timeout_duration, Self::recall_semantic_async(search, emb_for_sem)),
-            timeout(timeout_duration, Self::recall_kg_async(kg, related_cids_owned, intent_owned)),
-            timeout(timeout_duration, Self::recall_procedural_async(memory)),
+            timeout(
+                timeout_duration,
+                Self::recall_kg_async(kg, related_cids_owned, intent_owned)
+            ),
             timeout(timeout_duration, Self::recall_events_async(event_bus, intent_owned2)),
         );
 
@@ -1108,16 +1157,8 @@ impl IntentPrefetcher {
                 Vec::new()
             }
         };
-        let path_d: Vec<(String, f32)> = match path_d {
-            Ok(result) => result,
-            Err(_) => {
-                tracing::warn!("recall_events timed out after {}ms", PATH_TIMEOUT_MS);
-                Vec::new()
-            }
-        };
-
         // Step 3: RRF fusion
-        let fused = Self::rrf_fuse(path_a, path_b, path_c, path_d);
+        let fused = Self::rrf_fuse(path_a, path_b, Vec::new(), path_c);
 
         Ok(fused)
     }
@@ -1134,7 +1175,9 @@ impl IntentPrefetcher {
                 .into_iter()
                 .map(|hit| (hit.cid.clone(), hit.score))
                 .collect()
-        }).await.unwrap_or_else(|_| Vec::new())
+        })
+        .await
+        .unwrap_or_else(|_| Vec::new())
     }
 
     /// Path B (async): KG topology neighbors of related CIDs.
@@ -1143,16 +1186,15 @@ impl IntentPrefetcher {
         related_cids: Vec<String>,
         intent: String,
     ) -> Vec<(String, f32)> {
-        let Some(kg) = kg else { return Vec::new(); };
+        let Some(kg) = kg else {
+            return Vec::new();
+        };
         let kg = Arc::clone(&kg);
 
         spawn_blocking(move || -> Vec<(String, f32)> {
             let mut results: HashMap<String, f32> = HashMap::new();
 
-            let keywords: Vec<&str> = intent
-                .split_whitespace()
-                .filter(|w| w.len() > 2)
-                .collect();
+            let keywords: Vec<&str> = intent.split_whitespace().filter(|w| w.len() > 2).collect();
 
             for cid in related_cids {
                 if let Ok(neighbors) = kg.get_neighbors(&cid, None, 2) {
@@ -1178,38 +1220,16 @@ impl IntentPrefetcher {
             cids_with_scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
             cids_with_scores.truncate(PATH_LIMIT);
             cids_with_scores
-        }).await.unwrap_or_else(|_| Vec::new())
-    }
-
-    /// Path C (async): shared procedural memories matching the intent.
-    async fn recall_procedural_async(
-        memory: Arc<LayeredMemory>,
-    ) -> Vec<(String, f32)> {
-        spawn_blocking(move || -> Vec<(String, f32)> {
-            let entries = memory.get_shared(MemoryTier::Procedural);
-            entries
-                .into_iter()
-                .map(|e| {
-                    let desc = e.content.display().to_string();
-                    let score = e.importance as f32 / 100.0_f32;
-                    (desc, score)
-                })
-                .take(PATH_LIMIT)
-                .collect()
-        }).await.unwrap_or_else(|_| Vec::new())
+        })
+        .await
+        .unwrap_or_else(|_| Vec::new())
     }
 
     /// Path D (async): recent events with tags related to the intent.
-    async fn recall_events_async(
-        event_bus: Arc<EventBus>,
-        intent: String,
-    ) -> Vec<(String, f32)> {
+    async fn recall_events_async(event_bus: Arc<EventBus>, intent: String) -> Vec<(String, f32)> {
         spawn_blocking(move || -> Vec<(String, f32)> {
             let events = event_bus.snapshot_events();
-            let keywords: Vec<&str> = intent
-                .split_whitespace()
-                .filter(|w| w.len() > 2)
-                .collect();
+            let keywords: Vec<&str> = intent.split_whitespace().filter(|w| w.len() > 2).collect();
 
             let mut results: Vec<(String, f32)> = Vec::new();
             for ev in events.iter().rev().take(PATH_LIMIT * 2) {
@@ -1227,9 +1247,10 @@ impl IntentPrefetcher {
             results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
             results.truncate(PATH_LIMIT);
             results
-        }).await.unwrap_or_else(|_| Vec::new())
+        })
+        .await
+        .unwrap_or_else(|_| Vec::new())
     }
-
 
     /// Reciprocal Rank Fusion — combines ranked lists from multiple recall paths.
     fn rrf_fuse(
@@ -1245,7 +1266,10 @@ impl IntentPrefetcher {
             let base = relevance * 0.5; // weight semantic relevance
             scores
                 .entry(cid)
-                .and_modify(|(s, c)| { *s += rrf + base; *c += 1; })
+                .and_modify(|(s, c)| {
+                    *s += rrf + base;
+                    *c += 1;
+                })
                 .or_insert((rrf + base, 1));
         }
 
@@ -1254,7 +1278,10 @@ impl IntentPrefetcher {
             let base = relevance * 0.4;
             scores
                 .entry(cid)
-                .and_modify(|(s, c)| { *s += rrf + base; *c += 1; })
+                .and_modify(|(s, c)| {
+                    *s += rrf + base;
+                    *c += 1;
+                })
                 .or_insert((rrf + base, 1));
         }
 
@@ -1263,7 +1290,10 @@ impl IntentPrefetcher {
             let base = relevance * 0.3;
             scores
                 .entry(cid)
-                .and_modify(|(s, c)| { *s += rrf + base; *c += 1; })
+                .and_modify(|(s, c)| {
+                    *s += rrf + base;
+                    *c += 1;
+                })
                 .or_insert((rrf + base, 1));
         }
 
@@ -1272,7 +1302,10 @@ impl IntentPrefetcher {
             let base = relevance * 0.3;
             scores
                 .entry(cid)
-                .and_modify(|(s, c)| { *s += rrf + base; *c += 1; })
+                .and_modify(|(s, c)| {
+                    *s += rrf + base;
+                    *c += 1;
+                })
                 .or_insert((rrf + base, 1));
         }
 
@@ -1282,12 +1315,17 @@ impl IntentPrefetcher {
             .map(|(cid, (score, paths))| {
                 // Bonus for cross-path agreement
                 let path_bonus = (paths as f32 - 1.0) * 0.05;
-                ContextCandidate { cid, relevance: (score + path_bonus).min(1.0) }
+                ContextCandidate {
+                    cid,
+                    relevance: (score + path_bonus).min(1.0),
+                }
             })
             .collect();
 
         candidates.sort_by(|a, b| {
-            b.relevance.partial_cmp(&a.relevance).unwrap_or(std::cmp::Ordering::Equal)
+            b.relevance
+                .partial_cmp(&a.relevance)
+                .unwrap_or(std::cmp::Ordering::Equal)
         });
         candidates
     }
@@ -1312,13 +1350,11 @@ impl crate::kernel::AIKernel {
             .check(&ctx, PermissionAction::Read)
             .map_err(|e| e.to_string())?;
         // F-20 M2: Track current intent for causal hook (KG CausedBy edges)
-        self.session_store.set_current_intent(agent_id, Some(intent.to_string()));
-        Ok(self.prefetch.declare_intent(
-            agent_id,
-            intent,
-            related_cids,
-            budget_tokens,
-        ))
+        self.session_store
+            .set_current_intent(agent_id, Some(intent.to_string()));
+        Ok(self
+            .prefetch
+            .declare_intent(agent_id, intent, related_cids, budget_tokens))
     }
 
     /// Fetch the result of a previously declared intent prefetch.
@@ -1344,10 +1380,7 @@ mod tests {
 
     #[test]
     fn test_rrf_fuse_single_path() {
-        let path_a = vec![
-            ("cid1".to_string(), 0.9_f32),
-            ("cid2".to_string(), 0.8_f32),
-        ];
+        let path_a = vec![("cid1".to_string(), 0.9_f32), ("cid2".to_string(), 0.8_f32)];
         let result = IntentPrefetcher::rrf_fuse(path_a, vec![], vec![], vec![]);
         assert_eq!(result.len(), 2);
         assert_eq!(result[0].cid, "cid1");
@@ -1533,7 +1566,12 @@ mod tests {
         let embedding_b = vec![0.9, 0.1, 0.0]; // Similar to embedding_a (cosine ~0.995)
         let embedding_c = vec![0.0, 1.0, 0.0]; // Orthogonal (cosine ~0)
 
-        cache.store("fix auth bug".to_string(), Some(embedding_a.clone()), allocation.clone(), vec![]);
+        cache.store(
+            "fix auth bug".to_string(),
+            Some(embedding_a.clone()),
+            allocation.clone(),
+            vec![],
+        );
 
         // Very similar embedding should hit (cosine ~0.995 > 0.85)
         let result = cache.lookup("fix auth bug variant", &Some(embedding_b));
@@ -1680,13 +1718,8 @@ mod tests {
     fn create_test_prefetcher() -> IntentPrefetcher {
         let dir = tempfile::tempdir().unwrap();
         let cas = Arc::new(crate::cas::CASStorage::new(dir.path().join("cas")).unwrap());
-        let ctx_loader = Arc::new(
-            crate::fs::context_loader::ContextLoader::new(
-                dir.path().join("context"),
-                None,
-                cas,
-            ).unwrap()
-        );
+        let ctx_loader =
+            Arc::new(crate::fs::context_loader::ContextLoader::new(dir.path().join("context"), None, cas).unwrap());
 
         IntentPrefetcher::new(
             Arc::new(crate::fs::search::memory::InMemoryBackend::new()),
@@ -1723,11 +1756,7 @@ mod tests {
     fn test_intent_feedback_normalizes_intent() {
         let prefetcher = create_test_prefetcher();
 
-        prefetcher.record_feedback(
-            "Fix Auth Bug",
-            vec!["cid1".to_string()],
-            vec![],
-        );
+        prefetcher.record_feedback("Fix Auth Bug", vec!["cid1".to_string()], vec![]);
 
         // Should match regardless of case
         let (used, _) = prefetcher.get_similar_feedback("fix auth bug").unwrap();
@@ -1742,11 +1771,7 @@ mod tests {
     fn test_intent_feedback_returns_none_for_unknown_intent() {
         let prefetcher = create_test_prefetcher();
 
-        prefetcher.record_feedback(
-            "fix auth bug",
-            vec!["cid1".to_string()],
-            vec![],
-        );
+        prefetcher.record_feedback("fix auth bug", vec!["cid1".to_string()], vec![]);
 
         // Should not find feedback for different intent
         let result = prefetcher.get_similar_feedback("fix network bug");
@@ -1760,11 +1785,7 @@ mod tests {
         // Record more entries than the max (1000)
         // We can test this indirectly by checking the count doesn't grow unbounded
         for i in 0..100 {
-            prefetcher.record_feedback(
-                &format!("intent {}", i),
-                vec![format!("cid{}", i)],
-                vec![],
-            );
+            prefetcher.record_feedback(&format!("intent {}", i), vec![format!("cid{}", i)], vec![]);
         }
 
         assert_eq!(prefetcher.feedback_count(), 100);
@@ -1775,12 +1796,7 @@ mod tests {
     #[test]
     fn test_prefetch_async_returns_handle() {
         let prefetcher = create_test_prefetcher();
-        let handle = prefetcher.prefetch_async(
-            "agent-1",
-            "fix authentication",
-            vec![],
-            1000,
-        );
+        let handle = prefetcher.prefetch_async("agent-1", "fix authentication", vec![], 1000);
         // Handle should be created with a non-empty assembly_id
         assert!(!handle.assembly_id.is_empty());
         // State should be either Pending (async) or Ready (cache hit)
@@ -1804,12 +1820,7 @@ mod tests {
     #[test]
     fn test_prefetch_cancel() {
         let prefetcher = create_test_prefetcher();
-        let handle = prefetcher.prefetch_async(
-            "agent-1",
-            "fix bug",
-            vec![],
-            1000,
-        );
+        let handle = prefetcher.prefetch_async("agent-1", "fix bug", vec![], 1000);
         let assembly_id = handle.assembly_id.clone();
         // Cancel should succeed
         let cancelled = prefetcher.cancel(&assembly_id);
@@ -1822,12 +1833,7 @@ mod tests {
     #[test]
     fn test_prefetch_handle_await_result_blocks_until_ready() {
         let prefetcher = create_test_prefetcher();
-        let handle = prefetcher.prefetch_async(
-            "agent-1",
-            "fix auth bug",
-            vec![],
-            1000,
-        );
+        let handle = prefetcher.prefetch_async("agent-1", "fix auth bug", vec![], 1000);
         // For a cache hit, await_result should return immediately
         if handle.state.load(Ordering::Relaxed) == STATE_READY {
             let result = handle.await_result();
@@ -1920,7 +1926,9 @@ mod tests {
             candidates_considered: 1,
             candidates_included: 1,
         };
-        prefetcher.intent_cache.store("fix auth".to_string(), None, alloc, vec![]);
+        prefetcher
+            .intent_cache
+            .store("fix auth".to_string(), None, alloc, vec![]);
 
         let id = prefetcher.declare_intent("agent-1", "fix auth", vec![], 1000);
 
@@ -1947,7 +1955,10 @@ mod tests {
         assert_eq!(assembly.intent, "fix auth bug");
         assert_eq!(assembly.budget_tokens, 1000);
         // State could be Pending or Ready depending on background thread timing
-        assert!(matches!(assembly.state, AssemblyState::Pending | AssemblyState::Ready(_)));
+        assert!(matches!(
+            assembly.state,
+            AssemblyState::Pending | AssemblyState::Ready(_)
+        ));
     }
 
     // ── fetch_assembled_context ────────────────────────────────────────────────
@@ -2207,7 +2218,10 @@ mod tests {
 
         // cid1 still has count > 0 because first entry re-adds it
         let hot = prefetcher.get_hot_objects("agent-1");
-        assert!(hot.contains(&"cid1".to_string()), "cid1 survives because replay re-applies positive feedback");
+        assert!(
+            hot.contains(&"cid1".to_string()),
+            "cid1 survives because replay re-applies positive feedback"
+        );
 
         // Verify the profile_store directly: apply single negative feedback
         let entry = IntentFeedbackEntry {
@@ -2239,11 +2253,8 @@ mod tests {
     fn test_persist_restore_roundtrip() {
         let dir = tempfile::tempdir().unwrap();
         let cas = Arc::new(crate::cas::CASStorage::new(dir.path().join("cas")).unwrap());
-        let ctx_loader = Arc::new(
-            crate::fs::context_loader::ContextLoader::new(
-                dir.path().join("ctx"), None, cas,
-            ).unwrap()
-        );
+        let ctx_loader =
+            Arc::new(crate::fs::context_loader::ContextLoader::new(dir.path().join("ctx"), None, cas).unwrap());
 
         // Create prefetcher, add data, persist
         {
@@ -2265,19 +2276,20 @@ mod tests {
                 candidates_considered: 1,
                 candidates_included: 1,
             };
-            prefetcher.intent_cache.store("fix auth".to_string(), None, alloc, vec!["cid1".to_string()]);
-            prefetcher.profile_store.record_intent_complete("agent-1", Some("auth"), Some("deploy"));
+            prefetcher
+                .intent_cache
+                .store("fix auth".to_string(), None, alloc, vec!["cid1".to_string()]);
+            prefetcher
+                .profile_store
+                .record_intent_complete("agent-1", Some("auth"), Some("deploy"));
 
             prefetcher.persist().unwrap();
         }
 
         // Create new prefetcher and restore from same directory
         let cas2 = Arc::new(crate::cas::CASStorage::new(dir.path().join("cas2")).unwrap());
-        let ctx_loader2 = Arc::new(
-            crate::fs::context_loader::ContextLoader::new(
-                dir.path().join("ctx2"), None, cas2,
-            ).unwrap()
-        );
+        let ctx_loader2 =
+            Arc::new(crate::fs::context_loader::ContextLoader::new(dir.path().join("ctx2"), None, cas2).unwrap());
         let prefetcher2 = IntentPrefetcher::new(
             Arc::new(crate::fs::search::memory::InMemoryBackend::new()),
             None,
@@ -2300,18 +2312,18 @@ mod tests {
 
         // Verify profile restored
         let profile = prefetcher2.get_agent_profile("agent-1");
-        assert!(!profile.intent_transitions.is_empty(), "profile transitions should be restored");
+        assert!(
+            !profile.intent_transitions.is_empty(),
+            "profile transitions should be restored"
+        );
     }
 
     #[test]
     fn test_restore_missing_directory_is_ok() {
         let dir = tempfile::tempdir().unwrap();
         let cas = Arc::new(crate::cas::CASStorage::new(dir.path().join("cas")).unwrap());
-        let ctx_loader = Arc::new(
-            crate::fs::context_loader::ContextLoader::new(
-                dir.path().join("ctx"), None, cas,
-            ).unwrap()
-        );
+        let ctx_loader =
+            Arc::new(crate::fs::context_loader::ContextLoader::new(dir.path().join("ctx"), None, cas).unwrap());
         let prefetcher = IntentPrefetcher::new(
             Arc::new(crate::fs::search::memory::InMemoryBackend::new()),
             None,
@@ -2407,9 +2419,7 @@ mod tests {
     fn test_rrf_fuse_relevance_capped_at_one() {
         // When a CID appears in all 4 paths with high relevance, score should be capped at 1.0
         let path = vec![("cid1".to_string(), 1.0_f32)];
-        let result = IntentPrefetcher::rrf_fuse(
-            path.clone(), path.clone(), path.clone(), path.clone(),
-        );
+        let result = IntentPrefetcher::rrf_fuse(path.clone(), path.clone(), path.clone(), path.clone());
         assert_eq!(result.len(), 1);
         assert!(result[0].relevance <= 1.0, "relevance should be capped at 1.0");
     }

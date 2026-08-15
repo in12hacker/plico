@@ -8,9 +8,9 @@
 //! and handles assembly, not Agent.
 
 use crate::util::now_ms;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::RwLock;
-use serde::{Deserialize, Serialize};
 
 /// Structured intent declaration (F-1).
 ///
@@ -175,12 +175,8 @@ impl IntentPlan {
         let mut sorted = Vec::new();
 
         // Build step_id to index map
-        let step_id_to_idx: std::collections::HashMap<_, _> = self
-            .steps
-            .iter()
-            .enumerate()
-            .map(|(i, s)| (&s.step_id, i))
-            .collect();
+        let step_id_to_idx: std::collections::HashMap<_, _> =
+            self.steps.iter().enumerate().map(|(i, s)| (&s.step_id, i)).collect();
 
         // Validate dependencies exist
         for step in &self.steps {
@@ -222,7 +218,14 @@ impl IntentPlan {
 
         for i in 0..n {
             if !visited[i] {
-                visit(i, &self.steps, &mut visited, &mut in_progress, &mut sorted, &step_id_to_idx)?;
+                visit(
+                    i,
+                    &self.steps,
+                    &mut visited,
+                    &mut in_progress,
+                    &mut sorted,
+                    &step_id_to_idx,
+                )?;
             }
         }
 
@@ -262,24 +265,22 @@ impl IntentPlan {
         };
 
         // Build dependency info: for each position, what must come before it
-        let step_id_to_idx: std::collections::HashMap<_, _> = self.steps.iter()
-            .enumerate()
-            .map(|(i, s)| (&s.step_id, i))
-            .collect();
+        let step_id_to_idx: std::collections::HashMap<_, _> =
+            self.steps.iter().enumerate().map(|(i, s)| (&s.step_id, i)).collect();
 
         // Greedy placement: for each step, find the earliest valid position
         let mut result: Vec<usize> = Vec::with_capacity(n);
 
         // Sort steps by duration (longest first) for greedy assignment
         // Use (duration, step_idx) order so step_idx is usize for indexing
-        let mut step_durations: Vec<(u64, usize)> = sorted.iter()
-            .map(|&idx| (get_duration(idx), idx))
-            .collect();
+        let mut step_durations: Vec<(u64, usize)> = sorted.iter().map(|&idx| (get_duration(idx), idx)).collect();
         step_durations.sort_by_key(|(dur, _)| std::cmp::Reverse(*dur));
 
         for (_, step_idx) in step_durations {
             // Find earliest position where all dependencies are placed before this position
-            let deps: Vec<usize> = self.steps[step_idx].dependencies.iter()
+            let deps: Vec<usize> = self.steps[step_idx]
+                .dependencies
+                .iter()
                 .filter_map(|d| step_id_to_idx.get(d).copied())
                 .collect();
 
@@ -657,14 +658,17 @@ impl IntentTracker {
     pub fn declare(&self, intent_id: String, declaration: IntentDeclaration) -> Result<(), IntentError> {
         declaration.validate()?;
         let mut intents = self.intents.write().unwrap();
-        intents.insert(intent_id.clone(), ActiveIntent {
-            declaration,
-            state: IntentExecutionState::Declared,
-            steps_completed: 0,
-            steps_total: 0,
-            tokens_used: 0,
-            started_at_ms: None,
-        });
+        intents.insert(
+            intent_id.clone(),
+            ActiveIntent {
+                declaration,
+                state: IntentExecutionState::Declared,
+                steps_completed: 0,
+                steps_total: 0,
+                tokens_used: 0,
+                started_at_ms: None,
+            },
+        );
         Ok(())
     }
 
@@ -796,7 +800,8 @@ impl IntentTracker {
     /// List all active intents for an agent.
     pub fn list_active(&self, agent_id: &str) -> Vec<IntentProgress> {
         let intents = self.intents.read().unwrap();
-        intents.values()
+        intents
+            .values()
             .filter(|i| i.declaration.agent_id == agent_id)
             .map(|i| IntentProgress {
                 intent_id: i.declaration.keywords.first().cloned().unwrap_or_default(),
@@ -843,7 +848,6 @@ impl From<IntentValidationError> for IntentError {
         IntentError::ValidationFailed(e.to_string())
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -1074,12 +1078,17 @@ mod tests {
         let mut plan = IntentPlan::new("intent-1".to_string());
         plan.add_step(IntentStep::new(
             "step-1".to_string(),
-            IntentOperation::Read { cid: "cid1".to_string() },
+            IntentOperation::Read {
+                cid: "cid1".to_string(),
+            },
             100,
         ));
         plan.add_step(IntentStep::new(
             "step-2".to_string(),
-            IntentOperation::Search { query: "test".to_string(), tags: vec![] },
+            IntentOperation::Search {
+                query: "test".to_string(),
+                tags: vec![],
+            },
             200,
         ));
         assert_eq!(plan.steps.len(), 2);
@@ -1089,8 +1098,16 @@ mod tests {
     #[test]
     fn test_intent_plan_topological_sort_no_deps() {
         let mut plan = IntentPlan::new("intent-1".to_string());
-        plan.add_step(IntentStep::new("s1".to_string(), IntentOperation::Read { cid: "c1".to_string() }, 100));
-        plan.add_step(IntentStep::new("s2".to_string(), IntentOperation::Read { cid: "c2".to_string() }, 100));
+        plan.add_step(IntentStep::new(
+            "s1".to_string(),
+            IntentOperation::Read { cid: "c1".to_string() },
+            100,
+        ));
+        plan.add_step(IntentStep::new(
+            "s2".to_string(),
+            IntentOperation::Read { cid: "c2".to_string() },
+            100,
+        ));
 
         let sorted = plan.topological_sort().unwrap();
         assert_eq!(sorted.len(), 2);
@@ -1100,7 +1117,11 @@ mod tests {
     fn test_intent_plan_topological_sort_with_deps() {
         let mut plan = IntentPlan::new("intent-1".to_string());
         // s2 depends on s1
-        plan.add_step(IntentStep::new("s1".to_string(), IntentOperation::Read { cid: "c1".to_string() }, 100));
+        plan.add_step(IntentStep::new(
+            "s1".to_string(),
+            IntentOperation::Read { cid: "c1".to_string() },
+            100,
+        ));
         plan.add_step(
             IntentStep::new("s2".to_string(), IntentOperation::Read { cid: "c2".to_string() }, 100)
                 .with_dependency("s1".to_string()),
@@ -1129,7 +1150,11 @@ mod tests {
     fn test_intent_plan_entry_steps() {
         let mut plan = IntentPlan::new("intent-1".to_string());
         // s1 has no deps, s2 depends on s1
-        plan.add_step(IntentStep::new("s1".to_string(), IntentOperation::Read { cid: "c1".to_string() }, 100));
+        plan.add_step(IntentStep::new(
+            "s1".to_string(),
+            IntentOperation::Read { cid: "c1".to_string() },
+            100,
+        ));
         plan.add_step(
             IntentStep::new("s2".to_string(), IntentOperation::Read { cid: "c2".to_string() }, 100)
                 .with_dependency("s1".to_string()),
@@ -1144,7 +1169,10 @@ mod tests {
     fn test_intent_step_with_dependencies() {
         let step = IntentStep::new(
             "step1".to_string(),
-            IntentOperation::Call { tool: "test".to_string(), params: serde_json::json!({}) },
+            IntentOperation::Call {
+                tool: "test".to_string(),
+                params: serde_json::json!({}),
+            },
             50,
         )
         .with_dependency("dep1".to_string())
@@ -1159,7 +1187,11 @@ mod tests {
     fn test_optimized_sort_respects_dependencies() {
         // When dependencies exist, they must be respected
         let mut plan = IntentPlan::new("intent-1".to_string());
-        plan.add_step(IntentStep::new("s1".to_string(), IntentOperation::Read { cid: "c1".to_string() }, 100));
+        plan.add_step(IntentStep::new(
+            "s1".to_string(),
+            IntentOperation::Read { cid: "c1".to_string() },
+            100,
+        ));
         plan.add_step(
             IntentStep::new("s2".to_string(), IntentOperation::Read { cid: "c2".to_string() }, 100)
                 .with_dependency("s1".to_string()),
@@ -1185,8 +1217,19 @@ mod tests {
         // With execution time data, long operations should be prioritized earlier
         let mut plan = IntentPlan::new("intent-1".to_string());
         // s1: short read, s2: long search
-        plan.add_step(IntentStep::new("s1".to_string(), IntentOperation::Read { cid: "c1".to_string() }, 100));
-        plan.add_step(IntentStep::new("s2".to_string(), IntentOperation::Search { query: "test".to_string(), tags: vec![] }, 500));
+        plan.add_step(IntentStep::new(
+            "s1".to_string(),
+            IntentOperation::Read { cid: "c1".to_string() },
+            100,
+        ));
+        plan.add_step(IntentStep::new(
+            "s2".to_string(),
+            IntentOperation::Search {
+                query: "test".to_string(),
+                tags: vec![],
+            },
+            500,
+        ));
         // No dependencies, so order can be optimized
 
         let mut avg_times = std::collections::HashMap::new();
@@ -1205,8 +1248,16 @@ mod tests {
     #[test]
     fn test_intent_tree_creation() {
         let mut plan = IntentPlan::new("intent-1".to_string());
-        plan.add_step(IntentStep::new("s1".to_string(), IntentOperation::Read { cid: "c1".to_string() }, 100));
-        plan.add_step(IntentStep::new("s2".to_string(), IntentOperation::Read { cid: "c2".to_string() }, 100));
+        plan.add_step(IntentStep::new(
+            "s1".to_string(),
+            IntentOperation::Read { cid: "c1".to_string() },
+            100,
+        ));
+        plan.add_step(IntentStep::new(
+            "s2".to_string(),
+            IntentOperation::Read { cid: "c2".to_string() },
+            100,
+        ));
 
         let tree = IntentTree::new("intent-1".to_string(), plan);
         assert_eq!(tree.root_intent_id, "intent-1");
@@ -1216,8 +1267,16 @@ mod tests {
     #[test]
     fn test_intent_tree_assign_step() {
         let mut plan = IntentPlan::new("intent-1".to_string());
-        plan.add_step(IntentStep::new("s1".to_string(), IntentOperation::Read { cid: "c1".to_string() }, 100));
-        plan.add_step(IntentStep::new("s2".to_string(), IntentOperation::Read { cid: "c2".to_string() }, 100));
+        plan.add_step(IntentStep::new(
+            "s1".to_string(),
+            IntentOperation::Read { cid: "c1".to_string() },
+            100,
+        ));
+        plan.add_step(IntentStep::new(
+            "s2".to_string(),
+            IntentOperation::Read { cid: "c2".to_string() },
+            100,
+        ));
 
         let tree = IntentTree::new("intent-1".to_string(), plan);
 
@@ -1229,7 +1288,11 @@ mod tests {
     #[test]
     fn test_intent_tree_assign_same_step_fails() {
         let mut plan = IntentPlan::new("intent-1".to_string());
-        plan.add_step(IntentStep::new("s1".to_string(), IntentOperation::Read { cid: "c1".to_string() }, 100));
+        plan.add_step(IntentStep::new(
+            "s1".to_string(),
+            IntentOperation::Read { cid: "c1".to_string() },
+            100,
+        ));
 
         let tree = IntentTree::new("intent-1".to_string(), plan);
 
@@ -1241,7 +1304,11 @@ mod tests {
     #[test]
     fn test_intent_tree_record_result() {
         let mut plan = IntentPlan::new("intent-1".to_string());
-        plan.add_step(IntentStep::new("s1".to_string(), IntentOperation::Read { cid: "c1".to_string() }, 100));
+        plan.add_step(IntentStep::new(
+            "s1".to_string(),
+            IntentOperation::Read { cid: "c1".to_string() },
+            100,
+        ));
 
         let tree = IntentTree::new("intent-1".to_string(), plan);
         tree.assign_step("s1", "agent-a").unwrap();
@@ -1263,7 +1330,11 @@ mod tests {
     #[test]
     fn test_intent_tree_unauthorized_agent() {
         let mut plan = IntentPlan::new("intent-1".to_string());
-        plan.add_step(IntentStep::new("s1".to_string(), IntentOperation::Read { cid: "c1".to_string() }, 100));
+        plan.add_step(IntentStep::new(
+            "s1".to_string(),
+            IntentOperation::Read { cid: "c1".to_string() },
+            100,
+        ));
 
         let tree = IntentTree::new("intent-1".to_string(), plan);
         tree.assign_step("s1", "agent-a").unwrap();
@@ -1284,7 +1355,11 @@ mod tests {
     fn test_intent_tree_ready_steps() {
         let mut plan = IntentPlan::new("intent-1".to_string());
         // s1 has no deps, s2 depends on s1
-        plan.add_step(IntentStep::new("s1".to_string(), IntentOperation::Read { cid: "c1".to_string() }, 100));
+        plan.add_step(IntentStep::new(
+            "s1".to_string(),
+            IntentOperation::Read { cid: "c1".to_string() },
+            100,
+        ));
         plan.add_step(
             IntentStep::new("s2".to_string(), IntentOperation::Read { cid: "c2".to_string() }, 100)
                 .with_dependency("s1".to_string()),
@@ -1300,28 +1375,46 @@ mod tests {
     #[test]
     fn test_intent_tree_aggregate_results() {
         let mut plan = IntentPlan::new("intent-1".to_string());
-        plan.add_step(IntentStep::new("s1".to_string(), IntentOperation::Read { cid: "c1".to_string() }, 100));
-        plan.add_step(IntentStep::new("s2".to_string(), IntentOperation::Read { cid: "c2".to_string() }, 100));
+        plan.add_step(IntentStep::new(
+            "s1".to_string(),
+            IntentOperation::Read { cid: "c1".to_string() },
+            100,
+        ));
+        plan.add_step(IntentStep::new(
+            "s2".to_string(),
+            IntentOperation::Read { cid: "c2".to_string() },
+            100,
+        ));
 
         let tree = IntentTree::new("intent-1".to_string(), plan);
         tree.assign_step("s1", "agent-a").unwrap();
         tree.assign_step("s2", "agent-b").unwrap();
 
-        tree.record_result("s1", "agent-a", StepResult {
-            step_id: "s1".to_string(),
-            success: true,
-            output_cids: vec!["c1".to_string()],
-            tokens_used: 50,
-            error: None,
-        }).unwrap();
+        tree.record_result(
+            "s1",
+            "agent-a",
+            StepResult {
+                step_id: "s1".to_string(),
+                success: true,
+                output_cids: vec!["c1".to_string()],
+                tokens_used: 50,
+                error: None,
+            },
+        )
+        .unwrap();
 
-        tree.record_result("s2", "agent-b", StepResult {
-            step_id: "s2".to_string(),
-            success: true,
-            output_cids: vec!["c2".to_string()],
-            tokens_used: 60,
-            error: None,
-        }).unwrap();
+        tree.record_result(
+            "s2",
+            "agent-b",
+            StepResult {
+                step_id: "s2".to_string(),
+                success: true,
+                output_cids: vec!["c2".to_string()],
+                tokens_used: 60,
+                error: None,
+            },
+        )
+        .unwrap();
 
         let agg = tree.aggregate_results();
         assert!(agg.success);
@@ -1334,20 +1427,29 @@ mod tests {
     #[test]
     fn test_intent_tree_is_complete() {
         let mut plan = IntentPlan::new("intent-1".to_string());
-        plan.add_step(IntentStep::new("s1".to_string(), IntentOperation::Read { cid: "c1".to_string() }, 100));
+        plan.add_step(IntentStep::new(
+            "s1".to_string(),
+            IntentOperation::Read { cid: "c1".to_string() },
+            100,
+        ));
 
         let tree = IntentTree::new("intent-1".to_string(), plan);
         tree.assign_step("s1", "agent-a").unwrap();
 
         assert!(!tree.is_complete());
 
-        tree.record_result("s1", "agent-a", StepResult {
-            step_id: "s1".to_string(),
-            success: true,
-            output_cids: vec!["c1".to_string()],
-            tokens_used: 50,
-            error: None,
-        }).unwrap();
+        tree.record_result(
+            "s1",
+            "agent-a",
+            StepResult {
+                step_id: "s1".to_string(),
+                success: true,
+                output_cids: vec!["c1".to_string()],
+                tokens_used: 50,
+                error: None,
+            },
+        )
+        .unwrap();
 
         assert!(tree.is_complete());
     }

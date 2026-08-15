@@ -7,11 +7,11 @@
 //!
 //! F-2: LLM断路哨兵 — Node 19哨兵层设计。
 
-use std::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use super::{LlmError, LlmProvider, ChatMessage, ChatOptions};
+use super::{ChatMessage, ChatOptions, LlmError, LlmProvider};
 
 /// Circuit breaker states.
 const STATE_CLOSED: u8 = 0;
@@ -86,11 +86,15 @@ impl LlmProvider for CircuitBreakerLlmProvider {
                     tracing::info!("LLM circuit breaker CLOSED — provider recovered");
                     Ok((r, in_tok, out_tok))
                 }
-                Err(e) => {
+                Err(_) => {
                     self.state.store(STATE_OPEN, Ordering::Relaxed);
                     self.last_failure_ms.store(Self::now_ms(), Ordering::Relaxed);
-                    tracing::warn!("LLM circuit breaker HalfOpen probe failed: {e}");
-                    Err(LlmError::Unavailable(format!("LLM circuit open (probe failed): {e}")))
+                    tracing::warn!(
+                        outcome = "error",
+                        error_category = "llm_probe_failure",
+                        "LLM circuit breaker probe failed"
+                    );
+                    Err(LlmError::Unavailable("LLM circuit open after probe failure".into()))
                 }
             }
         } else {
@@ -100,14 +104,19 @@ impl LlmProvider for CircuitBreakerLlmProvider {
                     self.failure_count.store(0, Ordering::Relaxed);
                     Ok((r, in_tok, out_tok))
                 }
-                Err(e) => {
+                Err(error) => {
                     let count = self.failure_count.fetch_add(1, Ordering::Relaxed) + 1;
                     if count >= self.failure_threshold {
                         self.state.store(STATE_OPEN, Ordering::Relaxed);
                         self.last_failure_ms.store(Self::now_ms(), Ordering::Relaxed);
-                        tracing::warn!("LLM circuit breaker OPEN after {count} failures: {e}");
+                        tracing::warn!(
+                            outcome = "error",
+                            error_category = "llm_failure_threshold",
+                            failure_count = count,
+                            "LLM circuit breaker opened"
+                        );
                     }
-                    Err(e)
+                    Err(error)
                 }
             }
         }
@@ -146,7 +155,9 @@ mod tests {
                 Ok(("success response".into(), 0, 0))
             }
         }
-        fn model_name(&self) -> &str { "failing-llm" }
+        fn model_name(&self) -> &str {
+            "failing-llm"
+        }
     }
 
     #[test]

@@ -1,8 +1,10 @@
 //! Agent lifecycle operations — register, suspend, resume, terminate, checkpoint.
 
-use crate::scheduler::{Agent, AgentHandle, AgentId, AgentState, AgentResources, Intent, IntentPriority, TransitionError};
+use crate::api::semantic::{AgentCardDto, AgentUsageDto, SkillDto};
 use crate::kernel::event_bus::KernelEvent;
-use crate::api::semantic::{AgentUsageDto, AgentCardDto, SkillDto};
+use crate::scheduler::{
+    Agent, AgentHandle, AgentId, AgentResources, AgentState, Intent, IntentPriority, TransitionError,
+};
 
 /// Reserved agent names that cannot be registered by users.
 /// These names are hardcoded as trusted in `PermissionGuard::new()`
@@ -10,8 +12,8 @@ use crate::api::semantic::{AgentUsageDto, AgentCardDto, SkillDto};
 const RESERVED_AGENT_NAMES: &[&str] = &["kernel", "system", "root", "admin"];
 
 /// Wrapper around memory entries to ensure checkpoint CIDs are unique
-/// and do not collide with CASPersister-generated CIDs.
-#[derive(serde::Serialize, serde::Deserialize)]
+/// and do not collide with canonical-ledger object hashes.
+#[derive(serde::Serialize)]
 struct CheckpointEnvelope {
     entries: Vec<crate::memory::MemoryEntry>,
     #[serde(default)]
@@ -94,7 +96,8 @@ impl crate::kernel::AIKernel {
                 if agent.state().is_terminal() {
                     return Err(format!(
                         "Agent {} is in terminal state {:?} — cannot accept intents",
-                        aid_str, agent.state()
+                        aid_str,
+                        agent.state()
                     ));
                 }
                 if agent.state() == AgentState::Created {
@@ -125,7 +128,9 @@ impl crate::kernel::AIKernel {
     pub fn agent_status(&self, name_or_id: &str) -> Option<(String, String, usize)> {
         let aid = self.scheduler.resolve(name_or_id)?;
         let agent = self.scheduler.get(&aid)?;
-        let pending = self.scheduler.snapshot_intents()
+        let pending = self
+            .scheduler
+            .snapshot_intents()
             .iter()
             .filter(|i| i.agent_id.as_ref().map(|a| a.0.as_str()) == Some(&aid.0))
             .count();
@@ -141,14 +146,18 @@ impl crate::kernel::AIKernel {
     /// Track a CLI command as a tool call for the given agent.
     pub fn track_cli_usage(&self, agent_name_or_id: &str) {
         self.ensure_agent_registered(agent_name_or_id);
-        let resolved = self.scheduler.resolve(agent_name_or_id)
+        let resolved = self
+            .scheduler
+            .resolve(agent_name_or_id)
             .unwrap_or_else(|| AgentId(agent_name_or_id.to_string()));
         self.scheduler.record_tool_call(&resolved);
     }
 
     /// Track token consumption for a CLI command response.
     pub fn track_cli_token_usage(&self, agent_name_or_id: &str, tokens: u64) {
-        let resolved = self.scheduler.resolve(agent_name_or_id)
+        let resolved = self
+            .scheduler
+            .resolve(agent_name_or_id)
             .unwrap_or_else(|| AgentId(agent_name_or_id.to_string()));
         self.scheduler.record_token_usage(&resolved, tokens);
         self.persist_usage();
@@ -159,35 +168,18 @@ impl crate::kernel::AIKernel {
             std::io::Error::new(std::io::ErrorKind::NotFound, format!("Agent not found: {}", name_or_id))
         })?;
 
-        // Auto-checkpoint to CAS before suspend (best-effort)
-        let checkpoint_cid = self.checkpoint_agent(&aid.0).ok();
+        self.checkpoint_agent(&aid.0).map_err(std::io::Error::other)?;
 
-        let state_before = format!("{:?}", self.scheduler.get(&aid).map(|a| a.state()).unwrap_or(AgentState::Created));
-        let memories = self.memory.get_all(&aid.0);
-        let pending = self.scheduler.snapshot_intents()
-            .iter()
-            .filter(|i| i.agent_id.as_ref().map(|a| a.0.as_str()) == Some(&aid.0))
-            .count();
-        let last_intent = self.scheduler.snapshot_intents()
-            .iter().rfind(|i| i.agent_id.as_ref().map(|a| a.0.as_str()) == Some(&aid.0))
-            .map(|i| i.description.clone());
-
-        let snapshot = crate::memory::context_snapshot::ContextSnapshot {
-            agent_id: aid.0.clone(),
-            timestamp_ms: crate::memory::layered::now_ms(),
-            state_before_suspend: state_before.clone(),
-            pending_intents: pending,
-            active_memory_count: memories.len(),
-            last_intent_description: last_intent,
-        };
-
-        let mut entry = snapshot.to_memory_entry();
-        if let Some(cid) = checkpoint_cid {
-            entry.tags.push(format!("checkpoint:{}", cid));
-        }
-        self.memory.store(entry);
-
-        self.scheduler.update_state(&aid, AgentState::Suspended).map_err(transition_err)?;
+        let state_before = format!(
+            "{:?}",
+            self.scheduler
+                .get(&aid)
+                .map(|a| a.state())
+                .unwrap_or(AgentState::Created)
+        );
+        self.scheduler
+            .update_state(&aid, AgentState::Suspended)
+            .map_err(transition_err)?;
         self.event_bus.emit(KernelEvent::AgentStateChanged {
             agent_id: aid.0.clone(),
             old_state: state_before.clone(),
@@ -202,38 +194,9 @@ impl crate::kernel::AIKernel {
             std::io::Error::new(std::io::ErrorKind::NotFound, format!("Agent not found: {}", name_or_id))
         })?;
 
-        let memories = self.memory.get_all(&aid.0);
-
-        // Extract context summary BEFORE any restore (snapshot may be cleared by restore)
-        let ctx_summary = crate::memory::context_snapshot::find_latest_snapshot(&memories)
-            .map(|s| s.to_context_string());
-
-        // Try to auto-restore from the latest checkpoint CID
-        let checkpoint_cid = memories.iter()
-            .filter(|e| e.tags.contains(&crate::memory::context_snapshot::SNAPSHOT_TAG.to_string()))
-            .max_by_key(|e| e.created_at)
-            .and_then(|e| {
-                e.tags.iter()
-                    .find(|t| t.starts_with("checkpoint:"))
-                    .map(|t| t[11..].to_string())
-            });
-
-        if let Some(ref cid) = checkpoint_cid {
-            if let Ok(count) = self.restore_agent_checkpoint(&aid.0, cid) {
-                tracing::info!(
-                    "Agent {} auto-restored from checkpoint {} ({} entries)",
-                    aid.0, cid, count
-                );
-            }
-        }
-
-        // Inject context summary for cognitive continuity
-        if let Some(ctx_text) = ctx_summary {
-            let entry = crate::memory::MemoryEntry::ephemeral(&aid.0, ctx_text);
-            self.memory.store(entry);
-        }
-
-        self.scheduler.update_state(&aid, AgentState::Waiting).map_err(transition_err)?;
+        self.scheduler
+            .update_state(&aid, AgentState::Waiting)
+            .map_err(transition_err)?;
         self.event_bus.emit(KernelEvent::AgentStateChanged {
             agent_id: aid.0.clone(),
             old_state: "Suspended".into(),
@@ -247,8 +210,16 @@ impl crate::kernel::AIKernel {
         let aid = self.scheduler.resolve(name_or_id).ok_or_else(|| {
             std::io::Error::new(std::io::ErrorKind::NotFound, format!("Agent not found: {}", name_or_id))
         })?;
-        let old_state = format!("{:?}", self.scheduler.get(&aid).map(|a| a.state()).unwrap_or(AgentState::Created));
-        self.scheduler.update_state(&aid, AgentState::Terminated).map_err(transition_err)?;
+        let old_state = format!(
+            "{:?}",
+            self.scheduler
+                .get(&aid)
+                .map(|a| a.state())
+                .unwrap_or(AgentState::Created)
+        );
+        self.scheduler
+            .update_state(&aid, AgentState::Terminated)
+            .map_err(transition_err)?;
         self.event_bus.emit(KernelEvent::AgentStateChanged {
             agent_id: aid.0.clone(),
             old_state,
@@ -264,7 +235,9 @@ impl crate::kernel::AIKernel {
             std::io::Error::new(std::io::ErrorKind::NotFound, format!("Agent not found: {}", agent_id))
         })?;
         let old_state = format!("{:?}", agent.state());
-        self.scheduler.update_state(&aid, AgentState::Completed).map_err(transition_err)?;
+        self.scheduler
+            .update_state(&aid, AgentState::Completed)
+            .map_err(transition_err)?;
         self.event_bus.emit(KernelEvent::AgentStateChanged {
             agent_id: agent_id.to_string(),
             old_state,
@@ -281,7 +254,9 @@ impl crate::kernel::AIKernel {
         })?;
         let old_state = format!("{:?}", agent.state());
         tracing::info!("Agent {} explicitly failed: {}", agent_id, reason);
-        self.scheduler.update_state(&aid, AgentState::Failed).map_err(transition_err)?;
+        self.scheduler
+            .update_state(&aid, AgentState::Failed)
+            .map_err(transition_err)?;
         self.event_bus.emit(KernelEvent::AgentStateChanged {
             agent_id: agent_id.to_string(),
             old_state,
@@ -324,62 +299,36 @@ impl crate::kernel::AIKernel {
     /// The checkpoint is immutable and deduplicated by content hash.
     pub fn checkpoint_agent(&self, agent_id: &str) -> Result<String, String> {
         let aid = AgentId(agent_id.to_string());
-        self.scheduler.get(&aid).ok_or_else(|| format!("Agent not found: {}", agent_id))?;
+        self.scheduler
+            .get(&aid)
+            .ok_or_else(|| format!("Agent not found: {}", agent_id))?;
 
         let entries = self.memory.get_all(agent_id);
-        let envelope = CheckpointEnvelope { entries: entries.clone(), _checkpoint: true };
-        let payload = serde_json::to_vec(&envelope)
-            .map_err(|e| format!("Failed to serialize checkpoint: {}", e))?;
+        let envelope = CheckpointEnvelope {
+            entries: entries.clone(),
+            _checkpoint: true,
+        };
+        let payload = serde_json::to_vec(&envelope).map_err(|e| format!("Failed to serialize checkpoint: {}", e))?;
 
-        let cid = self.semantic_create(
-            payload,
-            vec![
-                "checkpoint".into(),
-                format!("agent:{}", agent_id),
-            ],
-            agent_id,
-            None,
-            crate::cas::ObjectScope::default(),
-        ).map_err(|e| format!("Failed to store checkpoint: {}", e))?;
+        let cid = self
+            .semantic_create(
+                payload,
+                vec!["checkpoint".into(), format!("agent:{}", agent_id)],
+                agent_id,
+                None,
+                crate::cas::ObjectScope::default(),
+            )
+            .map_err(|e| format!("Failed to store checkpoint: {}", e))?;
 
         tracing::info!(
-            "Checkpoint created for agent {}: CID={} ({} entries)",
-            agent_id, cid, entries.len()
+            phase = "persist",
+            outcome = "success",
+            role_id = %agent_id,
+            entry_count = entries.len(),
+            "agent checkpoint created"
         );
 
         Ok(cid)
-    }
-
-    /// Restore an agent's memory state from a CAS checkpoint.
-    ///
-    /// Fetches the checkpoint by CID, deserializes memory entries,
-    /// clears the agent's current memory, and replaces it with the
-    /// checkpoint data. Returns the number of entries restored.
-    pub fn restore_agent_checkpoint(&self, agent_id: &str, checkpoint_cid: &str) -> Result<usize, String> {
-        let aid = AgentId(agent_id.to_string());
-        self.scheduler.get(&aid).ok_or_else(|| format!("Agent not found: {}", agent_id))?;
-
-        let obj = self.get_object(checkpoint_cid, agent_id, "default")
-            .map_err(|e| format!("Failed to fetch checkpoint: {}", e))?;
-
-        let envelope: CheckpointEnvelope = serde_json::from_slice(&obj.data)
-            .map_err(|e| format!("Failed to deserialize checkpoint: {}", e))?;
-        let entries = envelope.entries;
-
-        let count = entries.len();
-        self.memory.clear_agent(agent_id);
-
-        for entry in entries {
-            self.memory.store(entry);
-        }
-        self.persist_memories();
-
-        tracing::info!(
-            "Checkpoint restored for agent {}: CID={} ({} entries)",
-            agent_id, checkpoint_cid, count
-        );
-
-        Ok(count)
     }
 
     pub fn agent_usage(&self, agent_id: &str) -> Option<AgentUsageDto> {
@@ -399,16 +348,12 @@ impl crate::kernel::AIKernel {
         })
     }
 
-    pub fn discover_agents(
-        &self,
-        state_filter: Option<&str>,
-        tool_filter: Option<&str>,
-    ) -> Vec<AgentCardDto> {
+    pub fn discover_agents(&self, state_filter: Option<&str>, tool_filter: Option<&str>) -> Vec<AgentCardDto> {
         let handles = self.scheduler.list_agents();
-        let all_tool_names: Vec<String> = self.tool_registry.list()
-            .iter().map(|t| t.name.clone()).collect();
+        let all_tool_names: Vec<String> = self.tool_registry.list().iter().map(|t| t.name.clone()).collect();
 
-        handles.into_iter()
+        handles
+            .into_iter()
             .filter(|h| {
                 if let Some(sf) = state_filter {
                     let state_str = format!("{:?}", h.state);
@@ -461,10 +406,11 @@ impl crate::kernel::AIKernel {
         description: &str,
         tags: Vec<String>,
     ) -> Result<String, String> {
-        use crate::fs::{KGNodeType, KGEdgeType};
+        use crate::fs::{KGEdgeType, KGNodeType};
 
         let aid = AgentId(agent_id.to_string());
-        self.scheduler.get(&aid)
+        self.scheduler
+            .get(&aid)
             .ok_or_else(|| format!("Agent not found: {}", agent_id))?;
 
         let mut props = serde_json::json!({
@@ -475,11 +421,13 @@ impl crate::kernel::AIKernel {
             props["tags"] = serde_json::json!(tags);
         }
 
-        let node_id = self.kg_add_node(name, KGNodeType::Fact, props, agent_id, "default")
+        let node_id = self
+            .kg_add_node(name, KGNodeType::Fact, props, agent_id, "default")
             .map_err(|e| e.to_string())?;
 
         // F-5: Link to Entity anchor (now guaranteed to exist via register_agent)
-        let agent_nodes = self.kg_list_nodes(Some(KGNodeType::Entity), agent_id, "default")
+        let agent_nodes = self
+            .kg_list_nodes(Some(KGNodeType::Entity), agent_id, "default")
             .unwrap_or_default();
         let agent_entity = agent_nodes.iter().find(|n| n.label == agent_id);
         if let Some(entity) = agent_entity {
@@ -494,7 +442,8 @@ impl crate::kernel::AIKernel {
             expected_outcome: String::new(),
         }];
         let _ = self.remember_procedural(
-            agent_id, "default",
+            agent_id,
+            "default",
             super::memory::ProceduralEntry {
                 name: name.to_string(),
                 description: description.to_string(),
@@ -520,18 +469,22 @@ impl crate::kernel::AIKernel {
         } else {
             self.scheduler.list_agents().into_iter().map(|h| h.id).collect()
         };
-        let all_facts: Vec<_> = agent_ids.iter()
-            .flat_map(|aid| self.kg_list_nodes(Some(KGNodeType::Fact), aid, "default").unwrap_or_default())
-            .collect();
-        all_facts.into_iter()
-            .filter(|n| {
-                n.properties.get("kind").and_then(|v| v.as_str()) == Some("skill")
+        let all_facts: Vec<_> = agent_ids
+            .iter()
+            .flat_map(|aid| {
+                self.kg_list_nodes(Some(KGNodeType::Fact), aid, "default")
+                    .unwrap_or_default()
             })
+            .collect();
+        all_facts
+            .into_iter()
+            .filter(|n| n.properties.get("kind").and_then(|v| v.as_str()) == Some("skill"))
             .filter(|n| {
                 if let Some(q) = query {
                     let q_lower = q.to_lowercase();
                     n.label.to_lowercase().contains(&q_lower)
-                        || n.properties.get("description")
+                        || n.properties
+                            .get("description")
                             .and_then(|v| v.as_str())
                             .map(|d| d.to_lowercase().contains(&q_lower))
                             .unwrap_or(false)
@@ -541,7 +494,8 @@ impl crate::kernel::AIKernel {
             })
             .filter(|n| {
                 if let Some(tf) = tag_filter {
-                    n.properties.get("tags")
+                    n.properties
+                        .get("tags")
                         .and_then(|v| v.as_array())
                         .map(|arr| arr.iter().any(|t| t.as_str() == Some(tf)))
                         .unwrap_or(false)
@@ -550,11 +504,15 @@ impl crate::kernel::AIKernel {
                 }
             })
             .map(|n| {
-                let tags = n.properties.get("tags")
+                let tags = n
+                    .properties
+                    .get("tags")
                     .and_then(|v| v.as_array())
                     .map(|arr| arr.iter().filter_map(|t| t.as_str().map(String::from)).collect())
                     .unwrap_or_default();
-                let description = n.properties.get("description")
+                let description = n
+                    .properties
+                    .get("description")
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string();

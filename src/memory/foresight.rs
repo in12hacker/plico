@@ -74,10 +74,7 @@ impl MarkovAccessChain {
 
             *self.access_counts.entry(prev.memory_id.clone()).or_insert(0) += 1;
 
-            let transitions = self
-                .transitions
-                .entry(prev.memory_id.clone())
-                .or_default();
+            let transitions = self.transitions.entry(prev.memory_id.clone()).or_default();
             *transitions.entry(curr.memory_id.clone()).or_insert(0.0) += weight;
         }
     }
@@ -106,12 +103,7 @@ impl MarkovAccessChain {
 
     /// Multi-hop prediction: walk K steps along the chain, collecting unique
     /// memories with cumulative probability.
-    pub fn predict_multihop(
-        &self,
-        start_memory_id: &str,
-        hops: usize,
-        top_k_per_hop: usize,
-    ) -> Vec<(String, f64)> {
+    pub fn predict_multihop(&self, start_memory_id: &str, hops: usize, top_k_per_hop: usize) -> Vec<(String, f64)> {
         let mut collected: HashMap<String, f64> = HashMap::new();
         let mut frontier: Vec<(String, f64)> = vec![(start_memory_id.to_string(), 1.0)];
 
@@ -189,7 +181,10 @@ pub fn foresight_prompt(intent_description: &str, recent_memories: &[String]) ->
 pub fn parse_foresight_response(response: &str) -> Vec<String> {
     response
         .lines()
-        .map(|l| l.trim().trim_start_matches(|c: char| c.is_numeric() || c == '.' || c == '-'))
+        .map(|l| {
+            l.trim()
+                .trim_start_matches(|c: char| c.is_numeric() || c == '.' || c == '-')
+        })
         .map(|l| l.trim().to_string())
         .filter(|l| !l.is_empty() && l.len() < 200)
         .collect()
@@ -221,11 +216,7 @@ mod tests {
     #[test]
     fn test_build_simple_chain() {
         let mut chain = MarkovAccessChain::new(0);
-        let events = make_events(&[
-            ("a", "m1", 100),
-            ("a", "m2", 200),
-            ("a", "m3", 300),
-        ]);
+        let events = make_events(&[("a", "m1", 100), ("a", "m2", 200), ("a", "m3", 300)]);
         chain.build_from_events(&events, 1000);
 
         assert_eq!(chain.transition_count(), 2);
@@ -258,11 +249,7 @@ mod tests {
     #[test]
     fn test_session_gap_breaks_chain() {
         let mut chain = MarkovAccessChain::new(0);
-        let events = make_events(&[
-            ("a", "m1", 100),
-            ("a", "m2", 200),
-            ("a", "m3", 10000),
-        ]);
+        let events = make_events(&[("a", "m1", 100), ("a", "m2", 200), ("a", "m3", 10000)]);
         chain.build_from_events(&events, 500);
 
         let from_m2 = chain.predict("m2", 5);
@@ -272,10 +259,7 @@ mod tests {
     #[test]
     fn test_cross_agent_events_ignored() {
         let mut chain = MarkovAccessChain::new(0);
-        let events = make_events(&[
-            ("a", "m1", 100),
-            ("b", "m2", 200),
-        ]);
+        let events = make_events(&[("a", "m1", 100), ("b", "m2", 200)]);
         chain.build_from_events(&events, 1000);
 
         assert_eq!(chain.transition_count(), 0);
@@ -306,12 +290,7 @@ mod tests {
         let mut chain_nodecay = MarkovAccessChain::new(0);
         let mut chain_decay = MarkovAccessChain::new(1000);
 
-        let events = make_events(&[
-            ("a", "m1", 100),
-            ("a", "m2", 200),
-            ("a", "m1", 9000),
-            ("a", "m3", 9100),
-        ]);
+        let events = make_events(&[("a", "m1", 100), ("a", "m2", 200), ("a", "m1", 9000), ("a", "m3", 9100)]);
 
         chain_nodecay.build_from_events(&events, 10000);
         chain_decay.build_from_events(&events, 10000);
@@ -324,7 +303,10 @@ mod tests {
 
         let m3_decay = pred_decay.iter().find(|(id, _)| id == "m3").unwrap().1;
         let m2_decay = pred_decay.iter().find(|(id, _)| id == "m2").unwrap().1;
-        assert!(m3_decay > m2_decay, "recent transition m1→m3 should be weighted higher with decay");
+        assert!(
+            m3_decay > m2_decay,
+            "recent transition m1→m3 should be weighted higher with decay"
+        );
     }
 
     #[test]

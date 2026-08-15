@@ -8,35 +8,46 @@ mod builtin_tools;
 pub mod cognition;
 pub mod event_bus;
 pub mod hook;
-pub mod persistence;
 pub mod ops;
-pub mod trace;
-mod tools;
+pub mod persistence;
+mod public_service;
 pub mod tests;
+mod tools;
+pub mod trace;
 
+pub use public_service::{
+    PublicAccess, PublicAuthenticationError, PublicCredentialBootstrapError, PublicRequestContext, PublicTransport,
+};
+
+use ops::cache::EdgeCache;
 use ops::checkpoint::CheckpointStore;
-use ops::prefetch::IntentPrefetcher;
+use ops::cost_ledger::{set_global_cost_ledger, TokenCostLedger};
 use ops::model::{HotSwapEmbeddingProvider, HotSwapLlmProvider};
 use ops::observability::KernelMetrics;
-use ops::cache::EdgeCache;
-use ops::cost_ledger::{TokenCostLedger, set_global_cost_ledger};
-use ops::distributed::{ClusterManager, NodeId};
+use ops::prefetch::IntentPrefetcher;
+use ops::projection_runtime::{ProjectionRuntime, ProjectionWorkerHandle};
 
 use crate::api::agent_auth::AgentKeyStore;
 use crate::config::PlicoConfig;
 
 use std::path::PathBuf;
-use std::sync::{Arc, RwLock, atomic::{AtomicU64, Ordering}};
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc, Mutex, RwLock,
+};
 
-use crate::cas::CASStorage;
-use crate::memory::{LayeredMemory, CASPersister, MemoryPersister};
-use crate::scheduler::AgentScheduler;
-use crate::scheduler::messaging::MessageBus;
-use crate::fs::{SemanticFS, InMemoryBackend, HnswBackend, EmbeddingProvider, SemanticSearch, LlmSummarizer, Summarizer, KnowledgeGraph, PetgraphBackend, StubEmbeddingProvider};
-use crate::llm::LlmProvider;
 use crate::api::permission::PermissionGuard;
-use crate::tool::ToolRegistry;
+use crate::cas::{CASStorage, PersonalVaultStorage};
+use crate::fs::{
+    EmbeddingProvider, HnswBackend, InMemoryBackend, KnowledgeGraph, LlmSummarizer, PetgraphBackend, SemanticFS,
+    SemanticSearch, Summarizer,
+};
 use crate::kernel::event_bus::{EventBus, KernelEvent};
+use crate::llm::LlmProvider;
+use crate::memory::{CASCanonicalLedger, CanonicalLedger, LayeredMemory};
+use crate::scheduler::messaging::MessageBus;
+use crate::scheduler::AgentScheduler;
+use crate::tool::ToolRegistry;
 
 /// The AI Kernel — all subsystems wired together.
 pub struct AIKernel {
@@ -47,7 +58,9 @@ pub struct AIKernel {
     pub(crate) scheduler: Arc<AgentScheduler>,
     pub(crate) fs: Arc<SemanticFS>,
     pub(crate) permissions: Arc<PermissionGuard>,
-    pub(crate) memory_persister: Option<Arc<dyn MemoryPersister + Send + Sync>>,
+    pub(crate) canonical: Arc<CASCanonicalLedger>,
+    pub(crate) projection: Arc<ProjectionRuntime>,
+    projection_worker: Mutex<Option<ProjectionWorkerHandle>>,
     pub(crate) embedding: HotSwapEmbeddingProvider,
     pub(crate) llm_provider: HotSwapLlmProvider,
     pub(crate) knowledge_graph: Option<Arc<dyn KnowledgeGraph>>,
@@ -59,10 +72,8 @@ pub struct AIKernel {
     pub hook_registry: Arc<hook::HookRegistry>,
     pub prefetch: Arc<ops::prefetch::IntentPrefetcher>,
     pub(crate) key_store: Arc<AgentKeyStore>,
-    pub(crate) tenant_store: Arc<ops::tenant::TenantStore>,
     pub(crate) metrics: Arc<KernelMetrics>,
     pub(crate) edge_cache: Arc<EdgeCache>,
-    pub(crate) cluster: Arc<ClusterManager>,
     pub(crate) session_store: Arc<ops::session::SessionStore>,
     pub(crate) checkpoint_store: Arc<CheckpointStore>,
     pub(crate) task_store: Arc<ops::task::TaskStore>,
@@ -70,7 +81,6 @@ pub struct AIKernel {
     pub(crate) kg_builder: Option<ops::kg_builder::KgBuilderHandle>,
     pub(crate) prompt_registry: Arc<crate::prompt::PromptRegistry>,
     pub(crate) agent_profiles: Arc<ops::agent_profile::AgentProfileStore>,
-    pub(crate) reranker: Option<Arc<dyn crate::fs::reranker::RerankerProvider>>,
     pub(crate) cognitive_loop: Arc<RwLock<Option<Arc<crate::kernel::cognition::CognitiveLoop>>>>,
     pub(crate) cognitive_pipeline: Arc<RwLock<Option<ops::cognitive_pipeline::CognitivePipelineHandle>>>,
     pub(crate) diagnostic_store: Arc<ops::diagnostic::DiagnosticStore>,
@@ -86,7 +96,9 @@ fn check_embedding_meta(root: &std::path::Path, model_name: &str, dim: usize) ->
                 let saved_model = val.get("model").and_then(|v| v.as_str()).unwrap_or("");
                 let saved_dim = val.get("dimension").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
                 saved_model != model_name || saved_dim != dim
-            } else { true }
+            } else {
+                true
+            }
         }
         Err(_) => false,
     }
@@ -104,6 +116,39 @@ fn save_embedding_meta(root: &std::path::Path, model_name: &str, dim: usize) {
     }
 }
 
+fn create_hnsw_or_tag_only(
+    root: &std::path::Path,
+    embedding: &dyn EmbeddingProvider,
+    maintain_legacy_metadata: bool,
+) -> Arc<dyn SemanticSearch> {
+    let dimension = embedding.dimension();
+    if dimension == 0 {
+        tracing::info!(
+            operation = "embedding_search_initialization",
+            outcome = "tag_only",
+            "embedding dimension unavailable; vector search remains inactive"
+        );
+        return Arc::new(InMemoryBackend::new());
+    }
+
+    let model_name = embedding.model_name();
+    if maintain_legacy_metadata && check_embedding_meta(root, &model_name, dimension) {
+        tracing::warn!(
+            operation = "legacy_object_vector_index_initialization",
+            outcome = "fresh_index",
+            dimension,
+            "embedding model contract changed; legacy object vector index starts empty"
+        );
+        let _ = std::fs::remove_file(root.join("hnsw_index.jsonl"));
+    }
+    let backend = Arc::new(HnswBackend::with_dim(dimension));
+    backend.restore_from(root).ok();
+    if maintain_legacy_metadata {
+        save_embedding_meta(root, &model_name, dimension);
+    }
+    backend
+}
+
 impl AIKernel {
     pub fn with_providers(
         root: PathBuf,
@@ -111,25 +156,31 @@ impl AIKernel {
         llm: Arc<dyn LlmProvider>,
     ) -> std::io::Result<Arc<Self>> {
         let config = PlicoConfig::load(Some(root.clone()));
-        let cas = Arc::new(CASStorage::new(root.join("cas"))?);
+        let vault =
+            Arc::new(PersonalVaultStorage::open(&root, Some("memory_index.json")).map_err(std::io::Error::other)?);
+        let canonical = Arc::new(CASCanonicalLedger::new(Arc::clone(&vault)).map_err(std::io::Error::other)?);
+        let ledger: Arc<dyn CanonicalLedger + Send + Sync> = canonical.clone();
+        let cas = Arc::new(CASStorage::new(vault.object_cas_root())?);
 
-        let embedding_inner: Arc<RwLock<Arc<dyn EmbeddingProvider>>> = Arc::new(RwLock::new(embedding.clone()));
-        let embedding_hswap = HotSwapEmbeddingProvider::new(embedding_inner.clone());
+        let edge_cache = Arc::new(EdgeCache::default());
+        let embedding =
+            persistence::wrap_embedding_provider(embedding, &config.inference, Arc::clone(&edge_cache.embedding))
+                .map_err(std::io::Error::other)?;
+        let embedding_hswap = HotSwapEmbeddingProvider::new(embedding);
 
         let llm_inner: Arc<RwLock<Arc<dyn LlmProvider>>> = Arc::new(RwLock::new(llm.clone()));
         let llm_hswap = HotSwapLlmProvider::new(llm_inner.clone());
 
-        let summarizer: Option<Arc<dyn Summarizer>> = Some(Arc::new(LlmSummarizer::new(llm.clone())) as Arc<dyn Summarizer>);
+        let summarizer: Option<Arc<dyn Summarizer>> =
+            Some(Arc::new(LlmSummarizer::new(llm.clone())) as Arc<dyn Summarizer>);
 
-        let search_backend: Arc<dyn SemanticSearch> = {
-            let b = Arc::new(HnswBackend::with_dim(embedding.dimension()));
-            b.restore_from(&root).ok();
-            b as Arc<dyn SemanticSearch>
-        };
+        let search_backend = create_hnsw_or_tag_only(&root, &embedding_hswap, false);
         let search_index = search_backend.clone();
         let knowledge_graph: Option<Arc<dyn KnowledgeGraph>> = Some(Arc::new(PetgraphBackend::open(root.clone())));
         let memory = Arc::new(LayeredMemory::new());
-        let memory_for_observer = memory.clone();
+        memory.set_ledger(Arc::clone(&ledger));
+        let projection =
+            ProjectionRuntime::initialize(Arc::clone(&vault), Arc::clone(&canonical), embedding_hswap.clone());
         let scheduler = Arc::new(AgentScheduler::new());
         let reranker = crate::fs::reranker::create_reranker_provider();
 
@@ -159,9 +210,11 @@ impl AIKernel {
                 Arc::new(llm_hswap.clone()),
                 ev_bus.clone(),
                 builder_cfg,
-                Some(embedding.clone()),
+                Some(Arc::new(embedding_hswap.clone())),
             ))
-        } else { None };
+        } else {
+            None
+        };
 
         let diagnostic_store = Arc::new(crate::kernel::ops::diagnostic::DiagnosticStore::new());
 
@@ -177,7 +230,9 @@ impl AIKernel {
             memory: memory.clone(),
             scheduler,
             permissions: Arc::new(PermissionGuard::new()),
-            memory_persister: None,
+            canonical,
+            projection,
+            projection_worker: Mutex::new(None),
             search_op_count: Arc::new(AtomicU64::new(0)),
             tool_registry: Arc::new(ToolRegistry::new()),
             message_bus: Arc::new(crate::kernel::MessageBus::new()),
@@ -193,10 +248,8 @@ impl AIKernel {
                 root.clone(),
             )),
             key_store: Arc::new(AgentKeyStore::new()),
-            tenant_store: Arc::new(ops::tenant::TenantStore::new()),
             metrics: Arc::new(KernelMetrics::new()),
-            edge_cache: Arc::new(EdgeCache::default()),
-            cluster: Arc::new(ClusterManager::new(NodeId::new(), "test".into(), true, "127.0.0.1".into(), 0)),
+            edge_cache,
             session_store: Arc::new(ops::session::SessionStore::new()),
             checkpoint_store: Arc::new(CheckpointStore::new(10)), // max 10
             task_store: Arc::new(ops::task::TaskStore::new(root.join("tasks.json"), ev_bus.clone())),
@@ -204,7 +257,6 @@ impl AIKernel {
             kg_builder,
             prompt_registry: Arc::new(crate::prompt::PromptRegistry::new()),
             agent_profiles: Arc::new(ops::agent_profile::AgentProfileStore::new()),
-            reranker,
             cognitive_loop: Arc::new(RwLock::new(None)),
             cognitive_pipeline: Arc::new(RwLock::new(None)),
             diagnostic_store,
@@ -213,34 +265,39 @@ impl AIKernel {
         };
 
         let kernel_arc = Arc::new(kernel);
-
-        // Initialize global Observer+Reflector for async memory pattern detection
-        ops::observer::init_observer(memory_for_observer);
+        kernel_arc
+            .restore_memories()
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
 
         Ok(kernel_arc)
     }
 
     pub fn new(root: PathBuf) -> std::io::Result<Arc<Self>> {
         let config = PlicoConfig::load(Some(root.clone()));
-        let cas = Arc::new(CASStorage::new(root.join("cas"))?);
-
-        let embedding_raw: Arc<dyn EmbeddingProvider> =
-            persistence::create_embedding_provider(&config.inference).unwrap_or_else(|e| {
-                tracing::warn!("Embedding backend failed: {e}. Using stub (tag-only search).");
-                Arc::new(StubEmbeddingProvider::new()) as Arc<dyn EmbeddingProvider>
-            });
+        let vault =
+            Arc::new(PersonalVaultStorage::open(&root, Some("memory_index.json")).map_err(std::io::Error::other)?);
+        let canonical = Arc::new(CASCanonicalLedger::new(Arc::clone(&vault)).map_err(std::io::Error::other)?);
+        let ledger: Arc<dyn CanonicalLedger + Send + Sync> = canonical.clone();
+        let cas = Arc::new(CASStorage::new(vault.object_cas_root())?);
 
         let edge_cache = Arc::new(EdgeCache::default());
-        let embedding_cached: Arc<dyn EmbeddingProvider> = Arc::new(
-            crate::fs::embedding::CachingEmbeddingProvider::new(embedding_raw, edge_cache.embedding.clone())
-        );
-        let embedding_inner: Arc<RwLock<Arc<dyn EmbeddingProvider>>> = Arc::new(RwLock::new(embedding_cached));
-        let embedding = HotSwapEmbeddingProvider::new(embedding_inner.clone());
+        let embedding_raw: Arc<dyn EmbeddingProvider> =
+            persistence::create_embedding_provider(&config.inference, Arc::clone(&edge_cache.embedding))
+                .map_err(|_| std::io::Error::other("embedding backend initialization failed"))?;
+        let embedding = HotSwapEmbeddingProvider::new(embedding_raw);
+        let projection = ProjectionRuntime::initialize(Arc::clone(&vault), Arc::clone(&canonical), embedding.clone());
 
-        let llm_raw: Arc<dyn LlmProvider> = match persistence::create_llm_provider("PLICO_SUMMARIZER_MODEL", "qwen2.5-coder-7b-instruct") {
-            Ok(provider) => { tracing::info!("LLM summarizer enabled: {}", provider.model_name()); provider }
-            Err(e) => { tracing::warn!("Could not create LLM provider: {e}. Using stub provider."); Arc::new(crate::llm::StubProvider::empty()) as Arc<dyn LlmProvider> }
-        };
+        let llm_raw: Arc<dyn LlmProvider> =
+            match persistence::create_llm_provider("PLICO_SUMMARIZER_MODEL", "qwen2.5-coder-7b-instruct") {
+                Ok(provider) => {
+                    tracing::info!("LLM summarizer enabled: {}", provider.model_name());
+                    provider
+                }
+                Err(e) => {
+                    tracing::warn!("Could not create LLM provider: {e}. Using stub provider.");
+                    Arc::new(crate::llm::StubProvider::empty()) as Arc<dyn LlmProvider>
+                }
+            };
         let llm_inner: Arc<RwLock<Arc<dyn LlmProvider>>> = Arc::new(RwLock::new(llm_raw));
         let llm_provider = HotSwapLlmProvider::new(llm_inner.clone());
 
@@ -249,25 +306,20 @@ impl AIKernel {
             Some(Arc::new(LlmSummarizer::new(lp)) as Arc<dyn Summarizer>)
         };
 
-        let search_backend: Arc<dyn SemanticSearch> = match std::env::var("SEARCH_BACKEND").unwrap_or_else(|_| "hnsw".into()).as_str() {
-            "memory" => { let b = Arc::new(InMemoryBackend::new()); b.restore_from(&root).ok(); b as Arc<dyn SemanticSearch> }
-            _ => {
-                let dim = embedding.dimension();
-                let model_name = embedding.model_name().to_string();
-                let meta_changed = check_embedding_meta(&root, &model_name, dim);
-                let b = Arc::new(HnswBackend::with_dim(dim));
-                if meta_changed {
-                    tracing::warn!("Embedding model changed (now {}@{}d) — starting with fresh HNSW index", model_name, dim);
-                    let _ = std::fs::remove_file(root.join("hnsw_index.jsonl"));
-                } else { b.restore_from(&root).ok(); }
-                save_embedding_meta(&root, &model_name, dim);
+        let search_backend: Arc<dyn SemanticSearch> = match std::env::var("SEARCH_BACKEND")
+            .unwrap_or_else(|_| "hnsw".into())
+            .as_str()
+        {
+            "memory" => {
+                let b = Arc::new(InMemoryBackend::new());
+                b.restore_from(&root).ok();
                 b as Arc<dyn SemanticSearch>
             }
+            _ => create_hnsw_or_tag_only(&root, &embedding, true),
         };
         let search_index = search_backend.clone();
         let knowledge_graph: Option<Arc<dyn KnowledgeGraph>> = Some(Arc::new(PetgraphBackend::open(root.clone())));
         let memory = Arc::new(LayeredMemory::new());
-        let memory_for_observer = memory.clone();
         let scheduler = Arc::new(AgentScheduler::new());
         let reranker = crate::fs::reranker::create_reranker_provider();
 
@@ -286,10 +338,7 @@ impl AIKernel {
         let fs_arc = Arc::new(fs);
 
         let permissions = Arc::new(PermissionGuard::new());
-        let persister = match CASPersister::new(cas.clone(), root.clone()) {
-            Ok(p) => { let ap: Arc<dyn MemoryPersister + Send + Sync> = Arc::new(p); memory.set_persister(ap.clone()); Some(ap) }
-            Err(e) => { tracing::warn!("Failed to create memory persister: {e}"); None }
-        };
+        memory.set_ledger(Arc::clone(&ledger));
 
         let _tool_registry = Arc::new(ToolRegistry::new());
         let message_bus = Arc::new(MessageBus::new());
@@ -298,35 +347,45 @@ impl AIKernel {
         let session_store = Arc::new(ops::session::SessionStore::restore(&root));
 
         if let Some(ref kg) = knowledge_graph {
-            let causal_handler = Arc::new(ops::causal_hook::CausalHookHandler::new(Arc::clone(kg), Arc::clone(&session_store)));
+            let causal_handler = Arc::new(ops::causal_hook::CausalHookHandler::new(
+                Arc::clone(kg),
+                Arc::clone(&session_store),
+            ));
             hook_registry.register(hook::HookPoint::PostToolCall, 100, causal_handler);
         }
 
-        let verification_handler = Arc::new(ops::verification::VerificationHookHandler::new(Arc::clone(&fs_arc), Arc::clone(&event_bus)));
+        let verification_handler = Arc::new(ops::verification::VerificationHookHandler::new(
+            Arc::clone(&fs_arc),
+            Arc::clone(&event_bus),
+        ));
         hook_registry.register(hook::HookPoint::PostToolCall, 90, verification_handler);
 
         let cost_ledger = Arc::new(TokenCostLedger::new());
         set_global_cost_ledger(Arc::clone(&cost_ledger));
 
         let prefetch = Arc::new(IntentPrefetcher::new(
-            search_backend.clone(), knowledge_graph.clone(), memory.clone(), event_bus.clone(),
-            Arc::new(embedding.clone()) as Arc<dyn EmbeddingProvider>, fs_arc.ctx_loader_arc(), root.clone(),
+            search_backend.clone(),
+            knowledge_graph.clone(),
+            memory.clone(),
+            event_bus.clone(),
+            Arc::new(embedding.clone()) as Arc<dyn EmbeddingProvider>,
+            fs_arc.ctx_loader_arc(),
+            root.clone(),
         ));
         prefetch.set_cost_ledger(Arc::clone(&cost_ledger));
 
-        if let Err(e) = prefetch.restore() { tracing::warn!("prefetch restore failed: {e}"); }
+        if let Err(e) = prefetch.restore() {
+            tracing::warn!("prefetch restore failed: {e}");
+        }
         let key_store = Arc::new(AgentKeyStore::open(&root));
-        let tenant_store = Arc::new(ops::tenant::TenantStore::restore(&root));
         let metrics = Arc::new(KernelMetrics::new());
 
-        let cluster = Arc::new(ClusterManager::new(
-            NodeId::new(), "plico-cluster".into(), true, "127.0.0.1".into(), 7878,
-        ));
-
         let timeout_session_store = Arc::clone(&session_store);
-        let timeout_memory = memory.clone();
+        let timeout_event_bus = Arc::clone(&event_bus);
         let timeout_root = root.clone();
-        std::thread::spawn(move || { ops::session::spawn_session_timeout_scanner(timeout_session_store, timeout_memory, timeout_root); });
+        std::thread::spawn(move || {
+            ops::session::spawn_session_timeout_scanner(timeout_session_store, timeout_event_bus, timeout_root);
+        });
 
         let checkpoint_store = Arc::new(CheckpointStore::restore(&root, &cas, 10));
         let task_store = Arc::new(ops::task::TaskStore::restore(root.clone(), event_bus.clone()));
@@ -334,11 +393,21 @@ impl AIKernel {
         let kg_builder_config = ops::kg_builder::KgBuilderConfig::from_env();
         let kg_builder = if kg_builder_config.enabled {
             if let Some(ref kg) = knowledge_graph {
-                let handle = ops::kg_builder::start_kg_builder(Arc::clone(kg), Arc::new(llm_provider.clone()), event_bus.clone(), kg_builder_config, Some(Arc::new(embedding.clone()) as Arc<dyn crate::fs::embedding::EmbeddingProvider>));
+                let handle = ops::kg_builder::start_kg_builder(
+                    Arc::clone(kg),
+                    Arc::new(llm_provider.clone()),
+                    event_bus.clone(),
+                    kg_builder_config,
+                    Some(Arc::new(embedding.clone()) as Arc<dyn crate::fs::embedding::EmbeddingProvider>),
+                );
                 tracing::info!("KG auto-extraction worker started");
                 Some(handle)
-            } else { None }
-        } else { None };
+            } else {
+                None
+            }
+        } else {
+            None
+        };
 
         let prompt_registry = {
             let mut reg = crate::prompt::PromptRegistry::new();
@@ -353,14 +422,17 @@ impl AIKernel {
                 memory.clone(),
                 cas.clone(),
             ));
-            let intent_network = Arc::new(crate::kernel::cognition::IntentSemanticNetwork::new(
-                Arc::new(embedding.clone()) as Arc<dyn EmbeddingProvider>,
-            ));
+            let intent_network = Arc::new(crate::kernel::cognition::IntentSemanticNetwork::new(Arc::new(
+                embedding.clone(),
+            )
+                as Arc<dyn EmbeddingProvider>));
             let tracker = Arc::new(crate::kernel::cognition::TrajectoryTracker::new());
-            let skill_forge = Arc::new(crate::kernel::cognition::SkillForge::new()
-                .with_trajectory_tracker(tracker.clone())
-                .with_embedding(Arc::new(embedding.clone()) as Arc<dyn EmbeddingProvider>));
-            
+            let skill_forge = Arc::new(
+                crate::kernel::cognition::SkillForge::new()
+                    .with_trajectory_tracker(tracker.clone())
+                    .with_embedding(Arc::new(embedding.clone()) as Arc<dyn EmbeddingProvider>),
+            );
+
             let cl = crate::kernel::cognition::CognitiveLoop::with_shared_tracker(
                 context_analyzer,
                 intent_network,
@@ -368,20 +440,28 @@ impl AIKernel {
                 tracker,
             );
             let arc = Arc::new(cl);
-            
+
             let _ = prefetch.cognitive_loop.set(Arc::clone(&arc));
 
             if tokio::runtime::Handle::try_current().is_ok() {
-                let loop_ref = Arc::clone(&arc);
+                let loop_ref = Arc::downgrade(&arc);
                 let sub_id = event_bus.subscribe();
-                let bus = Arc::clone(&event_bus);
+                let bus = Arc::downgrade(&event_bus);
                 tokio::spawn(async move {
                     loop {
+                        let Some(bus) = bus.upgrade() else {
+                            break;
+                        };
+                        let Some(loop_ref) = loop_ref.upgrade() else {
+                            break;
+                        };
                         if let Some(events) = bus.poll(&sub_id) {
                             for e in &events {
                                 loop_ref.on_event(e);
                             }
                         }
+                        drop(loop_ref);
+                        drop(bus);
                         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                     }
                 });
@@ -392,12 +472,36 @@ impl AIKernel {
         let trace_writer = trace::writer::TraceWriter::new(root.clone());
 
         let kernel = Self {
-            config, root, cas, memory, scheduler, fs: fs_arc, permissions, memory_persister: persister,
-            embedding, llm_provider, knowledge_graph, search_backend, search_op_count: Arc::new(AtomicU64::new(0)),
-            tool_registry: Arc::new(ToolRegistry::new()), message_bus, event_bus, hook_registry, prefetch, key_store, tenant_store, metrics,
-            edge_cache, cluster, session_store, checkpoint_store, task_store, cost_ledger: Arc::new(TokenCostLedger::new()), kg_builder, prompt_registry,
+            config,
+            root,
+            cas,
+            memory,
+            scheduler,
+            fs: fs_arc,
+            permissions,
+            canonical,
+            projection,
+            projection_worker: Mutex::new(None),
+            embedding,
+            llm_provider,
+            knowledge_graph,
+            search_backend,
+            search_op_count: Arc::new(AtomicU64::new(0)),
+            tool_registry: Arc::new(ToolRegistry::new()),
+            message_bus,
+            event_bus,
+            hook_registry,
+            prefetch,
+            key_store,
+            metrics,
+            edge_cache,
+            session_store,
+            checkpoint_store,
+            task_store,
+            cost_ledger: Arc::new(TokenCostLedger::new()),
+            kg_builder,
+            prompt_registry,
             agent_profiles: Arc::new(ops::agent_profile::AgentProfileStore::new()),
-            reranker,
             cognitive_loop: Arc::new(RwLock::new(cognitive_loop)),
             cognitive_pipeline: Arc::new(RwLock::new(None)),
             diagnostic_store: Arc::new(ops::diagnostic::DiagnosticStore::new()),
@@ -406,14 +510,14 @@ impl AIKernel {
         };
 
         let kernel_arc = Arc::new(kernel);
-        ops::observer::init_observer(memory_for_observer);
         kernel_arc.register_builtin_tools();
         kernel_arc.restore_agents();
         kernel_arc.restore_intents();
-        kernel_arc.restore_memories();
+        kernel_arc
+            .restore_memories()
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
         kernel_arc.restore_permissions();
         kernel_arc.restore_event_log();
-        kernel_arc.restore_checkpoints();
         kernel_arc.restore_task_store();
 
         Ok(kernel_arc)
@@ -431,6 +535,11 @@ impl AIKernel {
 
     /// Starts background cognitive workers. Must be called once after kernel is wrapped in Arc.
     pub fn start_workers(self: &Arc<Self>) {
+        if let Ok(mut worker) = self.projection_worker.lock() {
+            if worker.is_none() {
+                *worker = self.projection.start_worker();
+            }
+        }
         let cp_handle = ops::cognitive_pipeline::start_cognitive_pipeline(Arc::clone(self), 1024);
         *self.cognitive_pipeline.write().unwrap() = Some(cp_handle.clone());
         self.fs.set_cognitive_pipeline(cp_handle);
@@ -467,32 +576,13 @@ impl AIKernel {
         }
     }
 
-    /// Export agent memories to a portable passport format.
-    pub fn memory_export(
-        &self,
-        agent_id: &str,
-        tenant_id: &str,
-        passphrase: Option<&str>,
-    ) -> Result<Vec<u8>, String> {
-        let passport = ops::passport::MemoryPassport::new(
-            self.memory.clone(),
-            self.knowledge_graph.clone(),
-        );
-        passport.export_memories(agent_id, tenant_id, passphrase)
-    }
-
-    /// Import memories from a passport.
-    pub fn memory_import(
-        &self,
-        data: &[u8],
-        passphrase: Option<&str>,
-        tenant_id: &str,
-    ) -> Result<ops::passport::ImportReport, String> {
-        let passport = ops::passport::MemoryPassport::new(
-            self.memory.clone(),
-            self.knowledge_graph.clone(),
-        );
-        passport.import_memories(data, passphrase, tenant_id)
+    /// Stop and join the projection worker before persistence or process exit.
+    /// This operation is idempotent.
+    pub fn shutdown_projection_worker(&self) {
+        self.projection.begin_shutdown();
+        let worker = self.projection_worker.lock().ok().and_then(|mut worker| worker.take());
+        drop(worker);
+        self.projection.finish_shutdown_barrier();
     }
 
     const SEARCH_PERSIST_EVERY_N: u64 = 50;
@@ -505,7 +595,9 @@ impl AIKernel {
             let root = self.root.clone();
             let fs = Arc::clone(&self.fs);
             tokio::spawn(async move {
-                if let Err(e) = backend.persist_to(&root) { tracing::warn!("Async search index persistence failed: {e}"); }
+                if let Err(e) = backend.persist_to(&root) {
+                    tracing::warn!("Async search index persistence failed: {e}");
+                }
                 fs.flush_tag_index();
             });
         }
@@ -518,16 +610,33 @@ impl AIKernel {
         }
     }
 
-    pub fn event_subscribe(&self) -> String { self.event_bus.subscribe() }
-    pub fn event_subscribe_filtered(&self, filter: Option<event_bus::EventFilter>) -> String { self.event_bus.subscribe_filtered(filter) }
-    pub fn event_poll(&self, subscription_id: &str) -> Option<Vec<event_bus::KernelEvent>> { self.event_bus.poll(subscription_id) }
-    pub fn metrics(&self) -> &KernelMetrics { &self.metrics }
-    pub fn event_unsubscribe(&self, subscription_id: &str) -> bool { self.event_bus.unsubscribe(subscription_id) }
-    pub fn prompt_registry(&self) -> &crate::prompt::PromptRegistry { &self.prompt_registry }
+    pub fn event_subscribe(&self) -> String {
+        self.event_bus.subscribe()
+    }
+    pub fn event_subscribe_filtered(&self, filter: Option<event_bus::EventFilter>) -> String {
+        self.event_bus.subscribe_filtered(filter)
+    }
+    pub fn event_poll(&self, subscription_id: &str) -> Option<Vec<event_bus::KernelEvent>> {
+        self.event_bus.poll(subscription_id)
+    }
+    pub fn metrics(&self) -> &KernelMetrics {
+        &self.metrics
+    }
+    pub fn event_unsubscribe(&self, subscription_id: &str) -> bool {
+        self.event_bus.unsubscribe(subscription_id)
+    }
+    pub fn prompt_registry(&self) -> &crate::prompt::PromptRegistry {
+        &self.prompt_registry
+    }
 }
 
 impl crate::kernel::cognition::ToolExecutor for AIKernel {
-    fn execute_tool(&self, name: &str, params: &serde_json::Value, agent_id: &str) -> Result<serde_json::Value, String> {
+    fn execute_tool(
+        &self,
+        name: &str,
+        params: &serde_json::Value,
+        agent_id: &str,
+    ) -> Result<serde_json::Value, String> {
         let result = AIKernel::execute_tool(self, name, params, agent_id);
         if result.success {
             Ok(result.output)
@@ -543,8 +652,9 @@ mod memory_link;
 
 #[cfg(test)]
 mod kernel_mod_tests {
-    use super::AIKernel;
+    use super::{create_hnsw_or_tag_only, AIKernel};
     use crate::api::semantic::ApiRequest;
+    use crate::fs::{EmbeddingProvider, OpenAIEmbeddingBackend};
     use crate::kernel::tests::make_kernel;
 
     #[test]
@@ -554,6 +664,22 @@ mod kernel_mod_tests {
         let dir = tempfile::tempdir().unwrap();
         let kernel = AIKernel::new(dir.path().to_path_buf()).expect("kernel init");
         assert!(!kernel.root.as_os_str().is_empty());
+    }
+
+    #[test]
+    fn offline_openai_zero_dimension_does_not_touch_legacy_hnsw() {
+        let directory = tempfile::tempdir().unwrap();
+        let index_path = directory.path().join("hnsw_index.jsonl");
+        let metadata_path = directory.path().join(".embedding_meta.json");
+        std::fs::write(&index_path, b"LEGACY_HNSW_SENTINEL").unwrap();
+        std::fs::write(&metadata_path, b"LEGACY_METADATA_SENTINEL").unwrap();
+        let provider = OpenAIEmbeddingBackend::new("http://127.0.0.1:1/v1", "offline-openai-test", None).unwrap();
+        assert_eq!(provider.dimension(), 0);
+
+        let _search = create_hnsw_or_tag_only(directory.path(), &provider, true);
+
+        assert_eq!(std::fs::read(&index_path).unwrap(), b"LEGACY_HNSW_SENTINEL");
+        assert_eq!(std::fs::read(&metadata_path).unwrap(), b"LEGACY_METADATA_SENTINEL");
     }
 
     #[test]
@@ -567,8 +693,15 @@ mod kernel_mod_tests {
     fn test_handle_api_request_create_success() {
         let (kernel, _dir) = make_kernel();
         let req = ApiRequest::Create {
-            api_version: None, content: "hello".into(), content_encoding: Default::default(),
-            tags: vec!["test".into()], agent_id: "a1".into(), tenant_id: None, agent_token: None, intent: None, scope: None,
+            api_version: None,
+            content: "hello".into(),
+            content_encoding: Default::default(),
+            tags: vec!["test".into()],
+            agent_id: "a1".into(),
+            tenant_id: None,
+            agent_token: None,
+            intent: None,
+            scope: None,
         };
         let resp = kernel.handle_api_request(req);
         assert!(resp.cid.is_some());

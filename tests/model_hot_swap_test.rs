@@ -1,14 +1,12 @@
 //! Model Hot-Swap Tests (v18.0)
 //!
-//! Tests for runtime model switching without restart.
-//! - Embedding model switching
+//! Tests for LLM runtime switching and model health.
 //! - LLM model switching
 //! - Model health checking
-//! - Automatic fallback on failure
 
-use std::sync::Arc;
-use plico::kernel::AIKernel;
 use plico::api::semantic::ApiRequest;
+use plico::kernel::AIKernel;
+use std::sync::Arc;
 
 fn make_kernel() -> (Arc<AIKernel>, tempfile::TempDir) {
     std::env::set_var("EMBEDDING_BACKEND", "stub");
@@ -17,7 +15,6 @@ fn make_kernel() -> (Arc<AIKernel>, tempfile::TempDir) {
     let kernel = AIKernel::new(dir.path().to_path_buf()).expect("kernel init");
     (kernel, dir)
 }
-
 
 #[test]
 fn test_model_health_check_unknown_type() {
@@ -31,17 +28,6 @@ fn test_model_health_check_unknown_type() {
 }
 
 #[test]
-fn test_switch_embedding_invalid_backend() {
-    let (kernel, _dir) = make_kernel();
-
-    // Try to switch to an invalid backend - should fail
-    let result = kernel.switch_embedding_model("nonexistent", "some-model", None);
-    assert!(result.is_err(), "switch to invalid backend should fail");
-    let err = result.unwrap_err();
-    assert!(err.contains("unknown embedding backend type"));
-}
-
-#[test]
 fn test_switch_llm_invalid_backend() {
     let (kernel, _dir) = make_kernel();
 
@@ -50,23 +36,6 @@ fn test_switch_llm_invalid_backend() {
     assert!(result.is_err(), "switch to invalid backend should fail");
     let err = result.unwrap_err();
     assert!(err.contains("unknown LLM backend"));
-}
-
-#[test]
-fn test_api_request_switch_embedding_invalid() {
-    let (kernel, _dir) = make_kernel();
-
-    let req = ApiRequest::SwitchEmbeddingModel {
-        model_type: "invalid_backend".to_string(),
-        model_id: "some-model".to_string(),
-        python_path: None,
-    };
-
-    let resp = kernel.handle_api_request(req);
-    assert!(!resp.ok, "response should be error for invalid backend");
-    assert!(resp.error.is_some());
-    let err = resp.error.unwrap();
-    assert!(err.contains("unknown embedding backend type"));
 }
 
 #[test]
@@ -116,37 +85,4 @@ fn test_switch_llm_stub_succeeds() {
     let result = kernel.switch_llm_model("nonexistent_backend", "some-model", None);
     assert!(result.is_err());
     assert!(result.unwrap_err().contains("unknown LLM backend"));
-}
-
-#[test]
-fn test_switch_embedding_stub_fails_health_check() {
-    let (kernel, _dir) = make_kernel();
-
-    // The stub embedding provider intentionally fails health checks
-    // (it always returns ServerUnavailable error)
-    // So switching to stub should fail the health check
-
-    let result = kernel.switch_embedding_model("stub", "test-stub", None);
-    // The stub provider will fail health check, so this should fail
-    assert!(result.is_err());
-    let err = result.unwrap_err();
-    assert!(err.contains("health check failed"));
-    assert!(err.contains("stub"));
-}
-
-#[test]
-fn test_api_response_has_model_fields() {
-    let (kernel, _dir) = make_kernel();
-
-    // Verify that model_switch and model_health fields exist in ApiResponse
-    let req = ApiRequest::SwitchEmbeddingModel {
-        model_type: "nonexistent".to_string(),
-        model_id: "test".to_string(),
-        python_path: None,
-    };
-
-    let resp = kernel.handle_api_request(req);
-    // Should have model_switch field set (even when error happens after switch attempt)
-    // or error field
-    assert!(resp.model_switch.is_some() || resp.error.is_some());
 }

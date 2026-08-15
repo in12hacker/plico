@@ -15,8 +15,8 @@
 //! - L0: compress ~500 tokens → ~50 token summary (2-3 sentences)
 //! - L1: compress ~2000 tokens → ~200 token summary (paragraph)
 
+use crate::llm::{ChatMessage, ChatOptions, LlmProvider};
 use std::sync::Arc;
-use crate::llm::{LlmProvider, ChatMessage, ChatOptions};
 
 /// Errors from summarization operations.
 #[derive(Debug, thiserror::Error)]
@@ -115,9 +115,13 @@ impl Summarizer for LlmSummarizer {
             ChatMessage::system(layer.system_prompt()),
             ChatMessage::user(layer.user_prompt(truncated)),
         ];
-        let options = ChatOptions { temperature: 0.3, max_tokens: None };
+        let options = ChatOptions {
+            temperature: 0.3,
+            max_tokens: None,
+        };
 
-        let (summary, input_tokens, output_tokens) = self.provider
+        let (summary, input_tokens, output_tokens) = self
+            .provider
             .chat(&messages, &options)
             .map_err(|e| SummarError::Llm(e.to_string()))?;
 
@@ -127,7 +131,7 @@ impl Summarizer for LlmSummarizer {
                 input_tokens,
                 output_tokens,
                 self.provider.model_name(),
-                "",  // session_id not available in this context
+                "", // session_id not available in this context
                 "kernel-summarizer",
             );
         }
@@ -139,7 +143,6 @@ impl Summarizer for LlmSummarizer {
         self.provider.model_name()
     }
 }
-
 
 #[cfg(test)]
 mod tests {

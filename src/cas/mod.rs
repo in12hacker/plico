@@ -11,9 +11,25 @@
 //! - [`object`] — AIObject and AIObjectMeta definitions
 //! - [`storage`] — CAS storage engine
 
-pub mod gc;
+pub(crate) mod ledger_store;
 pub mod object;
+#[cfg(feature = "offline-migration")]
+pub mod offline_migration;
+pub(crate) mod projection_store;
 pub mod storage;
 
+pub(crate) use ledger_store::{
+    ExistingProjectionReadOnly, ImmutableLedgerNamespace, ImmutableLedgerStorage, LedgerStorageError,
+    LedgerStorageOpenError, PersonalVaultStorage,
+};
 pub use object::{AIObject, AIObjectMeta, ContentType, ObjectScope};
-pub use storage::{CASStorage, CASError};
+#[cfg(feature = "offline-migration")]
+pub use offline_migration::{
+    OfflineMigrationError, OfflineMigrationPublication, OfflineMigrationTarget, OfflineMigrationVault,
+    OfflineReferencedObjectFingerprint, OfflineSnapshotFingerprint, OfflineSourceFingerprint,
+};
+pub(crate) use projection_store::{
+    ProjectionClaimedLiveInspection, ProjectionPairGenesisEvidence, ProjectionPairPublishMode,
+    ProjectionPairResetReason, ProjectionStorageBundle,
+};
+pub use storage::{CASError, CASStorage};

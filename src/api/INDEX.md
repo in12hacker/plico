@@ -1,74 +1,76 @@
 # Module: api
 
-AI-friendly semantic API — permission guardrails + JSON protocol types for TCP daemon and CLI.
+Personal digital-twin protocol types, authentication, and internal semantic command types.
 
-Status: stable | Fan-in: 4 | Fan-out: 1
+Status: personal.v2 single-track active | Fan-in: 4 | Fan-out: 1
 
-## Dependents (Fan-in: 4)
+## Dependents
 
-- `src/kernel/mod.rs` → PermissionGuard, PermissionContext, PermissionAction, ApiRequest, ApiResponse
-- `src/bin/plicod.rs` → ApiRequest, ApiResponse, SearchResultDto, decode_content
-- `src/bin/plico_mcp.rs` → ApiRequest, ApiResponse (MCP dispatch)
-- `src/bin/aicli/` → ApiRequest, ApiResponse, GrowthPeriod (CLI dispatch)
+- `src/kernel/` → permission/auth guardrails, typed public service, internal commands
+- `src/client.rs` → public request/response transport after the single-track cutover
+- `src/bin/plicod.rs` → TCP/UDS public protocol boundary
+- `src/bin/plico_mcp/` and `src/bin/aicli/` → exact public capability consumers
 
 ## Modification Risk
 
-- Add `ApiRequest` variant → compatible, add dispatch in plicod.rs
-- Change `ApiResponse` fields → BREAKING, update all response construction sites
-- Change `PermissionAction` variants → BREAKING, update all check() calls
-- Change `PermissionGuard` policy → behavioral change, affects all agent access
+- Changing `public/` is a public wire break: update service, client, plicod, MCP, aicli and schema snapshots together.
+- Adding a public operation requires an accepted product decision and a real end-to-end handler; internal enum reachability is not evidence of a public capability.
+- Changing permission/auth policy affects every transport. Public identities must come from trusted transport context, never payload role/tenant fields.
+- `semantic.rs` is legacy internal command debt after cutover. Do not import it from the public service or build an adapter between protocols.
 
 ## Task Routing
 
-- Add new API method → modify `src/api/semantic.rs` ApiRequest + ApiResponse, then `src/bin/plicod.rs` dispatch
-- Change permission model → modify `src/api/permission.rs`
-- Add API response field → modify `src/api/semantic.rs` ApiResponse
-- Fix content encoding → modify `src/api/semantic.rs` decode_content
+- Public envelope, limits, operation/result DTOs and catalog → `public/`
+- Bearer token resolution → `agent_auth.rs`
+- Offline migration credential evidence → `offline_credentials.rs`; pure parsing/verification only, no filesystem access
+- Permission model → `permission.rs`
+- Legacy internal commands pending deletion/internalization → `semantic.rs`
 
-## Public API
+## Public protocol
 
-### Permission
+`public/` defines `plico.personal.v2` and an exact 14-operation catalog:
 
-| Export | File | Description |
-|--------|------|-------------|
-| `PermissionGuard` | `permission.rs` | Global access control registry |
-| `PermissionContext` | `permission.rs` | Per-request agent identity + embedded grants |
-| `PermissionAction` | `permission.rs` | Read/Write/ReadAny/Delete/Network/Execute/SendMessage/All |
-| `PermissionGrant` | `permission.rs` | Grant with optional scope + expiry |
+- `capabilities.describe`, `runtime.readiness`
+- `object.put`, `object.get`, `object.search`
+- `memory.create`, `memory.get`, `memory.recall`, `memory.update`, `memory.delete`
+- `projection.status`, owner-only `projection.rebuild`
+- `session.start`, `session.end`
 
-### Protocol
+Inputs deny unknown fields and never accept agent, tenant, tier, scope, importance, checkpoint, or thermal controls. Object search can report the existing CID-keyed BM25 path; Memory recall currently reports only entry-ID lexical overlap. Tenant/organization, cluster, KG mutation, internal control, Memory BM25, thermal/deep recall, and human document projections are not public capabilities.
 
-| Export | File | Description |
-|--------|------|-------------|
-| `ApiRequest` | `semantic.rs` | Tagged enum of all API operations (create/read/search/etc.) |
-| `ApiResponse` | `semantic.rs` | Unified response with optional fields |
-| `ContentEncoding` | `semantic.rs` | UTF-8 or Base64 encoding for binary payloads |
-| `decode_content` | `semantic.rs` | Decode content string by encoding type |
-| `SearchResultDto` | `semantic.rs` | Search result DTO for API responses |
+`projection.status` distinguishes `observed/unreconciled/unavailable`; only observed has one of
+Queued/Building/Ready/Failed/Stale/AbsentByPolicy. An authorized typed response may bind a full
+canonical content hash, but tracing, metrics, errors and unauthenticated diagnostics must never record it.
+The embedding manifest is the sole status source. Memory vector/hybrid/BM25 retrieval remains
+unsupported and `memory.recall` remains lexical.
+`runtime.readiness` reports projection `control_plane` and `worker` separately. Provider drift keeps
+the verified control plane readable while marking the worker restart-required; canonical/lexical
+availability therefore remains independent of embedding execution.
 
 ## Files
 
-| File | Lines | Purpose |
-|------|-------|---------|
-| `agent_auth.rs` | ~365 | Agent identity authentication (HMAC-SHA256 tokens) |
-| `permission.rs` | ~439 | PermissionGuard, fine-grained access control |
-| `semantic.rs` | ~2734 | ApiRequest/ApiResponse, all protocol types |
-| `mod.rs` | ~19 | Re-exports |
+| File | Purpose |
+|---|---|
+| `public/mod.rs` | protocol identity, operation catalog and hard limits |
+| `public/input.rs` | typed request envelope and validated inputs |
+| `public/output.rs` | typed data/error response schema |
+| `agent_auth.rs` | bearer issuance, persistence and constant-time role resolution |
+| `offline_credentials.rs` | Feature-gated exact credential parsing, constant-time owner proof and redacted role-cutoff hash |
+| `permission.rs` | internal fine-grained permission guard |
+| `semantic.rs` | legacy internal commands; must leave external transports during cutover |
+| `dto.rs`, `version.rs` | legacy DTO/version types pending call-graph cleanup |
 
-## Dependencies (Fan-out: 1)
+## Interface contract
 
-- `src/fs/` — imports EventType, EventRelation, EventSummary, KGNodeType, KGEdgeType for API type definitions
-
-## Interface Contract
-
-- `PermissionGuard::check()`: returns `Ok(())` if allowed, `Err(PermissionDenied)` if denied
-- Default policy: Read + Write allowed by default; Delete/Network/Execute require explicit grant
-- Trusted agents ("kernel", "system") bypass all checks
-- `PermissionGrant` supports optional scope restriction and expiry timestamp
-- Thread safety: `PermissionGuard` is NOT internally synchronized — caller must manage mutability
+- TCP authenticates a bounded bearer and resolves a local role before domain dispatch.
+- Owner-only UDS and Embedded clients inject trusted local context and reject self-reported role/tenant identity.
+- Transport/framing failures are client errors, not domain responses.
+- Success responses contain exactly one matching typed result; failures contain exactly one typed error.
+- Request-level tracing carries request ID, operation, transport and authenticated role; never bearer, content, full query, provider raw errors or private host paths.
+- Removed methods receive no compatibility alias or translation layer.
 
 ## Tests
 
-- Unit: `src/api/semantic.rs` mod tests (encoding roundtrips), `src/api/permission.rs` (implicit via integration)
-- Integration: `tests/permission_test.rs`
-- Critical: `test_default_policy`, `test_grant_and_check`, `test_trusted_agent_bypass`
+- Unit schema/limit/roundtrip tests: `src/api/public/tests.rs`
+- Auth and permission tests: `src/api/agent_auth.rs`, `tests/permission_test.rs`
+- Protocol gate: exact 14-operation parity across catalog, service, TCP/UDS, MCP and aicli; personal.v1 and all old wire methods are rejected without state change.

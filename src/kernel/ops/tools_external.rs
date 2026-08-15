@@ -1,6 +1,6 @@
 //! External tool provider integration — protocol-agnostic.
 //!
-//! The kernel doesn't know about MCP, Agent Skills, or A2A.
+//! The kernel does not depend on a specific external tool protocol.
 //! It only knows about `ExternalToolProvider`. When a protocol
 //! becomes obsolete, delete its adapter. When a new one emerges,
 //! add one. This file never changes.
@@ -8,7 +8,7 @@
 use std::sync::Arc;
 
 use crate::kernel::AIKernel;
-use crate::tool::{ExternalToolProvider, ToolHandler, ToolResult, ProcedureToolProvider};
+use crate::tool::{ExternalToolProvider, ToolHandler, ToolResult};
 
 impl AIKernel {
     /// Register an external tool provider and expose its tools through PWP.
@@ -19,16 +19,10 @@ impl AIKernel {
     ///
     /// After this call, agents discover these tools via `tool_list` and
     /// invoke them via `tool_call` — standard PWP, protocol-transparent.
-    pub fn add_tool_provider(
-        &self,
-        provider: Arc<dyn ExternalToolProvider>,
-        prefix: &str,
-    ) -> Vec<String> {
+    pub fn add_tool_provider(&self, provider: Arc<dyn ExternalToolProvider>, prefix: &str) -> Vec<String> {
         let tools = provider.discover_tools();
 
-        let tool_names: Vec<String> = tools.iter()
-            .map(|t| format!("{}.{}", prefix, t.name))
-            .collect();
+        let tool_names: Vec<String> = tools.iter().map(|t| format!("{}.{}", prefix, t.name)).collect();
 
         tracing::info!(
             "External tool provider '{}': {} tools registered with prefix '{}'",
@@ -52,20 +46,6 @@ impl AIKernel {
         }
 
         tool_names
-    }
-
-    /// Refresh the procedure-based tool provider.
-    ///
-    /// Discovers all shared+verified procedures and registers them as tools
-    /// under the "skill" prefix. Call this when shared procedures change.
-    pub fn refresh_procedure_tools(self: &Arc<Self>) -> Vec<String> {
-        let memory = Arc::clone(&self.memory);
-        let kernel = Arc::clone(self);
-        let dispatch = Arc::new(move |req: crate::api::semantic::ApiRequest| {
-            kernel.handle_api_request(req).ok
-        });
-        let provider = Arc::new(ProcedureToolProvider::new(memory, dispatch));
-        self.add_tool_provider(provider, "skill")
     }
 }
 

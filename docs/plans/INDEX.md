@@ -7,6 +7,8 @@ Human-facing milestone plans and iteration notes. **Tier A** source of truth for
 | [v0.5_intent_router_agent_enforcement.md](v0.5_intent_router_agent_enforcement.md) | v0.5 — Intent router, agent enforcement, messaging, kernel split |
 | [v0.6_dogfood_closing_exec_fs.md](v0.6_dogfood_closing_exec_fs.md) | **下一迭代 v0.6（草案）** — Dogfood CRUD 自动化、SKILL 对齐、`cpu_time_quota`、Clippy 策略、FS 拆分 |
 | [dogfood_cli_read_agent_gap.md](dogfood_cli_read_agent_gap.md) | Dogfood — `get`/`--agent` 根因与修复记录（收口工作见 v0.6） |
+| [personal-twin-public-capability-evolution.md](personal-twin-public-capability-evolution.md) | 个人数字分身公共能力：P0/P1/V1-A/V1-B 已完成；P3-A Rust 已切 personal.v2 exact-14，B2 消费者/发布证据门禁进行中；vector recall/thermal 不在本切片 |
+| [plico-agents-personal-twin-dogfood.md](plico-agents-personal-twin-dogfood.md) | 外部 demo 的 personal.v2 exact-14 破坏式迁移与新 dogfood 证据；旧 personal.v1 记录仅为 Historical |
 
 ## 规则
 

@@ -56,10 +56,6 @@ pub struct NetworkConfig {
     #[serde(default = "default_daemon_port")]
     pub daemon_port: u16,
 
-    /// SSE adapter port (default: 7879).
-    #[serde(default = "default_sse_port")]
-    pub sse_port: u16,
-
     /// Whether to disable UDS (Unix Domain Socket) in `plicod`.
     #[serde(default)]
     pub disable_uds: bool,
@@ -70,7 +66,8 @@ pub struct NetworkConfig {
 /// Embedding and LLM backend configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InferenceConfig {
-    /// Embedding backend: `"openai"` | `"ollama"` | `"local"` | `"ort"` | `"stub"`.
+    /// Operational embedding backend: `"openai"` | `"ollama"` | `"local"` | `"stub"`.
+    /// Only a verified Ollama provider can currently activate P3 memory projections.
     #[serde(default = "default_embedding_backend")]
     pub embedding_backend: String,
 
@@ -176,22 +173,39 @@ pub struct TuningConfig {
 // ── Default value functions ────────────────────────────────────────────
 
 fn default_root() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(std::env::temp_dir)
-        .join(".plico")
+    dirs::home_dir().unwrap_or_else(std::env::temp_dir).join(".plico")
 }
 
-fn default_host() -> String { "127.0.0.1".into() }
-fn default_daemon_port() -> u16 { 7878 }
-fn default_sse_port() -> u16 { 7879 }
-fn default_embedding_backend() -> String { "openai".into() }
-fn default_llm_backend() -> String { "llama".into() }
-fn default_persist_interval() -> u64 { 300 }
-fn default_rrf_k() -> u64 { 60 }
-fn default_kg_batch_size() -> usize { 5 }
-fn default_kg_extract_timeout() -> u64 { 3000 }
-fn default_log_level() -> String { "info".into() }
-fn default_chunking_mode() -> String { "none".into() }
+fn default_host() -> String {
+    "127.0.0.1".into()
+}
+fn default_daemon_port() -> u16 {
+    7878
+}
+fn default_embedding_backend() -> String {
+    "openai".into()
+}
+fn default_llm_backend() -> String {
+    "llama".into()
+}
+fn default_persist_interval() -> u64 {
+    300
+}
+fn default_rrf_k() -> u64 {
+    60
+}
+fn default_kg_batch_size() -> usize {
+    5
+}
+fn default_kg_extract_timeout() -> u64 {
+    3000
+}
+fn default_log_level() -> String {
+    "info".into()
+}
+fn default_chunking_mode() -> String {
+    "none".into()
+}
 
 // ── Default trait impls ────────────────────────────────────────────────
 
@@ -210,7 +224,6 @@ impl Default for NetworkConfig {
         Self {
             host: default_host(),
             daemon_port: default_daemon_port(),
-            sse_port: default_sse_port(),
             disable_uds: false,
         }
     }
@@ -252,7 +265,6 @@ impl Default for TuningConfig {
     }
 }
 
-
 // ── Loading ────────────────────────────────────────────────────────────
 
 impl PlicoConfig {
@@ -276,10 +288,7 @@ impl PlicoConfig {
         if let Ok(contents) = std::fs::read_to_string(&config_path) {
             match serde_json::from_str::<PlicoConfig>(&contents) {
                 Ok(file_config) => config.merge_from(file_config),
-                Err(e) => tracing::warn!(
-                    "Failed to parse {}: {e}",
-                    config_path.display(),
-                ),
+                Err(e) => tracing::warn!("Failed to parse {}: {e}", config_path.display(),),
             }
         }
 
@@ -297,9 +306,6 @@ impl PlicoConfig {
         }
         if other.network.daemon_port != default_daemon_port() {
             self.network.daemon_port = other.network.daemon_port;
-        }
-        if other.network.sse_port != default_sse_port() {
-            self.network.sse_port = other.network.sse_port;
         }
         if other.network.disable_uds {
             self.network.disable_uds = true;
@@ -394,8 +400,6 @@ impl PlicoConfig {
         // Network
         env_str!("PLICO_HOST", self.network.host);
         env_parse!("PLICO_DAEMON_PORT", self.network.daemon_port);
-        env_parse!("PLICO_SSE_PORT", self.network.sse_port);
-
         // Inference
         env_str!("EMBEDDING_BACKEND", self.inference.embedding_backend);
         env_opt!("EMBEDDING_API_BASE", self.inference.embedding_api_base);
@@ -410,7 +414,11 @@ impl PlicoConfig {
         env_opt!("OPENAI_API_KEY", self.inference.api_key);
         env_opt!("EMBEDDING_QUERY_PREFIX", self.inference.query_prefix);
         env_opt!("EMBEDDING_DOCUMENT_PREFIX", self.inference.document_prefix);
-        if let Ok(val) = std::env::var("EMBEDDING_DIM") { if let Ok(parsed) = val.parse() { self.inference.target_dim = Some(parsed); } }
+        if let Ok(val) = std::env::var("EMBEDDING_DIM") {
+            if let Ok(parsed) = val.parse() {
+                self.inference.target_dim = Some(parsed);
+            }
+        }
 
         // Tuning
         env_str!("PLICO_CHUNKING", self.tuning.chunking_mode);
@@ -462,14 +470,10 @@ impl PlicoConfig {
 
     /// Resolve Ollama URL (config > default).
     pub fn resolve_ollama_url(&self) -> String {
-        self.inference.ollama_url
+        self.inference
+            .ollama_url
             .clone()
             .unwrap_or_else(|| "http://localhost:11434".into())
-    }
-
-    /// Helper: construct the agent card URL for A2A protocol.
-    pub fn agent_card_url(&self) -> String {
-        format!("http://{}:{}", self.network.host, self.network.sse_port)
     }
 
     /// Helper: construct the daemon bind address.
@@ -478,10 +482,14 @@ impl PlicoConfig {
     }
 
     /// Helper: PID file path.
-    pub fn pid_path(&self) -> PathBuf { self.root.join("plicod.pid") }
+    pub fn pid_path(&self) -> PathBuf {
+        self.root.join("plicod.pid")
+    }
 
     /// Helper: UDS socket path.
-    pub fn sock_path(&self) -> PathBuf { self.root.join("plico.sock") }
+    pub fn sock_path(&self) -> PathBuf {
+        self.root.join("plico.sock")
+    }
 }
 
 pub fn ensure_v1_suffix(url: &str) -> String {
@@ -507,10 +515,7 @@ pub fn detect_embedding_server_port() -> Option<u16> {
 }
 
 fn detect_llama_server_port_filtered(embedding_only: bool) -> Option<u16> {
-    let output = std::process::Command::new("ps")
-        .args(["aux"])
-        .output()
-        .ok()?;
+    let output = std::process::Command::new("ps").args(["aux"]).output().ok()?;
     let stdout = String::from_utf8_lossy(&output.stdout);
     for line in stdout.lines() {
         if !line.contains("llama-server") || line.contains("grep") {
@@ -548,7 +553,6 @@ mod tests {
         let config = PlicoConfig::default();
         assert_eq!(config.network.host, "127.0.0.1");
         assert_eq!(config.network.daemon_port, 7878);
-        assert_eq!(config.network.sse_port, 7879);
         assert!(!config.network.disable_uds);
         assert_eq!(config.inference.embedding_backend, "openai");
         assert_eq!(config.inference.llm_backend, "llama");
@@ -573,17 +577,7 @@ mod tests {
         let config: PlicoConfig = serde_json::from_str(json).unwrap();
         assert_eq!(config.network.daemon_port, 9999);
         assert_eq!(config.network.host, "127.0.0.1");
-        assert_eq!(config.network.sse_port, 7879);
         assert_eq!(config.inference.llm_backend, "llama");
-    }
-
-    #[test]
-    fn agent_card_url_reflects_config() {
-        let mut config = PlicoConfig::default();
-        assert_eq!(config.agent_card_url(), "http://127.0.0.1:7879");
-        config.network.host = "0.0.0.0".into();
-        config.network.sse_port = 8080;
-        assert_eq!(config.agent_card_url(), "http://0.0.0.0:8080");
     }
 
     #[test]

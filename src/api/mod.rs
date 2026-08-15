@@ -4,11 +4,17 @@
 //! and a structured JSON request/response protocol over TCP or local CLI.
 
 pub mod agent_auth;
-pub mod version;
 pub mod dto;
-pub mod semantic;
+#[cfg(feature = "offline-migration")]
+pub mod offline_credentials;
 pub mod permission;
+pub mod public;
+pub mod semantic;
+pub mod version;
 
-pub use agent_auth::{AgentKeyStore, AgentToken, AgentAuthMode};
-pub use permission::{PermissionGuard, PermissionContext, PermissionAction, PermissionGrant};
+pub use agent_auth::{AgentAuthMode, AgentKeyStore, AgentToken};
+#[cfg(feature = "offline-migration")]
+pub use offline_credentials::{OfflineCredentialError, OfflineCredentialSet};
+pub use permission::{PermissionAction, PermissionContext, PermissionGrant, PermissionGuard};
+pub use public::*;
 pub use version::ApiVersion;

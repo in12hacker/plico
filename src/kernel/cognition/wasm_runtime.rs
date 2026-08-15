@@ -31,8 +31,7 @@ mod wasmtime_impl {
             let mut config = Config::new();
             config.consume_fuel(true);
 
-            let engine = Engine::new(&config)
-                .map_err(|e| CognitiveError::WasmInitFailed(e.to_string()))?;
+            let engine = Engine::new(&config).map_err(|e| CognitiveError::WasmInitFailed(e.to_string()))?;
 
             Ok(Self {
                 engine,
@@ -57,18 +56,14 @@ mod wasmtime_impl {
 
             // 2. Create store with fuel limit and host state
             let fuel_limit = limits.max_execution_time_ms * 1000; // ms → fuel units
-            let host_state = HostState {
-                executor,
-            };
+            let host_state = HostState { executor };
             let mut store = Store::new(&self.engine, host_state);
-            store.set_fuel(fuel_limit)
+            store
+                .set_fuel(fuel_limit)
                 .map_err(|e| CognitiveError::WasmExecutionFailed(format!("Failed to set fuel: {}", e)))?;
 
             // 3. Set memory limits
-            let memory_ty = MemoryType::new(
-                limits.max_memory_pages(),
-                Some(limits.max_memory_pages()),
-            );
+            let memory_ty = MemoryType::new(limits.max_memory_pages(), Some(limits.max_memory_pages()));
             let memory = Memory::new(&mut store, memory_ty)
                 .map_err(|e| CognitiveError::WasmExecutionFailed(format!("Failed to create memory: {}", e)))?;
 
@@ -89,9 +84,13 @@ mod wasmtime_impl {
             let tool_call_func = Func::wrap(
                 &mut store,
                 |mut caller: Caller<'_, HostState>,
-                 name_ptr: i32, name_len: i32,
-                 params_ptr: i32, params_len: i32,
-                 result_ptr: i32, result_capacity: i32| -> i32 {
+                 name_ptr: i32,
+                 name_len: i32,
+                 params_ptr: i32,
+                 params_len: i32,
+                 result_ptr: i32,
+                 result_capacity: i32|
+                 -> i32 {
                     // Read tool name from WASM memory
                     let name = {
                         let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
@@ -101,7 +100,9 @@ mod wasmtime_impl {
                         let data = memory.data(&caller);
                         let start = name_ptr as usize;
                         let end = start + name_len as usize;
-                        if end > data.len() { return -2; }
+                        if end > data.len() {
+                            return -2;
+                        }
                         match std::str::from_utf8(&data[start..end]) {
                             Ok(s) => s.to_string(),
                             Err(_) => return -3,
@@ -117,7 +118,9 @@ mod wasmtime_impl {
                         let data = memory.data(&caller);
                         let start = params_ptr as usize;
                         let end = start + params_len as usize;
-                        if end > data.len() { return -2; }
+                        if end > data.len() {
+                            return -2;
+                        }
                         match std::str::from_utf8(&data[start..end]) {
                             Ok(s) => serde_json::from_str(s).unwrap_or(serde_json::Value::Null),
                             Err(_) => return -3,
@@ -149,7 +152,8 @@ mod wasmtime_impl {
                     }
                     let len_bytes = (result_bytes.len() as i32).to_le_bytes();
                     memory.data_mut(&mut caller)[rptr..rptr + 4].copy_from_slice(&len_bytes);
-                    memory.data_mut(&mut caller)[rptr + 4..rptr + 4 + result_bytes.len()].copy_from_slice(&result_bytes);
+                    memory.data_mut(&mut caller)[rptr + 4..rptr + 4 + result_bytes.len()]
+                        .copy_from_slice(&result_bytes);
 
                     result_bytes.len() as i32
                 },
@@ -157,11 +161,14 @@ mod wasmtime_impl {
 
             // 5. Create linker and define host functions + memory
             let mut linker = Linker::new(&self.engine);
-            linker.define(&mut store, "env", "plico_log", log_func)
+            linker
+                .define(&mut store, "env", "plico_log", log_func)
                 .map_err(|e| CognitiveError::WasmExecutionFailed(format!("Failed to define plico_log: {}", e)))?;
-            linker.define(&mut store, "env", "plico_tool_call", tool_call_func)
+            linker
+                .define(&mut store, "env", "plico_tool_call", tool_call_func)
                 .map_err(|e| CognitiveError::WasmExecutionFailed(format!("Failed to define plico_tool_call: {}", e)))?;
-            linker.define(&mut store, "env", "memory", memory)
+            linker
+                .define(&mut store, "env", "memory", memory)
                 .map_err(|e| CognitiveError::WasmExecutionFailed(format!("Failed to define memory: {}", e)))?;
 
             // 6. Serialize inputs
@@ -169,11 +176,13 @@ mod wasmtime_impl {
                 .map_err(|e| CognitiveError::WasmExecutionFailed(format!("Failed to serialize inputs: {}", e)))?;
 
             // 7. Instantiate
-            let instance = linker.instantiate(&mut store, &module)
+            let instance = linker
+                .instantiate(&mut store, &module)
                 .map_err(|e| CognitiveError::WasmExecutionFailed(format!("Instantiation failed: {}", e)))?;
 
             // 8. Call main
-            let main_func = instance.get_func(&mut store, "main")
+            let main_func = instance
+                .get_func(&mut store, "main")
                 .ok_or_else(|| CognitiveError::WasmExecutionFailed("Module has no 'main' function".to_string()))?;
 
             // Write inputs to memory before calling main
@@ -191,7 +200,8 @@ mod wasmtime_impl {
             let input_ptr: i32 = 0;
             let input_len: i32 = inputs_json.len() as i32 + 4;
             let mut results = [Val::I32(0)];
-            main_func.call(&mut store, &[Val::I32(input_ptr), Val::I32(input_len)], &mut results)
+            main_func
+                .call(&mut store, &[Val::I32(input_ptr), Val::I32(input_len)], &mut results)
                 .map_err(|e| {
                     if e.to_string().contains("fuel") {
                         CognitiveError::WasmExecutionFailed("Execution exceeded fuel limit (timeout)".to_string())
@@ -241,7 +251,9 @@ mod wasmtime_impl {
 
             // Check cache
             {
-                let cache = self.cache.read()
+                let cache = self
+                    .cache
+                    .read()
                     .map_err(|e| CognitiveError::WasmInitFailed(format!("Cache lock poisoned: {}", e)))?;
                 if let Some(module) = cache.get(&hash) {
                     return Ok(module.clone());
@@ -254,7 +266,9 @@ mod wasmtime_impl {
 
             // Cache
             {
-                let mut cache = self.cache.write()
+                let mut cache = self
+                    .cache
+                    .write()
                     .map_err(|e| CognitiveError::WasmInitFailed(format!("Cache lock poisoned: {}", e)))?;
                 cache.insert(hash, module.clone());
             }
@@ -264,7 +278,7 @@ mod wasmtime_impl {
     }
 
     fn sha256_bytes(data: &[u8]) -> [u8; 32] {
-        use sha2::{Sha256, Digest};
+        use sha2::{Digest, Sha256};
         let mut hasher = Sha256::new();
         hasher.update(data);
         hasher.finalize().into()
@@ -360,18 +374,22 @@ mod tests {
         use super::*;
 
         fn minimal_wasm() -> Vec<u8> {
-            wat::parse_str(r#"
+            wat::parse_str(
+                r#"
                 (module
                     (memory (export "memory") 1)
                     (func (export "main") (param i32 i32) (result i32)
                         i32.const 0)
                 )
-            "#).unwrap()
+            "#,
+            )
+            .unwrap()
         }
 
         fn infinite_loop_wasm() -> Vec<u8> {
             // Function with many iterations to exhaust fuel
-            wat::parse_str(r#"
+            wat::parse_str(
+                r#"
                 (module
                     (memory (export "memory") 1)
                     (func (export "main") (param i32 i32) (result i32)
@@ -384,14 +402,18 @@ mod tests {
                                 (br $continue)))
                         i32.const 0)
                 )
-            "#).unwrap()
+            "#,
+            )
+            .unwrap()
         }
 
         #[tokio::test]
         async fn test_execute_minimal_module() {
             let runtime = WasmRuntime::new().unwrap();
             let limits = ResourceLimits::default();
-            let result = runtime.execute(&minimal_wasm(), serde_json::json!({}), &limits, None).await;
+            let result = runtime
+                .execute(&minimal_wasm(), serde_json::json!({}), &limits, None)
+                .await;
             assert!(result.is_ok(), "execute failed: {:?}", result.err());
         }
 
@@ -422,7 +444,9 @@ mod tests {
                 max_execution_time_ms: 1, // very low fuel
                 ..ResourceLimits::default()
             };
-            let result = runtime.execute(&infinite_loop_wasm(), serde_json::json!({}), &limits, None).await;
+            let result = runtime
+                .execute(&infinite_loop_wasm(), serde_json::json!({}), &limits, None)
+                .await;
             assert!(result.is_err());
             assert!(matches!(result.unwrap_err(), CognitiveError::WasmExecutionFailed(_)));
         }

@@ -40,7 +40,6 @@ pub struct AccessEntry {
     pub access_count: u64,
 }
 
-
 #[derive(Debug)]
 pub struct CASStorage {
     root: PathBuf,
@@ -175,9 +174,7 @@ impl CASStorage {
         let obj: AIObject = serde_json::from_slice(&json)?;
 
         if obj.cid != cid || !obj.verify_integrity() {
-            return Err(CASError::IntegrityFailed {
-                cid: cid.to_string(),
-            });
+            return Err(CASError::IntegrityFailed { cid: cid.to_string() });
         }
 
         Ok(obj)
@@ -219,21 +216,6 @@ impl CASStorage {
         Ok(cids)
     }
 
-    /// Delete an object by CID (physical delete).
-    /// WARNING: this is irreversible. Consider logical delete via the semantic FS layer.
-    pub fn delete(&self, cid: &str) -> io::Result<()> {
-        let obj_path = match self.object_path(cid) {
-            Ok(p) => p,
-            // Invalid CID or not found → no-op (graceful deletion)
-            Err(CASError::NotFound { .. }) | Err(CASError::InvalidCid { .. }) => return Ok(()),
-            Err(e) => return Err(io::Error::new(io::ErrorKind::InvalidInput, e.to_string())),
-        };
-        if obj_path.exists() {
-            fs::remove_file(obj_path)?;
-        }
-        Ok(())
-    }
-
     /// Storage root path.
     pub fn root(&self) -> &Path {
         &self.root
@@ -259,8 +241,15 @@ impl CASStorage {
         {
             let mut log = self.access_log.write().unwrap();
             log.entry(cid.to_string())
-                .and_modify(|e| { e.last_accessed_at = now; e.access_count += 1; })
-                .or_insert(AccessEntry { first_accessed_at: now, last_accessed_at: now, access_count: 1 });
+                .and_modify(|e| {
+                    e.last_accessed_at = now;
+                    e.access_count += 1;
+                })
+                .or_insert(AccessEntry {
+                    first_accessed_at: now,
+                    last_accessed_at: now,
+                    access_count: 1,
+                });
 
             // Evict oldest 10% when log exceeds limit
             if log.len() > MAX_ACCESS_LOG_ENTRIES {
@@ -297,29 +286,11 @@ impl CASStorage {
         self.access_log.read().unwrap().get(cid).cloned()
     }
 
-    /// List CIDs not accessed within `threshold_ms` milliseconds.
-    pub fn cold_objects(&self, threshold_ms: u64) -> Vec<String> {
-        let now = now_ms();
-        let log = self.access_log.read().unwrap();
-
-        let tracked: HashMap<&String, &AccessEntry> = log.iter().collect();
-        let mut cold = Vec::new();
-
-        if let Ok(cids) = self.list_cids() {
-            for cid in cids {
-                let is_cold = match tracked.get(&cid) {
-                    Some(entry) => now.saturating_sub(entry.last_accessed_at) > threshold_ms,
-                    None => true, // never accessed = cold
-                };
-                if is_cold { cold.push(cid); }
-            }
-        }
-        cold
-    }
-
     /// Total disk bytes occupied by CAS objects.
     pub fn total_bytes(&self) -> u64 {
-        self.list_cids().unwrap_or_default().iter()
+        self.list_cids()
+            .unwrap_or_default()
+            .iter()
             .filter_map(|cid| {
                 let p = self.object_path(cid).ok()?;
                 let m = fs::metadata(&p).ok()?;
@@ -331,8 +302,7 @@ impl CASStorage {
     /// Persist access log to disk.
     pub fn persist_access_log(&self) -> io::Result<()> {
         let log = self.access_log.read().unwrap();
-        let json = serde_json::to_vec(&*log)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        let json = serde_json::to_vec(&*log).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         let path = self.root.join("_access_log.json");
         let tmp = self.root.join("_access_log.json.tmp");
         fs::write(&tmp, json)?;
@@ -342,29 +312,11 @@ impl CASStorage {
 
     fn load_access_log(root: &Path) -> io::Result<HashMap<String, AccessEntry>> {
         let path = root.join("_access_log.json");
-        if !path.exists() { return Ok(HashMap::new()); }
-        let json = fs::read(&path)?;
-        serde_json::from_slice(&json)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
-    }
-
-    /// Mark-sweep garbage collection. Deletes CAS objects whose CIDs are not in `active`.
-    /// Returns (swept_count, kept_count).
-    pub fn gc(&self, active: &std::collections::HashSet<String>) -> io::Result<(usize, usize)> {
-        let all_cids = self.list_cids()?;
-        let mut swept = 0;
-        let mut kept = 0;
-        for cid in all_cids {
-            if active.contains(&cid) {
-                kept += 1;
-            } else {
-                // Remove from access_log too
-                self.access_log.write().unwrap().remove(&cid);
-                self.delete(&cid)?;
-                swept += 1;
-            }
+        if !path.exists() {
+            return Ok(HashMap::new());
         }
-        Ok((swept, kept))
+        let json = fs::read(&path)?;
+        serde_json::from_slice(&json).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
     }
 
     /// Compute shard directory for a CID.
@@ -392,10 +344,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let storage = CASStorage::new(dir.path().to_path_buf()).unwrap();
 
-        let obj = AIObject::new(
-            b"hello, plico!".to_vec(),
-            AIObjectMeta::text(["greeting", "test"]),
-        );
+        let obj = AIObject::new(b"hello, plico!".to_vec(), AIObjectMeta::text(["greeting", "test"]));
         let cid = obj.cid.clone();
 
         storage.put(&obj).unwrap();
@@ -457,15 +406,5 @@ mod tests {
 
         assert!(!storage.exists(""));
         assert!(!storage.exists("x"));
-    }
-
-    #[test]
-    fn test_delete_empty_cid_is_ok() {
-        let dir = tempdir().unwrap();
-        let storage = CASStorage::new(dir.path().to_path_buf()).unwrap();
-
-        // delete with invalid CID is a no-op (graceful handling)
-        assert!(storage.delete("").is_ok());
-        assert!(storage.delete("x").is_ok());
     }
 }

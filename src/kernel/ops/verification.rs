@@ -48,10 +48,7 @@ impl VerificationGate {
             VerificationResult::Pass
         } else {
             VerificationResult::Fail {
-                reason: format!(
-                    "Scope mismatch: requested {:?}, stored {:?}",
-                    requested, actual
-                ),
+                reason: format!("Scope mismatch: requested {:?}, stored {:?}", requested, actual),
             }
         }
     }
@@ -163,14 +160,17 @@ mod tests {
         std::env::set_var("EMBEDDING_BACKEND", "stub");
         let embedding = Arc::new(crate::fs::StubEmbeddingProvider::new());
         let search = Arc::new(crate::fs::search::memory::InMemoryBackend::new());
-        let fs = Arc::new(crate::fs::SemanticFS::new(
-            dir.path().to_path_buf(),
-            cas,
-            embedding.clone(),
-            search.clone(),
-            None,
-            None,
-        ).unwrap());
+        let fs = Arc::new(
+            crate::fs::SemanticFS::new(
+                dir.path().to_path_buf(),
+                cas,
+                embedding.clone(),
+                search.clone(),
+                None,
+                None,
+            )
+            .unwrap(),
+        );
 
         let result = VerificationGate::verify_write(&fs, "nonexistent_cid_12345678");
         assert!(matches!(result, VerificationResult::Fail { .. }));
@@ -179,20 +179,14 @@ mod tests {
     #[test]
     fn test_verify_memory_scope_match() {
         use crate::memory::MemoryScope;
-        let result = VerificationGate::verify_memory_scope(
-            &MemoryScope::Private,
-            &MemoryScope::Private,
-        );
+        let result = VerificationGate::verify_memory_scope(&MemoryScope::Private, &MemoryScope::Private);
         assert!(matches!(result, VerificationResult::Pass));
     }
 
     #[test]
     fn test_verify_memory_scope_mismatch() {
         use crate::memory::MemoryScope;
-        let result = VerificationGate::verify_memory_scope(
-            &MemoryScope::Private,
-            &MemoryScope::Shared,
-        );
+        let result = VerificationGate::verify_memory_scope(&MemoryScope::Private, &MemoryScope::Shared);
         assert!(matches!(result, VerificationResult::Fail { .. }));
     }
 

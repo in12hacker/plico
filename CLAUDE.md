@@ -24,7 +24,9 @@ AI-Native File System
   └─ Layered Context Loading         — L0 (~100 tokens), L1 (~2k tokens), L2 (full)
 ```
 
-核心哲学：管理单元 = agents/intents（非 processes/files）；存储寻址 = content hashes + semantic tags（非 filesystem paths）；索引 = vectors + knowledge graphs（非 filenames）。
+核心哲学：Plico 是单个个人用户的数字分身；Memory/CAS 是主数据，embedding、BM25、KG
+与摘要是可重建派生数据，文档/表格/PPT/GUI 是按需生成的人类侧投影。公共面不是企业
+多租户控制面，也不直接暴露 scheduler、KG 写入或通用 tool action。
 
 ## 构建与测试
 
@@ -48,16 +50,26 @@ cargo clippy -- -D warnings
 cargo build --release
 
 # 运行 CLI（embedded 模式 — 直接 kernel，无 daemon）
-cargo run --bin aicli -- --embedded put --content "test" --tags "test"
+cargo run --bin aicli -- --embedded object.put --content "test" --tag test
 
 # 运行 CLI（daemon 模式 — 默认，需要运行中的 plicod）
-cargo run --bin aicli -- put --content "test" --tags "test"
+cargo run --bin aicli -- object.put --content "test" --tag test
 
 # 运行 daemon（start/stop/status 生命周期）
 cargo run --bin plicod -- start --port 7878
 cargo run --bin plicod -- stop
 cargo run --bin plicod -- status
+
+# TCP 从 owner-only agent_tokens.json 安全读取 bearer；不得放入参数或日志
+export PLICO_ROOT="${PLICO_ROOT:-$HOME/.plico}"
+export PLICO_BEARER_TOKEN="$(jq -r '.\"personal-owner\".token' "$PLICO_ROOT/agent_tokens.json")"
+cargo run --bin aicli -- --tcp 127.0.0.1:7878 runtime.readiness
 ```
+
+公开 operation 固定为 14 项：`capabilities.describe`、`runtime.readiness`、
+`object.put/get/search`、`memory.create/get/recall/update/delete`、
+`projection.status/rebuild`、`session.start/end`。aicli 与 MCP 使用这些精确点号名称；不存在
+generic action、`--agent`、旧 method 或隐藏兼容模式。
 
 ## 推断后端配置
 
@@ -77,14 +89,6 @@ export LLM_BACKEND=stub
 ```
 
 **禁止** 使用 `EMBEDDING_BACKEND=local` — 它会启动 Python 子进程调用 Ollama，极慢。
-
-## 工具配置
-
-### Web Search (MCP)
-
-MiniMax MCP server 提供 `web_search` 和 `understand_image` 工具。配置方式见 `.claude/settings.json`。
-
-**重要**：内置 `WebSearch` 工具不适用于 MiniMax API。始终使用 MiniMax MCP server 的 `web_search`。
 
 ## 开发流程规范
 
@@ -139,10 +143,12 @@ MiniMax MCP server 提供 `web_search` 和 `understand_image` 工具。配置方
 **安全问题和硬编码值是代码红线。发现时必须立即修复。**
 
 ### 保留的 Agent 名称
-- `"kernel"`, `"system"`, `"root"`, `"admin"` 在 `PermissionGuard::new()` 中硬编码为受信（`src/api/permission.rs:179-181`）
-- 这些名称**禁止**被用户注册 — 它们绕过所有权限检查
-- 执行：`register_agent()` 拒绝这些名称，返回 `PermissionDenied`
-- 添加新的受信 agent 名称时，**必须**同时添加到 `src/kernel/ops/agent.rs` 的 `RESERVED_AGENT_NAMES`
+- `PermissionGuard` 仅把内部 `kernel`、`system` 视为 trusted；public context 绝不能由 payload
+  构造为这两个主体
+- `kernel`、`system`、`root`、`admin` 是旧 agent 注册面的 reserved names，但该注册面不属于
+  `plico.personal.v2`
+- `personal-owner` 不加入旧 trusted-agent bypass；它只由 UDS/Embedded/MCP 本地信任或 TCP
+  bootstrap bearer 产生，并在 `PublicRequestContext` 中显式赋予个人 owner 能力
 
 ### 内容大小限制
 - 每个对象最大内容：**10 MB**（`MAX_CONTENT_BYTES` in `src/api/semantic.rs`）
@@ -154,13 +160,16 @@ MiniMax MCP server 提供 `web_search` 和 `understand_image` 工具。配置方
 - 模式：写入 `.tmp` → rename 到最终路径
 
 ### 权限边界
-- 租户隔离是**最严格的安全边界** — 即使受信 agent（`kernel`, `system`）也不能绕过
-- 跨租户访问需要显式 `CrossTenant` 权限授予
+- Plico 面向一个个人 vault，不提供企业 tenant 或跨 tenant 授权。
+- 持久化格式中的旧 `tenant_id` 暂作为本地 namespace；任何主体都不能跨 namespace。
 - rename 操作上禁止 `let _ =` — 错误必须被记录或传播
 
 ### 密钥
 - **禁止** 在源码中硬编码 API key、token 或密码
 - 使用环境变量或 `~/.plico/` 配置文件
+- `plicod` 首次启动以 0600 权限原子创建/复用 `PLICO_ROOT/agent_tokens.json` 中的
+  `personal-owner` credential；bootstrap 是 daemon 本地信任基础设施，不是公共业务 operation
+- 日志不得包含 bearer、正文、完整 query、provider 原错、宿主私有路径
 
 ## Tokio 运行时模式（Daemon）
 
@@ -179,7 +188,8 @@ match tokio::runtime::Handle::try_current() {
 dimension: OnceLock<usize>  // 构造时不计算
 ```
 
-**CLI daemon 路由**：`commands/mod.rs` 中的命令仅用于 embedded 模式。Daemon 模式需要在 `main.rs` 的 `build_remote_request()` 中路由。
+**CLI 路由**：`aicli/input.rs` 只把 14 个点号 operation 映射到 `PublicCommand`；Embedded、
+UDS、TCP 共用 `KernelClient::request(PublicRequest)`，禁止再建 transport 专属命令路由。
 
 详见 skill `plico-tokio-patterns`。
 
@@ -198,19 +208,12 @@ EMBEDDING_BACKEND=stub LLM_BACKEND=stub cargo test --lib kernel::ops::fs::tests
 
 **Kernel 测试**：使用 `crate::kernel::tests::make_kernel()` 返回 `(Arc<AIKernel>, TempDir)`。
 
-**Handler 测试**：构造 `ApiRequest` 变体 → `kernel.handle_api_request(req)` → 检查 `ApiResponse`。
+**公共服务测试**：构造 `PublicRequest` + 可信 `PublicRequestContext`，调用
+`kernel.handle_public_request(&context, request)`，检查 typed `PublicResponse`。不得通过旧
+`ApiRequest`/`handle_api_request` 测试公共行为。
 
-**Tool 测试**：直接调用 `handle(kernel, "tool.name", &params, agent_id)` → 检查 `ToolResult`。
-
-**权限门控**：Delete、SendMessage、Execute 等操作需要先 `GrantPermission`：
-```rust
-kernel.handle_api_request(ApiRequest::GrantPermission {
-    agent_id: "test_agent".to_string(),
-    action: "Delete".to_string(),
-    scope: Some("*".to_string()),
-    expires_at: None,
-});
-```
+**权限门控**：本地 owner 具备个人纠错/遗忘能力；普通 authenticated role 的 Read/Write/Delete
+仍由 `PermissionGuard` 决定。测试用显式 guard grant，不在 public payload 注入 permission/role。
 
 **Stub embedding 限制**：stub 后端返回空向量，语义搜索可能返回 0 结果。测试中不要断言搜索结果数量，用 `assert!(resp.ok)` 即可。
 
@@ -218,13 +221,13 @@ kernel.handle_api_request(ApiRequest::GrantPermission {
 
 | 问题 | 原因 | 解决 |
 |------|------|------|
-| `RegisterAgent` 字段错误 | 只有 `name`，无 `agent_id`/`display_name` | 只传 `name` |
+| CLI 使用旧 `put/remember/agent` | 公共面已切为精确点号 operation | 使用 `object.put` / `memory.create` 等 |
 | `EventType::Meeting` 不存在 | 枚举是 `Sync` | 查源码确认变体名 |
 | `ToolResult.value` 不存在 | 字段是 `output` | 用 `result.output["key"]` |
 | `BatchCreateItem` 无 Default | 必须手动构造所有字段 | 逐字段赋值 |
 | `context_assemble` 参数 | 第一个参数是 `&[ContextCandidate]` 不是 `&[String]` | 传空切片测试 |
 | `make_kernel` 不在作用域 | `fs.rs` 等 ops 模块需要全路径 | 用 `crate::kernel::tests::make_kernel()` |
-| `end_session` 缺 `session_id` | 服务端要求 `session_id` 字段 | 从 `start_session` 响应中提取 |
+| `session.end` 缺 `session_id` | 服务端要求 UUID | 从 `session.start` typed 响应中提取 |
 
 ## AI 导航
 

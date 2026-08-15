@@ -1,310 +1,192 @@
 #!/bin/bash
-# Full benchmark run with preprocessing phase — stable version
-# Usage: ./scripts/run_full_benchmark.sh [--dry-run] [--skip-jina-v5] [--preprocess-timeout N]
+# One fresh-vault smoke run by default; five runs are an explicit shadow campaign.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 BENCH_DIR="$PROJECT_ROOT/benchmarks"
-PLICOD="$PROJECT_ROOT/target/release/plicod"
-
-HOST="${PLICO_HOST:-127.0.0.1}"
-PORT="${PLICO_PORT:-7878}"
-ROOT="/tmp/plico-bench-$(date +%Y%m%d-%H%M%S)"
+PYTHON="$BENCH_DIR/.venv/bin/python"
+SOURCE_PLICOD="$PROJECT_ROOT/target/release/plicod"
+OUTPUT_PARENT="$BENCH_DIR/results"
 PREPROCESS_TIMEOUT="${PREPROCESS_TIMEOUT:-300}"
-VERSION="${PLICO_BENCH_VERSION:-dev}"
+RUN_CLASS="${PLICO_BENCH_RUN_CLASS:-research}"
 DRY_RUN=false
-SKIP_JINA_V5=false
-FAILED_SUITES=()
+RUNS=1
+PLICOD_PID=""
+ACTIVE_VAULT=""
 
-function usage() {
-    cat <<EOF
-Usage: $0 [OPTIONS]
-
-Options:
-  --dry-run              Print configuration and exit without running
-  --skip-jina-v5         Skip Jina v5 embedding config
-  --preprocess-timeout N Seconds to wait for indexing after ingest (default: 180)
-  --version V            Benchmark version string (default: dev, or PLICO_BENCH_VERSION env)
-  --help                 Show this help
-EOF
+usage() {
+    echo "Usage: $0 [--dry-run] [--runs 1|5] [--output-parent DIR] [--preprocess-timeout N]"
 }
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --dry-run) DRY_RUN=true; shift ;;
-        --skip-jina-v5) SKIP_JINA_V5=true; shift ;;
-        --preprocess-timeout)
-            PREPROCESS_TIMEOUT="$2"
-            shift 2
-            ;;
-        --version)
-            VERSION="$2"
-            shift 2
-            ;;
+        --runs) RUNS="$2"; shift 2 ;;
+        --output-parent) OUTPUT_PARENT="$2"; shift 2 ;;
+        --preprocess-timeout) PREPROCESS_TIMEOUT="$2"; shift 2 ;;
         --help) usage; exit 0 ;;
         *) echo "Unknown option: $1"; usage; exit 1 ;;
     esac
 done
 
-function cleanup() {
-    local exit_code=$?
-    echo ""
-    echo "=== Cleanup ==="
-    if [[ -n "${PLICOD_PID:-}" ]] && kill -0 "$PLICOD_PID" 2>/dev/null; then
-        echo "Stopping plicod (PID $PLICOD_PID)..."
-        kill -TERM "$PLICOD_PID" 2>/dev/null || true
-        wait "$PLICOD_PID" 2>/dev/null || true
-    fi
-    if [[ -d "$ROOT" ]]; then
-        rm -rf "$ROOT"
-    fi
-    if [[ ${#FAILED_SUITES[@]} -gt 0 ]]; then
-        echo ""
-        echo "FAILED SUITES:"
-        for f in "${FAILED_SUITES[@]}"; do
-            echo "  - $f"
-        done
-    fi
-    exit $exit_code
-}
-trap cleanup EXIT
+if [[ "$RUNS" != "1" && "$RUNS" != "5" ]]; then
+    echo "ERROR: --runs must be exactly 1 (smoke) or 5 (shadow variance)"
+    exit 1
+fi
 
-function verify_server() {
-    local url=$1
-    local name=$2
-    local timeout=${3:-30}
-    echo -n "Verifying $name at $url ... "
-    for ((i = 0; i < timeout; i++)); do
-        if curl -sf "$url/models" >/dev/null 2>&1 || curl -sf "$url/health" >/dev/null 2>&1; then
-            echo "OK"
-            return 0
-        fi
-        sleep 1
-    done
-    echo "FAILED (timeout ${timeout}s)"
-    return 1
-}
-
-function verify_reranker() {
-    local url="http://127.0.0.1:18926/v1"
-    echo -n "Verifying Reranker (18926) /v1/rerank ... "
-    local resp
-    resp=$(curl -sf -w "\n%{http_code}" -X POST "$url/rerank" \
-        -H "Content-Type: application/json" \
-        -d '{"model":"test","query":"test","documents":["test"],"top_n":1}' 2>/dev/null) || true
-    local http_code
-    http_code=$(echo "$resp" | tail -1)
-    if [[ "$http_code" == "200" ]]; then
-        echo "OK (reranking enabled)"
-        return 0
-    elif [[ "$http_code" == "501" ]]; then
-        echo "FAILED (501: missing --reranking flag)"
-        echo ""
-        echo "Fix: scripts/model_manager.sh restart reranker"
-        echo "  or: scripts/start_model_servers.sh (re-run to auto-fix)"
-        return 1
-    else
-        echo "FAILED (HTTP $http_code)"
-        return 1
-    fi
-}
-
-function start_plicod() {
-    local embed_base=$1
-    # Kill any existing plicod on the target port
-    local existing_pid
-    existing_pid=$(lsof -ti :"$PORT" 2>/dev/null || true)
-    if [[ -n "$existing_pid" ]]; then
-        echo "Killing existing process on port $PORT (PID $existing_pid)..."
-        kill -TERM $existing_pid 2>/dev/null || true
-        sleep 2
-    fi
-    rm -rf "$ROOT"
-    mkdir -p "$ROOT"
-
-    export EMBEDDING_API_BASE="$embed_base"
-    export OPENAI_API_BASE="http://127.0.0.1:18920/v1"
-    export LLAMA_URL="http://127.0.0.1:18920/v1"
-    export LLM_BACKEND=openai
-    export LLM_MODEL=gemma-4-26B-A4B-it-Q4_K_M.gguf
-    export PLICO_KG_AUTO_EXTRACT=false
-    export PLICO_RERANKER_API_BASE="http://127.0.0.1:18926/v1"
-    export PLICO_RERANKER_MODEL="bge-reranker-v2-m3"
-    export PLICO_RERANKER_TOP_N=10
-
-    # Enable debug logging if DEBUG=1 is set
-    if [ "${DEBUG:-0}" = "1" ]; then
-        export RUST_LOG=debug
-        echo "Debug logging enabled (RUST_LOG=debug)"
-    fi
-
-    "$PLICOD" --port "$PORT" --root "$ROOT" > /tmp/plicod_bench.log 2>&1 &
-    PLICOD_PID=$!
-    echo "plicod started (PID $PLICOD_PID), root=$ROOT, embed=$embed_base"
-
-    for ((i = 0; i < 30; i++)); do
-        if python3 -c "
-import socket, struct, json, sys
-try:
-    s = socket.create_connection(('${HOST}', ${PORT}), timeout=2)
-    payload = json.dumps({'method': 'health_report'}).encode()
-    s.sendall(struct.pack('>I', len(payload)) + payload)
-    header = s.recv(4)
-    length = struct.unpack('>I', header)[0]
-    resp = json.loads(s.recv(length))
-    s.close()
-    sys.exit(0 if resp.get('ok') else 1)
-except Exception:
-    sys.exit(1)
-" 2>/dev/null; then
-            echo "plicod ready"
-            return 0
-        fi
-        sleep 1
-    done
-    echo "plicod failed to start within 30s"
-    return 1
-}
-
-function kill_plicod() {
-    if [[ -n "${PLICOD_PID:-}" ]] && kill -0 "$PLICOD_PID" 2>/dev/null; then
-        kill -TERM "$PLICOD_PID" 2>/dev/null || true
-        wait "$PLICOD_PID" 2>/dev/null || true
-    fi
-    PLICOD_PID=""
-}
-
-function run_suite() {
-    local suite=$1
-    local samples=$2
-    local embed_name=$3
-    local output="results/${suite}_${embed_name}_${VERSION}.json"
-
-    echo ""
-    echo "========================================"
-    echo "Suite: $suite | samples=$samples | embed=$embed_name"
-    echo "========================================"
-
-    if [[ "$DRY_RUN" == true ]]; then
-        echo "[DRY-RUN] uv run python -m plico_benchmarks run $suite --host $HOST --port $PORT --samples $samples --output $output --preprocess-timeout $PREPROCESS_TIMEOUT"
-        return 0
-    fi
-
-    if ! uv run python -m plico_benchmarks run "$suite" \
-        --host "$HOST" --port "$PORT" \
-        --samples "$samples" \
-        --output "$output" \
-        --preprocess-timeout "$PREPROCESS_TIMEOUT" 2>&1; then
-        echo "ERROR: suite $suite failed"
-        FAILED_SUITES+=("$suite ($embed_name): runtime error")
-        return 1
-    fi
-
-    # Validate output
-    if [[ ! -s "$output" ]]; then
-        echo "WARNING: $output is empty"
-        FAILED_SUITES+=("$suite ($embed_name): empty output")
-        return 1
-    fi
-
-    if ! python3 -c "import json,sys; d=json.load(open('$output')); sys.exit(0 if d.get('metrics') else 1)" 2>/dev/null; then
-        echo "WARNING: $output missing metrics"
-        FAILED_SUITES+=("$suite ($embed_name): missing metrics")
-        return 1
-    fi
-
-    echo "Suite $suite completed: $output"
-}
-
-# ===== Main =====
-echo "=== Plico Full Benchmark ==="
-echo "plicod binary: $PLICOD"
-echo "host: $HOST:$PORT"
-echo "root: $ROOT"
-echo "preprocess timeout: ${PREPROCESS_TIMEOUT}s"
-echo "dry-run: $DRY_RUN"
-echo "skip-jina-v5: $SKIP_JINA_V5"
-echo ""
-
-if [[ ! -x "$PLICOD" ]]; then
-    echo "ERROR: plicod binary not found or not executable: $PLICOD"
-    echo "Run: cargo build --release --bin plicod"
+if [[ "$RUN_CLASS" != "regression" && "$RUN_CLASS" != "research" ]]; then
+    echo "ERROR: full benchmark run class must be regression or research"
+    exit 1
+fi
+if [[ ! -x "$PYTHON" ]]; then
+    echo "ERROR: benchmarks/.venv is unavailable; run uv sync --extra dev"
     exit 1
 fi
 
 if [[ "$DRY_RUN" == false ]]; then
-    verify_server "http://127.0.0.1:18920/v1" "LLM (18920)" 30
-    verify_server "http://127.0.0.1:18921/v1" "Embedding Qwen3 (18921)" 30
-    if [[ "$SKIP_JINA_V5" == false ]]; then
-        verify_server "http://127.0.0.1:18922/v1" "Embedding Jina v5 (18922)" 30
-    fi
-    verify_reranker || exit 1
+    for role in READER JUDGE; do
+        for suffix in PROVIDER API_BASE MODEL API_KEY TIMEOUT_SECONDS MAX_TOKENS MAX_ATTEMPTS \
+            THINKING REASONING_EFFORT TEMPERATURE TOP_P MAX_REQUESTS MAX_INPUT_TOKENS \
+            MAX_OUTPUT_TOKENS MAX_USD; do
+            variable="PLICO_${role}_${suffix}"
+            if [[ -z "${!variable:-}" ]]; then
+                echo "ERROR: missing exact DeepSeek role setting $variable"
+                exit 1
+            fi
+        done
+    done
 fi
+
+cleanup_runtime() {
+    if [[ -n "$PLICOD_PID" ]] && kill -0 "$PLICOD_PID" 2>/dev/null; then
+        kill -TERM "$PLICOD_PID" 2>/dev/null || true
+        wait "$PLICOD_PID" 2>/dev/null || true
+    fi
+    PLICOD_PID=""
+    if [[ -n "$ACTIVE_VAULT" && -d "$ACTIVE_VAULT" ]]; then
+        rm -rf "$ACTIVE_VAULT"
+    fi
+    ACTIVE_VAULT=""
+}
+trap cleanup_runtime EXIT
+
+if [[ "$DRY_RUN" == false ]]; then
+    cargo build --manifest-path "$PROJECT_ROOT/Cargo.toml" --release --bin plicod
+    if [[ ! -x "$SOURCE_PLICOD" ]]; then
+        echo "ERROR: release plicod was not produced"
+        exit 1
+    fi
+fi
+
+mkdir -p "$OUTPUT_PARENT"
+OUTPUT_PARENT="$(cd "$OUTPUT_PARENT" && pwd -P)"
+CAMPAIGN_ID="$($PYTHON -c 'import uuid; print(uuid.uuid4())')"
+CAMPAIGN_DIR="$OUTPUT_PARENT/campaign-$CAMPAIGN_ID"
+if [[ -e "$CAMPAIGN_DIR" ]]; then
+    echo "ERROR: campaign output collision"
+    exit 1
+fi
+mkdir -m 700 "$CAMPAIGN_DIR"
+SEALED_PLICOD="$CAMPAIGN_DIR/plicod"
+if [[ "$DRY_RUN" == false ]]; then
+    install -m 700 "$SOURCE_PLICOD" "$SEALED_PLICOD"
+fi
+
+start_fresh_daemon() {
+    local suite=$1
+    local ordinal=$2
+    ACTIVE_VAULT="$(mktemp -d "/tmp/plico-benchmark-${suite}-${ordinal}.XXXXXX")"
+    chmod 700 "$ACTIVE_VAULT"
+    if find "$ACTIVE_VAULT" -mindepth 1 -print -quit | grep -q .; then
+        echo "ERROR: fresh vault was not empty before daemon startup"
+        exit 1
+    fi
+    local daemon_log="$CAMPAIGN_DIR/${suite}.run-${ordinal}.plicod.log"
+    if [[ "$DRY_RUN" == false ]]; then
+        : > "$daemon_log"
+        chmod 600 "$daemon_log"
+        env -u PLICO_READER_API_KEY -u PLICO_JUDGE_API_KEY \
+            -u PLICO_COMPILER_API_KEY -u OPENAI_API_KEY \
+            -u DEEPSEEK_API_KEY \
+            "$SEALED_PLICOD" --port 0 --root "$ACTIVE_VAULT" >"$daemon_log" 2>&1 &
+        PLICOD_PID=$!
+        for _ in $(seq 1 100); do
+            if [[ -S "$ACTIVE_VAULT/plico.sock" ]]; then
+                return 0
+            fi
+            if ! kill -0 "$PLICOD_PID" 2>/dev/null; then
+                echo "ERROR: plicod exited before creating its UDS"
+                exit 1
+            fi
+            sleep 0.1
+        done
+        echo "ERROR: plicod did not create its UDS"
+        exit 1
+    fi
+}
+
+stop_fresh_daemon() {
+    cleanup_runtime
+}
+
+run_one() {
+    local suite=$1
+    local ordinal=$2
+    local run_id
+    run_id="$($PYTHON -c 'import uuid; print(uuid.uuid4())')"
+    local output="$CAMPAIGN_DIR/${suite}.run-${ordinal}"
+    local journal="$CAMPAIGN_DIR/llm-journal-$run_id"
+    mkdir -m 700 "$journal"
+    start_fresh_daemon "$suite" "$ordinal"
+    echo "suite=$suite independent_run=$ordinal/$RUNS run_id=$run_id"
+    if [[ "$DRY_RUN" == true ]]; then
+        echo "PLICO_BENCH_RUN_ID=$run_id PLICO_LLM_RUN_ID=$run_id PLICO_LLM_ATTEMPT_JOURNAL_DIR=$journal $PYTHON -m plico_benchmarks run $suite --uds <fresh-vault>/plico.sock --output $output"
+    elif [[ "$suite" == "conversational-qa" ]]; then
+        PLICO_BENCH_RUN_CLASS="$RUN_CLASS" \
+            PLICO_BENCH_RUN_ID="$run_id" \
+            PLICO_LLM_RUN_ID="$run_id" \
+            PLICO_LLM_ATTEMPT_JOURNAL_DIR="$journal" \
+            "$PYTHON" -m plico_benchmarks run "$suite" \
+            --uds "$ACTIVE_VAULT/plico.sock" \
+            --output "$output" \
+            --preprocess-timeout "$PREPROCESS_TIMEOUT"
+    else
+        env -u PLICO_READER_API_KEY -u PLICO_JUDGE_API_KEY \
+            -u PLICO_COMPILER_API_KEY -u OPENAI_API_KEY \
+            -u DEEPSEEK_API_KEY \
+            PLICO_BENCH_RUN_CLASS="$RUN_CLASS" \
+            PLICO_BENCH_RUN_ID="$run_id" \
+            PLICO_LLM_RUN_ID="$run_id" \
+            PLICO_LLM_ATTEMPT_JOURNAL_DIR="$journal" \
+            "$PYTHON" -m plico_benchmarks run "$suite" \
+            --uds "$ACTIVE_VAULT/plico.sock" \
+            --output "$output" \
+            --preprocess-timeout "$PREPROCESS_TIMEOUT"
+    fi
+    stop_fresh_daemon
+}
 
 cd "$BENCH_DIR"
-mkdir -p results
-export PLICO_BENCH_VERSION="$VERSION"
-
-# ===== Config A: Qwen3 =====
-start_plicod "http://127.0.0.1:18921/v1"
-run_suite "performance"             100 "qwen3"
-run_suite "memory-lifecycle"        100 "qwen3"
-run_suite "conversational-qa"        40 "qwen3"
-run_suite "retrieval"                30 "qwen3"
-run_suite "kg-reasoning"             50 "qwen3"
-run_suite "token-efficiency"         50 "qwen3"
-run_suite "scope-isolation"          30 "qwen3"
-run_suite "session-lifecycle"        20 "qwen3"
-run_suite "causal-reasoning"         30 "qwen3"
-run_suite "intent-routing"           30 "qwen3"
-run_suite "proactive-optimization"   30 "qwen3"
-kill_plicod
-
-# ===== Config B: Jina v5 =====
-if [[ "$SKIP_JINA_V5" == false ]]; then
-    start_plicod "http://127.0.0.1:18922/v1"
-    run_suite "performance"             100 "jina_v5"
-    run_suite "memory-lifecycle"        100 "jina_v5"
-    run_suite "conversational-qa"        40 "jina_v5"
-    run_suite "retrieval"                30 "jina_v5"
-    run_suite "kg-reasoning"             50 "jina_v5"
-    run_suite "token-efficiency"         50 "jina_v5"
-    run_suite "scope-isolation"          30 "jina_v5"
-    run_suite "session-lifecycle"        20 "jina_v5"
-    run_suite "causal-reasoning"         30 "jina_v5"
-    run_suite "intent-routing"           30 "jina_v5"
-    run_suite "proactive-optimization"   30 "jina_v5"
-    kill_plicod
-fi
-
-# ===== Generate report =====
-echo ""
-echo "========================================"
-echo "Generating comparison report..."
-echo "========================================"
-if [[ "$DRY_RUN" == false ]]; then
-    # Find previous version for comparison
-    PREV_VERSION=""
-    for f in results/*_v*.json; do
-        v=$(echo "$f" | grep -oP '_v\d+\.json$' | sed 's/_//;s/\.json//')
-        if [[ -n "$v" && "$v" != "$VERSION" ]]; then
-            PREV_VERSION="$v"
-            break
-        fi
+SUITES=(performance retrieval memory-recall-lexical conversational-qa)
+for suite in "${SUITES[@]}"; do
+    for ordinal in $(seq 1 "$RUNS"); do
+        run_one "$suite" "$ordinal"
     done
+done
 
-    COMPARE_FLAG=""
-    if [[ -n "$PREV_VERSION" ]]; then
-        echo "Comparing against: $PREV_VERSION"
-        COMPARE_FLAG="--compare $PREV_VERSION"
-    fi
-
-    uv run python -m plico_benchmarks report \
-        --input results/ \
-        --output "docs/benchmark_report_${VERSION}_comparison.md" \
-        $COMPARE_FLAG 2>&1 || echo "REPORT_FAILED"
+if [[ "$DRY_RUN" == false && "$RUNS" == "5" ]]; then
+    comparison_args=()
+    for ordinal in 1 2 3 4 5; do
+        comparison_args+=(--result "$CAMPAIGN_DIR/retrieval.run-${ordinal}")
+    done
+    "$PYTHON" -m plico_benchmarks compare-shadow \
+        "${comparison_args[@]}" \
+        --candidate plico_object_search \
+        --reference bm25_only \
+        --metric recall@10 \
+        --output "$CAMPAIGN_DIR/retrieval.shadow"
 fi
 
-echo ""
-echo "All done. Results in $BENCH_DIR/results/"
+echo "campaign_id=$CAMPAIGN_ID"
+echo "results=$CAMPAIGN_DIR"

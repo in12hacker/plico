@@ -4,9 +4,20 @@ use crate::kernel::AIKernel;
 use crate::tool::ToolResult;
 use serde_json::json;
 
-pub(in crate::kernel) fn handle(kernel: &AIKernel, name: &str, params: &serde_json::Value, agent_id: &str) -> ToolResult {
+pub(in crate::kernel) fn handle(
+    kernel: &AIKernel,
+    name: &str,
+    params: &serde_json::Value,
+    agent_id: &str,
+) -> ToolResult {
     match name {
         "permission.grant" => {
+            if !can_manage_permissions(kernel, agent_id) {
+                return ToolResult::error(format!(
+                    "permission mutation denied: Agent '{}' lacks explicit ManagePermissions permission",
+                    agent_id
+                ));
+            }
             let target = params.get("agent_id").and_then(|v| v.as_str()).unwrap_or("");
             let action_str = params.get("action").and_then(|v| v.as_str()).unwrap_or("");
             let scope = params.get("scope").and_then(|v| v.as_str()).map(String::from);
@@ -20,6 +31,12 @@ pub(in crate::kernel) fn handle(kernel: &AIKernel, name: &str, params: &serde_js
             }
         }
         "permission.revoke" => {
+            if !can_manage_permissions(kernel, agent_id) {
+                return ToolResult::error(format!(
+                    "permission mutation denied: Agent '{}' lacks explicit ManagePermissions permission",
+                    agent_id
+                ));
+            }
             let target = params.get("agent_id").and_then(|v| v.as_str()).unwrap_or("");
             let action_str = params.get("action").and_then(|v| v.as_str()).unwrap_or("");
             match crate::api::permission::PermissionGuard::parse_action(action_str) {
@@ -33,11 +50,16 @@ pub(in crate::kernel) fn handle(kernel: &AIKernel, name: &str, params: &serde_js
         "permission.list" => {
             let target = params.get("agent_id").and_then(|v| v.as_str()).unwrap_or(agent_id);
             let grants = kernel.permission_list(target);
-            let dto: Vec<serde_json::Value> = grants.into_iter().map(|g| json!({
-                "action": format!("{:?}", g.action),
-                "scope": g.scope,
-                "expires_at": g.expires_at,
-            })).collect();
+            let dto: Vec<serde_json::Value> = grants
+                .into_iter()
+                .map(|g| {
+                    json!({
+                        "action": format!("{:?}", g.action),
+                        "scope": g.scope,
+                        "expires_at": g.expires_at,
+                    })
+                })
+                .collect();
             ToolResult::ok(json!({"agent_id": target, "grants": dto}))
         }
         "permission.check" => {
@@ -55,6 +77,13 @@ pub(in crate::kernel) fn handle(kernel: &AIKernel, name: &str, params: &serde_js
     }
 }
 
+fn can_manage_permissions(kernel: &AIKernel, agent_id: &str) -> bool {
+    kernel
+        .permission_list(agent_id)
+        .iter()
+        .any(|grant| grant.covers(crate::api::permission::PermissionAction::ManagePermissions))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -64,27 +93,63 @@ mod tests {
     #[test]
     fn test_permission_grant() {
         let (kernel, _tmp) = make_kernel();
-        let result = handle(&*kernel, "permission.grant", &json!({
-            "agent_id": "test_agent", "action": "read"
-        }), "test");
+        kernel.permission_grant(
+            "test",
+            crate::api::permission::PermissionAction::ManagePermissions,
+            None,
+            None,
+        );
+        let result = handle(
+            &kernel,
+            "permission.grant",
+            &json!({
+                "agent_id": "test_agent", "action": "read"
+            }),
+            "test",
+        );
         assert!(result.error.is_none(), "grant should succeed: {:?}", result.error);
     }
 
     #[test]
     fn test_permission_grant_unknown_action() {
         let (kernel, _tmp) = make_kernel();
-        let result = handle(&*kernel, "permission.grant", &json!({
-            "agent_id": "test_agent", "action": "nonexistent_action"
-        }), "test");
+        let result = handle(
+            &kernel,
+            "permission.grant",
+            &json!({
+                "agent_id": "test_agent", "action": "nonexistent_action"
+            }),
+            "test",
+        );
         assert!(result.error.is_some());
+    }
+
+    #[test]
+    fn test_trusted_name_without_explicit_admin_grant_is_denied() {
+        let (kernel, _tmp) = make_kernel();
+        let result = handle(
+            &kernel,
+            "permission.grant",
+            &json!({
+                "agent_id": "attacker", "action": "all"
+            }),
+            "kernel",
+        );
+        assert!(result.error.is_some());
+        assert!(kernel.permission_list("attacker").is_empty());
     }
 
     #[test]
     fn test_permission_check_default() {
         let (kernel, _tmp) = make_kernel();
-        let result = handle(&*kernel, "permission.check", &json!({
-            "agent_id": "test_agent", "action": "read"
-        }), "test");
+        let result = handle(
+            &kernel,
+            "permission.check",
+            &json!({
+                "agent_id": "test_agent", "action": "read"
+            }),
+            "test",
+        );
         assert!(result.error.is_none());
         // Default agents have read permission
         assert_eq!(result.output["allowed"], true);
@@ -93,32 +158,58 @@ mod tests {
     #[test]
     fn test_permission_revoke() {
         let (kernel, _tmp) = make_kernel();
-        handle(&*kernel, "permission.grant", &json!({"agent_id": "a", "action": "write"}), "test");
-        let result = handle(&*kernel, "permission.revoke", &json!({"agent_id": "a", "action": "write"}), "test");
+        kernel.permission_grant(
+            "test",
+            crate::api::permission::PermissionAction::ManagePermissions,
+            None,
+            None,
+        );
+        handle(
+            &kernel,
+            "permission.grant",
+            &json!({"agent_id": "a", "action": "write"}),
+            "test",
+        );
+        let result = handle(
+            &kernel,
+            "permission.revoke",
+            &json!({"agent_id": "a", "action": "write"}),
+            "test",
+        );
         assert!(result.error.is_none());
     }
 
     #[test]
     fn test_permission_list() {
         let (kernel, _tmp) = make_kernel();
-        handle(&*kernel, "permission.grant", &json!({"agent_id": "b", "action": "read"}), "test");
-        let result = handle(&*kernel, "permission.list", &json!({"agent_id": "b"}), "test");
+        handle(
+            &kernel,
+            "permission.grant",
+            &json!({"agent_id": "b", "action": "read"}),
+            "test",
+        );
+        let result = handle(&kernel, "permission.list", &json!({"agent_id": "b"}), "test");
         assert!(result.error.is_none());
     }
 
     #[test]
     fn test_permission_check_unknown_action() {
         let (kernel, _tmp) = make_kernel();
-        let result = handle(&*kernel, "permission.check", &json!({
-            "agent_id": "a", "action": "nonexistent"
-        }), "test");
+        let result = handle(
+            &kernel,
+            "permission.check",
+            &json!({
+                "agent_id": "a", "action": "nonexistent"
+            }),
+            "test",
+        );
         assert!(result.error.is_some());
     }
 
     #[test]
     fn test_permission_unknown_tool() {
         let (kernel, _tmp) = make_kernel();
-        let result = handle(&*kernel, "permission.nonexistent", &json!({}), "test");
+        let result = handle(&kernel, "permission.nonexistent", &json!({}), "test");
         assert!(result.error.is_some());
     }
 }

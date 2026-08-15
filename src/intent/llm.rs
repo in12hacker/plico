@@ -4,11 +4,11 @@
 //! The LLM receives a system prompt with the full tool catalog and
 //! returns structured JSON describing the intended actions.
 
-use std::sync::{Arc, RwLock};
-use super::{IntentRouter, ResolvedIntent, IntentError, RoutingAction};
+use super::{IntentError, IntentRouter, ResolvedIntent, RoutingAction};
 use crate::api::semantic::ApiRequest;
+use crate::llm::{ChatMessage, ChatOptions, LlmProvider};
 use crate::tool::ToolDescriptor;
-use crate::llm::{LlmProvider, ChatMessage, ChatOptions};
+use std::sync::{Arc, RwLock};
 
 pub struct LlmRouter {
     provider: Arc<dyn LlmProvider>,
@@ -17,7 +17,10 @@ pub struct LlmRouter {
 
 impl LlmRouter {
     pub fn new(provider: Arc<dyn LlmProvider>, tool_catalog: Vec<ToolDescriptor>) -> Self {
-        Self { provider, tool_catalog: RwLock::new(tool_catalog) }
+        Self {
+            provider,
+            tool_catalog: RwLock::new(tool_catalog),
+        }
     }
 
     pub fn set_tool_catalog(&self, catalog: Vec<ToolDescriptor>) {
@@ -32,7 +35,7 @@ impl LlmRouter {
         }
 
         format!(
-r#"You are a Plico AI-OS intent resolver. Given a user's natural language request,
+            r#"You are a Plico AI-OS intent resolver. Given a user's natural language request,
 determine which API action to take.
 
 Available tools:
@@ -54,18 +57,19 @@ IMPORTANT: Return ONLY valid JSON, no markdown, no extra text."#
         if catalog.is_empty() {
             return Ok(());
         }
-        let tool = catalog.iter().find(|t| t.name == tool_name)
-            .ok_or_else(|| IntentError::Unresolvable(
-                format!("Unknown tool '{}' — not in registry", tool_name),
-            ))?;
+        let tool = catalog
+            .iter()
+            .find(|t| t.name == tool_name)
+            .ok_or_else(|| IntentError::Unresolvable(format!("Unknown tool '{}' — not in registry", tool_name)))?;
 
         if let Some(required) = tool.schema.get("required").and_then(|r| r.as_array()) {
             for req in required {
                 if let Some(field) = req.as_str() {
                     if params.get(field).is_none() {
-                        return Err(IntentError::Unresolvable(
-                            format!("Tool '{}' requires parameter '{}' but it was not provided", tool_name, field),
-                        ));
+                        return Err(IntentError::Unresolvable(format!(
+                            "Tool '{}' requires parameter '{}' but it was not provided",
+                            tool_name, field
+                        )));
                     }
                 }
             }
@@ -81,8 +85,15 @@ IMPORTANT: Return ONLY valid JSON, no markdown, no extra text."#
 
         let tool_name = parsed.get("tool").and_then(|v| v.as_str()).unwrap_or("none");
         let confidence = parsed.get("confidence").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
-        let explanation = parsed.get("explanation").and_then(|v| v.as_str()).unwrap_or("").to_string();
-        let params = parsed.get("params").cloned().unwrap_or(serde_json::Value::Object(Default::default()));
+        let explanation = parsed
+            .get("explanation")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let params = parsed
+            .get("params")
+            .cloned()
+            .unwrap_or(serde_json::Value::Object(Default::default()));
 
         if tool_name == "none" || confidence < 0.1 {
             return Err(IntentError::Unresolvable(explanation));
@@ -109,13 +120,14 @@ impl IntentRouter for LlmRouter {
     fn resolve(&self, text: &str, agent_id: &str) -> Result<Vec<ResolvedIntent>, IntentError> {
         let system_prompt = self.build_system_prompt();
 
-        let messages = vec![
-            ChatMessage::system(system_prompt),
-            ChatMessage::user(text),
-        ];
-        let options = ChatOptions { temperature: 0.1, max_tokens: None };
+        let messages = vec![ChatMessage::system(system_prompt), ChatMessage::user(text)];
+        let options = ChatOptions {
+            temperature: 0.1,
+            max_tokens: None,
+        };
 
-        let (content, input_tokens, output_tokens) = self.provider
+        let (content, input_tokens, output_tokens) = self
+            .provider
             .chat(&messages, &options)
             .map_err(|e| IntentError::LlmUnavailable(format!("LLM request failed: {}", e)))?;
 
@@ -125,7 +137,7 @@ impl IntentRouter for LlmRouter {
                 input_tokens,
                 output_tokens,
                 self.provider.model_name(),
-                "",  // session_id not available in this context
+                "", // session_id not available in this context
                 agent_id,
             );
         }
@@ -147,7 +159,8 @@ mod tests {
     #[test]
     fn test_parse_llm_response_valid() {
         let router = make_router("");
-        let json = r#"{"tool": "cas.search", "params": {"query": "test"}, "confidence": 0.9, "explanation": "searching"}"#;
+        let json =
+            r#"{"tool": "cas.search", "params": {"query": "test"}, "confidence": 0.9, "explanation": "searching"}"#;
         let result = router.parse_llm_response(json, "agent1");
         assert!(result.is_ok());
         let intents = result.unwrap();
@@ -173,13 +186,11 @@ mod tests {
 
     #[test]
     fn test_system_prompt_contains_tools() {
-        let tools = vec![
-            ToolDescriptor {
-                name: "cas.search".into(),
-                description: "Search objects".into(),
-                schema: serde_json::Value::Null,
-            },
-        ];
+        let tools = vec![ToolDescriptor {
+            name: "cas.search".into(),
+            description: "Search objects".into(),
+            schema: serde_json::Value::Null,
+        }];
         let provider = Arc::new(StubProvider::new(""));
         let router = LlmRouter::new(provider, tools);
         let prompt = router.build_system_prompt();
@@ -188,7 +199,8 @@ mod tests {
 
     #[test]
     fn test_resolve_delegates_to_provider() {
-        let response = r#"{"tool": "cas.search", "params": {"query": "hello"}, "confidence": 0.95, "explanation": "search"}"#;
+        let response =
+            r#"{"tool": "cas.search", "params": {"query": "hello"}, "confidence": 0.95, "explanation": "search"}"#;
         let router = make_router(response);
         let result = router.resolve("find hello", "agent1");
         assert!(result.is_ok());

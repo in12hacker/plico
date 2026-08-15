@@ -49,7 +49,10 @@ pub enum AgentState {
 
 impl AgentState {
     pub fn is_terminal(&self) -> bool {
-        matches!(self, AgentState::Completed | AgentState::Failed | AgentState::Terminated)
+        matches!(
+            self,
+            AgentState::Completed | AgentState::Failed | AgentState::Terminated
+        )
     }
 
     pub fn is_active(&self) -> bool {
@@ -60,12 +63,23 @@ impl AgentState {
         use AgentState::*;
         matches!(
             (self, to),
-            (Created, Waiting) | (Created, Running) | (Created, Suspended) | (Created, Terminated)
-            | (Waiting, Running) | (Waiting, Suspended) | (Waiting, Completed)
-            | (Waiting, Failed) | (Waiting, Terminated)
-            | (Running, Waiting) | (Running, Suspended) | (Running, Completed)
-            | (Running, Failed) | (Running, Terminated)
-            | (Suspended, Waiting) | (Suspended, Running) | (Suspended, Terminated)
+            (Created, Waiting)
+                | (Created, Running)
+                | (Created, Suspended)
+                | (Created, Terminated)
+                | (Waiting, Running)
+                | (Waiting, Suspended)
+                | (Waiting, Completed)
+                | (Waiting, Failed)
+                | (Waiting, Terminated)
+                | (Running, Waiting)
+                | (Running, Suspended)
+                | (Running, Completed)
+                | (Running, Failed)
+                | (Running, Terminated)
+                | (Suspended, Waiting)
+                | (Suspended, Running)
+                | (Suspended, Terminated)
         )
     }
 }
@@ -103,8 +117,7 @@ pub struct Agent {
     resources: AgentResources,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AgentResources {
     /// Max number of memory entries this agent can store. 0 = unlimited.
     pub memory_quota: u64,
@@ -156,7 +169,10 @@ impl Agent {
 
     pub fn set_state(&mut self, state: AgentState) -> Result<(), TransitionError> {
         if !self.state.can_transition(state) {
-            return Err(TransitionError { from: self.state, to: state });
+            return Err(TransitionError {
+                from: self.state,
+                to: state,
+            });
         }
         self.state = state;
         Ok(())
@@ -185,7 +201,6 @@ impl Agent {
         self.created_at_ms
     }
 }
-
 
 /// An intent — a task or goal submitted to the scheduler.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -281,12 +296,21 @@ mod tests {
     fn test_can_transition_legal() {
         use AgentState::*;
         let legal = [
-            (Created, Waiting), (Created, Running), (Created, Terminated),
-            (Waiting, Running), (Waiting, Suspended), (Waiting, Completed),
-            (Waiting, Failed), (Waiting, Terminated),
-            (Running, Waiting), (Running, Suspended), (Running, Completed),
-            (Running, Failed), (Running, Terminated),
-            (Suspended, Waiting), (Suspended, Terminated),
+            (Created, Waiting),
+            (Created, Running),
+            (Created, Terminated),
+            (Waiting, Running),
+            (Waiting, Suspended),
+            (Waiting, Completed),
+            (Waiting, Failed),
+            (Waiting, Terminated),
+            (Running, Waiting),
+            (Running, Suspended),
+            (Running, Completed),
+            (Running, Failed),
+            (Running, Terminated),
+            (Suspended, Waiting),
+            (Suspended, Terminated),
         ];
         for (from, to) in legal {
             assert!(from.can_transition(to), "{:?} → {:?} should be legal", from, to);
@@ -366,8 +390,10 @@ mod tests {
         let mut agent = Agent::new("res-test".into());
         let res = agent.resources().clone();
         assert_eq!(res.memory_quota, 0);
-        let mut new_res = AgentResources::default();
-        new_res.memory_quota = 100;
+        let new_res = AgentResources {
+            memory_quota: 100,
+            ..AgentResources::default()
+        };
         agent.set_resources(new_res);
         assert_eq!(agent.resources().memory_quota, 100);
     }
@@ -407,16 +433,14 @@ mod tests {
 
     #[test]
     fn test_intent_with_action() {
-        let intent = Intent::new(IntentPriority::High, "test".into())
-            .with_action("{\"type\":\"create\"}".into());
+        let intent = Intent::new(IntentPriority::High, "test".into()).with_action("{\"type\":\"create\"}".into());
         assert!(intent.action.is_some());
     }
 
     #[test]
     fn test_intent_with_agent() {
         let aid = AgentId::new();
-        let intent = Intent::new(IntentPriority::Low, "test".into())
-            .with_agent(aid.clone());
+        let intent = Intent::new(IntentPriority::Low, "test".into()).with_agent(aid.clone());
         assert_eq!(intent.agent_id, Some(aid));
     }
 
@@ -458,7 +482,10 @@ mod tests {
 
     #[test]
     fn test_transition_error_is_std_error() {
-        let err = TransitionError { from: AgentState::Completed, to: AgentState::Running };
+        let err = TransitionError {
+            from: AgentState::Completed,
+            to: AgentState::Running,
+        };
         let _: &dyn std::error::Error = &err;
     }
 }

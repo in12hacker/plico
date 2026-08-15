@@ -8,7 +8,7 @@ from typing import Any
 
 import yaml
 
-CONFIG_DIR = Path(__file__).resolve().parent.parent.parent / "configs"
+CONFIG_DIR = Path(__file__).resolve().parent.parent.parent.parent / "configs"
 
 
 def load_yaml(name: str) -> dict[str, Any]:
@@ -28,27 +28,8 @@ class BenchmarkConfig:
     """Unified benchmark configuration."""
 
     def __init__(self) -> None:
-        self.embedding = load_yaml("embedding_models")
         self.judge = load_yaml("judge_prompts")
         self.benchmark = load_yaml("benchmark")
-
-    def default_embedding_model(self) -> dict[str, Any]:
-        models = self.embedding.get("models", [])
-        default_name = self.embedding.get("default", "")
-        for m in models:
-            if m.get("name") == default_name:
-                return m
-        # fallback to first recommended
-        for m in models:
-            if m.get("recommended"):
-                return m
-        return models[0] if models else {}
-
-    def get_embedding_model(self, name: str) -> dict[str, Any] | None:
-        for m in self.embedding.get("models", []):
-            if m.get("name") == name:
-                return m
-        return None
 
     def judge_prompt_for(self, dataset: str, prompt_type: str = "default") -> str:
         prompts = self.judge.get("prompts", {})

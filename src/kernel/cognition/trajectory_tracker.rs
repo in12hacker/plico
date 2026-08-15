@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 use tokio::sync::RwLock;
 
-use super::{TrajectoryPoint, now_ms};
+use super::{now_ms, TrajectoryPoint};
 
 /// 失败记录
 #[derive(Debug, Clone)]
@@ -163,11 +163,10 @@ impl TrajectoryTracker {
         let records = failures.get(agent_id).cloned().unwrap_or_default();
 
         let total = records.len();
-        let by_operation: HashMap<String, usize> = records.iter()
-            .fold(HashMap::new(), |mut acc, r| {
-                *acc.entry(r.operation.clone()).or_default() += 1;
-                acc
-            });
+        let by_operation: HashMap<String, usize> = records.iter().fold(HashMap::new(), |mut acc, r| {
+            *acc.entry(r.operation.clone()).or_default() += 1;
+            acc
+        });
 
         FailureStats {
             total_failures: total,

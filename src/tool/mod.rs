@@ -9,9 +9,8 @@
 //! ```text
 //! ToolRegistry
 //! ├── Built-in tools       — kernel methods exposed as tools (cas.*, memory.*, kg.*, agent.*)
-//! └── ExternalToolProvider  — protocol-agnostic adapter (MCP, Agent Skills, A2A, future protocols)
+//! └── ExternalToolProvider  — protocol-agnostic external tool adapter
 //!     ├── McpToolProvider   — MCP JSON-RPC over stdio
-//!     └── (future adapters) — Agent Skills, A2A, custom protocols
 //! ```
 //!
 //! # Discovery Flow
@@ -21,7 +20,6 @@
 //! 3. Agent calls `tool_call <name> <params>` → kernel dispatches and returns result
 
 pub mod registry;
-pub mod procedure_provider;
 
 use serde::{Deserialize, Serialize};
 
@@ -39,11 +37,19 @@ pub struct ToolResult {
 
 impl ToolResult {
     pub fn ok(output: serde_json::Value) -> Self {
-        Self { success: true, output, error: None }
+        Self {
+            success: true,
+            output,
+            error: None,
+        }
     }
 
     pub fn error(msg: impl Into<String>) -> Self {
-        Self { success: false, output: serde_json::Value::Null, error: Some(msg.into()) }
+        Self {
+            success: false,
+            output: serde_json::Value::Null,
+            error: Some(msg.into()),
+        }
     }
 
     pub fn is_ok(&self) -> bool {
@@ -81,7 +87,6 @@ pub struct ToolDescriptor {
 }
 
 pub use registry::ToolRegistry;
-pub use procedure_provider::ProcedureToolProvider;
 
 /// Trait for dynamic tool execution handlers.
 ///
@@ -104,7 +109,7 @@ where
 ///
 /// The kernel's tool system is designed to be protocol-agnostic:
 /// - `LlmProvider` abstracts inference (Ollama, OpenAI, vLLM — any dies, swap the adapter)
-/// - `ExternalToolProvider` abstracts tool protocols (MCP, Agent Skills, A2A — same principle)
+/// - `ExternalToolProvider` abstracts external tool protocols.
 ///
 /// When a protocol becomes obsolete, delete the adapter.
 /// When a new one emerges, add one. The kernel never changes.
@@ -192,7 +197,11 @@ mod tests {
 
     #[test]
     fn tool_result_error_default_on_empty() {
-        let r = ToolResult { success: false, output: serde_json::Value::Null, error: None };
+        let r = ToolResult {
+            success: false,
+            output: serde_json::Value::Null,
+            error: None,
+        };
         let msg = r.unwrap_err();
         assert!(msg.is_empty());
     }

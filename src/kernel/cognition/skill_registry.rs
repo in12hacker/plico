@@ -33,7 +33,6 @@ struct PersistedRecord {
     version: u32,
 }
 
-
 impl Default for SkillRegistry {
     fn default() -> Self {
         Self::new()
@@ -72,20 +71,26 @@ impl SkillRegistry {
                     Skill::Config(_) => "config",
                     Skill::Code(_) => "code",
                 };
-                agent_map.insert(id.clone(), PersistedRecord {
-                    skill_json: serde_json::json!({
-                        "type": skill_type,
-                        "id": id,
-                    }),
-                    created_at_ms: record.created_at_ms,
-                    updated_at_ms: record.updated_at_ms,
-                    version: record.version,
-                });
+                agent_map.insert(
+                    id.clone(),
+                    PersistedRecord {
+                        skill_json: serde_json::json!({
+                            "type": skill_type,
+                            "id": id,
+                        }),
+                        created_at_ms: record.created_at_ms,
+                        updated_at_ms: record.updated_at_ms,
+                        version: record.version,
+                    },
+                );
             }
         }
         let json = match serde_json::to_string_pretty(&persisted) {
             Ok(j) => j,
-            Err(e) => { tracing::warn!("SkillRegistry persist failed: {e}"); return; }
+            Err(e) => {
+                tracing::warn!("SkillRegistry persist failed: {e}");
+                return;
+            }
         };
         let tmp = path.with_extension("json.tmp");
         if std::fs::write(&tmp, &json).is_ok() {
@@ -98,10 +103,12 @@ impl SkillRegistry {
     /// Restore metadata from disk.
     fn restore(&mut self) -> std::io::Result<()> {
         let Some(ref path) = self.index_path else { return Ok(()) };
-        if !path.exists() { return Ok(()); }
+        if !path.exists() {
+            return Ok(());
+        }
         let json = std::fs::read_to_string(path)?;
-        let _loaded: HashMap<String, HashMap<String, PersistedRecord>> = serde_json::from_str(&json)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        let _loaded: HashMap<String, HashMap<String, PersistedRecord>> =
+            serde_json::from_str(&json).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
         // Skills are re-discovered from session history; metadata is informational only.
         Ok(())
     }
@@ -154,7 +161,10 @@ impl SkillRegistry {
                 return Ok(());
             }
         }
-        Err(super::CognitiveError::SkillFailed(format!("Skill not found: {}", skill_id)))
+        Err(super::CognitiveError::SkillFailed(format!(
+            "Skill not found: {}",
+            skill_id
+        )))
     }
 
     pub async fn increment_usage(&mut self, skill_id: &str, tokens_saved: f32, success: bool) {
@@ -166,8 +176,7 @@ impl SkillRegistry {
                 }
                 // Rolling average of tokens saved
                 let n = record.stats.invocations as f32;
-                record.stats.avg_tokens_saved =
-                    (record.stats.avg_tokens_saved * (n - 1.0) + tokens_saved) / n;
+                record.stats.avg_tokens_saved = (record.stats.avg_tokens_saved * (n - 1.0) + tokens_saved) / n;
                 record.stats.last_used_ms = super::now_ms();
             }
         }
@@ -177,7 +186,8 @@ impl SkillRegistry {
         self.agent_skills
             .get(agent_id)
             .map(|skills| {
-                skills.iter()
+                skills
+                    .iter()
                     .map(|(id, record)| (id.clone(), record.skill.clone(), record.stats.clone()))
                     .collect()
             })
@@ -199,10 +209,7 @@ impl SkillRegistry {
     }
 
     pub async fn count_for_agent(&self, agent_id: &str) -> usize {
-        self.agent_skills
-            .get(agent_id)
-            .map(|s| s.len())
-            .unwrap_or(0)
+        self.agent_skills.get(agent_id).map(|s| s.len()).unwrap_or(0)
     }
 }
 

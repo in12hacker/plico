@@ -24,7 +24,12 @@ impl super::super::AIKernel {
                 }
             }
 
-            ApiRequest::SetPromptOverride { name, template, variables, agent_id } => {
+            ApiRequest::SetPromptOverride {
+                name,
+                template,
+                variables,
+                agent_id,
+            } => {
                 let var_refs: Vec<&str> = variables.iter().map(|s| s.as_str()).collect();
                 let tpl = PromptTemplate::new(&name, &template, &var_refs);
                 self.prompt_registry.set_override(&name, tpl, agent_id.as_deref());

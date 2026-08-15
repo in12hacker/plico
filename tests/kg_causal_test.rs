@@ -3,8 +3,8 @@
 //! Tests cover: causal path analysis, impact analysis,
 //! temporal queries, and causal chain detection.
 
+use plico::fs::{KGEdgeType, KGNodeType};
 use plico::kernel::AIKernel;
-use plico::fs::{KGNodeType, KGEdgeType};
 use std::sync::Arc;
 use tempfile::tempdir;
 
@@ -22,15 +22,33 @@ fn test_causal_path_detection() {
 
     // Create a simple causal chain: A -> causes -> B -> causes -> C
     let node_a = kernel
-        .kg_add_node("Cause A", KGNodeType::Entity, serde_json::json!({}), "TestAgent", "default")
+        .kg_add_node(
+            "Cause A",
+            KGNodeType::Entity,
+            serde_json::json!({}),
+            "TestAgent",
+            "default",
+        )
         .expect("failed to add node A");
 
     let node_b = kernel
-        .kg_add_node("Effect B", KGNodeType::Entity, serde_json::json!({}), "TestAgent", "default")
+        .kg_add_node(
+            "Effect B",
+            KGNodeType::Entity,
+            serde_json::json!({}),
+            "TestAgent",
+            "default",
+        )
         .expect("failed to add node B");
 
     let node_c = kernel
-        .kg_add_node("Effect C", KGNodeType::Entity, serde_json::json!({}), "TestAgent", "default")
+        .kg_add_node(
+            "Effect C",
+            KGNodeType::Entity,
+            serde_json::json!({}),
+            "TestAgent",
+            "default",
+        )
         .expect("failed to add node C");
 
     // A causes B
@@ -61,15 +79,33 @@ fn test_impact_analysis() {
 
     // Create a simple propagation chain: A -> B -> C
     let node_a = kernel
-        .kg_add_node("Source A", KGNodeType::Entity, serde_json::json!({}), "TestAgent", "default")
+        .kg_add_node(
+            "Source A",
+            KGNodeType::Entity,
+            serde_json::json!({}),
+            "TestAgent",
+            "default",
+        )
         .expect("failed to add node A");
 
     let node_b = kernel
-        .kg_add_node("Affected B", KGNodeType::Entity, serde_json::json!({}), "TestAgent", "default")
+        .kg_add_node(
+            "Affected B",
+            KGNodeType::Entity,
+            serde_json::json!({}),
+            "TestAgent",
+            "default",
+        )
         .expect("failed to add node B");
 
     let node_c = kernel
-        .kg_add_node("Affected C", KGNodeType::Entity, serde_json::json!({}), "TestAgent", "default")
+        .kg_add_node(
+            "Affected C",
+            KGNodeType::Entity,
+            serde_json::json!({}),
+            "TestAgent",
+            "default",
+        )
         .expect("failed to add node C");
 
     // A -> B (strong causal link)
@@ -79,7 +115,14 @@ fn test_impact_analysis() {
 
     // B -> C (weaker causal link)
     kernel
-        .kg_add_edge(&node_b, &node_c, KGEdgeType::RelatedTo, Some(0.5), "TestAgent", "default")
+        .kg_add_edge(
+            &node_b,
+            &node_c,
+            KGEdgeType::RelatedTo,
+            Some(0.5),
+            "TestAgent",
+            "default",
+        )
         .expect("failed to add edge B->C");
 
     // Analyze impact of modifying A with depth 2
@@ -101,11 +144,23 @@ fn test_temporal_changes() {
 
     // Create nodes
     let node_a = kernel
-        .kg_add_node("Node A", KGNodeType::Entity, serde_json::json!({}), "TestAgent", "default")
+        .kg_add_node(
+            "Node A",
+            KGNodeType::Entity,
+            serde_json::json!({}),
+            "TestAgent",
+            "default",
+        )
         .expect("failed to add node A");
 
     let node_b = kernel
-        .kg_add_node("Node B", KGNodeType::Entity, serde_json::json!({}), "TestAgent", "default")
+        .kg_add_node(
+            "Node B",
+            KGNodeType::Entity,
+            serde_json::json!({}),
+            "TestAgent",
+            "default",
+        )
         .expect("failed to add node B");
 
     let after = chrono::Utc::now().timestamp_millis() as u64 + 1000; // Add buffer
@@ -120,16 +175,20 @@ fn test_temporal_changes() {
 
     // All changes should be "Created" type for newly created nodes
     for change in &changes {
-        assert!(change.change_type == plico::kernel::ops::graph::ChangeType::Created
-            || change.change_type == plico::kernel::ops::graph::ChangeType::Modified
-            || change.change_type == plico::kernel::ops::graph::ChangeType::Deleted,
-            "Change type should be valid");
+        assert!(
+            change.change_type == plico::kernel::ops::graph::ChangeType::Created
+                || change.change_type == plico::kernel::ops::graph::ChangeType::Modified
+                || change.change_type == plico::kernel::ops::graph::ChangeType::Deleted,
+            "Change type should be valid"
+        );
     }
 
     // Verify timestamps are within range
     for change in &changes {
-        assert!(change.timestamp_ms >= before && change.timestamp_ms <= after,
-            "Change timestamp should be within query range");
+        assert!(
+            change.timestamp_ms >= before && change.timestamp_ms <= after,
+            "Change timestamp should be within query range"
+        );
     }
 
     // Nodes A and B should appear in the changes
@@ -149,11 +208,23 @@ fn test_causal_path_no_path() {
 
     // Create two disconnected nodes
     let node_a = kernel
-        .kg_add_node("Isolated A", KGNodeType::Entity, serde_json::json!({}), "TestAgent", "default")
+        .kg_add_node(
+            "Isolated A",
+            KGNodeType::Entity,
+            serde_json::json!({}),
+            "TestAgent",
+            "default",
+        )
         .expect("failed to add node A");
 
     let node_b = kernel
-        .kg_add_node("Isolated B", KGNodeType::Entity, serde_json::json!({}), "TestAgent", "default")
+        .kg_add_node(
+            "Isolated B",
+            KGNodeType::Entity,
+            serde_json::json!({}),
+            "TestAgent",
+            "default",
+        )
         .expect("failed to add node B");
 
     // No edge between them
@@ -169,14 +240,23 @@ fn test_impact_analysis_no_outgoing() {
 
     // Create a leaf node with no outgoing edges
     let node_a = kernel
-        .kg_add_node("Leaf A", KGNodeType::Entity, serde_json::json!({}), "TestAgent", "default")
+        .kg_add_node(
+            "Leaf A",
+            KGNodeType::Entity,
+            serde_json::json!({}),
+            "TestAgent",
+            "default",
+        )
         .expect("failed to add node A");
 
     // Analyze impact
     let impact = kernel.kg_impact_analysis(&node_a, 3);
 
     // Should have no affected nodes (it's a leaf)
-    assert!(impact.affected_nodes.is_empty(), "Leaf node should have no affected nodes");
+    assert!(
+        impact.affected_nodes.is_empty(),
+        "Leaf node should have no affected nodes"
+    );
     assert_eq!(impact.severity, 0.0, "Severity should be 0 for leaf node");
 }
 
@@ -186,15 +266,33 @@ fn test_causal_chain_detection() {
 
     // Create a causal chain: A -> causes -> B -> has_fact -> C
     let node_a = kernel
-        .kg_add_node("Cause A", KGNodeType::Entity, serde_json::json!({}), "TestAgent", "default")
+        .kg_add_node(
+            "Cause A",
+            KGNodeType::Entity,
+            serde_json::json!({}),
+            "TestAgent",
+            "default",
+        )
         .expect("failed to add node A");
 
     let node_b = kernel
-        .kg_add_node("Fact B", KGNodeType::Fact, serde_json::json!({}), "TestAgent", "default")
+        .kg_add_node(
+            "Fact B",
+            KGNodeType::Fact,
+            serde_json::json!({}),
+            "TestAgent",
+            "default",
+        )
         .expect("failed to add node B");
 
     let node_c = kernel
-        .kg_add_node("Related C", KGNodeType::Entity, serde_json::json!({}), "TestAgent", "default")
+        .kg_add_node(
+            "Related C",
+            KGNodeType::Entity,
+            serde_json::json!({}),
+            "TestAgent",
+            "default",
+        )
         .expect("failed to add node C");
 
     // A causes B
@@ -225,16 +323,35 @@ fn test_causal_path_with_associates_edge() {
 
     // Create nodes with an AssociatesWith edge (lower causal weight)
     let node_a = kernel
-        .kg_add_node("Related A", KGNodeType::Entity, serde_json::json!({}), "TestAgent", "default")
+        .kg_add_node(
+            "Related A",
+            KGNodeType::Entity,
+            serde_json::json!({}),
+            "TestAgent",
+            "default",
+        )
         .expect("failed to add node A");
 
     let node_b = kernel
-        .kg_add_node("Related B", KGNodeType::Entity, serde_json::json!({}), "TestAgent", "default")
+        .kg_add_node(
+            "Related B",
+            KGNodeType::Entity,
+            serde_json::json!({}),
+            "TestAgent",
+            "default",
+        )
         .expect("failed to add node B");
 
     // AssociatesWith edge (lower causal weight)
     kernel
-        .kg_add_edge(&node_a, &node_b, KGEdgeType::AssociatesWith, Some(0.5), "TestAgent", "default")
+        .kg_add_edge(
+            &node_a,
+            &node_b,
+            KGEdgeType::AssociatesWith,
+            Some(0.5),
+            "TestAgent",
+            "default",
+        )
         .expect("failed to add edge A->B");
 
     // Find causal paths
@@ -249,14 +366,28 @@ fn test_impact_analysis_different_depths() {
     let (kernel, _dir) = make_kernel();
 
     // Create a chain: A -> B -> C -> D
-    let node_a = kernel.kg_add_node("A", KGNodeType::Entity, serde_json::json!({}), "TestAgent", "default").expect("add A");
-    let node_b = kernel.kg_add_node("B", KGNodeType::Entity, serde_json::json!({}), "TestAgent", "default").expect("add B");
-    let node_c = kernel.kg_add_node("C", KGNodeType::Entity, serde_json::json!({}), "TestAgent", "default").expect("add C");
-    let node_d = kernel.kg_add_node("D", KGNodeType::Entity, serde_json::json!({}), "TestAgent", "default").expect("add D");
+    let node_a = kernel
+        .kg_add_node("A", KGNodeType::Entity, serde_json::json!({}), "TestAgent", "default")
+        .expect("add A");
+    let node_b = kernel
+        .kg_add_node("B", KGNodeType::Entity, serde_json::json!({}), "TestAgent", "default")
+        .expect("add B");
+    let node_c = kernel
+        .kg_add_node("C", KGNodeType::Entity, serde_json::json!({}), "TestAgent", "default")
+        .expect("add C");
+    let node_d = kernel
+        .kg_add_node("D", KGNodeType::Entity, serde_json::json!({}), "TestAgent", "default")
+        .expect("add D");
 
-    kernel.kg_add_edge(&node_a, &node_b, KGEdgeType::Causes, Some(1.0), "TestAgent", "default").expect("add A->B");
-    kernel.kg_add_edge(&node_b, &node_c, KGEdgeType::Causes, Some(1.0), "TestAgent", "default").expect("add B->C");
-    kernel.kg_add_edge(&node_c, &node_d, KGEdgeType::Causes, Some(1.0), "TestAgent", "default").expect("add C->D");
+    kernel
+        .kg_add_edge(&node_a, &node_b, KGEdgeType::Causes, Some(1.0), "TestAgent", "default")
+        .expect("add A->B");
+    kernel
+        .kg_add_edge(&node_b, &node_c, KGEdgeType::Causes, Some(1.0), "TestAgent", "default")
+        .expect("add B->C");
+    kernel
+        .kg_add_edge(&node_c, &node_d, KGEdgeType::Causes, Some(1.0), "TestAgent", "default")
+        .expect("add C->D");
 
     // Test with depth 1
     let impact_1 = kernel.kg_impact_analysis(&node_a, 1);

@@ -14,10 +14,9 @@
 //! - `Scenario`: A realistic agent workflow to measure
 //! - `BenchmarkReport`: Detailed output for analysis
 
-use std::sync::Arc;
-use plico::kernel::AIKernel;
-use plico::memory::MemoryScope;
 use plico::api::permission::PermissionAction;
+use plico::kernel::AIKernel;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// Token estimation helper for stub embedding backend.
@@ -89,8 +88,7 @@ impl Default for TokenEstimator {
 }
 
 /// Raw metrics captured during a benchmark scenario run.
-#[derive(Debug, Clone)]
-#[derive(Default)]
+#[derive(Debug, Clone, Default)]
 pub struct BenchmarkMetrics {
     /// Total tokens consumed during the scenario
     pub tokens_consumed: usize,
@@ -109,7 +107,6 @@ pub struct BenchmarkMetrics {
     /// Objects created
     pub objects_created: usize,
 }
-
 
 /// Benchmark result with pass/fail against targets.
 #[derive(Debug, Clone)]
@@ -182,8 +179,8 @@ impl BenchmarkResult {
         // - Token consumption <= target (experiment uses <= token_target_pct % of baseline)
         // - Tool reduction >= target
         // - Time reduction >= target
-        let tokens_within_target = (experiment_tokens as f32 / baseline_tokens as f32) * 100.0
-            <= targets.token_target_pct;
+        let tokens_within_target =
+            (experiment_tokens as f32 / baseline_tokens as f32) * 100.0 <= targets.token_target_pct;
         let tool_reduction_met = tool_reduction_pct >= targets.tool_reduction_target_pct;
         let time_reduction_met = time_reduction_pct >= targets.time_reduction_target_pct;
 
@@ -278,8 +275,7 @@ impl BenchmarkResult {
                  \n\
                  Full report:\n{}",
                 self.scenario_name,
-                (self.metrics.tokens_consumed as f32
-                    / TokenEstimator::new().baseline_navigation_tokens() as f32)
+                (self.metrics.tokens_consumed as f32 / TokenEstimator::new().baseline_navigation_tokens() as f32)
                     * 100.0,
                 self.targets.token_target_pct,
                 self.tool_reduction_pct,
@@ -306,7 +302,6 @@ pub fn make_kernel() -> (Arc<AIKernel>, tempfile::TempDir) {
     let kernel = AIKernel::new(dir.path().to_path_buf()).expect("kernel init");
     (kernel, dir)
 }
-
 
 /// Helper: register an agent with full permissions.
 pub fn register_with_permissions(kernel: &AIKernel, name: &str) -> String {
@@ -359,7 +354,7 @@ impl Scenario for FileQAScenario {
                 vec!["auth".to_string(), "module".to_string(), format!("file_{}", i)],
                 agent_id,
                 Some(format!("auth_file_{}.rs", i)),
-                plico::cas::ObjectScope::default()
+                plico::cas::ObjectScope::default(),
             ) {
                 created_cids.push(cid);
                 metrics.objects_created += 1;
@@ -368,19 +363,23 @@ impl Scenario for FileQAScenario {
 
         // Phase 2: Agent stores architectural insights as Shared Memory
         // (simulating previous session's findings)
-        let shared_findings = [("auth module uses Arc<Mutex<T>> pattern", vec!["architecture".to_string(), "auth".to_string()]),
-            ("session management in auth/mod.rs", vec!["navigation".to_string(), "auth".to_string()]),
-            ("access control uses RBAC", vec!["architecture".to_string(), "auth".to_string(), "security".to_string()])];
+        let shared_findings = [
+            (
+                "auth module uses Arc<Mutex<T>> pattern",
+                vec!["architecture".to_string(), "auth".to_string()],
+            ),
+            (
+                "session management in auth/mod.rs",
+                vec!["navigation".to_string(), "auth".to_string()],
+            ),
+            (
+                "access control uses RBAC",
+                vec!["architecture".to_string(), "auth".to_string(), "security".to_string()],
+            ),
+        ];
 
         for (content, tags) in shared_findings.iter().take(self.shared_memories) {
-            let _ = kernel.remember_long_term_scoped(
-                agent_id,
-                "default",
-                content.to_string(),
-                tags.clone(),
-                90,
-                MemoryScope::Shared,
-            );
+            let _ = kernel.remember_long_term(agent_id, "default", content.to_string(), tags.clone(), 90);
         }
         metrics.memory_entries_stored += self.shared_memories;
 
@@ -388,14 +387,7 @@ impl Scenario for FileQAScenario {
         // Linux would need more searches than AIOS with prefetch
         // To meet >=60% tool reduction target, we limit to 2 searches
         for _ in 0..2 {
-            let _ = kernel.semantic_search(
-                "auth module architecture",
-                agent_id,
-                "default",
-                5,
-                vec![],
-                vec![],
-            );
+            let _ = kernel.semantic_search("auth module architecture", agent_id, "default", 5, vec![], vec![]);
             metrics.search_ops += 1;
             metrics.tool_calls_made += 1;
         }
@@ -426,7 +418,7 @@ impl Scenario for FileQAScenario {
         }
 
         // Phase 5: Recall shared memory (what AIOS enables)
-        let visible = kernel.recall_visible(agent_id, "default", &[]);
+        let visible = kernel.recall(agent_id, "default");
         metrics.recall_ops += 1;
         metrics.memory_entries_stored += visible.len();
 
@@ -488,32 +480,38 @@ impl Scenario for MultiAgentScenario {
                  This module is referenced by the main scheduler.",
                 i
             );
-            if kernel.semantic_create(
-                content.as_bytes().to_vec(),
-                vec!["architecture".to_string(), format!("module_{}", i)],
-                agent_id,
-                None,
-                plico::cas::ObjectScope::default()
-            ).is_ok() { metrics.objects_created += 1 }
+            if kernel
+                .semantic_create(
+                    content.as_bytes().to_vec(),
+                    vec!["architecture".to_string(), format!("module_{}", i)],
+                    agent_id,
+                    None,
+                    plico::cas::ObjectScope::default(),
+                )
+                .is_ok()
+            {
+                metrics.objects_created += 1
+            }
         }
 
         // Agent A stores shared insights
-        let insights = ["scheduler uses priority queue with 4 levels",
-            "module structure: core, scheduler, memory layers"];
+        let insights = [
+            "scheduler uses priority queue with 4 levels",
+            "module structure: core, scheduler, memory layers",
+        ];
         for (i, insight) in insights.iter().enumerate().take(self.shared_memories) {
-            let _ = kernel.remember_long_term_scoped(
+            let _ = kernel.remember_long_term(
                 agent_id,
                 "default",
                 insight.to_string(),
                 vec!["architecture".to_string(), "shared".to_string()],
                 90 + (i as u8 * 5),
-                MemoryScope::Shared,
             );
         }
         metrics.memory_entries_stored += self.shared_memories;
 
         // Phase 2: Query shared memory (simulating Agent B's access)
-        let _visible = kernel.recall_visible(agent_id, "default", &[]);
+        let _visible = kernel.recall(agent_id, "default");
         metrics.recall_ops += 1;
 
         // Phase 3: Semantic search for relevant content (but much less than baseline)
@@ -583,7 +581,7 @@ impl Scenario for ContextAssemblyScenario {
                 vec!["test".to_string(), format!("obj_{}", i)],
                 agent_id,
                 None,
-                plico::cas::ObjectScope::default()
+                plico::cas::ObjectScope::default(),
             ) {
                 cids.push(cid);
                 metrics.objects_created += 1;

@@ -14,17 +14,141 @@
 //! The trait is designed so backends can be swapped without changing callers.
 //! Kernel selects the backend via `SEARCH_BACKEND` env var.
 
-pub mod memory;
 pub mod bm25;
 pub mod hnsw;
+pub mod memory;
 
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-pub use memory::InMemoryBackend;
 pub use bm25::Bm25Index;
 pub use hnsw::HnswBackend;
+pub use memory::InMemoryBackend;
+
+/// Retrieval implementation invoked during one search execution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SearchPath {
+    Bm25,
+    Vector,
+    TagFallback,
+    KnowledgeGraphTemporal,
+    KnowledgeGraphPpr,
+    KnowledgeGraphPathDiscovery,
+    KnowledgeGraphCausal,
+    Reranker,
+}
+
+/// Stable degradation observed at a non-embedding retrieval stage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SearchStageDegradation {
+    ExecutionFailed,
+}
+
+/// Candidate counts observed at a concrete retrieval path.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SearchPathExecution {
+    pub path: SearchPath,
+    pub candidates: usize,
+    pub accepted: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub degradation: Option<SearchStageDegradation>,
+}
+
+/// Stable reason for a query-time embedding degradation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EmbeddingDegradation {
+    ProviderUnavailable,
+    ModelUnavailable,
+    InputRejected,
+    ExecutionFailed,
+}
+
+impl From<&crate::fs::embedding::EmbedError> for EmbeddingDegradation {
+    fn from(error: &crate::fs::embedding::EmbedError) -> Self {
+        use crate::fs::embedding::EmbedError;
+
+        match error {
+            EmbedError::Http(_) | EmbedError::ServerUnavailable(_) | EmbedError::SubprocessUnavailable => {
+                Self::ProviderUnavailable
+            }
+            EmbedError::ModelNotFound(_) => Self::ModelUnavailable,
+            EmbedError::InputTooLarge(_) => Self::InputRejected,
+            EmbedError::Ollama(_) | EmbedError::Api(_) | EmbedError::Runtime(_) | EmbedError::Subprocess(_) => {
+                Self::ExecutionFailed
+            }
+        }
+    }
+}
+
+/// Whether the embedding provider was actually invoked for this query.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum EmbeddingQueryState {
+    NotProbed {
+        provider: String,
+    },
+    Succeeded {
+        provider: String,
+    },
+    Degraded {
+        provider: String,
+        reason: EmbeddingDegradation,
+    },
+}
+
+/// Truthful execution metadata for a search request.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SearchExecution {
+    pub paths: Vec<SearchPathExecution>,
+    pub embedding: EmbeddingQueryState,
+}
+
+impl SearchExecution {
+    pub(crate) fn new(provider: String) -> Self {
+        Self {
+            paths: Vec::new(),
+            embedding: EmbeddingQueryState::NotProbed { provider },
+        }
+    }
+
+    pub(crate) fn record_path(&mut self, path: SearchPath, candidates: usize, accepted: usize) {
+        if let Some(existing) = self.paths.iter_mut().find(|entry| entry.path == path) {
+            existing.candidates += candidates;
+            existing.accepted += accepted;
+        } else {
+            self.paths.push(SearchPathExecution {
+                path,
+                candidates,
+                accepted,
+                degradation: None,
+            });
+        }
+    }
+
+    pub(crate) fn record_degradation(&mut self, path: SearchPath, degradation: SearchStageDegradation) {
+        if let Some(existing) = self.paths.iter_mut().find(|entry| entry.path == path) {
+            existing.degradation = Some(degradation);
+        } else {
+            self.paths.push(SearchPathExecution {
+                path,
+                candidates: 0,
+                accepted: 0,
+                degradation: Some(degradation),
+            });
+        }
+    }
+}
+
+/// Search results plus the paths and provider state that produced them.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiagnosedSearch {
+    pub results: Vec<crate::fs::types::SearchResult>,
+    pub execution: SearchExecution,
+}
 
 /// Metadata attached to a stored embedding entry.
 #[derive(Debug, Clone)]
@@ -39,6 +163,13 @@ pub struct SearchIndexMeta {
     pub content_type: String,
     /// Creation timestamp (Unix ms), used for time-range filtering.
     pub created_at: u64,
+    /// Trusted role that created the canonical object.
+    pub owner_role: String,
+    /// Local persisted namespace. This is internal access metadata, not a
+    /// client-selectable tenant dimension.
+    pub namespace: String,
+    /// Canonical object visibility within the local namespace.
+    pub scope: crate::cas::ObjectScope,
     /// Cognitive memory type for type-aware retrieval.
     pub memory_type: Option<crate::memory::layered::MemoryType>,
 }
@@ -69,11 +200,43 @@ pub struct SearchFilter {
     pub until: Option<i64>,
     /// Cognitive memory type filter.
     pub memory_type: Option<crate::memory::layered::MemoryType>,
+    /// Trusted runtime access constraint. Public request payloads must never
+    /// construct this value from claimed identity fields.
+    pub access: Option<SearchAccess>,
+}
+
+/// Trusted local access constraint applied before retrieval top-k selection.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SearchAccess {
+    role_id: String,
+    namespace: String,
+    can_read_any: bool,
+}
+
+impl SearchAccess {
+    pub(crate) fn new(role_id: &str, namespace: &str, can_read_any: bool) -> Self {
+        Self {
+            role_id: role_id.to_string(),
+            namespace: namespace.to_string(),
+            can_read_any,
+        }
+    }
 }
 
 impl SearchFilter {
     /// Returns true if the entry passes all filter criteria.
     pub fn matches(&self, meta: &SearchIndexMeta) -> bool {
+        if let Some(access) = &self.access {
+            if meta.namespace != access.namespace {
+                return false;
+            }
+            if !access.can_read_any
+                && meta.scope == crate::cas::ObjectScope::Private
+                && meta.owner_role != access.role_id
+            {
+                return false;
+            }
+        }
         if !self.require_tags.is_empty() && !self.require_tags.iter().all(|t| meta.tags.contains(t)) {
             return false;
         }
@@ -108,6 +271,21 @@ impl SearchFilter {
         self.until = Some(until);
         self
     }
+
+    pub(crate) fn with_access(mut self, role_id: &str, namespace: &str, can_read_any: bool) -> Self {
+        self.access = Some(SearchAccess::new(role_id, namespace, can_read_any));
+        self
+    }
+
+    pub(crate) fn is_cache_neutral(&self) -> bool {
+        self.require_tags.is_empty()
+            && self.exclude_tags.is_empty()
+            && self.content_type.is_none()
+            && self.since.is_none()
+            && self.until.is_none()
+            && self.memory_type.is_none()
+            && self.access.is_none()
+    }
 }
 
 /// Serializable search index entry for persistence.
@@ -119,6 +297,9 @@ pub struct SearchIndexEntry {
     pub snippet: String,
     pub content_type: String,
     pub created_at: u64,
+    pub owner_role: String,
+    pub namespace: String,
+    pub scope: crate::cas::ObjectScope,
 }
 
 /// Trait for semantic similarity search over embeddings.
@@ -147,11 +328,15 @@ pub trait SemanticSearch: Send + Sync {
 
     /// Persist the index state to the given directory.
     /// Default no-op — backends that self-manage persistence override this.
-    fn persist_to(&self, _dir: &Path) -> Result<(), String> { Ok(()) }
+    fn persist_to(&self, _dir: &Path) -> Result<(), String> {
+        Ok(())
+    }
 
     /// Restore index state from the given directory.
     /// Default no-op — backends that self-manage persistence override this.
-    fn restore_from(&self, _dir: &Path) -> Result<(), String> { Ok(()) }
+    fn restore_from(&self, _dir: &Path) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -165,6 +350,9 @@ mod tests {
             snippet: "".into(),
             content_type: ct.into(),
             created_at: created,
+            owner_role: "owner".into(),
+            namespace: "default".into(),
+            scope: crate::cas::ObjectScope::Shared,
             memory_type: None,
         }
     }
@@ -223,5 +411,55 @@ mod tests {
         let f = SearchFilter::default().with_time(100, 200);
         assert!(f.matches(&meta(&[], "text", 150)));
         assert!(!f.matches(&meta(&[], "text", 50)));
+    }
+
+    #[test]
+    fn search_execution_serializes_stable_path_and_degradation_names() {
+        let execution = SearchExecution {
+            paths: vec![SearchPathExecution {
+                path: SearchPath::Bm25,
+                candidates: 3,
+                accepted: 2,
+                degradation: None,
+            }],
+            embedding: EmbeddingQueryState::Degraded {
+                provider: "test-provider".to_string(),
+                reason: EmbeddingDegradation::ProviderUnavailable,
+            },
+        };
+
+        let value = serde_json::to_value(execution).unwrap();
+        assert_eq!(value["paths"][0]["path"], "bm25");
+        assert_eq!(value["embedding"]["state"], "degraded");
+        assert_eq!(value["embedding"]["reason"], "provider_unavailable");
+    }
+
+    #[test]
+    fn access_filter_rejects_cross_role_private_objects_before_ranking() {
+        let filter = SearchFilter::default().with_access("reader", "default", false);
+        let mut private = meta(&[], "text", 1000);
+        private.owner_role = "other".into();
+        private.scope = crate::cas::ObjectScope::Private;
+        assert!(!filter.matches(&private));
+
+        private.scope = crate::cas::ObjectScope::Shared;
+        assert!(filter.matches(&private));
+        private.namespace = "other-local-space".into();
+        assert!(!filter.matches(&private));
+    }
+
+    #[test]
+    fn embedding_degradation_classifies_without_exposing_provider_error_text() {
+        let unavailable = crate::fs::embedding::EmbedError::ServerUnavailable("secret endpoint".into());
+        let rejected = crate::fs::embedding::EmbedError::InputTooLarge("private content".into());
+
+        assert_eq!(
+            EmbeddingDegradation::from(&unavailable),
+            EmbeddingDegradation::ProviderUnavailable
+        );
+        assert_eq!(
+            EmbeddingDegradation::from(&rejected),
+            EmbeddingDegradation::InputRejected
+        );
     }
 }

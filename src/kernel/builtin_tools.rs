@@ -171,7 +171,7 @@ impl AIKernel {
         reg.register(ToolDescriptor {
             name: "permission.grant".into(),
             description: "Grant a permission action to an agent".into(),
-            schema: json!({"type":"object","properties":{"agent_id":{"type":"string"},"action":{"type":"string","enum":["Read","ReadAny","Write","Delete","Network","Execute","SendMessage","All"]},"scope":{"type":"string"},"expires_at":{"type":"integer"}},"required":["agent_id","action"]}),
+            schema: json!({"type":"object","properties":{"agent_id":{"type":"string"},"action":{"type":"string","enum":["Read","ReadAny","Write","Delete","Network","Execute","SendMessage","ManagePermissions","All"]},"scope":{"type":"string"},"expires_at":{"type":"integer"}},"required":["agent_id","action"]}),
         });
         reg.register(ToolDescriptor {
             name: "permission.revoke".into(),
@@ -206,8 +206,9 @@ impl AIKernel {
     /// list, only those tools can be called. Returns error for blocked/unknown tools.
     pub fn execute_tool(&self, name: &str, params: &serde_json::Value, agent_id: &str) -> ToolResult {
         let ctx = crate::kernel::hook::HookContext::new(agent_id, name, params.clone());
-        if let crate::kernel::hook::HookResult::Block { reason } =
-            self.hook_registry.run_hooks(crate::kernel::hook::HookPoint::PreToolCall, &ctx)
+        if let crate::kernel::hook::HookResult::Block { reason } = self
+            .hook_registry
+            .run_hooks(crate::kernel::hook::HookPoint::PreToolCall, &ctx)
         {
             return ToolResult::error(format!("blocked by hook: {}", reason));
         }
@@ -216,7 +217,8 @@ impl AIKernel {
 
         let mut post_ctx = ctx;
         post_ctx.params = serde_json::to_value(&result).unwrap_or(params.clone());
-        self.hook_registry.run_hooks(crate::kernel::hook::HookPoint::PostToolCall, &post_ctx);
+        self.hook_registry
+            .run_hooks(crate::kernel::hook::HookPoint::PostToolCall, &post_ctx);
 
         result
     }
@@ -225,9 +227,7 @@ impl AIKernel {
     fn execute_tool_impl(&self, name: &str, params: &serde_json::Value, agent_id: &str) -> ToolResult {
         let aid = crate::scheduler::AgentId(agent_id.to_string());
         if let Some(resources) = self.scheduler.get_resources(&aid) {
-            if !resources.allowed_tools.is_empty()
-                && !resources.allowed_tools.iter().any(|t| t == name)
-            {
+            if !resources.allowed_tools.is_empty() && !resources.allowed_tools.iter().any(|t| t == name) {
                 return ToolResult::error(format!(
                     "Tool '{}' not in agent's allowed list: {:?}",
                     name, resources.allowed_tools
@@ -240,9 +240,14 @@ impl AIKernel {
         if let Some(handler) = self.tool_registry.get_handler(name) {
             let ctx = crate::api::permission::PermissionContext::new(agent_id.to_string(), "default".to_string());
             let scope = format!("tool:{}", name);
-            if self.permissions.check_scoped(&ctx, crate::api::permission::PermissionAction::Execute, Some(&scope)).is_err() {
+            if self
+                .permissions
+                .check_scoped(&ctx, crate::api::permission::PermissionAction::Execute, Some(&scope))
+                .is_err()
+            {
                 return ToolResult::error(format!(
-                    "Agent '{}' lacks Execute permission for external tool '{}'", agent_id, name
+                    "Agent '{}' lacks Execute permission for external tool '{}'",
+                    agent_id, name
                 ));
             }
             return handler.execute(params, agent_id);
@@ -281,9 +286,12 @@ mod tests {
     #[test]
     fn test_cas_create_dispatch() {
         let (kernel, _dir) = make_kernel();
-        let result = dispatch(&kernel, "cas.create",
+        let result = dispatch(
+            &kernel,
+            "cas.create",
             serde_json::json!({"content": "test data", "tags": ["unit-test"]}),
-            "kernel");
+            "kernel",
+        );
         assert!(result.success, "cas.create should succeed: {:?}", result.error);
         assert!(result.output["cid"].is_string());
         let cid = result.output["cid"].as_str().unwrap();
@@ -293,9 +301,12 @@ mod tests {
     #[test]
     fn test_cas_create_empty_content_rejected() {
         let (kernel, _dir) = make_kernel();
-        let result = dispatch(&kernel, "cas.create",
+        let result = dispatch(
+            &kernel,
+            "cas.create",
             serde_json::json!({"content": "", "tags": []}),
-            "kernel");
+            "kernel",
+        );
         if !result.success {
             assert!(result.error.is_some(), "error should be set on failure");
         }
@@ -304,14 +315,15 @@ mod tests {
     #[test]
     fn test_cas_read_existing() {
         let (kernel, _dir) = make_kernel();
-        let create = dispatch(&kernel, "cas.create",
+        let create = dispatch(
+            &kernel,
+            "cas.create",
             serde_json::json!({"content": "read me", "tags": ["test"]}),
-            "kernel");
+            "kernel",
+        );
         let cid = create.output["cid"].as_str().unwrap();
 
-        let result = dispatch(&kernel, "cas.read",
-            serde_json::json!({"cid": cid}),
-            "kernel");
+        let result = dispatch(&kernel, "cas.read", serde_json::json!({"cid": cid}), "kernel");
         assert!(result.success, "cas.read should succeed: {:?}", result.error);
         assert_eq!(result.output["data"].as_str().unwrap(), "read me");
     }
@@ -319,32 +331,39 @@ mod tests {
     #[test]
     fn test_cas_read_nonexistent_returns_error() {
         let (kernel, _dir) = make_kernel();
-        let result = dispatch(&kernel, "cas.read",
+        let result = dispatch(
+            &kernel,
+            "cas.read",
             serde_json::json!({"cid": "0000000000000000000000000000000000000000000000000000000000000000"}),
-            "kernel");
+            "kernel",
+        );
         assert!(!result.success, "cas.read of nonexistent should fail");
     }
 
     #[test]
     fn test_cas_delete_existing() {
         let (kernel, _dir) = make_kernel();
-        let create = dispatch(&kernel, "cas.create",
+        let create = dispatch(
+            &kernel,
+            "cas.create",
             serde_json::json!({"content": "to delete", "tags": ["test"]}),
-            "kernel");
+            "kernel",
+        );
         let cid = create.output["cid"].as_str().unwrap();
 
-        let result = dispatch(&kernel, "cas.delete",
-            serde_json::json!({"cid": cid}),
-            "kernel");
+        let result = dispatch(&kernel, "cas.delete", serde_json::json!({"cid": cid}), "kernel");
         assert!(result.success, "cas.delete should succeed: {:?}", result.error);
     }
 
     #[test]
     fn test_cas_delete_nonexistent_returns_error() {
         let (kernel, _dir) = make_kernel();
-        let result = dispatch(&kernel, "cas.delete",
+        let result = dispatch(
+            &kernel,
+            "cas.delete",
             serde_json::json!({"cid": "0000000000000000000000000000000000000000000000000000000000000000"}),
-            "kernel");
+            "kernel",
+        );
         assert!(!result.success, "cas.delete of nonexistent should fail");
     }
 
@@ -353,10 +372,17 @@ mod tests {
     #[test]
     fn test_memory_store_working() {
         let (kernel, _dir) = make_kernel();
-        let result = dispatch(&kernel, "memory.store",
+        let result = dispatch(
+            &kernel,
+            "memory.store",
             serde_json::json!({"content": "working memory", "tier": "working", "importance": 50}),
-            "TestAgent");
-        assert!(result.success, "memory.store working should succeed: {:?}", result.error);
+            "TestAgent",
+        );
+        assert!(
+            result.success,
+            "memory.store working should succeed: {:?}",
+            result.error
+        );
         assert_eq!(result.output["tier"].as_str().unwrap(), "working");
     }
 
@@ -364,22 +390,35 @@ mod tests {
     fn test_memory_recall_agent_name_resolution() {
         let (kernel, _dir) = make_kernel();
         kernel.register_agent("RecallAgent".to_string()).unwrap();
-        dispatch(&kernel, "memory.store",
+        dispatch(
+            &kernel,
+            "memory.store",
             serde_json::json!({"content": "recallable", "tier": "working"}),
-            "RecallAgent");
+            "RecallAgent",
+        );
 
-        let result = dispatch(&kernel, "memory.recall",
+        let result = dispatch(
+            &kernel,
+            "memory.recall",
             serde_json::json!({"agent_id": "RecallAgent"}),
-            "RecallAgent");
-        assert!(result.success, "memory.recall by name should resolve: {:?}", result.error);
+            "RecallAgent",
+        );
+        assert!(
+            result.success,
+            "memory.recall by name should resolve: {:?}",
+            result.error
+        );
     }
 
     #[test]
     fn test_memory_recall_nonexistent_agent() {
         let (kernel, _dir) = make_kernel();
-        let result = dispatch(&kernel, "memory.recall",
+        let result = dispatch(
+            &kernel,
+            "memory.recall",
             serde_json::json!({"agent_id": "DoesNotExist"}),
-            "kernel");
+            "kernel",
+        );
         assert!(!result.success, "memory.recall for nonexistent agent should fail");
     }
 
@@ -388,9 +427,12 @@ mod tests {
     #[test]
     fn test_kg_add_node_dispatch() {
         let (kernel, _dir) = make_kernel();
-        let result = dispatch(&kernel, "kg.add_node",
+        let result = dispatch(
+            &kernel,
+            "kg.add_node",
             serde_json::json!({"label": "TestNode", "type": "entity", "properties": {}}),
-            "kernel");
+            "kernel",
+        );
         assert!(result.success, "kg.add_node should succeed: {:?}", result.error);
         assert!(result.output["node_id"].is_string());
     }
@@ -398,18 +440,27 @@ mod tests {
     #[test]
     fn test_kg_add_edge_dispatch() {
         let (kernel, _dir) = make_kernel();
-        let n1 = dispatch(&kernel, "kg.add_node",
+        let n1 = dispatch(
+            &kernel,
+            "kg.add_node",
             serde_json::json!({"label": "Node1", "type": "entity"}),
-            "kernel");
-        let n2 = dispatch(&kernel, "kg.add_node",
+            "kernel",
+        );
+        let n2 = dispatch(
+            &kernel,
+            "kg.add_node",
             serde_json::json!({"label": "Node2", "type": "entity"}),
-            "kernel");
+            "kernel",
+        );
         let node1 = n1.output["node_id"].as_str().unwrap();
         let node2 = n2.output["node_id"].as_str().unwrap();
 
-        let result = dispatch(&kernel, "kg.add_edge",
+        let result = dispatch(
+            &kernel,
+            "kg.add_edge",
             serde_json::json!({"src": node1, "dst": node2, "type": "related_to"}),
-            "kernel");
+            "kernel",
+        );
         assert!(result.success, "kg.add_edge should succeed: {:?}", result.error);
     }
 
@@ -418,9 +469,12 @@ mod tests {
     #[test]
     fn test_agent_register_dispatch() {
         let (kernel, _dir) = make_kernel();
-        let result = dispatch(&kernel, "agent.register",
+        let result = dispatch(
+            &kernel,
+            "agent.register",
             serde_json::json!({"name": "DispatchTestAgent"}),
-            "kernel");
+            "kernel",
+        );
         assert!(result.success, "agent.register should succeed: {:?}", result.error);
         assert!(result.output["agent_id"].is_string());
     }
@@ -428,14 +482,20 @@ mod tests {
     #[test]
     fn test_agent_status_dispatch() {
         let (kernel, _dir) = make_kernel();
-        let reg = dispatch(&kernel, "agent.register",
+        let reg = dispatch(
+            &kernel,
+            "agent.register",
             serde_json::json!({"name": "StatusTestAgent"}),
-            "kernel");
+            "kernel",
+        );
         let agent_id = reg.output["agent_id"].as_str().unwrap();
 
-        let result = dispatch(&kernel, "agent.status",
+        let result = dispatch(
+            &kernel,
+            "agent.status",
             serde_json::json!({"agent_id": agent_id}),
-            "kernel");
+            "kernel",
+        );
         assert!(result.success, "agent.status should succeed: {:?}", result.error);
         assert_eq!(result.output["agent_id"].as_str().unwrap(), agent_id);
     }
@@ -445,9 +505,7 @@ mod tests {
     #[test]
     fn test_tools_list_dispatch() {
         let (kernel, _dir) = make_kernel();
-        let result = dispatch(&kernel, "tools.list",
-            serde_json::json!({}),
-            "kernel");
+        let result = dispatch(&kernel, "tools.list", serde_json::json!({}), "kernel");
         assert!(result.success, "tools.list should succeed: {:?}", result.error);
         assert!(result.output.is_array());
     }
@@ -455,18 +513,19 @@ mod tests {
     #[test]
     fn test_tools_describe_unknown_returns_error() {
         let (kernel, _dir) = make_kernel();
-        let result = dispatch(&kernel, "tools.describe",
+        let result = dispatch(
+            &kernel,
+            "tools.describe",
             serde_json::json!({"name": "nonexistent.tool"}),
-            "kernel");
+            "kernel",
+        );
         assert!(!result.success, "tools.describe for unknown tool should fail");
     }
 
     #[test]
     fn test_unknown_tool_returns_error() {
         let (kernel, _dir) = make_kernel();
-        let result = dispatch(&kernel, "nonexistent.tool",
-            serde_json::json!({}),
-            "kernel");
+        let result = dispatch(&kernel, "nonexistent.tool", serde_json::json!({}), "kernel");
         assert!(!result.success, "unknown tool should return error");
     }
 
@@ -474,14 +533,24 @@ mod tests {
 
     struct BlockHook;
     impl crate::kernel::hook::HookHandler for BlockHook {
-        fn handle(&self, _point: crate::kernel::hook::HookPoint, _ctx: &crate::kernel::hook::HookContext) -> crate::kernel::hook::HookResult {
-            crate::kernel::hook::HookResult::Block { reason: "blocked by test hook".into() }
+        fn handle(
+            &self,
+            _point: crate::kernel::hook::HookPoint,
+            _ctx: &crate::kernel::hook::HookContext,
+        ) -> crate::kernel::hook::HookResult {
+            crate::kernel::hook::HookResult::Block {
+                reason: "blocked by test hook".into(),
+            }
         }
     }
 
     struct NoOpTestHook;
     impl crate::kernel::hook::HookHandler for NoOpTestHook {
-        fn handle(&self, _point: crate::kernel::hook::HookPoint, _ctx: &crate::kernel::hook::HookContext) -> crate::kernel::hook::HookResult {
+        fn handle(
+            &self,
+            _point: crate::kernel::hook::HookPoint,
+            _ctx: &crate::kernel::hook::HookContext,
+        ) -> crate::kernel::hook::HookResult {
             crate::kernel::hook::HookResult::Continue
         }
     }
@@ -491,11 +560,17 @@ mod tests {
     }
     impl RecordingHook {
         fn new() -> Self {
-            Self { calls: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())) }
+            Self {
+                calls: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            }
         }
     }
     impl crate::kernel::hook::HookHandler for RecordingHook {
-        fn handle(&self, point: crate::kernel::hook::HookPoint, ctx: &crate::kernel::hook::HookContext) -> crate::kernel::hook::HookResult {
+        fn handle(
+            &self,
+            point: crate::kernel::hook::HookPoint,
+            ctx: &crate::kernel::hook::HookContext,
+        ) -> crate::kernel::hook::HookResult {
             self.calls.lock().unwrap().push((point, ctx.tool_name.clone()));
             crate::kernel::hook::HookResult::Continue
         }
@@ -510,14 +585,20 @@ mod tests {
             std::sync::Arc::new(BlockHook),
         );
 
-        let result = dispatch(&kernel, "cas.delete",
+        let result = dispatch(
+            &kernel,
+            "cas.delete",
             serde_json::json!({"cid": "nonexistent"}),
-            "kernel");
+            "kernel",
+        );
 
         assert!(!result.success, "blocked tool should fail");
         let err_msg = result.error.unwrap_or_default();
-        assert!(err_msg.contains("blocked by hook"),
-            "error should mention hook blocking: {}", err_msg);
+        assert!(
+            err_msg.contains("blocked by hook"),
+            "error should mention hook blocking: {}",
+            err_msg
+        );
     }
 
     #[test]
@@ -529,9 +610,12 @@ mod tests {
             std::sync::Arc::new(NoOpTestHook),
         );
 
-        let result = dispatch(&kernel, "cas.create",
+        let result = dispatch(
+            &kernel,
+            "cas.create",
             serde_json::json!({"content": "hook test", "tags": ["test"]}),
-            "kernel");
+            "kernel",
+        );
 
         assert!(result.success, "noop hook should allow tool call: {:?}", result.error);
     }
@@ -542,15 +626,16 @@ mod tests {
         let recorder = std::sync::Arc::new(RecordingHook::new());
         let recorder_clone = recorder.clone();
 
-        kernel.hook_registry.register(
-            crate::kernel::hook::HookPoint::PostToolCall,
-            0,
-            recorder_clone,
-        );
+        kernel
+            .hook_registry
+            .register(crate::kernel::hook::HookPoint::PostToolCall, 0, recorder_clone);
 
-        let result = dispatch(&kernel, "cas.create",
+        let result = dispatch(
+            &kernel,
+            "cas.create",
             serde_json::json!({"content": "post hook test", "tags": []}),
-            "kernel");
+            "kernel",
+        );
 
         assert!(result.success);
         let calls = recorder.calls.lock().unwrap();
@@ -573,9 +658,7 @@ mod tests {
             std::sync::Arc::new(BlockHook),
         );
 
-        let result = dispatch(&kernel, "cas.read",
-            serde_json::json!({"cid": "abc"}),
-            "kernel");
+        let result = dispatch(&kernel, "cas.read", serde_json::json!({"cid": "abc"}), "kernel");
 
         assert!(!result.success, "first blocking hook should win");
         assert!(result.error.unwrap_or_default().contains("blocked by hook"));
@@ -584,11 +667,18 @@ mod tests {
     #[test]
     fn test_hook_registry_empty_passes_through() {
         let (kernel, _dir) = make_kernel();
-        let result = dispatch(&kernel, "cas.create",
+        let result = dispatch(
+            &kernel,
+            "cas.create",
             serde_json::json!({"content": "no hooks", "tags": ["test"]}),
-            "kernel");
+            "kernel",
+        );
 
-        assert!(result.success, "no hooks should not affect execution: {:?}", result.error);
+        assert!(
+            result.success,
+            "no hooks should not affect execution: {:?}",
+            result.error
+        );
     }
 
     #[test]
@@ -597,15 +687,16 @@ mod tests {
         let recorder = std::sync::Arc::new(RecordingHook::new());
         let recorder_clone = recorder.clone();
 
-        kernel.hook_registry.register(
-            crate::kernel::hook::HookPoint::PreToolCall,
-            0,
-            recorder_clone,
-        );
+        kernel
+            .hook_registry
+            .register(crate::kernel::hook::HookPoint::PreToolCall, 0, recorder_clone);
 
-        let _ = dispatch(&kernel, "cas.search",
+        let _ = dispatch(
+            &kernel,
+            "cas.search",
             serde_json::json!({"query": "test query", "limit": 5}),
-            "agent-42");
+            "agent-42",
+        );
 
         let calls = recorder.calls.lock().unwrap();
         let (point, tool_name) = &calls[0];

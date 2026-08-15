@@ -1,14 +1,70 @@
-"""Report generation — JSON + Markdown with full competitor analysis."""
+"""Report generation for protocol-matched benchmark results."""
 
 from __future__ import annotations
 
 import json
+import os
 import re
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
 
 _RICH_TAG_RE = re.compile(r"\[(?:red|green|yellow|blue|bold|dim|/[^]]+)\]")
+
+
+def _write_private_atomic(path: Path, content: str) -> None:
+    """Atomically write a potentially sensitive artifact with owner-only mode."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+        temporary.chmod(0o600)
+        os.replace(temporary, path)
+        path.chmod(0o600)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _ragas_style_proxy(metrics: dict[str, Any]) -> dict[str, Any]:
+    """Read scores that are explicitly labelled as the local judge proxy."""
+    return metrics.get("ragas_style_proxy", {})
+
+
+def _render_value(value: Any) -> str:
+    if isinstance(value, float):
+        return f"{value:.3f}"
+    if isinstance(value, dict):
+        parts = []
+        for key, nested in value.items():
+            rendered = f"{nested:.2f}" if isinstance(nested, float) else str(nested)
+            parts.append(f"{key}={rendered}")
+        return ", ".join(parts)
+    return str(value)
+
+
+def _render_ragas_style_proxy(lines: list[str], metrics: dict[str, Any], heading: str) -> None:
+    proxy = _ragas_style_proxy(metrics)
+    if not proxy:
+        return
+    lines.extend(
+        [
+            heading,
+            "",
+            "_Custom single-judge prompts; the official RAGAS package is not used. "
+            "No unsourced reference threshold is applied._",
+            "",
+            "| Metric | Score |",
+            "|--------|-------|",
+        ]
+    )
+    for key, value in proxy.items():
+        lines.append(f"| {key} | {value:.3f} |")
+    lines.append("")
 
 
 class Report:
@@ -20,921 +76,185 @@ class Report:
     def to_json(self, indent: int = 2) -> str:
         return json.dumps(self.data, indent=indent, ensure_ascii=False)
 
-    def save_json(self, path: Path) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(self.to_json(), encoding="utf-8")
+    def commit_result(self, path: Path) -> None:
+        """Commit a no-clobber result directory; ``path`` is never a file name."""
+        from plico_benchmarks.core.result_artifact import commit_result_directory
+
+        commit_result_directory(path, self.data)
 
     def to_markdown(self) -> str:
         return _render_markdown(self.data)
 
     def save_markdown(self, path: Path) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(self.to_markdown(), encoding="utf-8")
+        _write_private_atomic(path, self.to_markdown())
 
 
 def _render_markdown(data: dict[str, Any]) -> str:
     lines: list[str] = []
     meta = data.get("metadata", {})
-    cfg = data.get("config", {})
+    config = data.get("config", {})
     metrics = data.get("metrics", {})
     costs = data.get("costs", {})
 
-    lines.append(f"# Benchmark Report: {meta.get('suite', 'unknown')}")
-    lines.append("")
-    lines.append(f"> Version: {meta.get('version', 'unknown')}")
-    lines.append(f"> Timestamp: {meta.get('timestamp', '')}")
-    lines.append("")
+    lines.extend(
+        [
+            f"# Benchmark Report: {meta.get('suite', 'unknown')}",
+            "",
+            f"> Version: {meta.get('version', 'unknown')}",
+            f"> Timestamp: {meta.get('timestamp', '')}",
+            "",
+            "## Configuration",
+            "",
+        ]
+    )
+    for key, value in config.items():
+        lines.append(f"- **{key}**: {value}")
+    lines.extend(["", "## Overall Metrics", ""])
 
-    lines.append("## Configuration")
-    lines.append("")
-    for k, v in cfg.items():
-        lines.append(f"- **{k}**: {v}")
-    lines.append("")
-
-    lines.append("## Overall Metrics")
-    lines.append("")
     overall = metrics.get("overall", {})
     if overall:
-        lines.append("| Metric | Value |")
-        lines.append("|--------|-------|")
-        for k, v in overall.items():
-            if isinstance(v, float):
-                lines.append(f"| {k} | {v:.3f} |")
-            elif isinstance(v, dict):
-                parts = []
-                for kk, vv in v.items():
-                    if isinstance(vv, float):
-                        parts.append(f"{kk}={vv:.2f}")
-                    else:
-                        parts.append(f"{kk}={vv}")
-                lines.append(f"| {k} | {', '.join(parts)} |")
-            else:
-                lines.append(f"| {k} | {v} |")
+        lines.extend(["| Metric | Value |", "|--------|-------|"])
+        for key, value in overall.items():
+            lines.append(f"| {key} | {_render_value(value)} |")
     lines.append("")
 
-    per_cat = metrics.get("per_category", {})
-    if per_cat:
-        lines.append("## Per-Category Metrics")
-        lines.append("")
-        lines.append("| Category | Count | F1 | EM | LLM Score | Accuracy % |")
-        lines.append("|----------|-------|----|----|----------|-----------|")
-        for cat, vals in per_cat.items():
-            f1 = f"{vals.get('f1', 0):.3f}" if vals.get("f1") is not None else "—"
-            em = f"{vals.get('em', 0):.3f}" if vals.get("em") is not None else "—"
-            ls = f"{vals.get('llm_score', 0):.2f}" if vals.get("llm_score") is not None else "—"
-            ap = f"{vals.get('accuracy_pct', 0):.1f}" if vals.get("accuracy_pct") is not None else "—"
-            lines.append(f"| {cat} | {vals.get('count', 0)} | {f1} | {em} | {ls} | {ap} |")
-        lines.append("")
-
-    ragas = metrics.get("ragas", {})
-    if ragas:
-        lines.append("## RAGAS Metrics")
-        lines.append("")
-        lines.append("| Metric | Score | Production Target |")
-        lines.append("|--------|-------|-------------------|")
-        targets = {"faithfulness": 0.85, "answer_relevancy": 0.80, "context_precision": 0.65, "context_recall": 0.75}
-        for k, v in ragas.items():
-            target = targets.get(k, "—")
-            target_str = f"{target:.2f}" if isinstance(target, float) else target
-            lines.append(f"| {k} | {v:.3f} | {target_str} |")
+    per_category = metrics.get("per_category", {})
+    if per_category:
+        lines.extend(
+            [
+                "## Per-Category Metrics",
+                "",
+                "| Category | Count | F1 | EM | LLM Score | Accuracy % |",
+                "|----------|-------|----|----|----------|-----------|",
+            ]
+        )
+        for category, values in per_category.items():
+            f1 = f"{values['f1']:.3f}" if values.get("f1") is not None else "—"
+            em = f"{values['em']:.3f}" if values.get("em") is not None else "—"
+            llm_score = f"{values['llm_score']:.2f}" if values.get("llm_score") is not None else "—"
+            accuracy = (
+                f"{values['accuracy_pct']:.1f}" if values.get("accuracy_pct") is not None else "—"
+            )
+            lines.append(
+                f"| {category} | {values.get('count', 0)} | {f1} | {em} | "
+                f"{llm_score} | {accuracy} |"
+            )
         lines.append("")
 
-    stats = metrics.get("statistics", {})
-    if stats:
-        lines.append("## Statistics")
-        lines.append("")
-        lines.append(f"- Mean: {stats.get('mean', 0):.4f}")
-        lines.append(f"- Std: {stats.get('std', 0):.4f}")
-        lines.append(f"- 95% CI: [{stats.get('ci95_low', 0):.4f}, {stats.get('ci95_high', 0):.4f}]")
-        lines.append("")
+    _render_ragas_style_proxy(lines, metrics, "## RAGAS-style LLM-Judge Proxy Metrics")
+
+    statistics = metrics.get("statistics", {})
+    if statistics:
+        lines.extend(
+            [
+                "## Statistics",
+                "",
+                f"- Mean: {statistics.get('mean', 0):.4f}",
+                f"- Std: {statistics.get('std', 0):.4f}",
+                f"- 95% CI: [{statistics.get('ci95_low', 0):.4f}, "
+                f"{statistics.get('ci95_high', 0):.4f}]",
+                "",
+            ]
+        )
 
     if costs:
-        lines.append("## Cost Analysis")
-        lines.append("")
-        for k, v in costs.items():
-            lines.append(f"- **{k}**: {v}")
+        lines.extend(["## Cost Analysis", ""])
+        for key, value in costs.items():
+            lines.append(f"- **{key}**: {value}")
         lines.append("")
 
-    lines.append("---")
-    lines.append(f"_Generated by plico-benchmarks v{meta.get('plico_version', '0.1.0')}_")
-    lines.append("")
+    lines.extend(
+        [
+            "---",
+            f"_Generated by plico-benchmarks v{meta.get('plico_version', '0.1.0')}_",
+            "",
+        ]
+    )
     return "\n".join(lines)
 
 
 class MultiReporter:
-    """Generate a combined report with competitor analysis and SAS.
+    """Generate a combined report without unsupported cross-run inference."""
 
-    Renders:
-    - Per-suite metric tables with version deltas
-    - Full competitor comparison (scores + notes + source)
-    - Agent framework feature comparison matrix
-    - Soul Alignment Score (SAS) per axiom
-    - Competitor architectural analysis summaries
-    """
-
-    # Soul axiom mapping: which suites measure which axioms
-    AXIOM_SUITE_MAP = {
-        "A1_token_scarcity": ["token-efficiency"],
-        "A2_intent_before_action": ["intent-routing", "conversational-qa"],
-        "A3_memory_exoskeleton": ["memory-lifecycle"],
-        "A4_sharing_before_duplication": ["scope-isolation"],
-        "A5_mechanism_not_strategy": ["performance"],
-        "A6_semantics_before_structure": ["retrieval"],
-        "A7_proactive_before_passive": ["proactive-optimization"],
-        "A8_causality_before_correlation": ["causal-reasoning"],
-        "A9_gets_better": ["memory-lifecycle"],
-        "A10_session_first_class": ["session-lifecycle"],
-    }
-
-    def __init__(self, results: list[dict[str, Any]], prev_results: list[dict[str, Any]] | None = None):
+    def __init__(self, results: list[dict[str, Any]]):
         self.results = results
-        self.prev_results = prev_results or []
 
     def to_markdown(self) -> str:
-        lines: list[str] = []
-        lines.append("# Plico Benchmark Report")
-        lines.append("")
-        lines.append(f"> Generated: {time.strftime('%Y-%m-%d %H:%M:%S')}")
-        if self.prev_results:
-            lines.append(f"> Compared against: {self._prev_version()}")
-        lines.append("")
-
-        # Summary table
-        lines.append("## 1. Summary")
-        lines.append("")
-        lines.append(self._summary_table())
-        lines.append("")
-
-        # Per-suite details with full competitor comparison
-        lines.append("## 2. Suite Results")
-        lines.append("")
-        for r in self.results:
-            suite = r.get("metadata", {}).get("suite", "unknown")
-            lines.append(f"### {suite}")
-            lines.append("")
-            overall = r.get("metrics", {}).get("overall", {})
-            if overall:
-                lines.append("| Metric | Value |")
-                lines.append("|--------|-------|")
-                for k, v in overall.items():
-                    if isinstance(v, float):
-                        lines.append(f"| {k} | {v:.3f} |")
-                    elif isinstance(v, dict):
-                        parts = []
-                        for kk, vv in v.items():
-                            if isinstance(vv, float):
-                                parts.append(f"{kk}={vv:.2f}")
-                            else:
-                                parts.append(f"{kk}={vv}")
-                        lines.append(f"| {k} | {', '.join(parts)} |")
-                    else:
-                        lines.append(f"| {k} | {v} |")
-            lines.append("")
-
-            # RAGAS metrics (if present)
-            ragas = r.get("metrics", {}).get("ragas", {})
-            if ragas:
-                lines.append("#### RAGAS Metrics")
-                lines.append("")
-                lines.append("| Metric | Score | Target |")
-                lines.append("|--------|-------|--------|")
-                targets = {"faithfulness": 0.85, "answer_relevancy": 0.80, "context_precision": 0.65, "context_recall": 0.75}
-                for k, v in ragas.items():
-                    target = targets.get(k, "—")
-                    target_str = f"{target:.2f}" if isinstance(target, float) else target
-                    gap = ""
-                    if isinstance(target, float):
-                        delta = v - target
-                        gap = f" ({'+' if delta >= 0 else ''}{delta:.2f})"
-                    lines.append(f"| {k} | {v:.3f} | {target_str}{gap} |")
-                lines.append("")
-
-            # Full competitor comparison with notes
-            competitors = r.get("competitors", {})
-            if competitors:
-                self._render_competitor_section(lines, competitors)
-
-            # Version delta if available
-            delta = self._suite_delta(suite)
-            if delta:
-                lines.append("#### vs Previous Version")
-                lines.append("")
-                lines.append("| Metric | Prev | Current | Delta |")
-                lines.append("|--------|------|---------|-------|")
-                for metric, prev_val, curr_val, delta_str in delta:
-                    lines.append(f"| {metric} | {prev_val} | {curr_val} | {delta_str} |")
-                lines.append("")
-
-        # Competitor Analysis — detailed per-competitor summaries
-        lines.append("## 3. Competitor Analysis")
-        lines.append("")
-        lines.append(self._competitor_analysis_section())
-        lines.append("")
-
-        # Agent Framework Feature Comparison
-        lines.append("## 4. Agent Framework Comparison")
-        lines.append("")
-        lines.append(self._framework_comparison_table())
-        lines.append("")
-
-        # Soul Alignment Score
-        lines.append("## 5. Soul Alignment Score")
-        lines.append("")
-        lines.append(self._soul_alignment_table())
-        lines.append("")
-
-        # Key Learnings
-        lines.append("## 6. Key Learnings from Competitors")
-        lines.append("")
-        lines.append(self._key_learnings_section())
-        lines.append("")
-
-        # Strip Rich console tags — they're for terminal, not markdown files
-        return _RICH_TAG_RE.sub("", "\n".join(lines))
-
-    # Known per-category fields for memory benchmarks
-    _LONGMEMEVAL_CATS = ("single_session_user", "single_session_assistant",
-                         "preference_application", "knowledge_update", "temporal_reasoning")
-    _LOCOMO_CATS = ("single_hop", "multi_hop", "open_domain", "temporal")
-
-    def _render_competitor_section(self, lines: list[str], competitors: dict[str, Any]) -> None:
-        """Render full competitor comparison with scores, notes, source, date."""
-        for comp_key, comp_data in competitors.items():
-            if isinstance(comp_data, list) and comp_data:
-                lines.append(f"#### {comp_key} Competitors")
-                lines.append("")
-                first = comp_data[0]
-                has_overall = "overall" in first
-                has_mteb = "mteb_avg" in first
-                has_tokens = "tokens" in first
-
-                # Detect per-category columns from data
-                per_cat = self._detect_categories(comp_data)
-
-                if has_overall:
-                    cat_headers = " | ".join(c[1] for c in per_cat)
-                    cat_sep = "|".join("-----" for _ in per_cat)
-                    if per_cat:
-                        headers = f"| Competitor | Overall | {cat_headers} | Notes | Source | Date |"
-                        sep =     f"|-----------|---------|{cat_sep}|-------|--------|------|"
-                    else:
-                        headers = "| Competitor | Accuracy | Notes | Source | Date |"
-                        sep =      "|-----------|----------|-------|--------|------|"
-                elif has_mteb:
-                    headers = "| Competitor | MTEB Avg | Retrieval | Dims | Notes |"
-                    sep =      "|-----------|----------|-----------|------|-------|"
-                elif has_tokens:
-                    headers = "| Competitor | Tokens/Query | Cost/Query | Context % | Notes |"
-                    sep =      "|-----------|-------------|-----------|-----------|-------|"
-                else:
-                    continue
-
-                lines.append(headers)
-                lines.append(sep)
-                for c in comp_data:
-                    name = c.get("name", "unknown")
-                    if has_overall:
-                        notes = c.get("notes", "")
-                        source = c.get("source", "")
-                        date = c.get("date", "")
-                        if per_cat:
-                            cat_vals = []
-                            for cat_key, cat_label in per_cat:
-                                val = c.get(cat_key)
-                                cat_vals.append(f"{val}%" if val is not None else "—")
-                            cat_str = " | ".join(cat_vals)
-                            lines.append(f"| {name} | {c['overall']}% | {cat_str} | {notes} | {source} | {date} |")
-                        else:
-                            lines.append(f"| {name} | {c['overall']}% | {notes} | {source} | {date} |")
-                    elif has_mteb:
-                        ret = c.get("retrieval", "—")
-                        dims = c.get("dims", "—")
-                        notes = c.get("notes", "")
-                        lines.append(f"| {name} | {c['mteb_avg']} | {ret} | {dims} | {notes} |")
-                    elif has_tokens:
-                        cost = c.get("cost_per_query_usd", "—")
-                        pct = c.get("context_footprint_pct", "—")
-                        notes = c.get("notes", "")
-                        cost_str = f"${cost:.6f}" if isinstance(cost, (int, float)) else str(cost)
-                        pct_str = f"{pct}%" if isinstance(pct, (int, float)) else str(pct)
-                        lines.append(f"| {name} | {c['tokens']} | {cost_str} | {pct_str} | {notes} |")
-                lines.append("")
-            elif isinstance(comp_data, str):
-                lines.append(f"_{comp_data}_")
-                lines.append("")
-
-    # Short display labels for per-category columns
-    _CATEGORY_LABELS = {
-        "single_session_user": "User",
-        "single_session_assistant": "Asst",
-        "preference_application": "Pref",
-        "knowledge_update": "Update",
-        "temporal_reasoning": "Temporal",
-        "single_hop": "1-Hop",
-        "multi_hop": "M-Hop",
-        "open_domain": "Open",
-        "temporal": "Temporal",
-    }
-
-    def _detect_categories(self, comp_data: list[dict]) -> list[tuple[str, str]]:
-        """Detect per-category fields present in competitor data.
-
-        Returns list of (field_key, display_label) tuples.
-        """
-        for cat_set in (self._LONGMEMEVAL_CATS, self._LOCOMO_CATS):
-            found = []
-            for cat in cat_set:
-                if any(c.get(cat) is not None for c in comp_data):
-                    label = self._CATEGORY_LABELS.get(cat, cat[:10])
-                    found.append((cat, label))
-            if len(found) >= 2:
-                return found
-        return []
-
-    def _competitor_analysis_section(self) -> str:
-        """Generate detailed per-competitor architectural analysis from YAML data."""
-        from plico_benchmarks.core.competitors import (
-            get_memory_competitors, get_retrieval_competitors,
-            get_token_efficiency_competitors, get_agent_frameworks,
-        )
-
-        lines = []
-
-        # Memory system competitors (LongMemEval + LoCoMo + PersonaMem)
-        longmemeval = get_memory_competitors("longmemeval")
-        locomo = get_memory_competitors("locomo")
-        personamem = get_memory_competitors("personamem")
-
-        if longmemeval or locomo or personamem:
-            lines.append("### Memory Systems")
-            lines.append("")
-            for comp in longmemeval:
-                self._render_competitor_analysis(lines, comp, "LongMemEval")
-            for comp in locomo:
-                self._render_competitor_analysis(lines, comp, "LoCoMo")
-            for comp in personamem:
-                self._render_competitor_analysis(lines, comp, "PersonaMem")
-
-        # Embedding model competitors
-        mteb = get_retrieval_competitors()
-        if mteb:
-            lines.append("### Embedding Models")
-            lines.append("")
-            for comp in mteb:
-                self._render_competitor_analysis(lines, comp, "MTEB")
-
-        # Token efficiency competitors
-        token_efs = get_token_efficiency_competitors()
-        if token_efs:
-            lines.append("### Token Efficiency")
-            lines.append("")
-            for comp in token_efs:
-                self._render_competitor_analysis(lines, comp, "Token Efficiency")
-
-        # Agent frameworks
-        frameworks = get_agent_frameworks()
-        if frameworks:
-            lines.append("### Agent Frameworks")
-            lines.append("")
-            for fw in frameworks:
-                name = fw.get("name", "unknown")
-                lines.append(f"#### {name}")
-                lines.append(f"- **Stars**: {fw.get('github_stars', 'N/A')}")
-                lines.append(f"- **Memory layers**: {fw.get('memory_layers', 0)}")
-                lines.append(f"- **KG native**: {fw.get('kg_native', False)}")
-                lines.append(f"- **Scope isolation**: {fw.get('scope_isolation', 'none')}")
-                lines.append(f"- **Strengths**: {fw.get('strengths', '')}")
-                lines.append(f"- **Weaknesses**: {fw.get('weaknesses', '')}")
-                lines.append("")
-
-        return "\n".join(lines)
-
-    def _render_competitor_analysis(self, lines: list[str], comp: dict[str, Any], source: str) -> None:
-        """Render a single competitor's analysis from YAML analysis fields."""
-        name = comp.get("name", "unknown")
-        analysis = comp.get("analysis", {})
-
-        # Score line
-        score_parts = []
-        if "overall" in comp:
-            score_parts.append(f"{comp['overall']}%")
-        if "mteb_avg" in comp:
-            score_parts.append(f"MTEB {comp['mteb_avg']}")
-        if "tokens" in comp:
-            score_parts.append(f"{comp['tokens']} tokens/query")
-        score_str = ", ".join(score_parts) if score_parts else ""
-        lines.append(f"#### {name}")
-        if score_str:
-            lines.append(f"- **Score**: {score_str} ({source})")
-
-        # Per-category scores if present
-        cats = self._detect_categories([comp])
-        if cats:
-            cat_parts = []
-            for cat_key, cat_label in cats:
-                val = comp.get(cat_key)
-                if val is not None:
-                    cat_parts.append(f"{cat_label} {val}%")
-            if cat_parts:
-                lines.append(f"- **Per-category**: {', '.join(cat_parts)}")
-
-        # Analysis fields from YAML
-        if analysis:
-            if analysis.get("architecture"):
-                lines.append(f"- **Architecture**: {analysis['architecture']}")
-            if analysis.get("key_insight"):
-                lines.append(f"- **Key insight**: {analysis['key_insight']}")
-            if analysis.get("what_we_learn"):
-                lines.append(f"- **What we learn**: {analysis['what_we_learn']}")
-            if analysis.get("plico_gap"):
-                lines.append(f"- **Plico gap**: {analysis['plico_gap']}")
-        else:
-            # Fallback for competitors without analysis
-            if comp.get("notes"):
-                lines.append(f"- **Notes**: {comp['notes']}")
-        lines.append("")
-
-    def _framework_comparison_table(self) -> str:
-        """Generate feature comparison matrix across all frameworks."""
-        from plico_benchmarks.core.competitors import get_agent_frameworks, get_plico_state
-
-        frameworks = get_agent_frameworks()
-        plico = get_plico_state()
-
-        if not frameworks:
-            return "_No framework data available._"
-
-        lines = []
-        # Header
-        names = [fw["name"] for fw in frameworks] + ["Plico (v49)"]
-        lines.append("| Feature | " + " | ".join(names) + " |")
-        lines.append("|---------|" + "|".join(["-----"] * len(names)) + " |")
-
-        # Features to compare
-        features = [
-            ("Language", "language", "Rust"),
-            ("Memory Layers", "memory_layers", 4),
-            ("Scope Isolation", "scope_isolation", "Private/Shared/Group (OS-enforced)"),
-            ("KG Native", "kg_native", True),
-            ("Semantic Search", "semantic_search", "native BM25+HNSW hybrid"),
-            ("Session Mgmt", "session_mgmt", "OS session + warm context + delta"),
-            ("Proactive Optim", "proactive_optim", "intent prefetch + skill forge + self-healing"),
-            ("WASM Skills", "wasm_skills", True),
-            ("Token Efficiency", "token_efficiency", "L0/L1/L2 layered context"),
+        lines = [
+            "# Plico Benchmark Report",
+            "",
+            f"> Generated: {time.strftime('%Y-%m-%d %H:%M:%S')}",
         ]
-
-        for label, key, plico_val in features:
-            row = [label]
-            for fw in frameworks:
-                val = fw.get(key, "—")
-                if isinstance(val, bool):
-                    val = "Yes" if val else "No"
-                elif val is False:
-                    val = "No"
-                elif val is True:
-                    val = "Yes"
-                row.append(str(val))
-            # Plico value
-            if isinstance(plico_val, bool):
-                plico_val = "Yes" if plico_val else "No"
-            row.append(str(plico_val))
-            lines.append("| " + " | ".join(row) + " |")
-
-        return "\n".join(lines)
-
-    def _key_learnings_section(self) -> str:
-        """What Plico can learn from each competitor — data-driven from YAML analysis."""
-        from plico_benchmarks.core.competitors import (
-            get_memory_competitors, get_retrieval_competitors,
-            get_token_efficiency_competitors, get_agent_frameworks,
-            get_ragas_baselines, get_cross_benchmarks,
+        lines.extend(
+            ["", "## 1. Summary", "", self._summary_table(), "", "## 2. Suite Results", ""]
         )
 
-        lines = []
-
-        # Memory specialists
-        longmemeval = get_memory_competitors("longmemeval")
-        locomo = get_memory_competitors("locomo")
-        memory_comps = longmemeval + locomo
-        if memory_comps:
-            lines.append("### From Memory Specialists")
-            lines.append("")
-            lines.append("| Competitor | Key Insight | What We Learn | Plico Gap |")
-            lines.append("|-----------|------------|---------------|-----------|")
-            for comp in memory_comps:
-                analysis = comp.get("analysis", {})
-                if analysis:
-                    lines.append(f"| {comp['name']} | {analysis.get('key_insight', '—')} | {analysis.get('what_we_learn', '—')} | {analysis.get('plico_gap', '—')} |")
-                elif comp.get("notes"):
-                    lines.append(f"| {comp['name']} | {comp['notes']} | — | — |")
-            lines.append("")
-
-        # Embedding models
-        mteb = get_retrieval_competitors()
-        if mteb:
-            lines.append("### From Embedding Models")
-            lines.append("")
-            lines.append("| Model | Key Insight | What We Learn | Plico Gap |")
-            lines.append("|-------|------------|---------------|-----------|")
-            for comp in mteb:
-                analysis = comp.get("analysis", {})
-                if analysis:
-                    lines.append(f"| {comp['name']} | {analysis.get('key_insight', '—')} | {analysis.get('what_we_learn', '—')} | {analysis.get('plico_gap', '—')} |")
-                elif comp.get("notes"):
-                    lines.append(f"| {comp['name']} | {comp['notes']} | — | — |")
-            lines.append("")
-
-        # Token efficiency
-        token_efs = get_token_efficiency_competitors()
-        if token_efs:
-            lines.append("### From Token Efficiency")
-            lines.append("")
-            lines.append("| Competitor | Key Insight | What We Learn | Plico Gap |")
-            lines.append("|-----------|------------|---------------|-----------|")
-            for comp in token_efs:
-                analysis = comp.get("analysis", {})
-                if analysis:
-                    lines.append(f"| {comp['name']} | {analysis.get('key_insight', '—')} | {analysis.get('what_we_learn', '—')} | {analysis.get('plico_gap', '—')} |")
-                elif comp.get("notes"):
-                    lines.append(f"| {comp['name']} | {comp['notes']} | — | — |")
-            lines.append("")
-
-        # Agent frameworks
-        frameworks = get_agent_frameworks()
-        if frameworks:
-            lines.append("### From Agent Frameworks")
-            lines.append("")
-            lines.append("| Framework | Strengths | Weaknesses |")
-            lines.append("|-----------|-----------|------------|")
-            for fw in frameworks:
-                lines.append(f"| {fw['name']} | {fw.get('strengths', '—')} | {fw.get('weaknesses', '—')} |")
-            lines.append("")
-
-        # RAGAS production targets
-        ragas = get_ragas_baselines()
-        if ragas:
-            metrics = ragas.get("metrics", [])
-            if metrics:
-                lines.append("### RAGAS Production Targets")
-                lines.append("")
-                lines.append("| Metric | Description | Production Baseline | Good Threshold |")
-                lines.append("|--------|------------|-------------------|----------------|")
-                for m in metrics:
-                    lines.append(f"| {m['name']} | {m.get('description', '—')} | {m.get('production_baseline', '—')} | {m.get('good_threshold', '—')} |")
-                lines.append("")
-                lines.append("_RAGAS is the de-facto standard for RAG pipeline evaluation. These are production-grade targets._")
+        for result in self.results:
+            suite = result.get("metadata", {}).get("suite", "unknown")
+            lines.extend([f"### {suite}", ""])
+            config = result.get("config", {})
+            if config:
+                lines.extend(
+                    [
+                        "#### Run Configuration",
+                        "",
+                        "| Field | Value |",
+                        "|-------|-------|",
+                    ]
+                )
+                for key, value in config.items():
+                    rendered = (
+                        json.dumps(value, ensure_ascii=False, sort_keys=True)
+                        if isinstance(value, (dict, list))
+                        else str(value)
+                    )
+                    lines.append(f"| {key} | {rendered} |")
                 lines.append("")
 
-        # Cross-benchmark references
-        cross = get_cross_benchmarks()
-        if cross:
-            lines.append("### Cross-Benchmark References")
-            lines.append("")
-            for bench_key in ("hotpotqa", "agentbench", "bigbench_hard"):
-                bench = cross.get(bench_key)
-                if not bench:
-                    continue
-                lines.append(f"**{bench.get('description', bench_key)}**")
-                lines.append("")
-                baselines = bench.get("baselines", [])
-                if baselines:
-                    lines.append("| System | Score | Notes |")
-                    lines.append("|--------|-------|-------|")
-                    for b in baselines:
-                        score = b.get("f1", b.get("overall", b.get("accuracy", "—")))
-                        lines.append(f"| {b['name']} | {score} | {b.get('notes', '')} |")
-                if bench.get("plico_relevance"):
-                    lines.append(f"- _Plico relevance: {bench['plico_relevance']}_")
+            overall = result.get("metrics", {}).get("overall", {})
+            if overall:
+                lines.extend(["| Metric | Value |", "|--------|-------|"])
+                for key, value in overall.items():
+                    lines.append(f"| {key} | {_render_value(value)} |")
                 lines.append("")
 
-        return "\n".join(lines)
+            _render_ragas_style_proxy(
+                lines,
+                result.get("metrics", {}),
+                "#### RAGAS-style LLM-Judge Proxy Metrics",
+            )
+
+        return _RICH_TAG_RE.sub("", "\n".join(lines))
 
     def save(self, output_dir: Path, filename: str = "benchmark_report.md") -> Path:
         output_dir.mkdir(parents=True, exist_ok=True)
         path = output_dir / filename
-        path.write_text(self.to_markdown(), encoding="utf-8")
+        _write_private_atomic(path, self.to_markdown())
         return path
 
     def _summary_table(self) -> str:
-        """Generate a one-row-per-suite summary table."""
-        lines = []
-        lines.append("| Suite | Key Metric | Value | Competitor Best | Gap |")
-        lines.append("|-------|-----------|-------|----------------|-----|")
-        for r in self.results:
-            suite = r.get("metadata", {}).get("suite", "unknown")
-            overall = r.get("metrics", {}).get("overall", {})
+        """Generate a one-row-per-suite summary without cross-protocol baselines."""
+        lines = ["| Suite | Key Metric | Value |", "|-------|------------|-------|"]
+        for result in self.results:
+            suite = result.get("metadata", {}).get("suite", "unknown")
+            overall = result.get("metrics", {}).get("overall", {})
             key_metric, key_value = self._pick_key_metric(suite, overall)
-            comp_best, comp_name = self._competitor_best(suite)
-            gap = self._compute_gap(key_value, comp_best)
-            val_str = f"{key_value:.3f}" if isinstance(key_value, float) else str(key_value)
-            comp_str = f"{comp_best} ({comp_name})" if comp_best is not None else "—"
-            lines.append(f"| {suite} | {key_metric} | {val_str} | {comp_str} | {gap} |")
+            rendered = f"{key_value:.3f}" if isinstance(key_value, float) else str(key_value)
+            lines.append(f"| {suite} | {key_metric} | {rendered} |")
         return "\n".join(lines)
-
-    def _competitor_best(self, suite: str) -> tuple[Any, str]:
-        """Find the best competitor score for a given suite."""
-        from plico_benchmarks.core.competitors import (
-            get_memory_competitors, get_token_efficiency_competitors, get_retrieval_competitors,
-        )
-
-        if suite == "conversational-qa":
-            # Compare against LongMemEval best (excluding experimental)
-            comps = get_memory_competitors("longmemeval")
-            verified = [c for c in comps if c.get("overall") and c["name"] != "Supermemory (experimental)"]
-            if verified:
-                best_entry = max(verified, key=lambda c: c["overall"])
-                return best_entry["overall"], best_entry["name"]
-            return None, ""
-
-        if suite == "token-efficiency":
-            comps = get_token_efficiency_competitors()
-            # Best = lowest tokens (excluding full_context)
-            filtered = [c for c in comps if c.get("tokens") and c["name"] != "Full-Context"]
-            if filtered:
-                best_entry = min(filtered, key=lambda c: c["tokens"])
-                return best_entry["tokens"], best_entry["name"]
-            return None, ""
-
-        if suite == "retrieval":
-            comps = get_retrieval_competitors()
-            scored = [c for c in comps if c.get("mteb_avg") is not None]
-            if scored:
-                best_entry = max(scored, key=lambda c: c["mteb_avg"])
-                return best_entry["mteb_avg"], best_entry["name"]
-            return None, ""
-
-        return None, ""
-
-    def _compute_gap(self, plico_val: Any, comp_best: Any) -> str:
-        """Compute gap between Plico and best competitor."""
-        if plico_val is None or comp_best is None:
-            return "—"
-        if not isinstance(plico_val, (int, float)) or not isinstance(comp_best, (int, float)):
-            return "—"
-        gap = plico_val - comp_best
-        if gap > 0:
-            return f"[green]+{gap:.1f}[/green]"
-        if gap < 0:
-            return f"[red]{gap:.1f}[/red]"
-        return "="
 
     def _pick_key_metric(self, suite: str, overall: dict[str, Any]) -> tuple[str, Any]:
         """Pick the most important metric per suite for the summary."""
         if suite == "conversational-qa":
             return "accuracy_pct", overall.get("accuracy_pct", overall.get("llm_score", 0))
         if suite == "retrieval":
-            for ds in ("beir_scifact", "mab_ar"):
-                if ds in overall:
-                    return f"{ds}.recall@5", overall[ds].get("recall@5", 0)
+            for dataset in ("beir_scifact", "mab_ar_answer_bearing_retrieval_proxy"):
+                if dataset in overall:
+                    return f"{dataset}.recall@5", overall[dataset].get("recall@5", 0)
             return "recall@5", 0
-        if suite == "kg-reasoning":
-            return "avg_latency_ms", overall.get("avg_latency_ms", 0)
         if suite == "performance":
-            for op in ("search", "cas_write"):
-                if op in overall:
-                    return f"{op}.p50_ms", overall[op].get("p50_ms", 0)
+            for operation in ("object.search_warm_repeated", "object.put"):
+                if operation in overall:
+                    return f"{operation}.p50_ms", overall[operation].get("p50_ms", 0)
             return "p50_ms", 0
-        if suite == "memory-lifecycle":
-            if "create" in overall:
-                return "create.success_rate", overall["create"].get("success_rate", 0)
-            return "success_rate", 0
-        if suite == "token-efficiency":
-            for level in ("context_l0", "context_l1"):
-                if level in overall:
-                    return f"{level}.avg_tokens", overall[level].get("avg_tokens_per_query", 0)
-            return "avg_tokens", 0
-        if suite == "scope-isolation":
-            if "private_isolation" in overall:
-                return "leak_rate", overall["private_isolation"].get("leak_rate", 0)
-            return "isolation", 0
-        if suite == "session-lifecycle":
-            if "session_lifecycle" in overall:
-                return "success_rate", overall["session_lifecycle"].get("success_rate", 0)
-            return "success", 0
-        if suite == "causal-reasoning":
-            if "causal_retrieval" in overall:
-                return "cause_finds_effect", overall["causal_retrieval"].get("cause_finds_effect_rate", 0)
-            return "paths", 0
-        if suite == "intent-routing":
-            # Average hit rate across intent types
-            intent_scores = []
-            for intent_type in ("factual", "temporal", "multi_hop", "preference", "aggregation"):
-                key = f"intent_{intent_type}"
-                if key in overall:
-                    hit = overall[key].get("hit_rate", 0)
-                    intent_scores.append(hit)
-            if intent_scores:
-                return "avg_intent_hit", sum(intent_scores) / len(intent_scores)
-            return "intent_hit", 0
-        if suite == "proactive-optimization":
-            if "context_l0" in overall:
-                return "L0.avg_tokens", overall["context_l0"].get("avg_tokens_per_query", 0)
-            if "repeated_query_latency" in overall:
-                return "speedup_pct", overall["repeated_query_latency"].get("speedup_pct", 0)
-            return "speedup", 0
         return "value", 0
-
-    def _prev_metric(self, suite: str, metric: str) -> float | None:
-        """Find the same metric in previous results."""
-        for r in self.prev_results:
-            if r.get("metadata", {}).get("suite") == suite:
-                overall = r.get("metrics", {}).get("overall", {})
-                if metric in overall:
-                    val = overall[metric]
-                    return val if isinstance(val, (int, float)) else None
-                parts = metric.split(".")
-                if len(parts) == 2 and parts[0] in overall:
-                    sub = overall[parts[0]]
-                    if isinstance(sub, dict) and parts[1] in sub:
-                        return sub[parts[1]]
-        return None
-
-    def _suite_delta(self, suite: str) -> list[tuple[str, str, str, str]]:
-        """Compute deltas for all metrics in a suite vs previous version."""
-        deltas = []
-        for r in self.results:
-            if r.get("metadata", {}).get("suite") != suite:
-                continue
-            overall = r.get("metrics", {}).get("overall", {})
-            for k, v in overall.items():
-                if isinstance(v, dict):
-                    for kk, vv in v.items():
-                        if isinstance(vv, (int, float)):
-                            prev = self._prev_metric(suite, f"{k}.{kk}")
-                            deltas.append((f"{k}.{kk}", self._fmt(prev), self._fmt(vv), self._format_delta(vv, prev)))
-                elif isinstance(v, (int, float)):
-                    prev = self._prev_metric(suite, k)
-                    deltas.append((k, self._fmt(prev), self._fmt(v), self._format_delta(v, prev)))
-        return deltas
-
-    def _soul_alignment_table(self) -> str:
-        """Generate Soul Alignment Score (SAS) table."""
-        lines = []
-        lines.append("| # | Axiom | Suite(s) | Status | Score |")
-        lines.append("|---|-------|----------|--------|-------|")
-        total = 0
-        max_score = 0
-        for axiom, suites in self.AXIOM_SUITE_MAP.items():
-            max_score += 2
-            score, status = self._score_axiom(axiom, suites)
-            total += score
-            suite_str = ", ".join(suites)
-            lines.append(f"| {axiom.split('_')[0]} | {axiom.split('_', 1)[1]} | {suite_str} | {status} | {score}/2 |")
-        lines.append(f"| | **Total** | | | **{total}/{max_score}** |")
-        return "\n".join(lines)
-
-    def _score_axiom(self, axiom: str, suites: list[str]) -> tuple[int, str]:
-        """Score an axiom based on its associated suite results."""
-        suite_names = {r.get("metadata", {}).get("suite") for r in self.results}
-        measured = [s for s in suites if s in suite_names]
-
-        if not measured:
-            return 0, "not measured"
-
-        for r in self.results:
-            suite = r.get("metadata", {}).get("suite", "")
-            if suite not in measured:
-                continue
-            overall = r.get("metrics", {}).get("overall", {})
-
-            if "token" in axiom:
-                for level in ("context_l0", "context_l1"):
-                    if level in overall:
-                        tokens = overall[level].get("avg_tokens_per_query", 99999)
-                        if tokens < 1500:
-                            return 2, f"{tokens:.0f} tok/query (under Memori)"
-                        if tokens < 4000:
-                            return 1, f"{tokens:.0f} tok/query (under Zep)"
-                        return 0, f"{tokens:.0f} tok/query (over Zep)"
-
-            if "memory" in axiom and "exoskeleton" in axiom:
-                if "create" in overall:
-                    rate = overall["create"].get("success_rate", 0)
-                    if rate >= 99:
-                        return 2, f"CRUD {rate}%"
-                    if rate >= 90:
-                        return 1, f"CRUD {rate}%"
-                    return 0, f"CRUD {rate}%"
-
-            if "sharing" in axiom:
-                if "private_isolation" in overall:
-                    perfect = overall["private_isolation"].get("isolation_perfect", False)
-                    leak = overall["private_isolation"].get("leak_rate", 1)
-                    if perfect:
-                        return 2, "zero leaks"
-                    if leak < 0.1:
-                        return 1, f"leak rate {leak:.0%}"
-                    return 0, f"leak rate {leak:.0%}"
-
-            if "semantics" in axiom:
-                for ds in ("beir_scifact", "mab_ar"):
-                    if ds in overall:
-                        r5 = overall[ds].get("recall@5", 0)
-                        if r5 >= 0.7:
-                            return 2, f"{ds} recall@5 {r5:.3f}"
-                        if r5 >= 0.4:
-                            return 1, f"{ds} recall@5 {r5:.3f}"
-                        return 0, f"{ds} recall@5 {r5:.3f}"
-
-            if "causality" in axiom:
-                if "causal_retrieval" in overall:
-                    rate = overall["causal_retrieval"].get("cause_finds_effect_rate", 0)
-                    if rate >= 0.8:
-                        return 2, f"causal retrieval {rate:.0%}"
-                    if rate >= 0.5:
-                        return 1, f"causal retrieval {rate:.0%}"
-                    return 0, f"causal retrieval {rate:.0%}"
-
-            if "gets_better" in axiom:
-                if "checkpoint_restore" in overall:
-                    persist = overall["checkpoint_restore"].get("cp1_persistence_rate", 0)
-                    if persist >= 0.95:
-                        return 2, f"persistence {persist:.0%}"
-                    if persist >= 0.8:
-                        return 1, f"persistence {persist:.0%}"
-                    return 0, f"persistence {persist:.0%}"
-
-            if "session" in axiom:
-                if "session_lifecycle" in overall:
-                    success = overall["session_lifecycle"].get("success_rate", 0)
-                    if success >= 0.95:
-                        return 2, f"session success {success:.0%}"
-                    if success >= 0.8:
-                        return 1, f"session success {success:.0%}"
-                    return 0, f"session success {success:.0%}"
-                if "cross_session_memory" in overall:
-                    persist = overall["cross_session_memory"].get("search_persistence_rate", 0)
-                    if persist >= 0.95:
-                        return 2, f"cross-session {persist:.0%}"
-                    if persist >= 0.8:
-                        return 1, f"cross-session {persist:.0%}"
-                    return 0, f"cross-session {persist:.0%}"
-
-            if "intent" in axiom:
-                # Check intent routing hit rates across all intent types
-                intent_scores = []
-                for intent_type in ("factual", "temporal", "multi_hop", "preference", "aggregation"):
-                    key = f"intent_{intent_type}"
-                    if key in overall:
-                        hit = overall[key].get("hit_rate", 0)
-                        intent_scores.append(hit)
-                if intent_scores:
-                    avg_hit = sum(intent_scores) / len(intent_scores)
-                    if avg_hit >= 0.7:
-                        return 2, f"avg intent hit {avg_hit:.0%}"
-                    if avg_hit >= 0.4:
-                        return 1, f"avg intent hit {avg_hit:.0%}"
-                    return 0, f"avg intent hit {avg_hit:.0%}"
-                # Fall back to conversational-qa accuracy
-                if "accuracy_pct" in overall:
-                    acc = overall["accuracy_pct"]
-                    if acc >= 70:
-                        return 2, f"accuracy {acc:.1f}%"
-                    if acc >= 40:
-                        return 1, f"accuracy {acc:.1f}%"
-                    return 0, f"accuracy {acc:.1f}%"
-
-            if "proactive" in axiom:
-                if "context_l0" in overall:
-                    tokens = overall["context_l0"].get("avg_tokens_per_query", 99999)
-                    hit = overall["context_l0"].get("hit_rate", 0)
-                    if tokens < 200 and hit >= 0.8:
-                        return 2, f"L0 {tokens:.0f} tok, {hit:.0%} hit"
-                    if tokens < 500:
-                        return 1, f"L0 {tokens:.0f} tok, {hit:.0%} hit"
-                    return 0, f"L0 {tokens:.0f} tok, {hit:.0%} hit"
-                if "repeated_query_latency" in overall:
-                    speedup = overall["repeated_query_latency"].get("speedup_pct", 0)
-                    if speedup > 20:
-                        return 2, f"repeated query speedup {speedup:.0f}%"
-                    if speedup > 5:
-                        return 1, f"repeated query speedup {speedup:.0f}%"
-                    return 0, f"repeated query speedup {speedup:.0f}%"
-
-            return 1, "measured"
-
-        return 0, "not measured"
-
-    def _prev_version(self) -> str:
-        if self.prev_results:
-            return self.prev_results[0].get("metadata", {}).get("version", "unknown")
-        return "none"
-
-    @staticmethod
-    def _fmt(val: Any) -> str:
-        if val is None:
-            return "—"
-        if isinstance(val, float):
-            return f"{val:.3f}"
-        return str(val)
-
-    @staticmethod
-    def _format_delta(current: Any, prev: Any) -> str:
-        if prev is None or not isinstance(current, (int, float)) or not isinstance(prev, (int, float)):
-            return "—"
-        delta = current - prev
-        if delta > 0:
-            return f"[green]+{delta:.3f}[/green]"
-        if delta < 0:
-            return f"[red]{delta:.3f}[/red]"
-        return "="

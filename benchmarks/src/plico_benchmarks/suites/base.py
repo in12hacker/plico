@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import os
 import time
-from typing import Any
 
 from plico_benchmarks.core.client import PlicoClient
 from plico_benchmarks.core.harness import BaseSuite
@@ -20,9 +18,18 @@ class SuiteBase(BaseSuite):
         client: PlicoClient | None = None,
         host: str = "127.0.0.1",
         port: int = 7878,
+        uds_path: str | None = None,
         samples: int | None = None,
+        seed: int | None = None,
     ):
-        super().__init__(client=client, host=host, port=port, samples=samples)
+        super().__init__(
+            client=client,
+            host=host,
+            port=port,
+            uds_path=uds_path,
+            samples=samples,
+            seed=seed,
+        )
         self.llm = default_llm()
         self.judge = Judge()
 
@@ -31,8 +38,8 @@ class SuiteBase(BaseSuite):
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             try:
-                resp = self.client.health()
-                if resp.get("ok"):
+                response = self.client.runtime_readiness()
+                if isinstance(response.get("ready"), bool):
                     return
             except Exception:
                 pass

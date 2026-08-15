@@ -20,8 +20,8 @@
 //!   → Result returned to caller
 //! ```
 
-use std::sync::Arc;
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::time::Duration;
 use tokio::sync::{broadcast, mpsc, Mutex as TokioMutex, RwLock};
@@ -68,11 +68,23 @@ pub struct ExecutionResult {
 
 impl ExecutionResult {
     pub fn success(intent_id: IntentId, agent_id: Option<AgentId>, output: String, elapsed_ms: u64) -> Self {
-        Self { intent_id, agent_id, success: true, output, elapsed_ms }
+        Self {
+            intent_id,
+            agent_id,
+            success: true,
+            output,
+            elapsed_ms,
+        }
     }
 
     pub fn failure(intent_id: IntentId, agent_id: Option<AgentId>, output: String, elapsed_ms: u64) -> Self {
-        Self { intent_id, agent_id, success: false, output, elapsed_ms }
+        Self {
+            intent_id,
+            agent_id,
+            success: false,
+            output,
+            elapsed_ms,
+        }
     }
 }
 
@@ -129,12 +141,7 @@ pub trait AgentExecutor: Send + Sync {
     ///
     /// `cpu_time_limit_ms` — hard limit on CPU time for this execution.
     /// Implementations should enforce this limit.
-    fn execute(
-        &self,
-        intent: &Intent,
-        agent_id: Option<&AgentId>,
-        cpu_time_limit_ms: u64,
-    ) -> Result<String, String>;
+    fn execute(&self, intent: &Intent, agent_id: Option<&AgentId>, cpu_time_limit_ms: u64) -> Result<String, String>;
 }
 
 /// Simple in-process executor — logs the intent and returns a stub result.
@@ -142,12 +149,7 @@ pub trait AgentExecutor: Send + Sync {
 pub struct LocalExecutor;
 
 impl AgentExecutor for LocalExecutor {
-    fn execute(
-        &self,
-        intent: &Intent,
-        _agent_id: Option<&AgentId>,
-        _cpu_time_limit_ms: u64,
-    ) -> Result<String, String> {
+    fn execute(&self, intent: &Intent, _agent_id: Option<&AgentId>, _cpu_time_limit_ms: u64) -> Result<String, String> {
         tracing::info!(
             "LocalExecutor: intent {}: \"{}\" (priority={:?})",
             intent.id,
@@ -179,17 +181,14 @@ impl KernelExecutor {
     /// The closure receives a JSON-serialized `ApiRequest` and an optional
     /// agent ID, and must return a JSON-serialized `ApiResponse`.
     pub fn new(handler: impl Fn(&str, Option<&str>) -> String + Send + Sync + 'static) -> Self {
-        Self { handler: Box::new(handler) }
+        Self {
+            handler: Box::new(handler),
+        }
     }
 }
 
 impl AgentExecutor for KernelExecutor {
-    fn execute(
-        &self,
-        intent: &Intent,
-        agent_id: Option<&AgentId>,
-        _cpu_time_limit_ms: u64,
-    ) -> Result<String, String> {
+    fn execute(&self, intent: &Intent, agent_id: Option<&AgentId>, _cpu_time_limit_ms: u64) -> Result<String, String> {
         let Some(ref action_json) = intent.action else {
             tracing::info!(
                 "KernelExecutor: no action for intent {}, treating as descriptive",
@@ -198,10 +197,7 @@ impl AgentExecutor for KernelExecutor {
             return Ok(format!("[No action] Intent '{}' acknowledged.", intent.description));
         };
 
-        tracing::info!(
-            "KernelExecutor: executing intent {} action",
-            intent.id
-        );
+        tracing::info!("KernelExecutor: executing intent {} action", intent.id);
 
         let aid_str = agent_id.map(|a| a.0.as_str());
         let response_json = (self.handler)(action_json, aid_str);
@@ -226,11 +222,7 @@ impl TokioDispatchLoop {
     /// `scheduler` — the agent scheduler (provides the queue and agent registry).
     /// `executor` — the execution backend (e.g. `LocalExecutor`).
     /// `cpu_time_limit_ms` — hard limit on CPU time per intent.
-    pub fn new(
-        scheduler: Arc<AgentScheduler>,
-        executor: Arc<dyn AgentExecutor>,
-        cpu_time_limit_ms: u64,
-    ) -> Self {
+    pub fn new(scheduler: Arc<AgentScheduler>, executor: Arc<dyn AgentExecutor>, cpu_time_limit_ms: u64) -> Self {
         Self {
             scheduler,
             executor,
@@ -268,7 +260,6 @@ impl TokioDispatchLoop {
             .await;
         });
 
-        
         DispatchHandle {
             shutdown_tx,
             result_rx: Arc::new(RwLock::new(result_rx)),
@@ -290,8 +281,7 @@ async fn dispatch_loop(
     let mut poll_timer = interval(poll_interval);
     poll_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
-    let agent_locks: Arc<StdMutex<HashMap<String, Arc<TokioMutex<()>>>>> =
-        Arc::new(StdMutex::new(HashMap::new()));
+    let agent_locks: Arc<StdMutex<HashMap<String, Arc<TokioMutex<()>>>>> = Arc::new(StdMutex::new(HashMap::new()));
 
     loop {
         tokio::select! {
@@ -417,24 +407,14 @@ mod tests {
 
     #[test]
     fn test_execution_result_success() {
-        let r = ExecutionResult::success(
-            IntentId::new(),
-            None,
-            "done".to_string(),
-            100,
-        );
+        let r = ExecutionResult::success(IntentId::new(), None, "done".to_string(), 100);
         assert!(r.success);
         assert_eq!(r.elapsed_ms, 100);
     }
 
     #[test]
     fn test_execution_result_failure() {
-        let r = ExecutionResult::failure(
-            IntentId::new(),
-            None,
-            "crashed".to_string(),
-            50,
-        );
+        let r = ExecutionResult::failure(IntentId::new(), None, "crashed".to_string(), 50);
         assert!(!r.success);
         assert!(r.output.contains("crashed"));
     }
@@ -451,7 +431,12 @@ mod tests {
     /// Executor that sleeps longer than the timeout.
     struct SlowExecutor(u64);
     impl AgentExecutor for SlowExecutor {
-        fn execute(&self, _intent: &Intent, _agent_id: Option<&AgentId>, _cpu_time_limit_ms: u64) -> Result<String, String> {
+        fn execute(
+            &self,
+            _intent: &Intent,
+            _agent_id: Option<&AgentId>,
+            _cpu_time_limit_ms: u64,
+        ) -> Result<String, String> {
             std::thread::sleep(std::time::Duration::from_millis(self.0));
             Ok("done".into())
         }
@@ -469,9 +454,8 @@ mod tests {
         let limit_ms = 50u64;
 
         let output = async {
-            tokio::task::spawn_blocking(move || {
-                executor_ref.execute(&intent_ref, agent_id_exec.as_ref(), limit_ms)
-            }).await
+            tokio::task::spawn_blocking(move || executor_ref.execute(&intent_ref, agent_id_exec.as_ref(), limit_ms))
+                .await
         };
 
         let result = tokio::time::timeout(Duration::from_millis(limit_ms), output).await;
@@ -494,11 +478,12 @@ mod tests {
     #[tokio::test]
     async fn test_kernel_executor_falls_back_without_action() {
         // M1: When intent.action is None, KernelExecutor should acknowledge without error
-        let executor = KernelExecutor::new(|_, _| {
-            r#"{"ok":true}"#.to_string()
-        });
+        let executor = KernelExecutor::new(|_, _| r#"{"ok":true}"#.to_string());
 
-        let intent = Intent::new(crate::scheduler::agent::IntentPriority::High, "descriptive intent".into());
+        let intent = Intent::new(
+            crate::scheduler::agent::IntentPriority::High,
+            "descriptive intent".into(),
+        );
         let result = executor.execute(&intent, None, 5000);
 
         assert!(result.is_ok());
@@ -519,8 +504,7 @@ mod tests {
                     serde_json::to_string(&ApiResponse::ok()).unwrap_or_default()
                 }
                 Err(e) => {
-                    serde_json::to_string(&ApiResponse::error(format!("Invalid action JSON: {e}")))
-                        .unwrap_or_default()
+                    serde_json::to_string(&ApiResponse::error(format!("Invalid action JSON: {e}"))).unwrap_or_default()
                 }
             }
         });
@@ -535,8 +519,7 @@ mod tests {
         let resp_text = result.unwrap();
 
         // Response should be valid JSON containing ok=true
-        let resp: ApiResponse = serde_json::from_str(&resp_text)
-            .expect("response should be valid ApiResponse JSON");
+        let resp: ApiResponse = serde_json::from_str(&resp_text).expect("response should be valid ApiResponse JSON");
         assert!(resp.ok, "expected ok=true, got ok=false with error: {:?}", resp.error);
     }
 
@@ -549,8 +532,9 @@ mod tests {
             let req: Result<ApiRequest, _> = serde_json::from_str(action_json);
             match req {
                 Ok(_r) => serde_json::to_string(&ApiResponse::ok()).unwrap_or_default(),
-                Err(e) => serde_json::to_string(&ApiResponse::error(format!("Invalid action JSON: {e}")))
-                    .unwrap_or_default(),
+                Err(e) => {
+                    serde_json::to_string(&ApiResponse::error(format!("Invalid action JSON: {e}"))).unwrap_or_default()
+                }
             }
         });
 
@@ -590,8 +574,7 @@ mod tests {
         let dispatch = loop_.spawn();
 
         // Submit intent from the quota-limited agent
-        let intent = Intent::new(IntentPriority::High, "slow task".to_string())
-            .with_agent(agent_id.clone());
+        let intent = Intent::new(IntentPriority::High, "slow task".to_string()).with_agent(agent_id.clone());
         scheduler.submit(intent);
 
         // Wait for execution
@@ -604,8 +587,11 @@ mod tests {
         assert!(!results.is_empty(), "should have a result");
         let result = &results[0];
         assert!(!result.success, "execution should have failed due to timeout");
-        assert!(result.output.contains("Timeout") || result.output.contains("timeout"),
-            "should mention timeout, got: {}", result.output);
+        assert!(
+            result.output.contains("Timeout") || result.output.contains("timeout"),
+            "should mention timeout, got: {}",
+            result.output
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -630,8 +616,7 @@ mod tests {
         let loop_ = TokioDispatchLoop::new(Arc::clone(&scheduler), executor, 60_000);
         let dispatch = loop_.spawn();
 
-        let intent = Intent::new(IntentPriority::High, "slow but allowed".to_string())
-            .with_agent(agent_id.clone());
+        let intent = Intent::new(IntentPriority::High, "slow but allowed".to_string()).with_agent(agent_id.clone());
         scheduler.submit(intent);
 
         tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
@@ -661,10 +646,8 @@ mod tests {
         let loop_ = TokioDispatchLoop::new(Arc::clone(&scheduler), executor, 60_000);
         let dispatch = loop_.spawn();
 
-        let intent_a = Intent::new(IntentPriority::High, "task-a".into())
-            .with_agent(aid_a.clone());
-        let intent_b = Intent::new(IntentPriority::High, "task-b".into())
-            .with_agent(aid_b.clone());
+        let intent_a = Intent::new(IntentPriority::High, "task-a".into()).with_agent(aid_a.clone());
+        let intent_b = Intent::new(IntentPriority::High, "task-b".into()).with_agent(aid_b.clone());
         scheduler.submit(intent_a);
         scheduler.submit(intent_b);
 
@@ -678,7 +661,11 @@ mod tests {
         assert_eq!(results.len(), 2, "both agents should complete");
         assert!(results.iter().all(|r| r.success), "both should succeed");
         let max_elapsed = results.iter().map(|r| r.elapsed_ms).max().unwrap_or(0);
-        assert!(max_elapsed < 400, "parallel execution should complete in ~200ms, not {}ms", max_elapsed);
+        assert!(
+            max_elapsed < 400,
+            "parallel execution should complete in ~200ms, not {}ms",
+            max_elapsed
+        );
         let _ = elapsed;
     }
 
@@ -700,21 +687,27 @@ mod tests {
             delay_ms: u64,
         }
         impl AgentExecutor for CountingExecutor {
-            fn execute(&self, intent: &Intent, _agent_id: Option<&AgentId>, _cpu_time_limit_ms: u64) -> Result<String, String> {
+            fn execute(
+                &self,
+                intent: &Intent,
+                _agent_id: Option<&AgentId>,
+                _cpu_time_limit_ms: u64,
+            ) -> Result<String, String> {
                 let n = self.count.fetch_add(1, Ordering::SeqCst);
                 std::thread::sleep(std::time::Duration::from_millis(self.delay_ms));
                 Ok(format!("exec-{}-{}", n, intent.description))
             }
         }
 
-        let executor: Arc<dyn AgentExecutor> = Arc::new(CountingExecutor { count: cc, delay_ms: 100 });
+        let executor: Arc<dyn AgentExecutor> = Arc::new(CountingExecutor {
+            count: cc,
+            delay_ms: 100,
+        });
         let loop_ = TokioDispatchLoop::new(Arc::clone(&scheduler), executor, 60_000);
         let dispatch = loop_.spawn();
 
-        let intent1 = Intent::new(IntentPriority::High, "first".into())
-            .with_agent(aid.clone());
-        let intent2 = Intent::new(IntentPriority::High, "second".into())
-            .with_agent(aid.clone());
+        let intent1 = Intent::new(IntentPriority::High, "first".into()).with_agent(aid.clone());
+        let intent2 = Intent::new(IntentPriority::High, "second".into()).with_agent(aid.clone());
         scheduler.submit(intent1);
         scheduler.submit(intent2);
 
@@ -726,6 +719,10 @@ mod tests {
         assert_eq!(results.len(), 2, "both intents should complete");
         assert_eq!(call_count.load(Ordering::SeqCst), 2);
         let total_elapsed: u64 = results.iter().map(|r| r.elapsed_ms).sum();
-        assert!(total_elapsed >= 180, "serialized execution should take ~200ms total, got {}ms", total_elapsed);
+        assert!(
+            total_elapsed >= 180,
+            "serialized execution should take ~200ms total, got {}ms",
+            total_elapsed
+        );
     }
 }

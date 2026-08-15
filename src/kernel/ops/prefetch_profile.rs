@@ -7,8 +7,8 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::RwLock;
 
-use serde::{Deserialize, Serialize};
 use crate::kernel::ops::session::{AgentProfile, IntentKeyStrategy};
+use serde::{Deserialize, Serialize};
 
 /// Minimum confidence threshold for triggering prefetch (0.5 = 50%).
 const PREFETCH_CONFIDENCE_THRESHOLD: f32 = 0.5;
@@ -86,7 +86,9 @@ impl AgentProfileStore {
         }
 
         if profile.intent_transitions.len() > MAX_PROFILE_HISTORY {
-            let to_keep: Vec<_> = profile.intent_transitions.iter()
+            let to_keep: Vec<_> = profile
+                .intent_transitions
+                .iter()
                 .take(MAX_PROFILE_HISTORY)
                 .map(|(k, v)| (k.clone(), v.clone()))
                 .collect();
@@ -132,8 +134,8 @@ impl AgentProfileStore {
             return Ok(0);
         }
         let json = std::fs::read_to_string(&path)?;
-        let loaded: std::collections::HashMap<String, AgentProfile> = serde_json::from_str(&json)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        let loaded: std::collections::HashMap<String, AgentProfile> =
+            serde_json::from_str(&json).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
 
         let mut profiles = self.profiles.write().unwrap();
         for (id, profile) in loaded {

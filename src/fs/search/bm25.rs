@@ -1,19 +1,14 @@
 //! BM25 keyword search — complements vector similarity with exact-term matching.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
-
 pub struct Bm25Index {
     engine: std::sync::RwLock<bm25::SearchEngine<String>>,
-    /// Tracks total characters for dynamic avgdl computation.
-    total_length: AtomicUsize,
-    /// Tracks number of documents for dynamic avgdl computation.
-    doc_count: AtomicUsize,
 }
 
 impl Bm25Index {
     pub fn new() -> Self {
         // k1=1.2, b=0.75 are TREC/SIGIR 20-year standard values (Elasticsearch, Lucene defaults).
-        // avgdl starts at 256 (a reasonable text document length); it auto-adjusts as docs are added.
+        // This streaming index has no fixed corpus to fit. The bm25 crate keeps
+        // this configured avgdl constant; upserts do not update it dynamically.
         Self {
             engine: std::sync::RwLock::new(
                 bm25::SearchEngineBuilder::<String>::with_avgdl(256.0)
@@ -21,8 +16,6 @@ impl Bm25Index {
                     .b(0.75)
                     .build(),
             ),
-            total_length: AtomicUsize::new(0),
-            doc_count: AtomicUsize::new(0),
         }
     }
 
@@ -31,8 +24,6 @@ impl Bm25Index {
         if clean.is_empty() {
             return;
         }
-        self.doc_count.fetch_add(1, Ordering::Relaxed);
-        self.total_length.fetch_add(clean.len(), Ordering::Relaxed);
         let doc = bm25::Document::new(cid.to_string(), clean);
         self.engine.write().unwrap().upsert(doc);
     }
@@ -68,11 +59,11 @@ impl Bm25Index {
     }
 
     pub fn len(&self) -> usize {
-        self.doc_count.load(Ordering::Relaxed)
+        self.engine.read().unwrap().iter().count()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.doc_count.load(Ordering::Relaxed) == 0
+        self.engine.read().unwrap().iter().next().is_none()
     }
 }
 
@@ -151,6 +142,42 @@ mod tests {
         assert_eq!(idx.len(), 1);
         idx.upsert("doc2", "another document");
         assert_eq!(idx.len(), 2);
+    }
+
+    #[test]
+    fn test_repeated_upsert_replaces_without_inflating_len() {
+        let idx = Bm25Index::new();
+        idx.upsert("doc1", "old searchable phrase");
+        idx.upsert("doc1", "new replacement phrase");
+
+        assert_eq!(idx.len(), 1);
+        assert!(idx.search("old", 5).is_empty());
+        assert_eq!(idx.search("replacement", 5)[0].0, "doc1");
+    }
+
+    #[test]
+    fn test_remove_updates_len_and_is_empty() {
+        let idx = Bm25Index::new();
+        idx.upsert("doc1", "first document");
+        idx.upsert("doc2", "second document");
+
+        idx.remove("doc1");
+        assert_eq!(idx.len(), 1);
+        assert!(!idx.is_empty());
+
+        idx.remove("doc2");
+        assert_eq!(idx.len(), 0);
+        assert!(idx.is_empty());
+    }
+
+    #[test]
+    fn test_exact_code_identifier_is_searchable() {
+        let idx = Bm25Index::new();
+        idx.upsert("code", "SemanticFS calls embed_query before vector search");
+        idx.upsert("prose", "unrelated memory lifecycle documentation");
+
+        let results = idx.search("embed_query", 5);
+        assert_eq!(results[0].0, "code");
     }
 
     #[test]

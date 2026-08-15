@@ -9,7 +9,7 @@
 use std::sync::Arc;
 
 use crate::fs::embedding::EmbeddingProvider;
-use crate::fs::{KnowledgeGraph, KGEdge, KGEdgeType, KGNode, KGNodeType};
+use crate::fs::{KGEdge, KGEdgeType, KGNode, KGNodeType, KnowledgeGraph};
 
 /// Cosine similarity between two f32 vectors.
 fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
@@ -38,11 +38,7 @@ pub struct EntityResolver {
 }
 
 impl EntityResolver {
-    pub fn new(
-        kg: Arc<dyn KnowledgeGraph>,
-        embedder: Arc<dyn EmbeddingProvider>,
-        threshold: f32,
-    ) -> Self {
+    pub fn new(kg: Arc<dyn KnowledgeGraph>, embedder: Arc<dyn EmbeddingProvider>, threshold: f32) -> Self {
         Self {
             kg,
             embedder,
@@ -56,12 +52,7 @@ impl EntityResolver {
     /// Tier 2: Embedding similarity against stored entity embeddings
     ///
     /// Returns `ResolutionResult` with the matched node ID (if any) and the label embedding.
-    pub fn resolve(
-        &self,
-        label: &str,
-        node_type: KGNodeType,
-        agent_id: &str,
-    ) -> Result<ResolutionResult, String> {
+    pub fn resolve(&self, label: &str, node_type: KGNodeType, agent_id: &str) -> Result<ResolutionResult, String> {
         // Compute embedding for the label (needed for Tier 2 and for storage)
         let embed_result = self
             .embedder
@@ -72,10 +63,7 @@ impl EntityResolver {
         // Tier 1: Exact label match
         if let Ok(nodes) = self.kg.list_nodes(agent_id, Some(node_type)) {
             // Exact match
-            if let Some(existing) = nodes
-                .iter()
-                .find(|n| n.label.eq_ignore_ascii_case(label))
-            {
+            if let Some(existing) = nodes.iter().find(|n| n.label.eq_ignore_ascii_case(label)) {
                 return Ok(ResolutionResult {
                     resolved_id: Some(existing.id.clone()),
                     embedding,
@@ -85,11 +73,10 @@ impl EntityResolver {
             // Alias match
             for node in &nodes {
                 if let Some(aliases) = node.properties.get("aliases").and_then(|a| a.as_array()) {
-                    if aliases.iter().any(|a| {
-                        a.as_str()
-                            .map(|s| s.eq_ignore_ascii_case(label))
-                            .unwrap_or(false)
-                    }) {
+                    if aliases
+                        .iter()
+                        .any(|a| a.as_str().map(|s| s.eq_ignore_ascii_case(label)).unwrap_or(false))
+                    {
                         return Ok(ResolutionResult {
                             resolved_id: Some(node.id.clone()),
                             embedding,
@@ -101,15 +88,8 @@ impl EntityResolver {
             // Tier 2: Embedding-based semantic match
             let mut best_match: Option<(&KGNode, f32)> = None;
             for node in &nodes {
-                if let Some(stored_emb) = node
-                    .properties
-                    .get("embedding")
-                    .and_then(|v| v.as_array())
-                {
-                    let stored: Vec<f32> = stored_emb
-                        .iter()
-                        .filter_map(|v| v.as_f64().map(|f| f as f32))
-                        .collect();
+                if let Some(stored_emb) = node.properties.get("embedding").and_then(|v| v.as_array()) {
+                    let stored: Vec<f32> = stored_emb.iter().filter_map(|v| v.as_f64().map(|f| f as f32)).collect();
                     if stored.len() == embedding.len() {
                         let sim = cosine_similarity(&embedding, &stored);
                         if sim >= self.threshold {
@@ -149,8 +129,7 @@ impl EntityResolver {
     ) -> Result<(), String> {
         // Store embedding in node properties
         if let Ok(Some(mut node)) = self.kg.get_node(node_id) {
-            let emb_json: Vec<serde_json::Value> =
-                embedding.iter().map(|v| serde_json::json!(*v)).collect();
+            let emb_json: Vec<serde_json::Value> = embedding.iter().map(|v| serde_json::json!(*v)).collect();
             node.properties["embedding"] = serde_json::Value::Array(emb_json);
 
             // If resolved to a different node, propagate aliases and create IsAliasOf edge
@@ -164,14 +143,12 @@ impl EntityResolver {
                             .and_then(|a| a.as_array())
                             .cloned()
                             .unwrap_or_default();
-                        if !aliases.iter().any(|a| {
-                            a.as_str()
-                                .map(|s| s.eq_ignore_ascii_case(label))
-                                .unwrap_or(false)
-                        }) {
+                        if !aliases
+                            .iter()
+                            .any(|a| a.as_str().map(|s| s.eq_ignore_ascii_case(label)).unwrap_or(false))
+                        {
                             aliases.push(serde_json::Value::String(label.to_string()));
-                            resolved_node.properties["aliases"] =
-                                serde_json::Value::Array(aliases);
+                            resolved_node.properties["aliases"] = serde_json::Value::Array(aliases);
                             let _ = self.kg.add_node(resolved_node);
                         }
                     }
@@ -198,7 +175,7 @@ impl EntityResolver {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fs::embedding::{EmbedResult, EmbeddingProvider};
+    use crate::fs::embedding::{EmbedResult, EmbeddingBuilderIdentity, EmbeddingIdentityError, EmbeddingProvider};
     use crate::fs::graph::PetgraphBackend;
 
     /// Stub embedder for tests: returns deterministic embeddings based on text hash.
@@ -234,16 +211,23 @@ mod tests {
             self.dim
         }
 
-        fn model_name(&self) -> &str {
-            "stub-entity-resolver"
+        fn builder_identity(&self) -> Result<EmbeddingBuilderIdentity, EmbeddingIdentityError> {
+            Ok(EmbeddingBuilderIdentity::test_deterministic(
+                "stub-entity-resolver",
+                self.dim as u32,
+                "entity-resolver-v1",
+            ))
+        }
+
+        fn model_name(&self) -> String {
+            "stub-entity-resolver".into()
         }
     }
 
     fn setup() -> (EntityResolver, Arc<PetgraphBackend>) {
-        let kg: Arc<PetgraphBackend> = Arc::new(PetgraphBackend::open(std::env::temp_dir().join(format!(
-            "plico_test_entity_{}",
-            std::process::id()
-        ))));
+        let kg: Arc<PetgraphBackend> = Arc::new(PetgraphBackend::open(
+            std::env::temp_dir().join(format!("plico_test_entity_{}", std::process::id())),
+        ));
         let embedder = Arc::new(StubEmbedder { dim: 32 });
         let resolver = EntityResolver::new(kg.clone(), embedder, 0.85);
         (resolver, kg)
@@ -356,10 +340,9 @@ mod tests {
 
     #[test]
     fn test_tier2_no_match_below_threshold() {
-        let kg: Arc<PetgraphBackend> = Arc::new(PetgraphBackend::open(std::env::temp_dir().join(format!(
-            "plico_test_entity_below_{}",
-            std::process::id()
-        ))));
+        let kg: Arc<PetgraphBackend> = Arc::new(PetgraphBackend::open(
+            std::env::temp_dir().join(format!("plico_test_entity_below_{}", std::process::id())),
+        ));
         // Use a very high threshold so nothing matches
         let embedder = Arc::new(StubEmbedder { dim: 32 });
         let resolver = EntityResolver::new(kg.clone(), embedder, 0.99);
@@ -373,7 +356,9 @@ mod tests {
         kg.add_node(node).unwrap();
 
         // Resolve a completely different string — embedding similarity should be below threshold
-        let result = resolver.resolve("zzzzzzz_different_zzzzzzz", KGNodeType::Entity, "agent1").unwrap();
+        let result = resolver
+            .resolve("zzzzzzz_different_zzzzzzz", KGNodeType::Entity, "agent1")
+            .unwrap();
         assert_eq!(result.resolved_id, None);
     }
 
@@ -393,11 +378,15 @@ mod tests {
         let embedding = vec![0.1; 32];
 
         // link_and_store: "ent:alice" resolved to "ent:alice_smith"
-        resolver.link_and_store("ent:alice", "alice", "ent:alice_smith", &embedding, "agent1").unwrap();
+        resolver
+            .link_and_store("ent:alice", "alice", "ent:alice_smith", &embedding, "agent1")
+            .unwrap();
 
         // Check that IsAliasOf edge was created
         let edges = kg.list_edges("agent1").unwrap();
-        let alias_edge = edges.iter().find(|e| e.edge_type == KGEdgeType::IsAliasOf && e.src == "ent:alice" && e.dst == "ent:alice_smith");
+        let alias_edge = edges
+            .iter()
+            .find(|e| e.edge_type == KGEdgeType::IsAliasOf && e.src == "ent:alice" && e.dst == "ent:alice_smith");
         assert!(alias_edge.is_some(), "IsAliasOf edge should be created");
 
         // Check that alias was added to the resolved node
@@ -418,7 +407,9 @@ mod tests {
         let embedding = vec![0.2; 32];
 
         // link_and_store where node_id == resolved_id (same node, no alias needed)
-        resolver.link_and_store("ent:bob", "bob", "ent:bob", &embedding, "agent1").unwrap();
+        resolver
+            .link_and_store("ent:bob", "bob", "ent:bob", &embedding, "agent1")
+            .unwrap();
 
         // No IsAliasOf edge should be created
         let edges = kg.list_edges("agent1").unwrap();
@@ -440,7 +431,9 @@ mod tests {
         kg.add_node(node).unwrap();
 
         let embedding = vec![0.5; 32];
-        resolver.link_and_store("ent:charlie", "charlie", "ent:charlie", &embedding, "agent1").unwrap();
+        resolver
+            .link_and_store("ent:charlie", "charlie", "ent:charlie", &embedding, "agent1")
+            .unwrap();
 
         let node = kg.get_node("ent:charlie").unwrap().unwrap();
         let stored = node.properties.get("embedding").and_then(|v| v.as_array()).unwrap();
@@ -464,15 +457,19 @@ mod tests {
         let embedding = vec![0.3; 32];
 
         // link: "ent:dave_new" resolved to "ent:dave_old", but label "Dave" matches "dave" (case-insensitive)
-        resolver.link_and_store("ent:dave_new", "Dave", "ent:dave_old", &embedding, "agent1").unwrap();
+        resolver
+            .link_and_store("ent:dave_new", "Dave", "ent:dave_old", &embedding, "agent1")
+            .unwrap();
 
         // The alias should NOT be added because "Dave" matches "dave" case-insensitively
         let resolved = kg.get_node("ent:dave_old").unwrap().unwrap();
         let aliases = resolved.properties.get("aliases").and_then(|a| a.as_array());
         // Either no aliases or the alias list doesn't contain "Dave"
         if let Some(aliases) = aliases {
-            assert!(!aliases.iter().any(|a| a.as_str() == Some("Dave")),
-                "Should not add alias when label matches resolved node label");
+            assert!(
+                !aliases.iter().any(|a| a.as_str() == Some("Dave")),
+                "Should not add alias when label matches resolved node label"
+            );
         }
     }
 

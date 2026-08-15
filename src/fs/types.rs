@@ -107,10 +107,14 @@ impl EventMeta {
     pub fn in_range(&self, since: Option<u64>, until: Option<u64>) -> bool {
         let start = self.start_time.unwrap_or(0);
         if let Some(s) = since {
-            if start < s { return false; }
+            if start < s {
+                return false;
+            }
         }
         if let Some(u) = until {
-            if start > u { return false; }
+            if start > u {
+                return false;
+            }
         }
         true
     }
@@ -289,10 +293,22 @@ mod tests {
     #[test]
     fn test_event_relation_to_edge_type() {
         use crate::fs::graph::KGEdgeType;
-        assert!(matches!(EventRelation::Participant.to_edge_type(), KGEdgeType::HasParticipant));
-        assert!(matches!(EventRelation::Artifact.to_edge_type(), KGEdgeType::HasArtifact));
-        assert!(matches!(EventRelation::Recording.to_edge_type(), KGEdgeType::HasRecording));
-        assert!(matches!(EventRelation::Resolution.to_edge_type(), KGEdgeType::HasResolution));
+        assert!(matches!(
+            EventRelation::Participant.to_edge_type(),
+            KGEdgeType::HasParticipant
+        ));
+        assert!(matches!(
+            EventRelation::Artifact.to_edge_type(),
+            KGEdgeType::HasArtifact
+        ));
+        assert!(matches!(
+            EventRelation::Recording.to_edge_type(),
+            KGEdgeType::HasRecording
+        ));
+        assert!(matches!(
+            EventRelation::Resolution.to_edge_type(),
+            KGEdgeType::HasResolution
+        ));
     }
 
     #[test]

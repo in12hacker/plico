@@ -11,9 +11,7 @@ pub struct SkillValidator {
 
 impl SkillValidator {
     pub fn new() -> Self {
-        Self {
-            backtest_samples: 5,
-        }
+        Self { backtest_samples: 5 }
     }
 
     /// 验证技能候选
@@ -88,7 +86,8 @@ impl SkillValidator {
             if overlap > 0.7 {
                 return Some(format!(
                     "Description overlap with skill '{}' ({:.0}% similarity)",
-                    existing_name, overlap * 100.0
+                    existing_name,
+                    overlap * 100.0
                 ));
             }
         }
@@ -124,10 +123,7 @@ impl SkillValidator {
         }
     }
 
-    async fn validate_knowledge_skill(
-        &self,
-        skill: &super::KnowledgeSkill,
-    ) -> CognitiveResult<ValidationResult> {
+    async fn validate_knowledge_skill(&self, skill: &super::KnowledgeSkill) -> CognitiveResult<ValidationResult> {
         let mut issues = Vec::new();
 
         if skill.knowledge.is_empty() {
@@ -175,10 +171,7 @@ impl SkillValidator {
         })
     }
 
-    async fn validate_config_skill(
-        &self,
-        skill: &super::ConfigSkill,
-    ) -> CognitiveResult<ValidationResult> {
+    async fn validate_config_skill(&self, skill: &super::ConfigSkill) -> CognitiveResult<ValidationResult> {
         let mut issues = Vec::new();
 
         if skill.tool_chain.is_empty() {
@@ -201,10 +194,7 @@ impl SkillValidator {
         })
     }
 
-    async fn validate_code_skill(
-        &self,
-        skill: &super::CodeSkill,
-    ) -> CognitiveResult<ValidationResult> {
+    async fn validate_code_skill(&self, skill: &super::CodeSkill) -> CognitiveResult<ValidationResult> {
         let mut issues = Vec::new();
 
         if skill.wasm_bytes.is_empty() {
@@ -238,8 +228,7 @@ impl SkillValidator {
 mod tests {
     use super::*;
     use crate::kernel::cognition::{
-        KnowledgeItem, KnowledgeSkill, Skill, SkillCandidate, SkillType, SkillUsageStats,
-        ValidationStatus,
+        KnowledgeItem, KnowledgeSkill, Skill, SkillCandidate, SkillType, SkillUsageStats, ValidationStatus,
     };
 
     fn valid_candidate() -> SkillCandidate {
@@ -248,11 +237,7 @@ mod tests {
             name: "Test".to_string(),
             description: "A test skill".to_string(),
             skill_type: SkillType::Knowledge,
-            source_operations: vec![
-                "op1".to_string(),
-                "op2".to_string(),
-                "op3".to_string(),
-            ],
+            source_operations: vec!["op1".to_string(), "op2".to_string(), "op3".to_string()],
             confidence: 0.8,
         }
     }
@@ -268,7 +253,11 @@ mod tests {
             .collect();
         let result = validator.validate(&candidate).await.unwrap();
         assert!(result.passed);
-        assert!(result.test_pass_rate > 0.6, "expected > 0.6, got {}", result.test_pass_rate);
+        assert!(
+            result.test_pass_rate > 0.6,
+            "expected > 0.6, got {}",
+            result.test_pass_rate
+        );
     }
 
     #[tokio::test]
@@ -318,7 +307,11 @@ mod tests {
         let result = validator.validate(&candidate).await.unwrap();
         // Fewer than backtest_samples (5) => confidence-based with mild penalty
         assert!(result.passed);
-        assert!(result.test_pass_rate > 0.6, "expected > 0.6, got {}", result.test_pass_rate);
+        assert!(
+            result.test_pass_rate > 0.6,
+            "expected > 0.6, got {}",
+            result.test_pass_rate
+        );
     }
 
     #[tokio::test]
@@ -364,7 +357,10 @@ mod tests {
             usage_stats: SkillUsageStats::default(),
         });
 
-        let result = validator.validate_with_conflict_check(&candidate, &[&existing]).await.unwrap();
+        let result = validator
+            .validate_with_conflict_check(&candidate, &[&existing])
+            .await
+            .unwrap();
         assert!(!result.passed);
         assert!(result.issues.iter().any(|i| i.contains("Name conflict")));
     }
@@ -391,7 +387,10 @@ mod tests {
             usage_stats: SkillUsageStats::default(),
         });
 
-        let result = validator.validate_with_conflict_check(&candidate, &[&existing]).await.unwrap();
+        let result = validator
+            .validate_with_conflict_check(&candidate, &[&existing])
+            .await
+            .unwrap();
         assert!(result.issues.iter().any(|i| i.contains("Description overlap")));
     }
 
@@ -417,30 +416,51 @@ mod tests {
             usage_stats: SkillUsageStats::default(),
         });
 
-        let result = validator.validate_with_conflict_check(&candidate, &[&existing]).await.unwrap();
+        let result = validator
+            .validate_with_conflict_check(&candidate, &[&existing])
+            .await
+            .unwrap();
         assert!(result.passed);
-        assert!(!result.issues.iter().any(|i| i.contains("conflict") || i.contains("overlap")));
+        assert!(!result
+            .issues
+            .iter()
+            .any(|i| i.contains("conflict") || i.contains("overlap")));
     }
 
     #[tokio::test]
     async fn backtest_higher_rate_with_more_operations() {
         let validator = SkillValidator::new();
         let few_ops = SkillCandidate {
-            id: "c1".into(), name: "A".into(), description: "B".into(),
+            id: "c1".into(),
+            name: "A".into(),
+            description: "B".into(),
             skill_type: SkillType::Knowledge,
             source_operations: vec!["op1".into()],
             confidence: 0.8,
         };
         let many_ops = SkillCandidate {
-            id: "c2".into(), name: "A".into(), description: "B".into(),
+            id: "c2".into(),
+            name: "A".into(),
+            description: "B".into(),
             skill_type: SkillType::Knowledge,
-            source_operations: vec!["op1".into(), "op2".into(), "op3".into(), "op4".into(), "op5".into(), "op6".into()],
+            source_operations: vec![
+                "op1".into(),
+                "op2".into(),
+                "op3".into(),
+                "op4".into(),
+                "op5".into(),
+                "op6".into(),
+            ],
             confidence: 0.8,
         };
         let r1 = validator.validate(&few_ops).await.unwrap();
         let r2 = validator.validate(&many_ops).await.unwrap();
-        assert!(r2.test_pass_rate > r1.test_pass_rate,
-            "more ops should yield higher pass rate: {} vs {}", r2.test_pass_rate, r1.test_pass_rate);
+        assert!(
+            r2.test_pass_rate > r1.test_pass_rate,
+            "more ops should yield higher pass rate: {} vs {}",
+            r2.test_pass_rate,
+            r1.test_pass_rate
+        );
     }
 
     // --- Config skill validation ---
@@ -685,7 +705,10 @@ mod tests {
             parameter_mappings: vec![],
             conditional_branches: vec![],
         });
-        let result = validator.validate_with_conflict_check(&candidate, &[&existing]).await.unwrap();
+        let result = validator
+            .validate_with_conflict_check(&candidate, &[&existing])
+            .await
+            .unwrap();
         assert!(!result.passed);
         assert!(result.issues.iter().any(|i| i.contains("Name conflict")));
     }
@@ -706,10 +729,16 @@ mod tests {
             name: "My Code".into(),
             description: "old code skill".into(),
             wasm_bytes: vec![],
-            signature: crate::kernel::cognition::FunctionSignature { inputs: vec![], outputs: vec![] },
+            signature: crate::kernel::cognition::FunctionSignature {
+                inputs: vec![],
+                outputs: vec![],
+            },
             resource_limits: crate::kernel::cognition::ResourceLimits::default(),
         });
-        let result = validator.validate_with_conflict_check(&candidate, &[&existing]).await.unwrap();
+        let result = validator
+            .validate_with_conflict_check(&candidate, &[&existing])
+            .await
+            .unwrap();
         assert!(!result.passed);
         assert!(result.issues.iter().any(|i| i.contains("Name conflict")));
     }
@@ -733,8 +762,14 @@ mod tests {
             parameter_mappings: vec![],
             conditional_branches: vec![],
         });
-        let result = validator.validate_with_conflict_check(&candidate, &[&existing]).await.unwrap();
+        let result = validator
+            .validate_with_conflict_check(&candidate, &[&existing])
+            .await
+            .unwrap();
         assert!(result.passed);
-        assert!(!result.issues.iter().any(|i| i.contains("conflict") || i.contains("overlap")));
+        assert!(!result
+            .issues
+            .iter()
+            .any(|i| i.contains("conflict") || i.contains("overlap")));
     }
 }

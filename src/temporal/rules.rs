@@ -64,13 +64,9 @@ impl TemporalRule {
         match self.patterns[0] {
             // ── Exact days ──────────────────────────────────────────────
             "今天" | "today" | "今日" | "本日" => Some((*reference, *reference)),
-            "昨天" | "yesterday" | "昨日" => {
-                Some((*reference - Duration::days(1), *reference - Duration::days(1)))
-            }
+            "昨天" | "yesterday" | "昨日" => Some((*reference - Duration::days(1), *reference - Duration::days(1))),
             "前天" => Some((*reference - Duration::days(2), *reference - Duration::days(2))),
-            "明天" | "tomorrow" | "明日" => {
-                Some((*reference + Duration::days(1), *reference + Duration::days(1)))
-            }
+            "明天" | "tomorrow" | "明日" => Some((*reference + Duration::days(1), *reference + Duration::days(1))),
             "后天" => Some((*reference + Duration::days(2), *reference + Duration::days(2))),
             // ── Relative past ─────────────────────────────────────────
             "几天前" | "前几天" => {
@@ -153,31 +149,107 @@ impl TemporalRule {
 /// All pre-defined rules.
 static RULES: &[TemporalRule] = &[
     // Exact days
-    TemporalRule { patterns: &["今天", "today", "今日", "本日"], confidence: 0.95, granularity: Granularity::ExactDay },
-    TemporalRule { patterns: &["昨天", "yesterday", "昨日"], confidence: 0.95, granularity: Granularity::ExactDay },
-    TemporalRule { patterns: &["前天"], confidence: 0.95, granularity: Granularity::ExactDay },
-    TemporalRule { patterns: &["明天", "tomorrow", "明日"], confidence: 0.95, granularity: Granularity::ExactDay },
-    TemporalRule { patterns: &["后天"], confidence: 0.90, granularity: Granularity::ExactDay },
+    TemporalRule {
+        patterns: &["今天", "today", "今日", "本日"],
+        confidence: 0.95,
+        granularity: Granularity::ExactDay,
+    },
+    TemporalRule {
+        patterns: &["昨天", "yesterday", "昨日"],
+        confidence: 0.95,
+        granularity: Granularity::ExactDay,
+    },
+    TemporalRule {
+        patterns: &["前天"],
+        confidence: 0.95,
+        granularity: Granularity::ExactDay,
+    },
+    TemporalRule {
+        patterns: &["明天", "tomorrow", "明日"],
+        confidence: 0.95,
+        granularity: Granularity::ExactDay,
+    },
+    TemporalRule {
+        patterns: &["后天"],
+        confidence: 0.90,
+        granularity: Granularity::ExactDay,
+    },
     // Relative past
-    TemporalRule { patterns: &["几天前", "前几天"], confidence: 0.60, granularity: Granularity::Fuzzy },
-    TemporalRule { patterns: &["最近", "recently"], confidence: 0.50, granularity: Granularity::Fuzzy },
-    TemporalRule { patterns: &["今早", "今天早上", "this morning"], confidence: 0.85, granularity: Granularity::ExactDay },
-    TemporalRule { patterns: &["今晚", "this evening", "tonight"], confidence: 0.85, granularity: Granularity::ExactDay },
+    TemporalRule {
+        patterns: &["几天前", "前几天"],
+        confidence: 0.60,
+        granularity: Granularity::Fuzzy,
+    },
+    TemporalRule {
+        patterns: &["最近", "recently"],
+        confidence: 0.50,
+        granularity: Granularity::Fuzzy,
+    },
+    TemporalRule {
+        patterns: &["今早", "今天早上", "this morning"],
+        confidence: 0.85,
+        granularity: Granularity::ExactDay,
+    },
+    TemporalRule {
+        patterns: &["今晚", "this evening", "tonight"],
+        confidence: 0.85,
+        granularity: Granularity::ExactDay,
+    },
     // Weeks
-    TemporalRule { patterns: &["上周", "last week"], confidence: 0.85, granularity: Granularity::Week },
-    TemporalRule { patterns: &["上上周"], confidence: 0.80, granularity: Granularity::Week },
+    TemporalRule {
+        patterns: &["上周", "last week"],
+        confidence: 0.85,
+        granularity: Granularity::Week,
+    },
+    TemporalRule {
+        patterns: &["上上周"],
+        confidence: 0.80,
+        granularity: Granularity::Week,
+    },
     // Months
-    TemporalRule { patterns: &["本月", "this month"], confidence: 0.90, granularity: Granularity::Month },
-    TemporalRule { patterns: &["上个月", "last month", "上月"], confidence: 0.90, granularity: Granularity::Month },
-    TemporalRule { patterns: &["两个月前"], confidence: 0.80, granularity: Granularity::Month },
+    TemporalRule {
+        patterns: &["本月", "this month"],
+        confidence: 0.90,
+        granularity: Granularity::Month,
+    },
+    TemporalRule {
+        patterns: &["上个月", "last month", "上月"],
+        confidence: 0.90,
+        granularity: Granularity::Month,
+    },
+    TemporalRule {
+        patterns: &["两个月前"],
+        confidence: 0.80,
+        granularity: Granularity::Month,
+    },
     // Quarters
-    TemporalRule { patterns: &["本季度", "this quarter"], confidence: 0.90, granularity: Granularity::Quarter },
-    TemporalRule { patterns: &["上季度", "last quarter"], confidence: 0.85, granularity: Granularity::Quarter },
+    TemporalRule {
+        patterns: &["本季度", "this quarter"],
+        confidence: 0.90,
+        granularity: Granularity::Quarter,
+    },
+    TemporalRule {
+        patterns: &["上季度", "last quarter"],
+        confidence: 0.85,
+        granularity: Granularity::Quarter,
+    },
     // Years
-    TemporalRule { patterns: &["去年", "last year"], confidence: 0.95, granularity: Granularity::Year },
-    TemporalRule { patterns: &["今年", "this year"], confidence: 0.95, granularity: Granularity::Year },
+    TemporalRule {
+        patterns: &["去年", "last year"],
+        confidence: 0.95,
+        granularity: Granularity::Year,
+    },
+    TemporalRule {
+        patterns: &["今年", "this year"],
+        confidence: 0.95,
+        granularity: Granularity::Year,
+    },
     // Eras
-    TemporalRule { patterns: &["很久以前", "long ago"], confidence: 0.30, granularity: Granularity::Fuzzy },
+    TemporalRule {
+        patterns: &["很久以前", "long ago"],
+        confidence: 0.30,
+        granularity: Granularity::Fuzzy,
+    },
 ];
 
 /// Build a fast lookup map: lowercase pattern → rule index.
@@ -191,8 +263,7 @@ fn build_rule_map() -> HashMap<String, usize> {
     map
 }
 
-static RULE_MAP: std::sync::LazyLock<HashMap<String, usize>> =
-    std::sync::LazyLock::new(build_rule_map);
+static RULE_MAP: std::sync::LazyLock<HashMap<String, usize>> = std::sync::LazyLock::new(build_rule_map);
 
 /// Heuristic temporal resolver — rule-based, synchronous, no LLM needed.
 /// Returns `None` if the expression doesn't match any rule.
@@ -900,7 +971,7 @@ mod tests {
 
     #[test]
     fn test_heuristic_resolver_default() {
-        let resolver = HeuristicTemporalResolver::default();
+        let resolver = HeuristicTemporalResolver;
         let result = resolver.resolve("今天");
         assert!(result.is_some());
     }

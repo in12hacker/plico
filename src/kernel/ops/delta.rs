@@ -16,97 +16,121 @@ pub fn change_entry_from_event(event: &SequencedEvent) -> ChangeEntry {
         KernelEvent::ObjectStored { cid, agent_id, tags } => {
             (cid.clone(), "stored".to_string(), tags.clone(), agent_id.clone())
         }
-        KernelEvent::MemoryStored { agent_id, tier, .. } => {
-            (format!("memory:{}", tier), "memory_stored".to_string(), vec![], agent_id.clone())
-        }
-        KernelEvent::AgentStateChanged { agent_id, old_state, new_state } => {
-            (
-                format!("agent:{}", agent_id),
-                format!("state_changed:{}->{}", old_state, new_state),
-                vec![],
-                agent_id.clone(),
-            )
-        }
-        KernelEvent::IntentSubmitted { intent_id, agent_id, .. } => {
-            (
-                format!("intent:{}", intent_id),
-                "intent_submitted".to_string(),
-                vec![],
-                agent_id.clone().unwrap_or_default(),
-            )
-        }
-        KernelEvent::IntentCompleted { intent_id, success } => {
-            (
-                format!("intent:{}", intent_id),
-                if *success {
-                    "intent_completed".to_string()
-                } else {
-                    "intent_failed".to_string()
-                },
-                vec![],
-                "system".to_string(),
-            )
-        }
-        KernelEvent::EventCreated { event_id, agent_id, .. } => {
-            (
-                format!("event:{}", event_id),
-                "event_created".to_string(),
-                vec![],
-                agent_id.clone(),
-            )
-        }
-        KernelEvent::KnowledgeShared { cid, agent_id, tags, scope, .. } => {
-            (
-                cid.clone(),
-                format!("knowledge_shared:{}", scope),
-                tags.clone(),
-                agent_id.clone(),
-            )
-        }
-        KernelEvent::KnowledgeSuperseded { old_cid, new_cid, agent_id } => {
-            (
-                new_cid.clone(),
-                format!("knowledge_superseded:{}", old_cid),
-                vec![],
-                agent_id.clone(),
-            )
-        }
-        KernelEvent::TaskDelegated { task_id, from_agent, to_agent, .. } => {
-            (
-                format!("task:{}", task_id),
-                format!("task_delegated:{}->{}", from_agent, to_agent),
-                vec![],
-                from_agent.clone(),
-            )
-        }
-        KernelEvent::TaskCompleted { task_id, agent_id, result_cids } => {
-            (
-                format!("task:{}", task_id),
-                format!("task_completed:{}results", result_cids.len()),
-                vec![],
-                agent_id.clone(),
-            )
-        }
-        KernelEvent::VerificationFailed { tool_name, operation, reason, agent_id } => {
-            (
-                format!("verification:{}", tool_name),
-                format!("verification_failed:{}", operation),
-                vec![reason.clone()],
-                agent_id.clone(),
-            )
-        }
-        KernelEvent::CognitiveConflictDetected { conflict_id, conflict_type, description, agent_id, .. } => {
-            (
-                format!("conflict:{}", conflict_id),
-                format!("conflict_detected:{}", conflict_type),
-                vec![description.clone()],
-                agent_id.clone(),
-            )
-        }
+        KernelEvent::MemoryStored { agent_id, tier, .. } => (
+            format!("memory:{}", tier),
+            "memory_stored".to_string(),
+            vec![],
+            agent_id.clone(),
+        ),
+        KernelEvent::AgentStateChanged {
+            agent_id,
+            old_state,
+            new_state,
+        } => (
+            format!("agent:{}", agent_id),
+            format!("state_changed:{}->{}", old_state, new_state),
+            vec![],
+            agent_id.clone(),
+        ),
+        KernelEvent::IntentSubmitted {
+            intent_id, agent_id, ..
+        } => (
+            format!("intent:{}", intent_id),
+            "intent_submitted".to_string(),
+            vec![],
+            agent_id.clone().unwrap_or_default(),
+        ),
+        KernelEvent::IntentCompleted { intent_id, success } => (
+            format!("intent:{}", intent_id),
+            if *success {
+                "intent_completed".to_string()
+            } else {
+                "intent_failed".to_string()
+            },
+            vec![],
+            "system".to_string(),
+        ),
+        KernelEvent::EventCreated { event_id, agent_id, .. } => (
+            format!("event:{}", event_id),
+            "event_created".to_string(),
+            vec![],
+            agent_id.clone(),
+        ),
+        KernelEvent::KnowledgeShared {
+            cid,
+            agent_id,
+            tags,
+            scope,
+            ..
+        } => (
+            cid.clone(),
+            format!("knowledge_shared:{}", scope),
+            tags.clone(),
+            agent_id.clone(),
+        ),
+        KernelEvent::KnowledgeSuperseded {
+            old_cid,
+            new_cid,
+            agent_id,
+        } => (
+            new_cid.clone(),
+            format!("knowledge_superseded:{}", old_cid),
+            vec![],
+            agent_id.clone(),
+        ),
+        KernelEvent::TaskDelegated {
+            task_id,
+            from_agent,
+            to_agent,
+            ..
+        } => (
+            format!("task:{}", task_id),
+            format!("task_delegated:{}->{}", from_agent, to_agent),
+            vec![],
+            from_agent.clone(),
+        ),
+        KernelEvent::TaskCompleted {
+            task_id,
+            agent_id,
+            result_cids,
+        } => (
+            format!("task:{}", task_id),
+            format!("task_completed:{}results", result_cids.len()),
+            vec![],
+            agent_id.clone(),
+        ),
+        KernelEvent::VerificationFailed {
+            tool_name,
+            operation,
+            reason,
+            agent_id,
+        } => (
+            format!("verification:{}", tool_name),
+            format!("verification_failed:{}", operation),
+            vec![reason.clone()],
+            agent_id.clone(),
+        ),
+        KernelEvent::CognitiveConflictDetected {
+            conflict_id,
+            conflict_type,
+            description,
+            agent_id,
+            ..
+        } => (
+            format!("conflict:{}", conflict_id),
+            format!("conflict_detected:{}", conflict_type),
+            vec![description.clone()],
+            agent_id.clone(),
+        ),
     };
 
     let summary = if tags.is_empty() {
-        format!("{} {} by {}", event.event.event_type_name(), &cid[..8.min(cid.len())], changed_by)
+        format!(
+            "{} {} by {}",
+            event.event.event_type_name(),
+            &cid[..8.min(cid.len())],
+            changed_by
+        )
     } else {
         let tags_str = tags.join(",");
         format!(
@@ -140,7 +164,9 @@ fn event_matches_filter(event: &SequencedEvent, watch_cids: &[String], watch_tag
             KernelEvent::ObjectStored { cid, .. } => Some(cid.as_str()),
             _ => None,
         };
-        let Some(cid) = event_cid else { return false; };
+        let Some(cid) = event_cid else {
+            return false;
+        };
         if !watch_cids.iter().any(|w| cid.contains(w) || w.contains(cid)) {
             return false;
         }
@@ -152,7 +178,9 @@ fn event_matches_filter(event: &SequencedEvent, watch_cids: &[String], watch_tag
             KernelEvent::ObjectStored { tags, .. } => Some(tags.as_slice()),
             _ => None,
         };
-        let Some(tags) = event_tags else { return false; };
+        let Some(tags) = event_tags else {
+            return false;
+        };
         if !watch_tags.iter().any(|w| tags.iter().any(|t| t == w || t.contains(w))) {
             return false;
         }
@@ -186,10 +214,13 @@ pub fn handle_delta_since(
     let changes: Vec<ChangeEntry> = events.iter().map(change_entry_from_event).collect();
 
     // Calculate token estimate
-    let token_estimate = changes.iter().map(|c| {
-        // Rough estimate: summary string length in tokens
-        crate::api::semantic::estimate_tokens(&c.summary)
-    }).sum();
+    let token_estimate = changes
+        .iter()
+        .map(|c| {
+            // Rough estimate: summary string length in tokens
+            crate::api::semantic::estimate_tokens(&c.summary)
+        })
+        .sum();
 
     let to_seq = events.last().map(|e| e.seq).unwrap_or(since_seq);
 
@@ -314,8 +345,14 @@ mod tests {
     #[test]
     fn test_change_entry_intent_completed_success_and_failure() {
         let bus = EventBus::new();
-        bus.emit(KernelEvent::IntentCompleted { intent_id: "i1".into(), success: true });
-        bus.emit(KernelEvent::IntentCompleted { intent_id: "i2".into(), success: false });
+        bus.emit(KernelEvent::IntentCompleted {
+            intent_id: "i1".into(),
+            success: true,
+        });
+        bus.emit(KernelEvent::IntentCompleted {
+            intent_id: "i2".into(),
+            success: false,
+        });
         let events = bus.events_since(0);
         assert_eq!(change_entry_from_event(&events[0]).change_type, "intent_completed");
         assert_eq!(change_entry_from_event(&events[1]).change_type, "intent_failed");

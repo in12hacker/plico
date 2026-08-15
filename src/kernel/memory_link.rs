@@ -30,7 +30,9 @@ impl super::AIKernel {
             if existing.id == node_id {
                 continue;
             }
-            let existing_tags: Vec<String> = existing.properties.get("tags")
+            let existing_tags: Vec<String> = existing
+                .properties
+                .get("tags")
                 .and_then(|v: &serde_json::Value| v.as_array())
                 .map(|arr| arr.iter().filter_map(|t| t.as_str().map(String::from)).collect())
                 .unwrap_or_default();
@@ -38,7 +40,14 @@ impl super::AIKernel {
             let shared: Vec<_> = tags.iter().filter(|t| existing_tags.contains(t)).collect();
             if !shared.is_empty() {
                 let weight = shared.len() as f32 / (tags.len().max(existing_tags.len())) as f32;
-                if let Err(e) = self.kg_add_edge(&node_id, &existing.id, KGEdgeType::SimilarTo, Some(weight), agent_id, tenant_id) {
+                if let Err(e) = self.kg_add_edge(
+                    &node_id,
+                    &existing.id,
+                    KGEdgeType::SimilarTo,
+                    Some(weight),
+                    agent_id,
+                    tenant_id,
+                ) {
                     tracing::debug!("failed to create memory link edge: {}", e);
                 }
             }
@@ -60,9 +69,12 @@ mod tests {
     #[test]
     fn test_link_memory_to_kg_with_multiple_tags() {
         let (kernel, _dir) = make_kernel();
-        kernel.link_memory_to_kg("entry_002", "test_agent", "default", &[
-            "tag1".to_string(), "tag2".to_string(), "tag3".to_string(),
-        ]);
+        kernel.link_memory_to_kg(
+            "entry_002",
+            "test_agent",
+            "default",
+            &["tag1".to_string(), "tag2".to_string(), "tag3".to_string()],
+        );
     }
 
     #[test]

@@ -22,7 +22,7 @@ pub use super::version::*;
 // Re-export all DTOs so `crate::api::semantic::SearchResultDto` etc. keep working.
 pub use super::dto::*;
 
-use crate::fs::{EventType, EventRelation, EventSummary, KGNodeType, KGEdgeType};
+use crate::fs::{EventRelation, EventSummary, EventType, KGEdgeType, KGNodeType};
 
 /// Content encoding field for binary-safe API payloads.
 ///
@@ -53,16 +53,15 @@ const MAX_CONTENT_BYTES: usize = 10 * 1024 * 1024;
 pub fn decode_content(content: &str, encoding: &ContentEncoding) -> Result<Vec<u8>, String> {
     let bytes = match encoding {
         ContentEncoding::Utf8 => content.as_bytes().to_vec(),
-        ContentEncoding::Base64 => {
-            base64::engine::general_purpose::STANDARD
-                .decode(content)
-                .map_err(|e| format!("base64 decode error: {e}"))?
-        }
+        ContentEncoding::Base64 => base64::engine::general_purpose::STANDARD
+            .decode(content)
+            .map_err(|e| format!("base64 decode error: {e}"))?,
     };
     if bytes.len() > MAX_CONTENT_BYTES {
         return Err(format!(
             "Content size {} bytes exceeds limit of {} bytes",
-            bytes.len(), MAX_CONTENT_BYTES
+            bytes.len(),
+            MAX_CONTENT_BYTES
         ));
     }
     Ok(bytes)
@@ -80,16 +79,18 @@ pub fn estimate_tokens(text: &str) -> usize {
     ascii.div_ceil(4) + non_ascii.div_ceil(2)
 }
 
-pub(crate) fn default_importance() -> u8 { 50 }
-pub(crate) fn default_k() -> usize { 10 }
-pub(crate) fn default_priority() -> String { "medium".to_string() }
-fn default_budget_tokens() -> usize { 4096 }
-fn default_auto_checkpoint() -> bool { true }
-fn default_max_results() -> usize { 10 }
-
+pub(crate) fn default_importance() -> u8 {
+    50
+}
+pub(crate) fn default_priority() -> String {
+    "medium".to_string()
+}
+fn default_budget_tokens() -> usize {
+    4096
+}
 /// A JSON API request.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "method")]
+#[serde(tag = "method", deny_unknown_fields)]
 pub enum ApiRequest {
     #[serde(rename = "create")]
     Create {
@@ -196,8 +197,6 @@ pub enum ApiRequest {
     Recall {
         agent_id: String,
         #[serde(default)]
-        scope: Option<String>,
-        #[serde(default)]
         query: Option<String>,
         #[serde(default)]
         limit: Option<usize>,
@@ -213,39 +212,28 @@ pub enum ApiRequest {
         tags: Vec<String>,
         #[serde(default = "default_importance")]
         importance: u8,
-        #[serde(default)]
-        scope: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        tenant_id: Option<String>,
-    },
-
-    #[serde(rename = "recall_semantic")]
-    RecallSemantic {
-        agent_id: String,
-        query: String,
-        #[serde(default = "default_k")]
-        k: usize,
-    },
-
-    /// Intent-aware routed recall with 7-signal RFE, MMR diversity, and HyDE.
-    /// Advanced retrieval pipeline that classifies query intent and applies
-    /// per-intent retrieval strategies for better results.
-    #[serde(rename = "recall_routed")]
-    RecallRouted {
-        agent_id: String,
-        query: String,
-        #[serde(default = "default_k")]
-        k: usize,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         tenant_id: Option<String>,
     },
 
     #[serde(rename = "explore")]
-    Explore { cid: String, edge_type: Option<String>, depth: Option<u8>, agent_id: String },
+    Explore {
+        cid: String,
+        edge_type: Option<String>,
+        depth: Option<u8>,
+        agent_id: String,
+    },
 
     #[serde(rename = "grant_permission")]
     GrantPermission {
+        /// Agent receiving the grant (legacy field name retained on the wire).
         agent_id: String,
+        /// Authenticated administrator performing the mutation.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        caller_agent_id: Option<String>,
+        /// Token bound to `caller_agent_id`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        agent_token: Option<String>,
         action: String,
         scope: Option<String>,
         expires_at: Option<u64>,
@@ -253,7 +241,14 @@ pub enum ApiRequest {
 
     #[serde(rename = "revoke_permission")]
     RevokePermission {
+        /// Agent losing the grant (legacy field name retained on the wire).
         agent_id: String,
+        /// Authenticated administrator performing the mutation.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        caller_agent_id: Option<String>,
+        /// Token bound to `caller_agent_id`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        agent_token: Option<String>,
         action: String,
     },
 
@@ -261,10 +256,7 @@ pub enum ApiRequest {
     ListPermissions { agent_id: String },
 
     #[serde(rename = "check_permission")]
-    CheckPermission {
-        agent_id: String,
-        action: String,
-    },
+    CheckPermission { agent_id: String, action: String },
 
     #[serde(rename = "list_deleted")]
     ListDeleted { agent_id: String },
@@ -319,7 +311,6 @@ pub enum ApiRequest {
     },
 
     // ── Knowledge Graph direct operations ────────────────────────────────
-
     #[serde(rename = "add_node")]
     AddNode {
         label: String,
@@ -382,7 +373,6 @@ pub enum ApiRequest {
     },
 
     // ── Agent Lifecycle operations ────────────────────────────────────
-
     #[serde(rename = "submit_intent")]
     SubmitIntent {
         description: String,
@@ -406,7 +396,6 @@ pub enum ApiRequest {
     AgentTerminate { agent_id: String },
 
     // ── Tool operations ──────────────────────────────────────────────
-
     #[serde(rename = "tool_call")]
     ToolCall {
         tool: String,
@@ -422,7 +411,6 @@ pub enum ApiRequest {
     ToolDescribe { tool: String, agent_id: String },
 
     // ── Procedural Memory ────────────────────────────────────────────
-
     #[serde(rename = "remember_procedural")]
     RememberProcedural {
         agent_id: String,
@@ -433,8 +421,6 @@ pub enum ApiRequest {
         learned_from: Option<String>,
         #[serde(default)]
         tags: Vec<String>,
-        #[serde(default)]
-        scope: Option<String>,
     },
 
     #[serde(rename = "recall_procedural")]
@@ -444,15 +430,7 @@ pub enum ApiRequest {
         name: Option<String>,
     },
 
-    #[serde(rename = "recall_visible")]
-    RecallVisible {
-        agent_id: String,
-        #[serde(default)]
-        groups: Vec<String>,
-    },
-
     // ── Agent Resource Management ─────────────────────────────────────
-
     #[serde(rename = "agent_set_resources")]
     AgentSetResources {
         agent_id: String,
@@ -467,15 +445,10 @@ pub enum ApiRequest {
     },
 
     // ── Agent Checkpoint & Restore ───────────────────────────────────
-
     #[serde(rename = "agent_checkpoint")]
     AgentCheckpoint { agent_id: String },
 
-    #[serde(rename = "agent_restore")]
-    AgentRestore { agent_id: String, checkpoint_cid: String },
-
     // ── Agent Messaging ───────────────────────────────────────────────
-
     #[serde(rename = "send_message")]
     SendMessage {
         from: String,
@@ -495,13 +468,9 @@ pub enum ApiRequest {
     },
 
     #[serde(rename = "ack_message")]
-    AckMessage {
-        agent_id: String,
-        message_id: String,
-    },
+    AckMessage { agent_id: String, message_id: String },
 
     // ── Core Polymorphic Verbs (v1.0) ────────────────────────────────
-
     #[serde(rename = "get")]
     CoreGet {
         id: String,
@@ -601,7 +570,6 @@ pub enum ApiRequest {
     },
 
     // ── Graph CRUD extensions (v0.7) ─────────────────────────────────
-
     #[serde(rename = "get_node")]
     GetNode {
         node_id: String,
@@ -655,23 +623,11 @@ pub enum ApiRequest {
     },
 
     // ── Agent lifecycle extensions (v0.7) ────────────────────────────
-
     #[serde(rename = "agent_complete")]
     AgentComplete { agent_id: String },
 
     #[serde(rename = "agent_fail")]
     AgentFail { agent_id: String, reason: String },
-
-    // ── Memory tier management (v0.7) ────────────────────────────────
-
-    #[serde(rename = "memory_move")]
-    MemoryMove {
-        agent_id: String,
-        entry_id: String,
-        target_tier: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        tenant_id: Option<String>,
-    },
 
     #[serde(rename = "memory_delete")]
     MemoryDeleteEntry {
@@ -681,15 +637,7 @@ pub enum ApiRequest {
         tenant_id: Option<String>,
     },
 
-    #[serde(rename = "evict_expired")]
-    EvictExpired {
-        agent_id: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        tenant_id: Option<String>,
-    },
-
     // ── Context Loading (v0.9) ──────────────────────────────────────
-
     #[serde(rename = "load_context")]
     LoadContext {
         cid: String,
@@ -701,7 +649,6 @@ pub enum ApiRequest {
     },
 
     // ── Temporal Edge History (v0.9) ────────────────────────────────
-
     #[serde(rename = "edge_history")]
     EdgeHistory {
         src_id: String,
@@ -714,7 +661,6 @@ pub enum ApiRequest {
     },
 
     // ── Event Bus (v5.0) ───────────────────────────────────────────
-
     #[serde(rename = "event_subscribe")]
     EventSubscribe {
         agent_id: String,
@@ -731,12 +677,10 @@ pub enum ApiRequest {
     EventUnsubscribe { subscription_id: String },
 
     // ── System Status (v5.3 — replaces HTTP dashboard) ───────────
-
     #[serde(rename = "system_status")]
     SystemStatus,
 
     // ── Context Budget (v6.0) ────────────────────────────────────
-
     #[serde(rename = "context_assemble")]
     ContextAssemble {
         agent_id: String,
@@ -745,12 +689,10 @@ pub enum ApiRequest {
     },
 
     // ── Resource Visibility (v6.1) ──────────────────────────────
-
     #[serde(rename = "agent_usage")]
     AgentUsage { agent_id: String },
 
     // ── Edge Cache (v19.0) ─────────────────────────────────────
-
     #[serde(rename = "cache_stats")]
     CacheStats,
 
@@ -758,32 +700,10 @@ pub enum ApiRequest {
     CacheInvalidate,
 
     // ── Intent Cache (F-9) ────────────────────────────────────────
-
     #[serde(rename = "intent_cache_stats")]
     IntentCacheStats,
 
-    // ── Distributed Mode (v20.0) ─────────────────────────────────
-
-    #[serde(rename = "cluster_status")]
-    ClusterStatus,
-
-    #[serde(rename = "cluster_join")]
-    ClusterJoin {
-        host: String,
-        port: u16,
-    },
-
-    #[serde(rename = "cluster_leave")]
-    ClusterLeave,
-
-    #[serde(rename = "node_ping")]
-    NodePing {
-        target_host: String,
-        target_port: u16,
-    },
-
     // ── Token Usage (F-8) ─────────────────────────────────────
-
     #[serde(rename = "query_token_usage")]
     QueryTokenUsage {
         agent_id: String,
@@ -792,7 +712,6 @@ pub enum ApiRequest {
     },
 
     // ── Delta感知 (F-7) ─────────────────────────────────────
-
     /// Query changes since a given event sequence number.
     /// Used by agents to efficiently sync state after a session gap.
     #[serde(rename = "delta_since")]
@@ -813,37 +732,23 @@ pub enum ApiRequest {
     },
 
     // ── Session Lifecycle (F-6) ─────────────────────────────────
-
-    /// Start a new session — orchestrates checkpoint restore + delta + prefetch.
+    /// Start a new durable session and optionally return changes since a prior watermark.
     #[serde(rename = "start_session")]
     StartSession {
         agent_id: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         agent_token: Option<String>,
-        /// Intent hint — triggers prefetch engine to warm up context.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        intent_hint: Option<String>,
-        /// Memory tiers to restore from checkpoint (empty = all tiers).
-        #[serde(default)]
-        load_tiers: Vec<crate::memory::MemoryTier>,
         /// Last seen event sequence number from previous session.
         /// Used for delta calculation. Omit for first session.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         last_seen_seq: Option<u64>,
     },
 
-    /// End an active session — creates checkpoint and returns last_seq.
+    /// Durably end an active session and return the current event watermark.
     #[serde(rename = "end_session")]
-    EndSession {
-        agent_id: String,
-        session_id: String,
-        /// Whether to auto-create a checkpoint before ending (default: true).
-        #[serde(default = "default_auto_checkpoint")]
-        auto_checkpoint: bool,
-    },
+    EndSession { agent_id: String, session_id: String },
 
     // ── Agent Discovery (v6.2) ──────────────────────────────────
-
     #[serde(rename = "discover_agents")]
     DiscoverAgents {
         #[serde(default)]
@@ -854,7 +759,6 @@ pub enum ApiRequest {
     },
 
     // ── Agent Delegation (v6.3 → F-14) ─────────────────────────────────
-
     /// Delegate a task to another agent with state tracking and deadline support (F-14).
     /// Replaces v6.3 DelegateTask which used intent+messaging approach.
     #[serde(rename = "delegate_task")]
@@ -878,16 +782,11 @@ pub enum ApiRequest {
 
     /// Query the status of a delegated task (F-14).
     #[serde(rename = "query_task_status")]
-    QueryTaskStatus {
-        task_id: String,
-    },
+    QueryTaskStatus { task_id: String },
 
     /// Start working on a task — transitions from Pending to InProgress (F-14).
     #[serde(rename = "task_start")]
-    TaskStart {
-        task_id: String,
-        agent_id: String,
-    },
+    TaskStart { task_id: String, agent_id: String },
 
     /// Report task completion with result CIDs (F-14).
     #[serde(rename = "task_complete")]
@@ -906,7 +805,6 @@ pub enum ApiRequest {
     },
 
     // ── Event History (v7.0) ───────────────────────────────────
-
     #[serde(rename = "event_history")]
     EventHistory {
         #[serde(default)]
@@ -918,7 +816,6 @@ pub enum ApiRequest {
     },
 
     // ── Agent Skill Registry (v8.0) ───────────────────────────
-
     #[serde(rename = "register_skill")]
     RegisterSkill {
         agent_id: String,
@@ -938,43 +835,7 @@ pub enum ApiRequest {
         tag_filter: Option<String>,
     },
 
-    // ── Tenant Management (Phase 3C) ──────────────────────────────
-
-    /// Create a new tenant.
-    #[serde(rename = "create_tenant")]
-    CreateTenant {
-        /// Unique tenant identifier (must be non-empty).
-        tenant_id: String,
-        /// Agent ID of the tenant administrator.
-        admin_agent_id: String,
-        /// Agent performing the operation (must be trusted or system).
-        caller_agent_id: String,
-    },
-
-    /// List all tenants accessible to the calling agent.
-    #[serde(rename = "list_tenants")]
-    ListTenants {
-        /// Agent performing the operation.
-        agent_id: String,
-    },
-
-    /// Share resources between tenants (requires CrossTenant permission).
-    #[serde(rename = "tenant_share")]
-    TenantShare {
-        /// Source tenant ID.
-        from_tenant: String,
-        /// Destination tenant ID.
-        to_tenant: String,
-        /// Resource type: "kg" | "memory" | "cas"
-        resource_type: String,
-        /// Tag pattern to match resources (e.g., "project-x*" or "*").
-        resource_pattern: String,
-        /// Agent performing the operation.
-        agent_id: String,
-    },
-
     // ── Proactive Context Assembly (F-2) ───────────────────────────
-
     /// Declare an intent and trigger asynchronous semantic prefetch.
     /// Returns an assembly_id for later FetchAssembledContext call.
     #[serde(rename = "declare_intent")]
@@ -999,7 +860,6 @@ pub enum ApiRequest {
     },
 
     // ── Adaptive Prefetch (F-15) ─────────────────────────────────────────────
-
     /// Report feedback about which CIDs were actually used vs prefetched but unused.
     /// Enables adaptive prefetch learning — future prefetches prioritize historically-used CIDs.
     #[serde(rename = "intent_feedback")]
@@ -1014,7 +874,6 @@ pub enum ApiRequest {
     },
 
     // ── Batch Operations (v15.0) ─────────────────────────────────
-
     /// Batch create multiple objects in a single call.
     /// Each item is processed independently — one failure does not affect others.
     #[serde(rename = "batch_create")]
@@ -1037,10 +896,7 @@ pub enum ApiRequest {
 
     /// Batch submit multiple intents in a single call.
     #[serde(rename = "batch_submit_intent")]
-    BatchSubmitIntent {
-        intents: Vec<IntentSpec>,
-        agent_id: String,
-    },
+    BatchSubmitIntent { intents: Vec<IntentSpec>, agent_id: String },
 
     /// Batch query multiple objects/memories in a single call.
     #[serde(rename = "batch_query")]
@@ -1052,7 +908,6 @@ pub enum ApiRequest {
     },
 
     // ── KG Causal Reasoning (v16.0) ────────────────────────────────────────
-
     /// Find causal paths between two KG nodes.
     #[serde(rename = "kg_causal_path")]
     KGCausalPath {
@@ -1086,20 +941,7 @@ pub enum ApiRequest {
         tenant_id: Option<String>,
     },
 
-    // ── Model Hot-Swap (v18.0) ────────────────────────────────────────────
-
-    /// Switch embedding model at runtime without restart.
-    #[serde(rename = "switch_embedding_model")]
-    SwitchEmbeddingModel {
-        /// Backend type: "local", "ollama", "openai", "stub"
-        model_type: String,
-        /// Model identifier, e.g. "BAAI/bge-small-en-v1.5"
-        model_id: String,
-        /// Optional python interpreter path for local backend
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        python_path: Option<String>,
-    },
-
+    // ── Model Operations ──────────────────────────────────────────────────
     /// Switch LLM model at runtime without restart.
     #[serde(rename = "switch_llm_model")]
     SwitchLlmModel {
@@ -1119,36 +961,7 @@ pub enum ApiRequest {
         model_type: String,
     },
 
-    // ── Hybrid Retrieval / Graph-RAG (F-11) ────────────────────────────────
-
-    /// Hybrid retrieval combining vector search and knowledge graph traversal.
-    /// Returns results with provenance showing the causal path from query to result.
-    #[serde(rename = "hybrid_retrieve")]
-    HybridRetrieve {
-        query_text: String,
-        /// Optional: KG seed node tags to start graph traversal from.
-        #[serde(default)]
-        seed_tags: Vec<String>,
-        /// Graph traversal depth (default 2).
-        #[serde(default)]
-        graph_depth: u8,
-        /// Optional: filter to only these edge types (e.g., ["causes", "has_resolution"]).
-        #[serde(default)]
-        edge_types: Vec<String>,
-        /// Maximum number of results to return (default 20).
-        #[serde(default)]
-        max_results: usize,
-        /// Token budget limit — stops adding results when budget is reached.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        token_budget: Option<usize>,
-        /// Agent performing the operation.
-        agent_id: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        tenant_id: Option<String>,
-    },
-
     // ── Growth Report (F-13) ─────────────────────────────────────────────
-
     /// Query a growth report for an agent showing learning progress and efficiency.
     #[serde(rename = "query_growth_report")]
     QueryGrowthReport {
@@ -1159,7 +972,6 @@ pub enum ApiRequest {
     },
 
     // ── Memory Stats (F-17) ───────────────────────────────────────────
-
     /// Query memory usage statistics for an agent's tier.
     #[serde(rename = "memory_stats")]
     MemoryStats {
@@ -1172,54 +984,16 @@ pub enum ApiRequest {
         tenant_id: Option<String>,
     },
 
-    // ── Knowledge Discovery (F-16) ──────────────────────────────────
-
-    /// Discover shared knowledge from other agents.
-    #[serde(rename = "discover_knowledge")]
-    DiscoverKnowledge {
-        /// Semantic search query.
-        query: String,
-        /// Scope of the discovery search.
-        #[serde(default)]
-        scope: DiscoveryScope,
-        /// Filter by knowledge types (empty = all types).
-        #[serde(default)]
-        knowledge_types: Vec<KnowledgeType>,
-        /// Maximum number of results to return.
-        #[serde(default = "default_max_results")]
-        max_results: usize,
-        /// Optional token budget limit.
-        #[serde(default)]
-        token_budget: Option<usize>,
-        /// Agent performing the discovery.
-        agent_id: String,
-    },
-
     // ── Storage Governance (F-18) ──────────────────────────────────
-
     /// Query CAS object usage statistics for a CID.
     #[serde(rename = "object_usage")]
-    ObjectUsage {
-        cid: String,
-        agent_id: String,
-    },
+    ObjectUsage { cid: String, agent_id: String },
 
     /// Query complete storage statistics.
     #[serde(rename = "storage_stats")]
-    StorageStats {
-        agent_id: String,
-    },
-
-    /// Evict cold (unused) objects from CAS.
-    #[serde(rename = "evict_cold")]
-    EvictCold {
-        agent_id: String,
-        #[serde(default)]
-        dry_run: bool,
-    },
+    StorageStats { agent_id: String },
 
     // ── Hook Management (Daemon-First) ──────────────────────────────
-
     /// List all registered lifecycle hooks.
     #[serde(rename = "hook_list")]
     HookList,
@@ -1243,34 +1017,24 @@ pub enum ApiRequest {
     },
 
     // ── Health Report (Daemon-First) ────────────────────────────────
-
     /// Query system health report with detailed subsystem status.
     #[serde(rename = "health_report")]
     HealthReport,
 
     // ── Token Cost Ledger (F-2) ─────────────────────────────────────
-
     /// Get cost summary for a session (F-2).
     #[serde(rename = "cost_session_summary")]
-    CostSessionSummary {
-        session_id: String,
-    },
+    CostSessionSummary { session_id: String },
 
     /// Get cost trend for an agent (F-2).
     #[serde(rename = "cost_agent_trend")]
-    CostAgentTrend {
-        agent_id: String,
-        last_n_sessions: usize,
-    },
+    CostAgentTrend { agent_id: String, last_n_sessions: usize },
 
     /// Check for cost anomaly (F-2).
     #[serde(rename = "cost_anomaly_check")]
-    CostAnomalyCheck {
-        agent_id: String,
-    },
+    CostAnomalyCheck { agent_id: String },
 
     // ── Prompt Registry (v31) ─────────────────────────────────────
-
     /// List all registered prompt names.
     #[serde(rename = "list_prompts")]
     ListPrompts,
@@ -1303,7 +1067,6 @@ pub enum ApiRequest {
     },
 
     // ── Batch Long-Term Memory (v31) ──────────────────────────────
-
     /// Batch store multiple long-term memories with a single batched embedding call.
     #[serde(rename = "remember_long_term_batch")]
     RememberLongTermBatch {
@@ -1315,7 +1078,6 @@ pub enum ApiRequest {
     },
 
     // ── Trace (v52) ────────────────────────────────────────────────
-
     /// List trace files for an agent within a date range.
     #[serde(rename = "trace_list")]
     TraceList {
@@ -1335,9 +1097,7 @@ pub enum ApiRequest {
 
     /// Show all spans for a specific trace_id.
     #[serde(rename = "trace_show")]
-    TraceShow {
-        trace_id: String,
-    },
+    TraceShow { trace_id: String },
 
     /// List failed spans for an agent.
     #[serde(rename = "trace_failures")]
@@ -1349,7 +1109,6 @@ pub enum ApiRequest {
     },
 
     // ── File Import (v33) ─────────────────────────────────────────
-
     /// Import files from a local directory into CAS with optional chunking.
     ///
     /// The daemon reads files at the given paths, stores each in CAS,
@@ -1465,9 +1224,6 @@ pub struct ApiResponse {
     /// Token issued to an agent on registration (returned in RegisterAgent response).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub token: Option<String>,
-    /// List of tenants (returned in ListTenants response).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tenants: Option<Vec<TenantDto>>,
     /// Correlation ID for distributed tracing (v14.0).
     /// Present in responses when a correlation ID was passed or generated for the request.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1505,9 +1261,6 @@ pub struct ApiResponse {
     /// Intent cache statistics (F-9).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub intent_cache_stats: Option<IntentCacheStatsDto>,
-    /// Cluster status (v20.0).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cluster_status: Option<ClusterStatusDto>,
     /// Token estimate for the response content (F-8).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub token_estimate: Option<usize>,
@@ -1520,9 +1273,6 @@ pub struct ApiResponse {
     /// Session ended result (F-6).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_ended: Option<SessionEnded>,
-    /// Hybrid retrieval result — Graph-RAG combining vector search + KG traversal (F-11).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub hybrid_result: Option<HybridResult>,
     /// Growth report showing agent learning progress and efficiency (F-13).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub growth_report: Option<GrowthReport>,
@@ -1541,9 +1291,6 @@ pub struct ApiResponse {
     /// Storage statistics (F-18).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub storage_stats: Option<StorageStatsResult>,
-    /// Evict cold result (F-18).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub evict_result: Option<EvictColdResult>,
     /// Health report (F-7).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub health_report: Option<HealthReport>,
@@ -1611,15 +1358,38 @@ impl Default for ApiResponse {
         Self {
             ok: false,
             version: Some(ApiVersion::CURRENT),
-            cid: None, node_id: None, data: None, results: None,
-            agent_id: None, agents: None, memory: None, tags: None,
-            neighbors: None, deleted: None, events: None, nodes: None,
-            paths: None, edges: None, intent_id: None, assembly_id: None,
+            cid: None,
+            node_id: None,
+            data: None,
+            results: None,
+            agent_id: None,
+            agents: None,
+            memory: None,
+            tags: None,
+            neighbors: None,
+            deleted: None,
+            events: None,
+            nodes: None,
+            paths: None,
+            edges: None,
+            intent_id: None,
+            assembly_id: None,
             agent_state: None,
-            pending_intents: None, tools: None, tool_result: None,
-            resolved_intents: None, messages: None, context_data: None,
-            error: None, message: None, error_code: None, fix_hint: None, next_actions: None, total_count: None, has_more: None,
-            subscription_id: None, kernel_events: None,
+            pending_intents: None,
+            tools: None,
+            tool_result: None,
+            resolved_intents: None,
+            messages: None,
+            context_data: None,
+            error: None,
+            message: None,
+            error_code: None,
+            fix_hint: None,
+            next_actions: None,
+            total_count: None,
+            has_more: None,
+            subscription_id: None,
+            kernel_events: None,
             system_status: None,
             context_assembly: None,
             agent_usage: None,
@@ -1628,7 +1398,6 @@ impl Default for ApiResponse {
             event_history: None,
             discovered_skills: None,
             token: None,
-            tenants: None,
             correlation_id: None,
             batch_create: None,
             batch_memory_store: None,
@@ -1641,19 +1410,16 @@ impl Default for ApiResponse {
             model_health: None,
             cache_stats: None,
             intent_cache_stats: None,
-            cluster_status: None,
             token_estimate: None,
             delta_result: None,
             session_started: None,
             session_ended: None,
-            hybrid_result: None,
             growth_report: None,
             task_result: None,
             memory_stats: None,
             discovery_result: None,
             object_usage: None,
             storage_stats: None,
-            evict_result: None,
             health_report: None,
             hook_list: None,
             cost_session_summary: None,
@@ -1669,7 +1435,10 @@ impl Default for ApiResponse {
 
 impl ApiResponse {
     pub fn ok() -> Self {
-        Self { ok: true, ..Self::default() }
+        Self {
+            ok: true,
+            ..Self::default()
+        }
     }
 
     pub fn with_cid(cid: String) -> Self {
@@ -1708,9 +1477,11 @@ impl ApiResponse {
         r
     }
 
-
     pub fn error(msg: impl Into<String>) -> Self {
-        Self { error: Some(msg.into()), ..Self::default() }
+        Self {
+            error: Some(msg.into()),
+            ..Self::default()
+        }
     }
 
     /// Create an ok response with a human-readable confirmation message (F-47).
@@ -1850,7 +1621,6 @@ mod tests {
         assert!(v3 < v2);
     }
 
-
     #[test]
     fn test_api_request_with_version() {
         let json = r#"{"method":"create","api_version":"1.0.0","content":"test","tags":[],"agent_id":"a1"}"#;
@@ -1877,6 +1647,43 @@ mod tests {
     fn test_api_response_includes_version() {
         let resp = ApiResponse::ok();
         assert_eq!(resp.version, Some(ApiVersion::CURRENT));
+    }
+
+    #[test]
+    fn removed_non_personal_operations_are_not_deserializable() {
+        let removed_methods = [
+            "create_tenant",
+            "list_tenants",
+            "tenant_share",
+            "cluster_status",
+            "cluster_join",
+            "cluster_leave",
+            "node_ping",
+            "evict_cold",
+            "recall_visible",
+        ];
+
+        for method in removed_methods {
+            let json = format!(r#"{{"method":"{method}"}}"#);
+            assert!(
+                serde_json::from_str::<ApiRequest>(&json).is_err(),
+                "removed operation '{method}' must not re-enter the public request schema"
+            );
+        }
+    }
+
+    #[test]
+    fn session_requests_reject_removed_orchestrator_fields() {
+        for json in [
+            r#"{"method":"start_session","agent_id":"owner","intent_hint":"prefetch","last_seen_seq":0}"#,
+            r#"{"method":"start_session","agent_id":"owner","load_tiers":[],"last_seen_seq":0}"#,
+            r#"{"method":"end_session","agent_id":"owner","session_id":"s1","auto_checkpoint":true}"#,
+        ] {
+            assert!(
+                serde_json::from_str::<ApiRequest>(json).is_err(),
+                "removed session orchestration field was accepted: {json}"
+            );
+        }
     }
 
     #[test]

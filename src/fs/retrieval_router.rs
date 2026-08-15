@@ -1,14 +1,6 @@
-//! Adaptive Retrieval Router — intent-aware query routing.
-//!
-//! Classifies query intent and routes to the optimal retrieval strategy.
-//! LLM-first when available, rule-based fallback otherwise.
-//!
-//! Strategies:
-//! - FACTUAL: dense HNSW+BM25 (fastest)
-//! - TEMPORAL: temporal KG path + time-decay boost
-//! - MULTI_HOP: KG PPR + dense hybrid
-//! - PREFERENCE: Semantic-type top-k
-//! - AGGREGATION: broad recall + dedup merge
+//! Query intent classification and the retrieval options currently consumed by
+//! memory recall. LLM classification is used when available, with rule-based
+//! classification as the local fallback.
 
 use serde::{Deserialize, Serialize};
 
@@ -143,90 +135,42 @@ pub fn intent_classification_prompt(query: &str) -> String {
     )
 }
 
-/// Per-intent retrieval configuration.
-///
-/// `top_k` values calibrated against MemMachine ablation study (2026):
-/// k=30 is the single most impactful parameter (+4.2%), k=50 degrades.
-/// `use_reranker` is intent-routed: disabled for multi-session/temporal
-/// queries where cross-encoder reduces diversity (wakamex/longmem finding).
+/// Per-intent options that are applied by the current memory recall path.
 #[derive(Debug, Clone)]
 pub struct RetrievalConfig {
     pub top_k: usize,
-    pub use_kg: bool,
-    pub use_ppr: bool,
-    pub use_bm25: bool,
-    pub use_vector: bool,
-    pub time_decay_boost: bool,
     pub typed_retrieval: Option<crate::memory::MemoryType>,
-    pub bm25_weight: f32,
-    pub vector_weight: f32,
     pub use_reranker: bool,
 }
 
 impl RetrievalConfig {
     pub fn for_intent(intent: QueryIntent) -> Self {
         // Allow top_k override via env var for ablation experiments
-        let top_k_override: Option<usize> = std::env::var("PLICO_TOP_K")
-            .ok().and_then(|v| v.parse().ok());
+        let top_k_override: Option<usize> = std::env::var("PLICO_TOP_K").ok().and_then(|v| v.parse().ok());
         let mut config = match intent {
             QueryIntent::Factual => Self {
                 top_k: 15,
-                use_kg: false,
-                use_ppr: false,
-                use_bm25: true,
-                use_vector: true,
-                time_decay_boost: false,
                 typed_retrieval: None,
-                bm25_weight: 1.0,
-                vector_weight: 1.0,
                 use_reranker: true,
             },
             QueryIntent::Temporal => Self {
                 top_k: 15,
-                use_kg: true,
-                use_ppr: false,
-                use_bm25: true,
-                use_vector: true,
-                time_decay_boost: true,
                 typed_retrieval: Some(crate::memory::MemoryType::Episodic),
-                bm25_weight: 0.8,
-                vector_weight: 1.2,
                 use_reranker: true,
             },
             QueryIntent::MultiHop => Self {
                 top_k: 30,
-                use_kg: true,
-                use_ppr: true,
-                use_bm25: true,
-                use_vector: true,
-                time_decay_boost: false,
                 typed_retrieval: None,
-                bm25_weight: 1.2,
-                vector_weight: 0.8,
                 use_reranker: true,
             },
             QueryIntent::Preference => Self {
                 top_k: 15,
-                use_kg: false,
-                use_ppr: false,
-                use_bm25: true,
-                use_vector: true,
-                time_decay_boost: false,
                 typed_retrieval: Some(crate::memory::MemoryType::Semantic),
-                bm25_weight: 1.0,
-                vector_weight: 1.0,
                 use_reranker: true,
             },
             QueryIntent::Aggregation => Self {
                 top_k: 15,
-                use_kg: true,
-                use_ppr: false,
-                use_bm25: true,
-                use_vector: true,
-                time_decay_boost: false,
                 typed_retrieval: None,
-                bm25_weight: 1.2,
-                vector_weight: 0.8,
                 use_reranker: true,
             },
         };
@@ -242,42 +186,107 @@ fn is_temporal_query_rule(q: &str) -> bool {
     // Strong temporal signals — "before"/"after" removed (too ambiguous,
     // e.g. "Where did X move to after Y?" is factual, not temporal)
     let temporal_keywords = [
-        "when", "what time", "last week", "yesterday",
-        "last month", "last year", "ago", "since", "until", "during",
-        "recently", "earlier", "later", "previous", "next",
-        "how many days", "how many weeks", "how many months",
-        "which happened first", "in order",
-        "之前", "之后", "上周", "昨天", "上个月", "去年", "最近",
-        "以前", "以后", "期间", "何时",
+        "when",
+        "what time",
+        "last week",
+        "yesterday",
+        "last month",
+        "last year",
+        "ago",
+        "since",
+        "until",
+        "during",
+        "recently",
+        "earlier",
+        "later",
+        "previous",
+        "next",
+        "how many days",
+        "how many weeks",
+        "how many months",
+        "which happened first",
+        "in order",
+        "之前",
+        "之后",
+        "上周",
+        "昨天",
+        "上个月",
+        "去年",
+        "最近",
+        "以前",
+        "以后",
+        "期间",
+        "何时",
     ];
     temporal_keywords.iter().any(|kw| q.contains(kw))
 }
 
 fn is_multi_hop_query_rule(q: &str) -> bool {
     let multi_hop_keywords = [
-        "why", "because", "caused", "led to", "result of", "consequence",
-        "how did", "what happened after", "relationship between",
-        "connected to", "related to",
-        "为什么", "因为", "导致", "关系", "原因",
+        "why",
+        "because",
+        "caused",
+        "led to",
+        "result of",
+        "consequence",
+        "how did",
+        "what happened after",
+        "relationship between",
+        "connected to",
+        "related to",
+        "为什么",
+        "因为",
+        "导致",
+        "关系",
+        "原因",
     ];
     multi_hop_keywords.iter().any(|kw| q.contains(kw))
 }
 
 fn is_preference_query_rule(q: &str) -> bool {
     let pref_keywords = [
-        "prefer", "like", "favorite", "always", "usually", "tend to",
-        "habit", "opinion", "taste", "recommend", "suggest", "should i",
-        "what would you", "best way to", "any tips", "any ideas",
-        "喜欢", "偏好", "习惯", "总是", "通常", "推荐", "建议",
+        "prefer",
+        "like",
+        "favorite",
+        "always",
+        "usually",
+        "tend to",
+        "habit",
+        "opinion",
+        "taste",
+        "recommend",
+        "suggest",
+        "should i",
+        "what would you",
+        "best way to",
+        "any tips",
+        "any ideas",
+        "喜欢",
+        "偏好",
+        "习惯",
+        "总是",
+        "通常",
+        "推荐",
+        "建议",
     ];
     pref_keywords.iter().any(|kw| q.contains(kw))
 }
 
 fn is_aggregation_query_rule(q: &str) -> bool {
     let agg_keywords = [
-        "list all", "how many", "summarize", "total", "count",
-        "overview", "all the", "everything",
-        "列出", "多少", "总结", "所有", "汇总",
+        "list all",
+        "how many",
+        "summarize",
+        "total",
+        "count",
+        "overview",
+        "all the",
+        "everything",
+        "列出",
+        "多少",
+        "总结",
+        "所有",
+        "汇总",
     ];
     agg_keywords.iter().any(|kw| q.contains(kw))
 }
@@ -367,30 +376,39 @@ mod tests {
 
     #[test]
     fn test_llm_response_parsing() {
-        assert_eq!(classify_by_llm_response("factual").unwrap().intent, QueryIntent::Factual);
-        assert_eq!(classify_by_llm_response("TEMPORAL").unwrap().intent, QueryIntent::Temporal);
-        assert_eq!(classify_by_llm_response("multi_hop").unwrap().intent, QueryIntent::MultiHop);
-        assert_eq!(classify_by_llm_response("preference").unwrap().intent, QueryIntent::Preference);
-        assert_eq!(classify_by_llm_response("aggregation").unwrap().intent, QueryIntent::Aggregation);
+        assert_eq!(
+            classify_by_llm_response("factual").unwrap().intent,
+            QueryIntent::Factual
+        );
+        assert_eq!(
+            classify_by_llm_response("TEMPORAL").unwrap().intent,
+            QueryIntent::Temporal
+        );
+        assert_eq!(
+            classify_by_llm_response("multi_hop").unwrap().intent,
+            QueryIntent::MultiHop
+        );
+        assert_eq!(
+            classify_by_llm_response("preference").unwrap().intent,
+            QueryIntent::Preference
+        );
+        assert_eq!(
+            classify_by_llm_response("aggregation").unwrap().intent,
+            QueryIntent::Aggregation
+        );
         assert!(classify_by_llm_response("unknown_category").is_none());
     }
 
     #[test]
     fn test_retrieval_config_factual() {
         let config = RetrievalConfig::for_intent(QueryIntent::Factual);
-        assert!(!config.use_kg);
-        assert!(!config.use_ppr);
-        assert!(config.use_bm25);
-        assert!(config.use_vector);
         assert_eq!(config.top_k, 15);
         assert!(config.use_reranker);
     }
 
     #[test]
-    fn test_retrieval_config_multi_hop_uses_ppr() {
+    fn test_retrieval_config_multi_hop_uses_broader_top_k() {
         let config = RetrievalConfig::for_intent(QueryIntent::MultiHop);
-        assert!(config.use_kg);
-        assert!(config.use_ppr);
         assert_eq!(config.top_k, 30);
         assert!(config.use_reranker);
     }
@@ -404,7 +422,6 @@ mod tests {
     #[test]
     fn test_retrieval_config_temporal_uses_episodic_type() {
         let config = RetrievalConfig::for_intent(QueryIntent::Temporal);
-        assert!(config.time_decay_boost);
         assert_eq!(config.typed_retrieval, Some(crate::memory::MemoryType::Episodic));
     }
 

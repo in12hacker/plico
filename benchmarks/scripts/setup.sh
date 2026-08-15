@@ -15,17 +15,6 @@ fi
 echo "Installing Python dependencies..."
 uv sync
 
-echo "Checking legacy dataset fallback..."
-LEGACY_DIRS=(
-    "../bench/data"
-    "../.runtime/bench_legacy/data"
-)
-for dir in "${LEGACY_DIRS[@]}"; do
-    if [ -d "$dir" ]; then
-        echo "  Found legacy data at $dir"
-    fi
-done
-
 echo ""
 echo "Setup complete. Run a suite:"
 echo "  uv run python -m plico_benchmarks list"

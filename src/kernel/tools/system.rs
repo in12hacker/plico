@@ -4,7 +4,12 @@ use crate::kernel::AIKernel;
 use crate::tool::ToolResult;
 use serde_json::json;
 
-pub(in crate::kernel) fn handle(kernel: &AIKernel, name: &str, params: &serde_json::Value, agent_id: &str) -> ToolResult {
+pub(in crate::kernel) fn handle(
+    kernel: &AIKernel,
+    name: &str,
+    params: &serde_json::Value,
+    agent_id: &str,
+) -> ToolResult {
     match name {
         "tools.list" => {
             let tools = kernel.tool_registry.list();
@@ -47,7 +52,7 @@ mod tests {
     #[test]
     fn test_tools_list() {
         let (kernel, _tmp) = make_kernel();
-        let result = handle(&*kernel, "tools.list", &json!({}), "test");
+        let result = handle(&kernel, "tools.list", &json!({}), "test");
         assert!(result.error.is_none());
     }
 
@@ -55,12 +60,12 @@ mod tests {
     fn test_tools_describe_existing() {
         let (kernel, _tmp) = make_kernel();
         // First list to find a tool name
-        let list_result = handle(&*kernel, "tools.list", &json!({}), "test");
+        let list_result = handle(&kernel, "tools.list", &json!({}), "test");
         let tools = list_result.output;
         if let Some(arr) = tools.as_array() {
             if let Some(first) = arr.first() {
                 let name = first["name"].as_str().unwrap_or("");
-                let result = handle(&*kernel, "tools.describe", &json!({"name": name}), "test");
+                let result = handle(&kernel, "tools.describe", &json!({"name": name}), "test");
                 assert!(result.error.is_none(), "describe should succeed for existing tool");
             }
         }
@@ -69,21 +74,21 @@ mod tests {
     #[test]
     fn test_tools_describe_not_found() {
         let (kernel, _tmp) = make_kernel();
-        let result = handle(&*kernel, "tools.describe", &json!({"name": "nonexistent_tool"}), "test");
+        let result = handle(&kernel, "tools.describe", &json!({"name": "nonexistent_tool"}), "test");
         assert!(result.error.is_some());
     }
 
     #[test]
     fn test_context_load_invalid_layer() {
         let (kernel, _tmp) = make_kernel();
-        let result = handle(&*kernel, "context.load", &json!({"cid": "test", "layer": "L99"}), "test");
+        let result = handle(&kernel, "context.load", &json!({"cid": "test", "layer": "L99"}), "test");
         assert!(result.error.is_some());
     }
 
     #[test]
     fn test_unknown_system_tool() {
         let (kernel, _tmp) = make_kernel();
-        let result = handle(&*kernel, "system.nonexistent", &json!({}), "test");
+        let result = handle(&kernel, "system.nonexistent", &json!({}), "test");
         assert!(result.error.is_some());
     }
 }

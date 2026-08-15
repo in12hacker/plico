@@ -214,36 +214,66 @@ EMBEDDING_BACKEND=stub LLM_BACKEND=stub cargo test --test perf_regression
 ## 7. 版本快照
 
 ### 质量基线
-- 测试：2157 个（lib，+10）
-- 覆盖率：87.60%（≥87% 阈值）
+- 测试：2157 个（lib）
+- 覆盖率：87.61%（≥87% 阈值）
 - Clippy：0 个新增警告
-- 性能回归：13/13 通过（+1 trace_write_overhead）
+- 性能回归：13/13 通过
 
-### Benchmark 验证结果
-| Suite | Metric | 验证结果 |
-|-------|--------|---------|
-| memory-lifecycle | cross_layer_hit_rate | 1.00 ✅ |
-| memory-lifecycle | recall_hit_rate | 1.00 ✅ |
-| memory-lifecycle | accuracy_pct | 100.00% ✅（原 6.7%）|
-| conversational-qa | accuracy_pct | 24-30%（无代码变更，波动范围）|
+### Benchmark 结果（v52 vs v50 完整对比）
 
-### Benchmark 基线（v51-embedfix）
-| 指标 | 值 |
-|------|-----|
-| SAS | 15/20 |
-| conversational-qa accuracy_pct | 42.5% |
-| retrieval recall@5 | 68.7% |
-| scope-isolation own_access | 100% |
-| causal-reasoning bidirectional | 100% |
-| causal-reasoning accuracy_pct | 0.0% |
-| memory-lifecycle accuracy_pct | 6.7% |
+报告：`benchmarks/docs/benchmark_report_v52_comparison.md`
+
+#### 关键指标变化
+
+| Suite | Metric | v50 | v52 | Delta |
+|-------|--------|-----|-----|-------|
+| conversational-qa | accuracy_pct | 30.0% | 42.5% | +12.5pp |
+| conversational-qa | f1 | 0.204 | 0.258 | +0.054 |
+| conversational-qa | RAGAS faithfulness | — | 0.950 | 超目标 0.85 |
+| retrieval | recall@5 | 0.557 | 0.687 | +0.130 |
+| retrieval | recall@10 | 0.770 | 0.727 | -0.043 |
+| scope-isolation | own_access_rate | 0.000 | 1.000 | +1.000 |
+| scope-isolation | leak_rate | 0.000 | 0.000 | = |
+| session-lifecycle | success_rate | 0.000 | 1.000 | +1.000 |
+| session-lifecycle | search_persistence | 0.000 | 1.000 | +1.000 |
+| memory-lifecycle | search.hit_rate | 0.000 | 1.000 | +1.000 |
+| memory-lifecycle | layer_migration.accuracy_pct | 13.3% | 100.0% | +86.7pp |
+| memory-lifecycle | delete.success_rate | 0.000 | 1.000 | +1.000 |
+| causal-reasoning | bidirectional_rate | 0.000 | 0.900 | +0.900 |
+| causal-reasoning | cause_finds_effect | 0.000 | 1.000 | +1.000 |
+| causal-reasoning | accuracy_pct | 0.0% | 50.0% | +50.0pp |
+| performance | cas_write.qps | 21.3 | 204.0 | +182.7 |
+| performance | memory_recall.qps | 2218.7 | 8030.7 | +5812.0 |
+| **⚠️ performance** | **search.qps** | **1375.5** | **3.0** | **-1372.5** |
+| **⚠️ performance** | **search.p50_ms** | **0.079** | **288.9** | **+288.8** |
+| token-efficiency | L2 avg_tokens | 1689.8 | 1854.8 | +165.0 |
+| proactive-optimization | L2 avg_tokens | 1058.8 | 568.9 | -489.9 |
+
+#### SAS
+
+| # | Axiom | v50 | v52 | Delta |
+|---|-------|-----|-----|-------|
+| A1 | token_scarcity | 2/2 | 2/2 | = |
+| A2 | intent_before_action | 1/2 | 1/2 | = |
+| A3 | memory_exoskeleton | 0/2 | 0/2 | = |
+| A4 | sharing_before_duplication | 2/2 | 2/2 | = |
+| A5 | mechanism_not_strategy | 1/2 | 1/2 | = |
+| A6 | semantics_before_structure | 1/2 | 1/2 | = |
+| A7 | proactive_before_passive | 2/2 | 2/2 | = |
+| A8 | causality_before_correlation | 0/2 | 2/2 | +2 |
+| A9 | gets_better | 2/2 | 2/2 | = |
+| A10 | session_first_class | 0/2 | 2/2 | +2 |
+| **Total** | | **11/20** | **15/20** | **+4** |
 
 ### 关键变更
-- **A1-A3**: Trace 基础设施（Span + TraceStore + mpsc Writer + API dispatch 集成）
-- **A4-A5**: Trace CLI/API（TraceList/TraceShow/TraceFailures + `aicli trace` 命令）
-- **A6**: trace_write_overhead 性能回归测试（P50<1ms，验证 mpsc 非阻塞）
+- **3a5910c**: embedding 修复 — `remember_working_scoped` 同步生成 embedding（修复语义搜索不可用）
+- **A1-A6**: Trace 基础设施（Span + TraceStore + mpsc Writer + CLI/API）
 - **B1-B2**: benchmark 引入 Reader 模式（causal-reasoning + memory-lifecycle）
-- **C1**: scope_isolation 改用 recall_semantic + remember_long_term
+- **C1**: scope_isolation 改用 `recall_semantic` + `remember_long_term`
+- **benchmark.md**: 添加前置条件规则（完整 benchmark 前必须通过阶段 3+4）
 
 ### 遗留问题
-- 无
+- **搜索性能严重退化**：同步 embedding 生成导致 search qps 从 1375 降至 3，延迟从 0.08ms 升至 289ms
+- **conversational-qa accuracy_pct 42.5%**：远低于 OMEGA 95.4%、Mastra 94.87%
+- **A3 memory_exoskeleton 0/2**：CRUD 指标 1.0 但 accuracy_pct 和跨层语义迁移待提升
+- **A2 intent_before_action 1/2**：intent-routing accuracy_pct=50%，hit_rate 部分退化

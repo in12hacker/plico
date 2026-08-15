@@ -3,39 +3,39 @@
 [![CI](https://github.com/in12hacker/plico/actions/workflows/ci.yml/badge.svg)](https://github.com/in12hacker/plico/actions/workflows/ci.yml)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-2021-edition.svg)](https://www.rust-lang.org)
-[![Tests](https://img.shields.io/badge/tests-2%2C075-brightgreen.svg)](#状态)
 
 **语言：** [简体中文](README_zh.md) · [English](README.md)
 
-从 **AI 视角** 设计的操作系统内核——不以人类优先的 CLI/GUI 为中心，也不把「路径型文件系统」当作主要抽象。上层智能体通过 **语义 API**（内容、标签、意图、图）与系统交互。实现 **推理框架无关**：Embedding 和 LLM 后端均支持任何 OpenAI-compatible API 的推理服务（llama.cpp、vLLM、SGLang、TensorRT-LLM、Ollama 等），也可使用本地 ONNX 或 stub 测试。
+面向**个人数字分身**的 AI 原生内核。对象与记忆是 canonical 主数据；文档、表格、PPT
+和图形界面只在人需要时生成，不是核心数据模型。AI 客户端使用类型化
+`plico.personal.v2` 对象/记忆/会话/投影 API，不直接操作路径文件或内核管理接口。推理栈保持
+模型无关。
 
 "太初"——一切就绪，等待被使用。AI-OS 从意识觉醒到自主进化的起点。
 
 ## 状态
 
-**v46 — 212 个源文件, 85,116 行 Rust, 2,075 单元测试 (0 失败), 44 个集成测试文件**
+项目处于持续开发阶段。验证结果随每次变更报告，不在此维护容易失真的静态计数。
 
-核心栈：CAS、语义文件系统（向量 + BM25 + redb 知识图谱，17 种边类型）、分层记忆（四层 + MemoryScope）、智能体调度器、内核事件总线（类型化发布/订阅 + 过滤 + 持久化日志）、权限护栏、Hook 系统（5 个拦截点）、意图系统（DAG 分解 + 自主执行）、上下文预算引擎（L0/L1/L2）、工具注册表（37 个内置 + 外部 MCP）、智能体生命周期（检查点/恢复/发现/委派）、学习闭环（执行统计 + 技能发现 + 自我修复）、检索融合引擎（RFE，7 路自适应排序）、统一配置（`config.json` + 环境变量 + CLI）、`plicod`（TCP+UDS 守护进程 + start/stop/status 生命周期管理）、`plico-sse`（A2A SSE 适配器）、`plico-mcp`（stdio JSON-RPC）、`aicli`（语义 CLI）。
-
-灵魂 3.0 对齐度：**94.7%**。架构红线：**9/9 (100%)**。
+核心栈：CAS、语义文件系统（向量 + BM25 + 知识图谱）、分层记忆、智能体调度器、内核事件总线、权限护栏、意图与上下文预算系统、检索融合、模型无关推理后端、`plicod`、`plico-mcp` 和 `aicli`。
 
 ## 架构
 
 ```
-外部 AI 智能体 / MCP 客户端
+个人 AI 客户端 / MCP 客户端
         ↓  语义 JSON
 ┌────────────────────────────────────────────────────┐
 │  接口适配器                                         │
-│  ┌─────────┐  ┌───────────┐  ┌──────────┐         │
-│  │  aicli   │  │ plico-mcp │  │ plico-sse│         │
-│  └────┬─────┘  └─────┬─────┘  └────┬─────┘         │
-│       └───────────────┼─────────────┘               │
+│          ┌─────────┐  ┌───────────┐                 │
+│          │  aicli  │  │ plico-mcp │                 │
+│          └────┬────┘  └─────┬─────┘                 │
+│               └─────────────┤                       │
 │               ┌───────▼────────┐                    │
 │               │  KernelClient  │ (UDS / TCP / 嵌入) │
 │               └───────┬────────┘                    │
 ├───────────────────────┼────────────────────────────┤
 │  AI 内核              │                             │
-│  ├─ 智能体调度器 + 派发循环                         │
+│  ├─ 个人 vault 类型化公共服务（14 项）              │
 │  ├─ 分层记忆（四层 + MemoryScope）                  │
 │  ├─ 事件总线（类型化发布/订阅 + 持久化日志）        │
 │  ├─ Hook 系统（5 个拦截点）                        │
@@ -53,7 +53,12 @@
 └────────────────────────────────────────────────────┘
 ```
 
-**守护进程优先**: `plicod` 托管内核，支持 `start/stop/status` 生命周期命令和 PID 文件多实例保护。客户端通过 UDS 或 TCP 连接，使用长度前缀 JSON 帧协议。`--embedded` 模式可用于测试。
+**唯一公共契约**：`plicod`、`KernelClient`、`plico-mcp` 与 `aicli` 共用 14 项类型化
+operation：`capabilities.describe`、`runtime.readiness`、`object.put/get/search`、
+`memory.create/get/recall/update/delete`、`projection.status/rebuild`、`session.start/end`。
+UDS、MCP、嵌入模式使用可信本地 owner；TCP 默认仅监听 loopback，并强制 bearer。
+`projection.rebuild` 仅允许 owner 调用。当前支持 Memory embedding 控制面，但 Memory
+vector/hybrid/BM25 检索仍明确 unsupported；`memory.recall` 仍为 lexical。
 
 ## 快速开始
 
@@ -73,26 +78,30 @@ EMBEDDING_BACKEND=stub LLM_BACKEND=stub cargo llvm-cov --lib
 # Clippy（零警告要求）
 cargo clippy -- -D warnings
 
-# 启动守护进程（推荐 — 默认绑定 127.0.0.1:7878）
+# 启动守护进程（默认 127.0.0.1:7878）。首次启动会在 PLICO_ROOT 下
+# 以 0600 权限创建/复用 agent_tokens.json，不打印或记录 token。
 cargo run --bin plicod -- start
-cargo run --bin plicod -- start --host 0.0.0.0 --port 9000
 
 # 守护进程生命周期
 cargo run --bin plicod -- stop       # 优雅停止
 cargo run --bin plicod -- status     # JSON 状态输出
 
-# CLI（默认连接守护进程）
-cargo run --bin aicli -- agent --name my-agent
-cargo run --bin aicli -- put --content "关于 Plico 架构的知识" --tags "plico,arch"
-cargo run --bin aicli -- search "架构"
-cargo run --bin aicli -- remember --content "重要洞察" --tier working --agent my-agent
-cargo run --bin aicli -- recall --agent my-agent
+# CLI（默认走 UDS；点号 operation 与公共协议完全一致）
+cargo run --bin aicli -- capabilities.describe
+cargo run --bin aicli -- object.put --content "关于 Plico 的知识" --tag plico --tag 架构
+cargo run --bin aicli -- object.search --query "架构"
+cargo run --bin aicli -- memory.create --content "重要洞察" --tag 洞察
+cargo run --bin aicli -- memory.recall --query "洞察"
+cargo run --bin aicli -- projection.status --revision-id UUID
+cargo run --bin aicli -- projection.rebuild --all-eligible
 
 # CLI 嵌入模式（无需守护进程）
-cargo run --bin aicli -- --embedded put --content "hello" --tags "test"
+cargo run --bin aicli -- --embedded object.put --content "hello" --tag test
 
-# SSE 适配器（A2A 协议，默认绑定 127.0.0.1:7879）
-cargo run --bin plico-sse
+# TCP：只在本机读取 owner-only 凭据；不要把 token 写入参数或日志。
+export PLICO_ROOT="${PLICO_ROOT:-$HOME/.plico}"
+export PLICO_BEARER_TOKEN="$(jq -r '.\"personal-owner\".token' "$PLICO_ROOT/agent_tokens.json")"
+cargo run --bin aicli -- --tcp 127.0.0.1:7878 runtime.readiness
 
 # MCP 适配器（stdio JSON-RPC 2.0）
 cargo run --bin plico-mcp
@@ -131,13 +140,13 @@ Plico 使用三层级联（最低 → 最高优先级）：
 | 1 | **Token 是最稀缺资源** | 分层返回 L0/L1/L2，追踪消耗，delta 优于 full |
 | 2 | **意图先于操作** | Agent 声明意图，OS 组装上下文并执行 |
 | 3 | **记忆跨越边界** | 四层记忆持久化，checkpoint/restore 跨"死亡" |
-| 4 | **共享先于重复** | MemoryScope: Private / Shared / Group |
+| 4 | **主数据先于投影** | 个人 Memory/CAS 是主数据，人类文件是按需视图 |
 | 5 | **机制，不是策略** | 内核提供原语，不替 Agent 决策 |
 | 6 | **结构先于语言** | JSON 是唯一内核接口，NL 在接口层 |
 | 7 | **主动先于被动** | 意图预取、warm context、目标自生成 |
 | 8 | **因果先于关联** | KG 记录 CausedBy / DependsOn / Produces 因果链 |
 | 9 | **越用越好** | AgentProfile 累积，技能发现，自我修复 |
-| 10 | **会话是一等公民** | session-start/end、warm_context、变更通知 |
+| 10 | **会话是一等公民** | 持久化 session start/end 与单调事件水位 |
 
 ## 代码布局
 
@@ -145,10 +154,10 @@ Plico 使用三层级联（最低 → 最高优先级）：
 src/
 ├── cas/                 # SHA-256 内容寻址对象存储
 ├── memory/              # 分层记忆（瞬时 → 长期）+ 持久化
-├── intent/              # NL → 结构化 ApiRequest（接口层，非内核）
+├── intent/              # 内部自然语言意图路由，不是公共 wire 协议
 ├── scheduler/           # 智能体、优先级、消息、执行派发
 ├── fs/                  # 语义存储：标签、嵌入、图、上下文
-│   ├── embedding/       # EmbeddingProvider（OpenAI-compatible、Ollama、ONNX、stub）
+│   ├── embedding/       # EmbeddingProvider（OpenAI-compatible、Ollama、local worker、stub）
 │   ├── search/          # SemanticSearch（BM25、HNSW）
 │   ├── graph/           # KnowledgeGraph（redb，17 种边类型）
 │   ├── semantic_fs/     # 核心 CRUD + 事件存储
@@ -161,7 +170,7 @@ src/
 │   ├── hook.rs          # Hook 注册表（5 个拦截点）
 │   ├── event_bus.rs     # 类型化发布/订阅 + 持久化事件日志
 │   └── ops/             # 24 个操作模块
-├── api/                 # ApiRequest / ApiResponse + 权限 + 认证
+├── api/                 # plico.personal.v2 类型化协议 + 内部旧命令
 ├── tool/                # Tool trait 与注册表（「一切皆工具」）
 ├── temporal/            # 时间推理（自然语言时间 → 时间范围）
 ├── llm/                 # LlmProvider trait（OpenAI-compatible / Ollama / stub）
@@ -169,7 +178,6 @@ src/
 ├── client.rs            # KernelClient trait（嵌入 / UDS / TCP）
 └── bin/
     ├── plicod.rs        # 守护进程（TCP + UDS，start/stop/status 生命周期，PID 文件）
-    ├── plico_sse.rs     # SSE 适配器（A2A 协议）
     ├── plico_mcp/       # MCP stdio 服务（JSON-RPC 2.0）
     └── aicli/           # 语义 CLI（守护进程优先，--embedded 回退）
 

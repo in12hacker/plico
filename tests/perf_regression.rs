@@ -42,9 +42,7 @@ fn make_kernel() -> (Arc<AIKernel>, tempfile::TempDir) {
 }
 
 fn sample_embedding(dim: usize, seed: f32) -> Vec<f32> {
-    (0..dim)
-        .map(|i| (seed * (i + 1) as f32).sin())
-        .collect()
+    (0..dim).map(|i| (seed * (i + 1) as f32).sin()).collect()
 }
 
 fn make_meta(cid: &str, tags: Vec<&str>) -> SearchIndexMeta {
@@ -54,6 +52,9 @@ fn make_meta(cid: &str, tags: Vec<&str>) -> SearchIndexMeta {
         snippet: String::new(),
         content_type: "text".to_string(),
         created_at: 0,
+        owner_role: "owner".to_string(),
+        namespace: "default".to_string(),
+        scope: plico::cas::ObjectScope::Shared,
         memory_type: None,
     }
 }
@@ -80,12 +81,7 @@ fn bench_n<F: FnMut()>(n: usize, mut f: F) -> Vec<Duration> {
 }
 
 /// Assert P50 and P95 are within thresholds.
-fn assert_latency_ok(
-    label: &str,
-    durations: &[Duration],
-    p50_max: Duration,
-    p95_max: Duration,
-) {
+fn assert_latency_ok(label: &str, durations: &[Duration], p50_max: Duration, p95_max: Duration) {
     let p50 = percentile(durations, 50.0);
     let p95 = percentile(durations, 95.0);
     let p99 = percentile(durations, 99.0);
@@ -99,12 +95,16 @@ fn assert_latency_ok(
     assert!(
         p50 <= p50_max,
         "[perf-regression] {} P50 {:?} exceeds threshold {:?}",
-        label, p50, p50_max
+        label,
+        p50,
+        p50_max
     );
     assert!(
         p95 <= p95_max,
         "[perf-regression] {} P95 {:?} exceeds threshold {:?}",
-        label, p95, p95_max
+        label,
+        p95,
+        p95_max
     );
 }
 
@@ -148,7 +148,12 @@ fn perf_hnsw_search_100() {
         assert!(!results.is_empty());
     });
 
-    assert_latency_ok("hnsw_search_100", &durations, Duration::from_millis(1), Duration::from_millis(5));
+    assert_latency_ok(
+        "hnsw_search_100",
+        &durations,
+        Duration::from_millis(1),
+        Duration::from_millis(5),
+    );
 }
 
 #[test]
@@ -163,7 +168,12 @@ fn perf_hnsw_search_1000() {
         assert!(!results.is_empty());
     });
 
-    assert_latency_ok("hnsw_search_1000", &durations, Duration::from_millis(5), Duration::from_millis(15));
+    assert_latency_ok(
+        "hnsw_search_1000",
+        &durations,
+        Duration::from_millis(5),
+        Duration::from_millis(15),
+    );
 }
 
 #[test]
@@ -178,7 +188,12 @@ fn perf_hnsw_search_5000() {
         assert!(!results.is_empty());
     });
 
-    assert_latency_ok("hnsw_search_5000", &durations, Duration::from_millis(10), Duration::from_millis(30));
+    assert_latency_ok(
+        "hnsw_search_5000",
+        &durations,
+        Duration::from_millis(10),
+        Duration::from_millis(30),
+    );
 }
 
 #[test]
@@ -196,7 +211,12 @@ fn perf_hnsw_search_with_filter_1000() {
         assert!(!results.is_empty());
     });
 
-    assert_latency_ok("hnsw_search_filtered_1000", &durations, Duration::from_millis(5), Duration::from_millis(15));
+    assert_latency_ok(
+        "hnsw_search_filtered_1000",
+        &durations,
+        Duration::from_millis(5),
+        Duration::from_millis(15),
+    );
 }
 
 // ── HNSW Upsert/Delete Performance ──────────────────────────────────────────
@@ -212,7 +232,12 @@ fn perf_hnsw_upsert() {
         backend.upsert(&cid, &emb, make_meta(&cid, vec!["tag"]));
     });
 
-    assert_latency_ok("hnsw_upsert", &durations, Duration::from_millis(1), Duration::from_millis(5));
+    assert_latency_ok(
+        "hnsw_upsert",
+        &durations,
+        Duration::from_millis(1),
+        Duration::from_millis(5),
+    );
 }
 
 #[test]
@@ -234,7 +259,12 @@ fn perf_hnsw_delete() {
         idx += 1;
     });
 
-    assert_latency_ok("hnsw_delete", &durations, Duration::from_millis(2), Duration::from_millis(10));
+    assert_latency_ok(
+        "hnsw_delete",
+        &durations,
+        Duration::from_millis(2),
+        Duration::from_millis(10),
+    );
 }
 
 // ── Two-Stage Search Regression ──────────────────────────────────────────────
@@ -257,7 +287,12 @@ fn perf_two_stage_search_5000() {
         assert!(results[0].score > 0.99, "exact match score should be ~1.0");
     });
 
-    assert_latency_ok("two_stage_search_5000", &durations, Duration::from_millis(10), Duration::from_millis(30));
+    assert_latency_ok(
+        "two_stage_search_5000",
+        &durations,
+        Duration::from_millis(10),
+        Duration::from_millis(30),
+    );
 }
 
 // ── CAS Write + Read Performance ─────────────────────────────────────────────
@@ -269,30 +304,41 @@ async fn perf_cas_write_read() {
     let content = "The quick brown fox jumps over the lazy dog. ".repeat(10);
 
     let durations = bench_n(100, || {
-        let resp = call_api(&kernel, ApiRequest::Create {
-            content: content.clone(),
-            content_encoding: ContentEncoding::Utf8,
-            tags: vec!["perf".to_string()],
-            agent_id: agent_id.clone(),
-            tenant_id: None,
-            agent_token: None,
-            api_version: None,
-            intent: None,
-            scope: None,
-});
+        let resp = call_api(
+            &kernel,
+            ApiRequest::Create {
+                content: content.clone(),
+                content_encoding: ContentEncoding::Utf8,
+                tags: vec!["perf".to_string()],
+                scope: None,
+                agent_id: agent_id.clone(),
+                tenant_id: None,
+                agent_token: None,
+                api_version: None,
+                intent: None,
+            },
+        );
         assert!(resp.ok, "create failed: {:?}", resp.error);
         let cid = resp.cid.unwrap();
 
-        let resp = call_api(&kernel, ApiRequest::Read {
-            cid,
-            agent_id: agent_id.clone(),
-            tenant_id: None,
-            agent_token: None,
-        });
+        let resp = call_api(
+            &kernel,
+            ApiRequest::Read {
+                cid,
+                agent_id: agent_id.clone(),
+                tenant_id: None,
+                agent_token: None,
+            },
+        );
         assert!(resp.ok, "read failed: {:?}", resp.error);
     });
 
-    assert_latency_ok("cas_write_read", &durations, Duration::from_millis(20), Duration::from_millis(50));
+    assert_latency_ok(
+        "cas_write_read",
+        &durations,
+        Duration::from_millis(20),
+        Duration::from_millis(50),
+    );
 }
 
 // ── Memory Recall Performance ────────────────────────────────────────────────
@@ -303,25 +349,35 @@ fn perf_memory_recall_100() {
     let (agent_id, _) = register_agent(&kernel, "perf_agent");
 
     for i in 0..100 {
-        call_api(&kernel, ApiRequest::Remember {
-            agent_id: agent_id.clone(),
-            content: format!("Memory item {}: important fact about topic {}", i, i % 10),
-            tenant_id: None,
-        });
+        call_api(
+            &kernel,
+            ApiRequest::Remember {
+                agent_id: agent_id.clone(),
+                content: format!("Memory item {}: important fact about topic {}", i, i % 10),
+                tenant_id: None,
+            },
+        );
     }
 
     let durations = bench_n(100, || {
-        let resp = call_api(&kernel, ApiRequest::Recall {
-            agent_id: agent_id.clone(),
-            query: Some("important fact".to_string()),
-            limit: Some(10),
-            scope: None,
-            tier: None,
-        });
+        let resp = call_api(
+            &kernel,
+            ApiRequest::Recall {
+                agent_id: agent_id.clone(),
+                query: Some("important fact".to_string()),
+                limit: Some(10),
+                tier: None,
+            },
+        );
         assert!(resp.ok, "recall failed: {:?}", resp.error);
     });
 
-    assert_latency_ok("memory_recall_100", &durations, Duration::from_millis(5), Duration::from_millis(20));
+    assert_latency_ok(
+        "memory_recall_100",
+        &durations,
+        Duration::from_millis(5),
+        Duration::from_millis(20),
+    );
 }
 
 // ── Search Performance (full pipeline) ───────────────────────────────────────
@@ -332,37 +388,48 @@ async fn perf_search_pipeline_50() {
     let (agent_id, _) = register_agent(&kernel, "perf_agent");
 
     for i in 0..50 {
-        call_api(&kernel, ApiRequest::Create {
-            content: format!("Document {} about rust programming", i),
-            content_encoding: ContentEncoding::Utf8,
-            tags: vec!["doc".to_string()],
-            agent_id: agent_id.clone(),
-            tenant_id: None,
-            agent_token: None,
-            api_version: None,
-            intent: None,
-            scope: None,
-});
+        call_api(
+            &kernel,
+            ApiRequest::Create {
+                content: format!("Document {} about rust programming", i),
+                content_encoding: ContentEncoding::Utf8,
+                tags: vec!["doc".to_string()],
+                agent_id: agent_id.clone(),
+                tenant_id: None,
+                agent_token: None,
+                api_version: None,
+                intent: None,
+                scope: None,
+            },
+        );
     }
 
     let durations = bench_n(100, || {
-        let resp = call_api(&kernel, ApiRequest::Search {
-            query: "rust programming".to_string(),
-            agent_id: agent_id.clone(),
-            tenant_id: None,
-            agent_token: None,
-            limit: Some(10),
-            offset: None,
-            require_tags: vec![],
-            exclude_tags: vec![],
-            since: None,
-            until: None,
-            intent_context: None,
-        });
+        let resp = call_api(
+            &kernel,
+            ApiRequest::Search {
+                query: "rust programming".to_string(),
+                agent_id: agent_id.clone(),
+                tenant_id: None,
+                agent_token: None,
+                limit: Some(10),
+                offset: None,
+                require_tags: vec![],
+                exclude_tags: vec![],
+                since: None,
+                until: None,
+                intent_context: None,
+            },
+        );
         assert!(resp.ok, "search failed: {:?}", resp.error);
     });
 
-    assert_latency_ok("search_pipeline_50", &durations, Duration::from_millis(20), Duration::from_millis(100));
+    assert_latency_ok(
+        "search_pipeline_50",
+        &durations,
+        Duration::from_millis(20),
+        Duration::from_millis(100),
+    );
 }
 
 // ── Batch Operations Performance ─────────────────────────────────────────────
@@ -382,15 +449,23 @@ fn perf_batch_create_50() {
         .collect();
 
     let durations = bench_n(20, || {
-        let resp = call_api(&kernel, ApiRequest::BatchCreate {
-            agent_id: agent_id.clone(),
-            items: items.clone(),
-            tenant_id: None,
-        });
+        let resp = call_api(
+            &kernel,
+            ApiRequest::BatchCreate {
+                agent_id: agent_id.clone(),
+                items: items.clone(),
+                tenant_id: None,
+            },
+        );
         assert!(resp.ok, "batch_create failed: {:?}", resp.error);
     });
 
-    assert_latency_ok("batch_create_50", &durations, Duration::from_millis(200), Duration::from_millis(300));
+    assert_latency_ok(
+        "batch_create_50",
+        &durations,
+        Duration::from_millis(200),
+        Duration::from_millis(300),
+    );
 }
 
 // ── KG Path Finding Performance ──────────────────────────────────────────────
@@ -400,53 +475,73 @@ fn perf_kg_find_paths() {
     let (kernel, _dir) = make_kernel();
     let (agent_id, _) = register_agent(&kernel, "perf_agent");
 
-    let hub = call_api(&kernel, ApiRequest::AddNode {
-        agent_id: agent_id.clone(),
-        label: "Hub".to_string(),
-        node_type: KGNodeType::Entity,
-        properties: serde_json::Value::Null,
-        tenant_id: None,
-    });
+    let hub = call_api(
+        &kernel,
+        ApiRequest::AddNode {
+            agent_id: agent_id.clone(),
+            label: "Hub".to_string(),
+            node_type: KGNodeType::Entity,
+            properties: serde_json::Value::Null,
+            tenant_id: None,
+        },
+    );
     assert!(hub.ok);
     let hub_id = hub.node_id.unwrap();
 
     let mut leaf_ids = Vec::new();
     for i in 0..20 {
-        let resp = call_api(&kernel, ApiRequest::AddNode {
-            agent_id: agent_id.clone(),
-            label: format!("Leaf_{}", i),
-            node_type: KGNodeType::Entity,
-            properties: serde_json::Value::Null,
-            tenant_id: None,
-        });
+        let resp = call_api(
+            &kernel,
+            ApiRequest::AddNode {
+                agent_id: agent_id.clone(),
+                label: format!("Leaf_{}", i),
+                node_type: KGNodeType::Entity,
+                properties: serde_json::Value::Null,
+                tenant_id: None,
+            },
+        );
         assert!(resp.ok);
         let leaf_id = resp.node_id.unwrap();
         leaf_ids.push(leaf_id.clone());
 
-        call_api(&kernel, ApiRequest::AddEdge {
-            agent_id: agent_id.clone(),
-            src_id: hub_id.clone(),
-            dst_id: leaf_id,
-            edge_type: KGEdgeType::AssociatesWith,
-            weight: None,
-            tenant_id: None,
-        });
+        call_api(
+            &kernel,
+            ApiRequest::AddEdge {
+                agent_id: agent_id.clone(),
+                src_id: hub_id.clone(),
+                dst_id: leaf_id,
+                edge_type: KGEdgeType::AssociatesWith,
+                weight: None,
+                tenant_id: None,
+            },
+        );
     }
 
     let durations = bench_n(100, || {
-        let resp = call_api(&kernel, ApiRequest::FindPaths {
-            agent_id: agent_id.clone(),
-            src_id: leaf_ids[0].clone(),
-            dst_id: leaf_ids[1].clone(),
-            max_depth: Some(4),
-            weighted: false,
-            tenant_id: None,
-        });
+        let resp = call_api(
+            &kernel,
+            ApiRequest::FindPaths {
+                agent_id: agent_id.clone(),
+                src_id: leaf_ids[0].clone(),
+                dst_id: leaf_ids[1].clone(),
+                max_depth: Some(4),
+                weighted: false,
+                tenant_id: None,
+            },
+        );
         assert!(resp.ok, "find_paths failed: {:?}", resp.error);
-        assert!(!resp.paths.as_ref().unwrap().is_empty(), "should find at least one path");
+        assert!(
+            !resp.paths.as_ref().unwrap().is_empty(),
+            "should find at least one path"
+        );
     });
 
-    assert_latency_ok("kg_find_paths", &durations, Duration::from_millis(10), Duration::from_millis(30));
+    assert_latency_ok(
+        "kg_find_paths",
+        &durations,
+        Duration::from_millis(10),
+        Duration::from_millis(30),
+    );
 }
 
 // ── Trace Write Performance ──────────────────────────────────────────────────
@@ -459,41 +554,52 @@ fn perf_trace_write_overhead() {
 
     // Warm up
     for _ in 0..3 {
-        let resp = call_api(&kernel, ApiRequest::Search {
-            query: "warmup".to_string(),
-            agent_id: agent_id.clone(),
-            tenant_id: None,
-            agent_token: None,
-            limit: Some(5),
-            offset: None,
-            require_tags: vec![],
-            exclude_tags: vec![],
-            since: None,
-            until: None,
-            intent_context: None,
-        });
+        let resp = call_api(
+            &kernel,
+            ApiRequest::Search {
+                query: "warmup".to_string(),
+                agent_id: agent_id.clone(),
+                tenant_id: None,
+                agent_token: None,
+                limit: Some(5),
+                offset: None,
+                require_tags: vec![],
+                exclude_tags: vec![],
+                since: None,
+                until: None,
+                intent_context: None,
+            },
+        );
         assert!(resp.ok);
     }
 
     // Measure latency of API calls with trace recording enabled
     let durations = bench_n(100, || {
-        let resp = call_api(&kernel, ApiRequest::Search {
-            query: "perf".to_string(),
-            agent_id: agent_id.clone(),
-            tenant_id: None,
-            agent_token: None,
-            limit: Some(5),
-            offset: None,
-            require_tags: vec![],
-            exclude_tags: vec![],
-            since: None,
-            until: None,
-            intent_context: None,
-        });
+        let resp = call_api(
+            &kernel,
+            ApiRequest::Search {
+                query: "perf".to_string(),
+                agent_id: agent_id.clone(),
+                tenant_id: None,
+                agent_token: None,
+                limit: Some(5),
+                offset: None,
+                require_tags: vec![],
+                exclude_tags: vec![],
+                since: None,
+                until: None,
+                intent_context: None,
+            },
+        );
         assert!(resp.ok);
     });
 
     // Trace overhead should be negligible (< 1ms P50, < 5ms P95)
     // because writes go through mpsc channel (non-blocking)
-    assert_latency_ok("trace_write_overhead", &durations, Duration::from_millis(1), Duration::from_millis(5));
+    assert_latency_ok(
+        "trace_write_overhead",
+        &durations,
+        Duration::from_millis(1),
+        Duration::from_millis(5),
+    );
 }

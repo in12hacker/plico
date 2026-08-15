@@ -3,9 +3,9 @@
 //! Validates the learning loop: skill discovery works, procedural memory stores
 //! reusable operations, and growth tracking captures agent evolution.
 
-use std::sync::Arc;
 use plico::api::semantic::ApiRequest;
 use plico::kernel::AIKernel;
+use std::sync::Arc;
 
 fn make_kernel() -> (Arc<AIKernel>, tempfile::TempDir) {
     std::env::set_var("EMBEDDING_BACKEND", "stub");
@@ -15,16 +15,11 @@ fn make_kernel() -> (Arc<AIKernel>, tempfile::TempDir) {
     (kernel, dir)
 }
 
-
 #[test]
 fn axiom9_skill_registration_and_discovery() {
     let (kernel, _dir) = make_kernel();
     let agent_id = kernel.register_agent("skill-agent".into()).unwrap();
-    kernel.permission_grant(
-        &agent_id,
-        plico::api::permission::PermissionAction::Write,
-        None, None,
-    );
+    kernel.permission_grant(&agent_id, plico::api::permission::PermissionAction::Write, None, None);
 
     let register_resp = kernel.handle_api_request(ApiRequest::RegisterSkill {
         agent_id: agent_id.clone(),
@@ -48,16 +43,8 @@ fn axiom9_skill_registration_and_discovery() {
 fn axiom9_procedural_memory_store_and_recall() {
     let (kernel, _dir) = make_kernel();
     let agent_id = kernel.register_agent("proc-memory-agent".into()).unwrap();
-    kernel.permission_grant(
-        &agent_id,
-        plico::api::permission::PermissionAction::Write,
-        None, None,
-    );
-    kernel.permission_grant(
-        &agent_id,
-        plico::api::permission::PermissionAction::Read,
-        None, None,
-    );
+    kernel.permission_grant(&agent_id, plico::api::permission::PermissionAction::Write, None, None);
+    kernel.permission_grant(&agent_id, plico::api::permission::PermissionAction::Read, None, None);
 
     let store_resp = kernel.handle_api_request(ApiRequest::RememberProcedural {
         agent_id: agent_id.clone(),
@@ -77,7 +64,6 @@ fn axiom9_procedural_memory_store_and_recall() {
         ],
         learned_from: Some("manual observation".to_string()),
         tags: vec!["deploy".to_string()],
-        scope: None,
     });
     assert!(store_resp.ok, "RememberProcedural failed: {:?}", store_resp.error);
 
@@ -92,21 +78,16 @@ fn axiom9_procedural_memory_store_and_recall() {
 fn axiom9_growth_report_after_session() {
     let (kernel, _dir) = make_kernel();
     let agent_id = kernel.register_agent("growth-agent".into()).unwrap();
-    kernel.permission_grant(
-        &agent_id,
-        plico::api::permission::PermissionAction::Write,
-        None, None,
-    );
+    kernel.permission_grant(&agent_id, plico::api::permission::PermissionAction::Write, None, None);
 
     let start_resp = kernel.handle_api_request(ApiRequest::StartSession {
         agent_id: agent_id.clone(),
         agent_token: None,
-        intent_hint: Some("test learning growth".to_string()),
-        load_tiers: vec![],
         last_seen_seq: None,
     });
     assert!(start_resp.ok, "StartSession failed: {:?}", start_resp.error);
-    let session_id = start_resp.session_started
+    let session_id = start_resp
+        .session_started
         .as_ref()
         .map(|s| s.session_id.clone())
         .expect("should have session_started");
@@ -120,13 +101,12 @@ fn axiom9_growth_report_after_session() {
         tenant_id: None,
         agent_token: None,
         intent: None,
-            scope: None,
-});
+        scope: None,
+    });
 
     let end_resp = kernel.handle_api_request(ApiRequest::EndSession {
         agent_id: agent_id.clone(),
         session_id,
-        auto_checkpoint: true,
     });
     assert!(end_resp.ok, "EndSession failed: {:?}", end_resp.error);
 
@@ -141,11 +121,7 @@ fn axiom9_growth_report_after_session() {
 fn axiom9_intent_feedback_for_learning() {
     let (kernel, _dir) = make_kernel();
     let agent_id = kernel.register_agent("feedback-learner".into()).unwrap();
-    kernel.permission_grant(
-        &agent_id,
-        plico::api::permission::PermissionAction::Write,
-        None, None,
-    );
+    kernel.permission_grant(&agent_id, plico::api::permission::PermissionAction::Write, None, None);
 
     // First declare an intent to get an intent_id
     let declare_resp = kernel.handle_api_request(ApiRequest::DeclareIntent {

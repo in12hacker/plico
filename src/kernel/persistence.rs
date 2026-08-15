@@ -6,18 +6,21 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::fs::{OllamaBackend, OpenAIEmbeddingBackend, EmbeddingProvider, LocalEmbeddingBackend, StubEmbeddingProvider, EmbedError, OrtEmbeddingBackend, EmbeddingCircuitBreaker, AdaptiveEmbeddingProvider};
-use crate::llm::{LlmProvider, LlmError, OllamaProvider, StubProvider, OpenAICompatibleProvider, CircuitBreakerLlmProvider};
+use crate::fs::{
+    AdaptiveEmbeddingProvider, EmbedError, EmbeddingCircuitBreaker, EmbeddingProvider, LocalEmbeddingBackend,
+    OllamaBackend, OpenAIEmbeddingBackend, StubEmbeddingProvider,
+};
+use crate::kernel::ops::cache::EmbeddingCache;
+use crate::llm::{
+    CircuitBreakerLlmProvider, LlmError, LlmProvider, OllamaProvider, OpenAICompatibleProvider, StubProvider,
+};
+use crate::memory::CanonicalLedger;
 
 use super::AIKernel;
 
 /// Resolve llama.cpp server URL via unified config.
 pub(crate) fn resolve_llama_url() -> String {
     crate::config::PlicoConfig::load(None).resolve_llama_url()
-}
-
-pub(crate) fn ensure_v1_suffix(url: &str) -> String {
-    crate::config::ensure_v1_suffix(url)
 }
 
 pub fn atomic_write_json<T: serde::Serialize>(path: &Path, data: &T) {
@@ -32,96 +35,149 @@ pub fn atomic_write_json<T: serde::Serialize>(path: &Path, data: &T) {
 pub fn atomic_write_bytes(path: &Path, data: &[u8]) -> std::io::Result<()> {
     let tmp = path.with_extension("tmp");
     std::fs::write(&tmp, data)?;
-    if std::fs::rename(&tmp, path).is_err() {
+    if let Err(error) = std::fs::rename(&tmp, path) {
         let _ = std::fs::remove_file(&tmp);
+        return Err(error);
     }
     Ok(())
 }
 
 impl AIKernel {
-    pub(crate) fn restore_memories(&self) {
-        if let Some(ref persister) = self.memory_persister {
-            for id in persister.list_all_agent_ids() {
-                let _ = self.memory.restore_agent(&id);
-            }
+    pub(crate) fn restore_memories(&self) -> Result<(), crate::memory::LedgerError> {
+        for id in self.canonical.list_origin_roles()? {
+            self.memory.restore_agent(&id)?;
         }
+        Ok(())
     }
 
-    pub(crate) fn persist_memories(&self) -> usize { self.memory.persist_all() }
+    pub(crate) fn persist_memories(&self) -> Result<bool, crate::memory::LedgerError> {
+        self.memory.flush_ledger()
+    }
 
-    pub fn persist_all(&self) {
-        self.persist_memories();
+    pub fn flush_canonical_memory(&self) -> Result<(), crate::memory::LedgerError> {
+        self.persist_memories()?;
+        tracing::info!(
+            phase = "flush_ledger",
+            outcome = "success",
+            "canonical memory ledger flushed"
+        );
+        Ok(())
+    }
+
+    pub fn persist_auxiliary_best_effort(&self) {
         self.persist_agents();
         self.persist_intents();
         self.persist_permissions();
         self.persist_event_log();
         self.persist_search_index();
         self.fs.flush_tag_index();
-        self.persist_checkpoints();
+        if self.persist_checkpoints().is_err() {
+            tracing::warn!(
+                phase = "persist_auxiliary",
+                error_category = "checkpoint_write",
+                "checkpoint persistence failed"
+            );
+        }
         self.persist_task_store();
-        self.persist_tenants();
         self.persist_key_store();
         self.persist_sessions();
         let _ = self.prefetch.persist();
         let _ = self.cost_ledger.persist_to_dir(&self.root.join("prefetch"));
-        tracing::info!("All kernel state persisted to disk");
     }
 
-    pub(crate) fn persist_sessions(&self) { let _ = self.session_store.persist(&self.root); }
-    pub(crate) fn agent_index_path(&self) -> PathBuf { self.root.join("agent_index.json") }
+    pub(crate) fn persist_sessions(&self) {
+        let _ = self.session_store.persist(&self.root);
+    }
+    pub(crate) fn agent_index_path(&self) -> PathBuf {
+        self.root.join("agent_index.json")
+    }
     pub(crate) fn persist_agents(&self) {
         atomic_write_json(&self.agent_index_path(), &self.scheduler.snapshot_agents());
         self.persist_usage();
     }
-    fn usage_index_path(&self) -> PathBuf { self.root.join("usage_index.json") }
-    pub(crate) fn persist_usage(&self) { atomic_write_json(&self.usage_index_path(), &self.scheduler.snapshot_usage()); }
+    fn usage_index_path(&self) -> PathBuf {
+        self.root.join("usage_index.json")
+    }
+    pub(crate) fn persist_usage(&self) {
+        atomic_write_json(&self.usage_index_path(), &self.scheduler.snapshot_usage());
+    }
 
     fn restore_usage(&self) {
         let path = self.usage_index_path();
         if let Ok(json) = std::fs::read_to_string(&path) {
-            if let Ok(data) = serde_json::from_str(&json) { self.scheduler.restore_usage(data); }
+            if let Ok(data) = serde_json::from_str(&json) {
+                self.scheduler.restore_usage(data);
+            }
         }
     }
 
     pub(crate) fn restore_agents(&self) {
         let path = self.agent_index_path();
         if let Ok(json) = std::fs::read_to_string(&path) {
-            if let Ok(agents) = serde_json::from_str(&json) { self.scheduler.restore_agents(agents); }
+            if let Ok(agents) = serde_json::from_str(&json) {
+                self.scheduler.restore_agents(agents);
+            }
         }
         self.restore_usage();
     }
 
-    fn intent_index_path(&self) -> PathBuf { self.root.join("intent_index.json") }
-    pub(crate) fn persist_intents(&self) { atomic_write_json(&self.intent_index_path(), &self.scheduler.snapshot_intents()); }
+    fn intent_index_path(&self) -> PathBuf {
+        self.root.join("intent_index.json")
+    }
+    pub(crate) fn persist_intents(&self) {
+        atomic_write_json(&self.intent_index_path(), &self.scheduler.snapshot_intents());
+    }
     pub(crate) fn restore_intents(&self) {
         let path = self.intent_index_path();
         if let Ok(json) = std::fs::read_to_string(&path) {
-            if let Ok(intents) = serde_json::from_str(&json) { self.scheduler.restore_intents(intents); }
+            if let Ok(intents) = serde_json::from_str(&json) {
+                self.scheduler.restore_intents(intents);
+            }
         }
         let _ = std::fs::remove_file(&path);
     }
 
-    pub(crate) fn persist_search_index(&self) { let _ = self.search_backend.persist_to(&self.root); }
+    pub(crate) fn persist_search_index(&self) {
+        let _ = self.search_backend.persist_to(&self.root);
+    }
 
-    fn permission_index_path(&self) -> PathBuf { self.root.join("permission_index.json") }
+    fn permission_index_path(&self) -> PathBuf {
+        self.root.join("permission_index.json")
+    }
     pub(crate) fn persist_permissions(&self) {
         let grants = self.permissions.snapshot();
-        if grants.is_empty() { let _ = std::fs::remove_file(self.permission_index_path()); }
-        else { atomic_write_json(&self.permission_index_path(), &grants); }
+        if grants.is_empty() {
+            let _ = std::fs::remove_file(self.permission_index_path());
+        } else {
+            atomic_write_json(&self.permission_index_path(), &grants);
+        }
     }
     pub(crate) fn restore_permissions(&self) {
         let path = self.permission_index_path();
         if let Ok(json) = std::fs::read_to_string(&path) {
-            if let Ok(grants) = serde_json::from_str(&json) { self.permissions.restore(grants); }
+            if let Ok(grants) = serde_json::from_str(&json) {
+                self.permissions.restore(grants);
+            }
         }
     }
 
     pub(crate) fn persist_event_log(&self) {
         let events = self.event_bus.snapshot_events();
-        if events.is_empty() { return; }
-        if let Ok(mut file) = std::fs::OpenOptions::new().create(true).write(true).truncate(true).open(self.root.join("event_log.jsonl")) {
+        if events.is_empty() {
+            return;
+        }
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(self.root.join("event_log.jsonl"))
+        {
             use std::io::Write;
-            for e in &events { if let Ok(json) = serde_json::to_string(e) { let _ = writeln!(file, "{}", json); } }
+            for e in &events {
+                if let Ok(json) = serde_json::to_string(e) {
+                    let _ = writeln!(file, "{}", json);
+                }
+            }
         }
     }
     pub(crate) fn restore_event_log(&self) {
@@ -130,12 +186,16 @@ impl AIKernel {
         }
     }
 
-    pub(crate) fn persist_checkpoints(&self) { self.checkpoint_store.persist(&self.root, &self.cas); }
-    pub(crate) fn persist_task_store(&self) { self.task_store.persist(); }
-    pub(crate) fn restore_checkpoints(&self) {}
+    pub(crate) fn persist_checkpoints(&self) -> std::io::Result<()> {
+        self.checkpoint_store.persist(&self.root, &self.cas)
+    }
+    pub(crate) fn persist_task_store(&self) {
+        self.task_store.persist();
+    }
     pub(crate) fn restore_task_store(&self) {}
-    pub(crate) fn persist_tenants(&self) { self.tenant_store.persist(&self.root); }
-    pub(crate) fn persist_key_store(&self) { self.key_store.persist(&self.root); }
+    pub(crate) fn persist_key_store(&self) {
+        self.key_store.persist(&self.root);
+    }
 }
 
 fn read_circuit_breaker_config(t_env: &str, c_env: &str, t_def: u32, c_def: u64) -> (u32, u64) {
@@ -144,58 +204,71 @@ fn read_circuit_breaker_config(t_env: &str, c_env: &str, t_def: u32, c_def: u64)
     (t, c)
 }
 
-pub(crate) fn create_embedding_provider(config: &crate::config::InferenceConfig) -> Result<Arc<dyn EmbeddingProvider>, EmbedError> {
+pub(crate) fn create_embedding_provider(
+    config: &crate::config::InferenceConfig,
+    cache: Arc<EmbeddingCache>,
+) -> Result<Arc<dyn EmbeddingProvider>, EmbedError> {
     let backend = &config.embedding_backend;
     let base_provider: Arc<dyn EmbeddingProvider> = match backend.as_str() {
-        "ort" => {
-            let model_dir = std::env::var("PLICO_MODEL_DIR").unwrap_or_else(|_| "./models/all-MiniLM-L6-v2".to_string());
-            match OrtEmbeddingBackend::new(std::path::Path::new(&model_dir)) {
-                Ok(b) => Arc::new(b) as Arc<dyn EmbeddingProvider>,
-                Err(_) => Arc::new(StubEmbeddingProvider::new()) as Arc<dyn EmbeddingProvider>,
-            }
-        }
+        "ort" => return Err(EmbedError::ModelNotFound("ort embedding activation unavailable".into())),
         "local" => {
-            let model_id = config.embedding_model_id.clone().unwrap_or_else(|| "BAAI/bge-small-en-v1.5".to_string());
+            let model_id = config
+                .embedding_model_id
+                .clone()
+                .unwrap_or_else(|| "BAAI/bge-small-en-v1.5".to_string());
             let python = config.embedding_python.clone().unwrap_or_else(|| "python3".to_string());
-            match LocalEmbeddingBackend::new(&model_id, &python) {
-                Ok(b) => Arc::new(b) as Arc<dyn EmbeddingProvider>,
-                Err(_) => try_ollama_circuitbreaker(),
-            }
+            Arc::new(LocalEmbeddingBackend::new(&model_id, &python)?)
         }
         "openai" => {
-            let base_url = config.embedding_api_base.clone().map(|u| crate::config::ensure_v1_suffix(&u)).unwrap_or_else(|| {
-                if let Some(port) = crate::config::detect_embedding_server_port() { format!("http://127.0.0.1:{port}/v1") } else { "http://127.0.0.1:8080/v1".into() }
-            });
-            let model = config.embedding_model.clone().unwrap_or_else(|| "all-MiniLM-L6-v2".to_string());
-            match OpenAIEmbeddingBackend::new(&base_url, &model, config.api_key.clone()) {
-                Ok(b) => Arc::new(b) as Arc<dyn EmbeddingProvider>,
-                Err(_) => Arc::new(StubEmbeddingProvider::new()) as Arc<dyn EmbeddingProvider>,
-            }
+            let base_url = config
+                .embedding_api_base
+                .clone()
+                .map(|u| crate::config::ensure_v1_suffix(&u))
+                .unwrap_or_else(|| {
+                    if let Some(port) = crate::config::detect_embedding_server_port() {
+                        format!("http://127.0.0.1:{port}/v1")
+                    } else {
+                        "http://127.0.0.1:8080/v1".into()
+                    }
+                });
+            let model = config
+                .embedding_model
+                .clone()
+                .unwrap_or_else(|| "all-MiniLM-L6-v2".to_string());
+            Arc::new(OpenAIEmbeddingBackend::new(&base_url, &model, config.api_key.clone())?)
         }
         "stub" => Arc::new(StubEmbeddingProvider::new()) as Arc<dyn EmbeddingProvider>,
-        _ => try_ollama_circuitbreaker(),
+        "ollama" => {
+            let url = config
+                .ollama_url
+                .clone()
+                .unwrap_or_else(|| "http://localhost:11434".to_string());
+            let model = config
+                .embedding_model
+                .clone()
+                .unwrap_or_else(|| "all-minilm-l6-v2:latest".to_string());
+            Arc::new(OllamaBackend::new(&url, &model)?)
+        }
+        _ => return Err(EmbedError::ModelNotFound("unknown embedding backend".into())),
     };
 
-    let (threshold, cooldown_ms) = read_circuit_breaker_config("EMBEDDING_CB_THRESHOLD", "EMBEDDING_CB_COOLDOWN_MS", 3, 30_000);
+    wrap_embedding_provider(base_provider, config, cache)
+}
+
+pub(crate) fn wrap_embedding_provider(
+    base_provider: Arc<dyn EmbeddingProvider>,
+    config: &crate::config::InferenceConfig,
+    cache: Arc<EmbeddingCache>,
+) -> Result<Arc<dyn EmbeddingProvider>, EmbedError> {
+    let (threshold, cooldown_ms) =
+        read_circuit_breaker_config("EMBEDDING_CB_THRESHOLD", "EMBEDDING_CB_COOLDOWN_MS", 3, 30_000);
     let with_cb = Arc::new(EmbeddingCircuitBreaker::new(base_provider, threshold, cooldown_ms));
-    let adaptive = AdaptiveEmbeddingProvider::from_config(with_cb as Arc<dyn EmbeddingProvider>, config);
-    Ok(Arc::new(adaptive) as Arc<dyn EmbeddingProvider>)
-}
-
-fn try_ollama_circuitbreaker() -> Arc<dyn EmbeddingProvider> {
-    match try_ollama() {
-        Ok(inner) => {
-            let with_cb = Arc::new(EmbeddingCircuitBreaker::new(inner, 3, 30_000));
-            Arc::new(AdaptiveEmbeddingProvider::from_env(with_cb as Arc<dyn EmbeddingProvider>)) as Arc<dyn EmbeddingProvider>
-        }
-        Err(_) => Arc::new(StubEmbeddingProvider::new()) as Arc<dyn EmbeddingProvider>,
-    }
-}
-
-fn try_ollama() -> Result<Arc<dyn EmbeddingProvider>, EmbedError> {
-    let url = std::env::var("OLLAMA_URL").unwrap_or_else(|_| "http://localhost:11434".to_string());
-    let model = std::env::var("OLLAMA_EMBEDDING_MODEL").unwrap_or_else(|_| "all-minilm-l6-v2".to_string());
-    match OllamaBackend::new(&url, &model) { Ok(b) => Ok(Arc::new(b) as Arc<dyn EmbeddingProvider>), Err(e) => Err(e) }
+    let adaptive = AdaptiveEmbeddingProvider::from_config(with_cb as Arc<dyn EmbeddingProvider>, config)
+        .map_err(|_| EmbedError::Api("invalid adaptive embedding configuration".into()))?;
+    Ok(Arc::new(crate::fs::embedding::CachingEmbeddingProvider::new(
+        Arc::new(adaptive),
+        cache,
+    )))
 }
 
 pub(crate) fn create_llm_provider(model_env: &str, default_model: &str) -> Result<Arc<dyn LlmProvider>, LlmError> {
@@ -209,11 +282,17 @@ pub(crate) fn create_llm_provider(model_env: &str, default_model: &str) -> Resul
         "openai" => {
             let base_url = std::env::var("OPENAI_API_BASE").unwrap_or_else(|_| "https://api.openai.com/v1".to_string());
             let model = std::env::var(model_env).unwrap_or_else(|_| default_model.to_string());
-            Arc::new(OpenAICompatibleProvider::new(&base_url, &model, std::env::var("OPENAI_API_KEY").ok())?) as Arc<dyn LlmProvider>
+            Arc::new(OpenAICompatibleProvider::new(
+                &base_url,
+                &model,
+                std::env::var("OPENAI_API_KEY").ok(),
+            )?) as Arc<dyn LlmProvider>
         }
         "llama" => {
             let base_url = crate::config::PlicoConfig::load(None).resolve_llama_url();
-            let model = std::env::var("LLAMA_MODEL").or_else(|_| std::env::var(model_env)).unwrap_or_else(|_| default_model.to_string());
+            let model = std::env::var("LLAMA_MODEL")
+                .or_else(|_| std::env::var(model_env))
+                .unwrap_or_else(|_| default_model.to_string());
             Arc::new(OpenAICompatibleProvider::new(&base_url, &model, None)?) as Arc<dyn LlmProvider>
         }
         _ => Arc::new(StubProvider::empty()) as Arc<dyn LlmProvider>,
@@ -264,10 +343,15 @@ mod tests {
     }
 
     #[test]
-    fn test_ensure_v1_suffix() {
-        assert_eq!(ensure_v1_suffix("http://localhost:8080"), "http://localhost:8080/v1");
-        assert_eq!(ensure_v1_suffix("http://localhost:8080/v1"), "http://localhost:8080/v1");
-        assert_eq!(ensure_v1_suffix("http://localhost:8080/"), "http://localhost:8080/v1");
+    fn atomic_write_bytes_propagates_rename_failure_and_cleans_temp() {
+        let directory = tempfile::tempdir().unwrap();
+        let destination = directory.path().join("destination");
+        std::fs::create_dir(&destination).unwrap();
+        let temporary = destination.with_extension("tmp");
+
+        assert!(atomic_write_bytes(&destination, b"must not report success").is_err());
+        assert!(!temporary.exists());
+        assert!(destination.is_dir());
     }
 
     #[test]
@@ -284,16 +368,81 @@ mod tests {
             embedding_backend: "stub".to_string(),
             ..Default::default()
         };
-        let provider = create_embedding_provider(&config);
+        let provider = create_embedding_provider(&config, Arc::new(EmbeddingCache::new(8)));
         assert!(provider.is_ok());
+        assert!(matches!(
+            provider.unwrap().builder_identity(),
+            Err(crate::fs::EmbeddingIdentityError::StubProvider)
+        ));
+    }
+
+    #[test]
+    fn embedding_pipeline_rejects_a_second_wrapper_stack() {
+        let config = crate::config::InferenceConfig {
+            embedding_backend: "stub".to_string(),
+            ..Default::default()
+        };
+        let first = wrap_embedding_provider(
+            Arc::new(StubEmbeddingProvider::new()),
+            &config,
+            Arc::new(EmbeddingCache::new(8)),
+        )
+        .unwrap();
+        let second = wrap_embedding_provider(first, &config, Arc::new(EmbeddingCache::new(8)));
+        assert!(matches!(second, Err(EmbedError::Api(_))));
+    }
+
+    #[test]
+    fn removed_ort_and_unknown_backends_fail_without_stub_fallback() {
+        for backend in ["ort", "unknown-provider"] {
+            let config = crate::config::InferenceConfig {
+                embedding_backend: backend.to_string(),
+                ..Default::default()
+            };
+            let result = create_embedding_provider(&config, Arc::new(EmbeddingCache::new(8)));
+            assert!(matches!(result, Err(EmbedError::ModelNotFound(_))), "backend {backend}");
+        }
+    }
+
+    #[test]
+    fn remote_provider_capability_matrix_is_fail_closed() {
+        let openai = create_embedding_provider(
+            &crate::config::InferenceConfig {
+                embedding_backend: "openai".into(),
+                embedding_api_base: Some("http://127.0.0.1:1/v1".into()),
+                embedding_model: Some("unpinned-alias".into()),
+                ..Default::default()
+            },
+            Arc::new(EmbeddingCache::new(8)),
+        )
+        .unwrap();
+        assert!(matches!(
+            openai.builder_identity(),
+            Err(crate::fs::EmbeddingIdentityError::UnpinnedRemoteModel)
+        ));
+
+        let ollama = create_embedding_provider(
+            &crate::config::InferenceConfig {
+                embedding_backend: "ollama".into(),
+                embedding_model: Some("nomic-embed-text:latest".into()),
+                ollama_url: Some("http://127.0.0.1:1".into()),
+                ..Default::default()
+            },
+            Arc::new(EmbeddingCache::new(8)),
+        )
+        .unwrap();
+        assert!(matches!(
+            ollama.builder_identity(),
+            Err(crate::fs::EmbeddingIdentityError::ProviderProbeFailed)
+        ));
     }
 
     #[test]
     fn test_create_llm_provider_stub() {
-        let _ = std::env::set_var("LLM_BACKEND", "stub");
+        std::env::set_var("LLM_BACKEND", "stub");
         let result = create_llm_provider("TEST_MODEL", "test-model");
         assert!(result.is_ok());
-        let _ = std::env::remove_var("LLM_BACKEND");
+        std::env::remove_var("LLM_BACKEND");
     }
 
     #[test]
@@ -321,9 +470,10 @@ mod tests {
     }
 
     #[test]
-    fn test_persist_all() {
+    fn test_canonical_flush_and_auxiliary_persist() {
         let (kernel, _dir) = make_kernel();
-        kernel.persist_all();
+        kernel.flush_canonical_memory().unwrap();
+        kernel.persist_auxiliary_best_effort();
     }
 
     #[test]

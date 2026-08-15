@@ -20,21 +20,16 @@ fn make_kernel() -> (Arc<AIKernel>, tempfile::TempDir) {
 fn axiom10_session_start_and_end() {
     let (kernel, _dir) = make_kernel();
     let agent_id = kernel.register_agent("session-agent".into()).unwrap();
-    kernel.permission_grant(
-        &agent_id,
-        plico::api::permission::PermissionAction::Write,
-        None, None,
-    );
+    kernel.permission_grant(&agent_id, plico::api::permission::PermissionAction::Write, None, None);
 
     let start_resp = kernel.handle_api_request(ApiRequest::StartSession {
         agent_id: agent_id.clone(),
         agent_token: None,
-        intent_hint: Some("code review session".to_string()),
-        load_tiers: vec![],
         last_seen_seq: None,
     });
     assert!(start_resp.ok, "StartSession failed: {:?}", start_resp.error);
-    let session_id = start_resp.session_started
+    let session_id = start_resp
+        .session_started
         .as_ref()
         .map(|s| s.session_id.clone())
         .expect("should have session_started");
@@ -42,7 +37,6 @@ fn axiom10_session_start_and_end() {
     let end_resp = kernel.handle_api_request(ApiRequest::EndSession {
         agent_id: agent_id.clone(),
         session_id,
-        auto_checkpoint: true,
     });
     assert!(end_resp.ok, "EndSession failed: {:?}", end_resp.error);
     assert!(end_resp.session_ended.is_some(), "Should have session_ended result");
@@ -52,26 +46,17 @@ fn axiom10_session_start_and_end() {
 fn axiom10_session_with_operations() {
     let (kernel, _dir) = make_kernel();
     let agent_id = kernel.register_agent("ops-session-agent".into()).unwrap();
-    kernel.permission_grant(
-        &agent_id,
-        plico::api::permission::PermissionAction::Write,
-        None, None,
-    );
-    kernel.permission_grant(
-        &agent_id,
-        plico::api::permission::PermissionAction::Read,
-        None, None,
-    );
+    kernel.permission_grant(&agent_id, plico::api::permission::PermissionAction::Write, None, None);
+    kernel.permission_grant(&agent_id, plico::api::permission::PermissionAction::Read, None, None);
 
     let start_resp = kernel.handle_api_request(ApiRequest::StartSession {
         agent_id: agent_id.clone(),
         agent_token: None,
-        intent_hint: None,
-        load_tiers: vec![],
         last_seen_seq: None,
     });
     assert!(start_resp.ok);
-    let session_id = start_resp.session_started
+    let session_id = start_resp
+        .session_started
         .as_ref()
         .map(|s| s.session_id.clone())
         .expect("should have session_started");
@@ -108,7 +93,6 @@ fn axiom10_session_with_operations() {
     let end_resp = kernel.handle_api_request(ApiRequest::EndSession {
         agent_id: agent_id.clone(),
         session_id,
-        auto_checkpoint: true,
     });
     assert!(end_resp.ok);
 }
@@ -117,18 +101,12 @@ fn axiom10_session_with_operations() {
 fn axiom10_session_continuity_via_seq() {
     let (kernel, _dir) = make_kernel();
     let agent_id = kernel.register_agent("continuity-agent".into()).unwrap();
-    kernel.permission_grant(
-        &agent_id,
-        plico::api::permission::PermissionAction::Write,
-        None, None,
-    );
+    kernel.permission_grant(&agent_id, plico::api::permission::PermissionAction::Write, None, None);
 
     // Session 1
     let start1 = kernel.handle_api_request(ApiRequest::StartSession {
         agent_id: agent_id.clone(),
         agent_token: None,
-        intent_hint: None,
-        load_tiers: vec![],
         last_seen_seq: None,
     });
     assert!(start1.ok);
@@ -143,13 +121,12 @@ fn axiom10_session_continuity_via_seq() {
         tenant_id: None,
         agent_token: None,
         intent: None,
-            scope: None,
-});
+        scope: None,
+    });
 
     let end1 = kernel.handle_api_request(ApiRequest::EndSession {
         agent_id: agent_id.clone(),
         session_id: session_id_1,
-        auto_checkpoint: true,
     });
     assert!(end1.ok);
     let last_seq = end1.session_ended.as_ref().unwrap().last_seq;
@@ -158,8 +135,6 @@ fn axiom10_session_continuity_via_seq() {
     let start2 = kernel.handle_api_request(ApiRequest::StartSession {
         agent_id: agent_id.clone(),
         agent_token: None,
-        intent_hint: None,
-        load_tiers: vec![],
         last_seen_seq: Some(last_seq),
     });
     assert!(start2.ok);
@@ -168,7 +143,6 @@ fn axiom10_session_continuity_via_seq() {
     let end2 = kernel.handle_api_request(ApiRequest::EndSession {
         agent_id: agent_id.clone(),
         session_id: session_id_2,
-        auto_checkpoint: true,
     });
     assert!(end2.ok);
 }
@@ -177,32 +151,33 @@ fn axiom10_session_continuity_via_seq() {
 fn axiom10_session_performance_within_budget() {
     let (kernel, _dir) = make_kernel();
     let agent_id = kernel.register_agent("perf-session-agent".into()).unwrap();
-    kernel.permission_grant(
-        &agent_id,
-        plico::api::permission::PermissionAction::Write,
-        None, None,
-    );
+    kernel.permission_grant(&agent_id, plico::api::permission::PermissionAction::Write, None, None);
 
     let start = std::time::Instant::now();
     let start_resp = kernel.handle_api_request(ApiRequest::StartSession {
         agent_id: agent_id.clone(),
         agent_token: None,
-        intent_hint: None,
-        load_tiers: vec![],
         last_seen_seq: None,
     });
     let start_latency = start.elapsed();
     assert!(start_resp.ok);
-    assert!(start_latency.as_millis() < 200, "StartSession should be <200ms, got {}ms", start_latency.as_millis());
+    assert!(
+        start_latency.as_millis() < 200,
+        "StartSession should be <200ms, got {}ms",
+        start_latency.as_millis()
+    );
 
     let session_id = start_resp.session_started.as_ref().unwrap().session_id.clone();
     let end_start = std::time::Instant::now();
     let end_resp = kernel.handle_api_request(ApiRequest::EndSession {
         agent_id: agent_id.clone(),
         session_id,
-        auto_checkpoint: true,
     });
     let end_latency = end_start.elapsed();
     assert!(end_resp.ok);
-    assert!(end_latency.as_millis() < 200, "EndSession should be <200ms, got {}ms", end_latency.as_millis());
+    assert!(
+        end_latency.as_millis() < 200,
+        "EndSession should be <200ms, got {}ms",
+        end_latency.as_millis()
+    );
 }

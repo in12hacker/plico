@@ -89,16 +89,16 @@ impl Clone for LatencyHistogram {
 impl LatencyHistogram {
     /// Bucket boundaries in microseconds.
     const BUCKET_BOUNDARIES: [u64; 11] = [
-        100,     // 100us
-        500,     // 500us
-        1_000,   // 1ms
-        5_000,   // 5ms
-        10_000,  // 10ms
-        50_000,  // 50ms
-        100_000, // 100ms
-        500_000, // 500ms
-        1_000_000, // 1s
-        5_000_000, // 5s
+        100,        // 100us
+        500,        // 500us
+        1_000,      // 1ms
+        5_000,      // 5ms
+        10_000,     // 10ms
+        50_000,     // 50ms
+        100_000,    // 100ms
+        500_000,    // 500ms
+        1_000_000,  // 1s
+        5_000_000,  // 5s
         10_000_000, // 10s
     ];
 
@@ -112,10 +112,7 @@ impl LatencyHistogram {
 
     /// Record a latency observation (in microseconds).
     pub fn record(&self, us: u64) {
-        let bucket = Self::BUCKET_BOUNDARIES
-            .iter()
-            .position(|&b| us <= b)
-            .unwrap_or(11); // overflow bucket
+        let bucket = Self::BUCKET_BOUNDARIES.iter().position(|&b| us <= b).unwrap_or(11); // overflow bucket
 
         self.buckets[bucket].fetch_add(1, Ordering::Relaxed);
         self.sum.fetch_add(us, Ordering::Relaxed);
@@ -225,7 +222,11 @@ impl OpCounter {
 impl Clone for OpCounter {
     fn clone(&self) -> Self {
         Self {
-            counts: self.counts.iter().map(|c| AtomicU64::new(c.load(Ordering::Relaxed))).collect(),
+            counts: self
+                .counts
+                .iter()
+                .map(|c| AtomicU64::new(c.load(Ordering::Relaxed)))
+                .collect(),
         }
     }
 }
@@ -468,7 +469,10 @@ impl SessionObservation {
             suggestions.push("Cache hit rate <10%: consider registering common intents".into());
         }
         if obs.verifications_failed > 0 {
-            suggestions.push(format!("{} verification failures: review tool call parameters", obs.verifications_failed));
+            suggestions.push(format!(
+                "{} verification failures: review tool call parameters",
+                obs.verifications_failed
+            ));
         }
         if obs.total_tokens > 100_000 {
             suggestions.push("High token usage: consider using L1 context layer for better compression".into());
@@ -493,7 +497,7 @@ pub struct DecomposedHealth {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct HealthAction {
     pub component: String,
-    pub severity: String,  // "critical" | "warning" | "info"
+    pub severity: String, // "critical" | "warning" | "info"
     pub suggestion: String,
 }
 
@@ -519,8 +523,12 @@ impl DecomposedHealth {
         let cost_visibility = true; // Always true once cost ledger is integrated
 
         let mut overall = cache_effectiveness * 0.4;
-        if feedback_loop_active { overall += 0.3; }
-        if cost_visibility { overall += 0.3; }
+        if feedback_loop_active {
+            overall += 0.3;
+        }
+        if cost_visibility {
+            overall += 0.3;
+        }
         overall = overall.min(1.0);
 
         let mut actionable_items = Vec::new();
@@ -531,7 +539,8 @@ impl DecomposedHealth {
                 severity: "warning".into(),
                 suggestion: format!(
                     "Cache hit rate {:.1}% with {} lookups — warm up cache with repeated intents",
-                    cache_hit_rate * 100.0, cache_stats.total_lookups
+                    cache_hit_rate * 100.0,
+                    cache_stats.total_lookups
                 ),
             });
         }
@@ -566,8 +575,8 @@ impl DecomposedHealth {
 
 use crate::api::semantic::{GrowthPeriod, GrowthReport};
 use crate::kernel::event_bus::{EventBus, KernelEvent};
-use crate::kernel::ops::session::SessionStore;
 use crate::kernel::ops::prefetch::IntentPrefetcher;
+use crate::kernel::ops::session::SessionStore;
 
 /// Handle a query_growth_report request — generates a growth report for an agent.
 ///
@@ -619,9 +628,7 @@ pub fn handle_query_growth_report(
     // 3. Knowledge accumulation from EventBus
     let agent_events = event_bus.events_by_agent(agent_id);
     let relevant_events: Vec<_> = if let Some(cutoff) = cutoff_ms {
-        agent_events.into_iter()
-            .filter(|e| e.timestamp_ms >= cutoff)
-            .collect()
+        agent_events.into_iter().filter(|e| e.timestamp_ms >= cutoff).collect()
     } else {
         agent_events
     };
@@ -713,7 +720,11 @@ fn calculate_token_averages(sessions: &[super::session::CompletedSession]) -> To
         // If first was 0 but last isn't, the ratio is undefined (infinite improvement)
         // We return 0.0 as a sentinel indicating "no baseline to compare against"
         // If both are 0, return 1.0 (equal, neither better nor worse)
-        if last_5_avg > 0 { 0.0 } else { 1.0 }
+        if last_5_avg > 0 {
+            0.0
+        } else {
+            1.0
+        }
     };
 
     TokenAverages {
@@ -724,11 +735,7 @@ fn calculate_token_averages(sessions: &[super::session::CompletedSession]) -> To
 }
 
 /// Count KG nodes and edges created by an agent within a time period.
-fn count_kg_growth(
-    kg: &dyn crate::fs::KnowledgeGraph,
-    agent_id: &str,
-    cutoff_ms: Option<u64>,
-) -> (u64, u64) {
+fn count_kg_growth(kg: &dyn crate::fs::KnowledgeGraph, agent_id: &str, cutoff_ms: Option<u64>) -> (u64, u64) {
     let nodes = match kg.list_nodes(agent_id, None) {
         Ok(n) => n,
         Err(_) => return (0, 0),
@@ -911,7 +918,7 @@ mod tests {
             entries: 0,
             memory_bytes: 0,
             hits: 0,
-            total_lookups: 50,  // cold cache with lookups = warning
+            total_lookups: 50, // cold cache with lookups = warning
         };
         let health = DecomposedHealth::from_cache_and_profile(&cache_stats, 0);
         assert!(!health.actionable_items.is_empty());

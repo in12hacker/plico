@@ -23,12 +23,11 @@ Plico 是一个**为 AI Agent 设计的操作系统内核**。
 │  Application Layer (AI Agents)                      │
 ├─────────────────────────────────────────────────────┤
 │  Interface Adapters                                 │
-│  ┌─────────┐ ┌───────────┐ ┌──────────┐            │
-│  │  aicli   │ │ plico-mcp │ │ plico-sse│            │
-│  │ (CLI)    │ │ (JSON-RPC)│ │  (SSE)   │            │
-│  └────┬─────┘ └─────┬─────┘ └────┬─────┘            │
-│       │             │             │                  │
-│       └─────────────┼─────────────┘                  │
+│        ┌─────────┐ ┌───────────┐                    │
+│        │  aicli  │ │ plico-mcp │                    │
+│        │ (CLI)   │ │ (JSON-RPC)│                    │
+│        └────┬────┘ └─────┬─────┘                    │
+│             └────────────┤                          │
 │                     │                                │
 │             ┌───────▼────────┐                       │
 │             │  KernelClient  │ (trait)                │
@@ -68,7 +67,7 @@ Plico 是一个**为 AI Agent 设计的操作系统内核**。
 | 7 | **主动先于被动** | DeclareIntent → 后台预取 → 上下文就绪 |
 | 8 | **因果先于关联** | KG 记录 CausedBy / DependsOn / Produces 因果链 |
 | 9 | **越用越好** | AgentProfile 累积，技能发现，自我修复 |
-| 10 | **会话是一等公民** | session-start/end，warm_context，变更通知 |
+| 10 | **会话是一等公民** | 持久化 session start/end 与单调事件水位 |
 
 ---
 
@@ -80,7 +79,7 @@ Plico 是一个**为 AI Agent 设计的操作系统内核**。
 |------|------|------|------|------|
 | **kernel** | `src/kernel/` | 20,800 | 339 | 核心调度、Hook、意图、执行、预取、学习 |
 | **fs** | `src/fs/` | 7,647 | 167 | CAS、语义搜索、KG(redb)、向量索引 |
-| **bin** | `src/bin/` | 7,857 | 161 | aicli + plicod + plico_mcp + plico_sse |
+| **bin** | `src/bin/` | — | — | aicli + plicod + plico_mcp |
 | **api** | `src/api/` | 4,130 | 81 | DTO、语义 API、版本、鉴权 |
 | **memory** | `src/memory/` | 2,431 | 33 | 4 层记忆 + MemoryScope + 相关性 |
 | **scheduler** | `src/scheduler/` | 1,781 | 23 | Agent 调度、配额、生命周期 |
@@ -220,8 +219,8 @@ JSON 是唯一接口格式。
 
 | 操作 | API | CLI | 说明 |
 |------|-----|-----|------|
-| 开始会话 | `start_session` | `session-start --agent X --intent "..."` | 返回 session_id + warm_context + changes + token_est |
-| 结束会话 | `end_session` | `session-end --session <id>` | 返回 delta |
+| 开始会话 | `start_session` | `session-start --agent X [--last-seq N]` | 持久化 active session，返回 session_id + changes + watermark |
+| 结束会话 | `end_session` | `session-end --session <id>` | 持久化结束状态，返回真实 EventBus last_seq |
 | 增量查询 | `delta_since` | `delta --agent X --since <ts>` | 自上次以来的变更 |
 
 ### 5.8 意图系统
@@ -364,7 +363,7 @@ JSON 是唯一接口格式。
 | R5 | 身份不可伪造 | Agent token 密码学验证 | ✅ |
 | R6 | 记忆 scope 强制 | Private 记忆不可跨 Agent 泄露 | ✅ |
 | R7 | 事件日志不可变 | 只追加，不修改，不删除 | ✅ |
-| R8 | 协议适配器无状态 | plico-mcp/plico-sse 不缓存不决策 | ✅ |
+| R8 | 协议适配器无状态 | plico-mcp 不缓存不决策 | ✅ |
 
 ---
 

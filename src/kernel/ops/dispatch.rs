@@ -1,7 +1,7 @@
 //! Dispatch loop operations — start Tokio or local executor.
 
+use crate::scheduler::dispatch::{AgentExecutor, DispatchHandle, KernelExecutor, LocalExecutor, TokioDispatchLoop};
 use std::sync::Arc;
-use crate::scheduler::dispatch::{TokioDispatchLoop, LocalExecutor, KernelExecutor, AgentExecutor, DispatchHandle};
 
 impl crate::kernel::AIKernel {
     /// Start the dispatch loop with KernelExecutor.
@@ -16,13 +16,14 @@ impl crate::kernel::AIKernel {
                 use crate::api::semantic::{ApiRequest, ApiResponse};
                 let req: ApiRequest = match serde_json::from_str(action_json) {
                     Ok(r) => r,
-                    Err(e) => return serde_json::to_string(
-                        &ApiResponse::error(format!("Invalid action JSON: {e}"))
-                    ).unwrap_or_default(),
+                    Err(e) => {
+                        return serde_json::to_string(&ApiResponse::error(format!("Invalid action JSON: {e}")))
+                            .unwrap_or_default()
+                    }
                 };
                 let resp = kernel.handle_api_request(req);
                 serde_json::to_string(&resp).unwrap_or_default()
-            }
+            },
         ));
         let loop_ = TokioDispatchLoop::new(Arc::clone(&self.scheduler), executor, 60_000);
         loop_.spawn()
@@ -50,14 +51,14 @@ impl crate::kernel::AIKernel {
                 interval.tick().await;
                 let results = handle.drain_results().await;
                 for result in results {
-                    let agent_id = result.agent_id.as_ref()
-                        .map(|a| a.0.as_str())
-                        .unwrap_or("system");
+                    let agent_id = result.agent_id.as_ref().map(|a| a.0.as_str()).unwrap_or("system");
 
-                    kernel.event_bus.emit(crate::kernel::event_bus::KernelEvent::IntentCompleted {
-                        intent_id: result.intent_id.0.clone(),
-                        success: result.success,
-                    });
+                    kernel
+                        .event_bus
+                        .emit(crate::kernel::event_bus::KernelEvent::IntentCompleted {
+                            intent_id: result.intent_id.0.clone(),
+                            success: result.success,
+                        });
 
                     let output_preview: String = result.output.chars().take(120).collect();
                     let label = format!(

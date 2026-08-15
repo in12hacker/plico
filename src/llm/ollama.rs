@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use tokio::runtime::Runtime;
 
-use super::{LlmProvider, ChatMessage, ChatOptions, LlmError};
+use super::{ChatMessage, ChatOptions, LlmError, LlmProvider};
 
 pub struct OllamaProvider {
     /// Only created when no Tokio runtime is active (standalone/CLI mode).
@@ -17,12 +17,12 @@ impl OllamaProvider {
     pub fn new(url: &str, model: &str) -> Result<Self, LlmError> {
         let rt = match tokio::runtime::Handle::try_current() {
             Ok(_) => None,
-            Err(_) => {
-                Some(Arc::new(tokio::runtime::Builder::new_multi_thread()
+            Err(_) => Some(Arc::new(
+                tokio::runtime::Builder::new_multi_thread()
                     .worker_threads(1)
                     .enable_all()
-                    .build()?))
-            }
+                    .build()?,
+            )),
         };
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(60))
@@ -65,21 +65,19 @@ impl OllamaProvider {
             .json(&body)
             .send()
             .await
-            .map_err(|e| {
-                if e.is_connect() {
-                    LlmError::Unavailable(format!("cannot connect to Ollama at {}", self.url))
-                } else {
-                    LlmError::Http(e)
-                }
-            })?;
+            .map_err(|_| LlmError::Unavailable("provider request failed".into()))?;
 
         let status = resp.status();
-        let body_bytes = resp.bytes().await.map_err(LlmError::Http)?;
-
         if !status.is_success() {
-            let body_str = String::from_utf8_lossy(&body_bytes);
-            return Err(LlmError::Api(format!("status={} body={}", status, body_str)));
+            return Err(LlmError::Api(format!(
+                "provider returned HTTP status {}",
+                status.as_u16()
+            )));
         }
+        let body_bytes = resp
+            .bytes()
+            .await
+            .map_err(|_| LlmError::Api("provider response read failed".into()))?;
 
         #[derive(serde::Deserialize)]
         struct ChatResponse {
@@ -90,8 +88,8 @@ impl OllamaProvider {
             content: String,
         }
 
-        let parsed: ChatResponse = serde_json::from_slice(&body_bytes)
-            .map_err(|e| LlmError::Parse(format!("response parse error: {e}")))?;
+        let parsed: ChatResponse =
+            serde_json::from_slice(&body_bytes).map_err(|e| LlmError::Parse(format!("response parse error: {e}")))?;
 
         let content = parsed.message.content.trim().to_string();
         let input_tokens = messages.iter().map(|m| m.content.len() as u32 / 4).sum::<u32>().max(1);
@@ -104,10 +102,10 @@ impl OllamaProvider {
 impl LlmProvider for OllamaProvider {
     fn chat(&self, messages: &[ChatMessage], options: &ChatOptions) -> Result<(String, u32, u32), LlmError> {
         match tokio::runtime::Handle::try_current() {
-            Ok(handle) => {
-                tokio::task::block_in_place(|| handle.block_on(self.chat_async(messages, options)))
-            }
-            Err(_) => self.rt.as_ref()
+            Ok(handle) => tokio::task::block_in_place(|| handle.block_on(self.chat_async(messages, options))),
+            Err(_) => self
+                .rt
+                .as_ref()
                 .expect("rt must exist when no Tokio runtime is active")
                 .block_on(self.chat_async(messages, options)),
         }
@@ -160,7 +158,10 @@ mod tests {
     fn test_ollama_chat_unreachable() {
         let provider = OllamaProvider::new("http://127.0.0.1:1", "model").unwrap();
         let msgs = vec![ChatMessage::user("test")];
-        let opts = ChatOptions { temperature: 0.0, max_tokens: None };
+        let opts = ChatOptions {
+            temperature: 0.0,
+            max_tokens: None,
+        };
         let result = provider.chat(&msgs, &opts);
         assert!(result.is_err());
     }

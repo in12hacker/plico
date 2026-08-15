@@ -66,15 +66,14 @@ impl McpTransport {
             "params": params
         });
 
-        writeln!(self.stdin, "{}", serde_json::to_string(&request).unwrap())
-            .map_err(McpError::Io)?;
+        writeln!(self.stdin, "{}", serde_json::to_string(&request).unwrap()).map_err(McpError::Io)?;
         self.stdin.flush().map_err(McpError::Io)?;
 
         let mut line = String::new();
         self.stdout.read_line(&mut line).map_err(McpError::Io)?;
 
-        let resp: Value = serde_json::from_str(line.trim())
-            .map_err(|e| McpError::Protocol(format!("invalid JSON response: {e}")))?;
+        let resp: Value =
+            serde_json::from_str(line.trim()).map_err(|e| McpError::Protocol(format!("invalid JSON response: {e}")))?;
 
         if let Some(err) = resp.get("error") {
             return Err(McpError::ServerError {
@@ -93,25 +92,31 @@ impl McpTransport {
             "params": params
         });
 
-        writeln!(self.stdin, "{}", serde_json::to_string(&notification).unwrap())
-            .map_err(McpError::Io)?;
+        writeln!(self.stdin, "{}", serde_json::to_string(&notification).unwrap()).map_err(McpError::Io)?;
         self.stdin.flush().map_err(McpError::Io)?;
         Ok(())
     }
 
     fn call_tool(&mut self, name: &str, arguments: &Value) -> Result<String, McpError> {
-        let resp = self.send_request("tools/call", serde_json::json!({
-            "name": name,
-            "arguments": arguments
-        }))?;
+        let resp = self.send_request(
+            "tools/call",
+            serde_json::json!({
+                "name": name,
+                "arguments": arguments
+            }),
+        )?;
 
         let result = &resp["result"];
         if result.get("isError") == Some(&Value::Bool(true)) {
             let text = result["content"][0]["text"].as_str().unwrap_or("unknown error");
-            return Err(McpError::ServerError { code: -1, message: text.to_string() });
+            return Err(McpError::ServerError {
+                code: -1,
+                message: text.to_string(),
+            });
         }
 
-        result["content"][0]["text"].as_str()
+        result["content"][0]["text"]
+            .as_str()
             .map(String::from)
             .ok_or_else(|| McpError::Protocol("tools/call response missing content text".into()))
     }
@@ -130,11 +135,7 @@ pub struct McpClient {
 }
 
 impl McpClient {
-    pub fn new(
-        command: &str,
-        args: &[&str],
-        envs: &[(&str, &str)],
-    ) -> Result<Self, McpError> {
+    pub fn new(command: &str, args: &[&str], envs: &[(&str, &str)]) -> Result<Self, McpError> {
         let mut cmd = Command::new(command);
         cmd.args(args)
             .stdin(Stdio::piped())
@@ -145,21 +146,34 @@ impl McpClient {
         }
 
         let mut child = cmd.spawn().map_err(McpError::Spawn)?;
-        let stdin = BufWriter::new(child.stdin.take().ok_or_else(|| {
-            McpError::Protocol("failed to open stdin".into())
-        })?);
-        let stdout = BufReader::new(child.stdout.take().ok_or_else(|| {
-            McpError::Protocol("failed to open stdout".into())
-        })?);
+        let stdin = BufWriter::new(
+            child
+                .stdin
+                .take()
+                .ok_or_else(|| McpError::Protocol("failed to open stdin".into()))?,
+        );
+        let stdout = BufReader::new(
+            child
+                .stdout
+                .take()
+                .ok_or_else(|| McpError::Protocol("failed to open stdout".into()))?,
+        );
 
-        let mut transport = McpTransport { stdin, stdout, next_id: 1 };
+        let mut transport = McpTransport {
+            stdin,
+            stdout,
+            next_id: 1,
+        };
 
         let server_info = {
-            let resp = transport.send_request("initialize", serde_json::json!({
-                "protocolVersion": PROTOCOL_VERSION,
-                "capabilities": {},
-                "clientInfo": { "name": "plico-mcp-client", "version": "1.0.0" }
-            }))?;
+            let resp = transport.send_request(
+                "initialize",
+                serde_json::json!({
+                    "protocolVersion": PROTOCOL_VERSION,
+                    "capabilities": {},
+                    "clientInfo": { "name": "plico-mcp-client", "version": "1.0.0" }
+                }),
+            )?;
             let result = &resp["result"];
             let info = ServerInfo {
                 name: result["serverInfo"]["name"].as_str().unwrap_or("unknown").to_string(),
@@ -171,13 +185,17 @@ impl McpClient {
 
         let tools = {
             let resp = transport.send_request("tools/list", serde_json::json!({}))?;
-            let tools_arr = resp["result"]["tools"].as_array()
+            let tools_arr = resp["result"]["tools"]
+                .as_array()
                 .ok_or_else(|| McpError::Protocol("tools/list did not return tools array".into()))?;
-            tools_arr.iter().map(|t| McpToolDef {
-                name: t["name"].as_str().unwrap_or("").to_string(),
-                description: t["description"].as_str().unwrap_or("").to_string(),
-                input_schema: t["inputSchema"].clone(),
-            }).collect()
+            tools_arr
+                .iter()
+                .map(|t| McpToolDef {
+                    name: t["name"].as_str().unwrap_or("").to_string(),
+                    description: t["description"].as_str().unwrap_or("").to_string(),
+                    input_schema: t["inputSchema"].clone(),
+                })
+                .collect()
         };
 
         Ok(Self {
@@ -207,11 +225,14 @@ impl ExternalToolProvider for McpClient {
     }
 
     fn discover_tools(&self) -> Vec<ToolDescriptor> {
-        self.tools.iter().map(|t| ToolDescriptor {
-            name: t.name.clone(),
-            description: t.description.clone(),
-            schema: t.input_schema.clone(),
-        }).collect()
+        self.tools
+            .iter()
+            .map(|t| ToolDescriptor {
+                name: t.name.clone(),
+                description: t.description.clone(),
+                schema: t.input_schema.clone(),
+            })
+            .collect()
     }
 
     fn call_tool(&self, name: &str, params: &serde_json::Value) -> ToolResult {

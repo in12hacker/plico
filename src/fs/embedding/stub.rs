@@ -1,6 +1,8 @@
 //! Stub embedding provider — returns errors, triggers tag-based fallback.
 
-use crate::fs::embedding::types::{EmbedError, EmbeddingProvider, EmbedResult};
+use crate::fs::embedding::types::{
+    EmbedError, EmbedResult, EmbeddingBuilderIdentity, EmbeddingIdentityError, EmbeddingProvider,
+};
 
 /// A stub embedding provider used when no backend is available.
 /// Always returns an error, triggering tag-based fallback in search.
@@ -30,7 +32,11 @@ impl EmbeddingProvider for StubEmbeddingProvider {
         384
     }
 
-    fn model_name(&self) -> &str {
-        "stub"
+    fn builder_identity(&self) -> Result<EmbeddingBuilderIdentity, EmbeddingIdentityError> {
+        Err(EmbeddingIdentityError::StubProvider)
+    }
+
+    fn model_name(&self) -> String {
+        "stub".to_string()
     }
 }

@@ -3,8 +3,8 @@
 //! Binary-heap scheduler queue ordering intents by priority (Critical > High > Medium > Low)
 //! with timestamp tiebreaking (older intents dispatched first at equal priority).
 
-use std::collections::BinaryHeap;
 use std::cmp::Ordering;
+use std::collections::BinaryHeap;
 
 use super::agent::{Intent, IntentId};
 

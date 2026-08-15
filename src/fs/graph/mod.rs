@@ -4,12 +4,12 @@
 //! Implementation is in the backend module.
 
 pub mod backend;
-pub mod types;
 #[cfg(test)]
 mod tests;
+pub mod types;
 
-pub use types::{KGNode, KGEdge, KGNodeType, KGEdgeType, DiskGraph, KGError, KGSearchHit};
-pub use backend::{PetgraphBackend, EdgeRecord};
+pub use backend::{EdgeRecord, PetgraphBackend};
+pub use types::{DiskGraph, KGEdge, KGEdgeType, KGError, KGNode, KGNodeType, KGSearchHit};
 
 /// Result of a temporal diff between two time points.
 #[derive(Debug, Clone)]
@@ -64,18 +64,9 @@ pub trait KnowledgeGraph: Send + Sync {
         t: u64,
     ) -> Result<Option<KGEdge>, KGError>;
     fn invalidate_conflicts(&self, new_edge: &KGEdge) -> Result<usize, KGError>;
-    fn edge_history(
-        &self,
-        src: &str,
-        dst: &str,
-        edge_type: Option<KGEdgeType>,
-    ) -> Result<Vec<KGEdge>, KGError>;
-    fn get_valid_nodes_at(
-        &self,
-        agent_id: &str,
-        node_type: Option<KGNodeType>,
-        t: u64,
-    ) -> Result<Vec<KGNode>, KGError>;
+    fn edge_history(&self, src: &str, dst: &str, edge_type: Option<KGEdgeType>) -> Result<Vec<KGEdge>, KGError>;
+    fn get_valid_nodes_at(&self, agent_id: &str, node_type: Option<KGNodeType>, t: u64)
+        -> Result<Vec<KGNode>, KGError>;
     fn save_to_disk(&self, path: &std::path::Path) -> Result<(), KGError>;
     fn load_from_disk(&self, path: &std::path::Path) -> Result<(), KGError>;
 
@@ -96,7 +87,10 @@ pub trait KnowledgeGraph: Send + Sync {
     /// Default: O(n) scan. Backends may override with an indexed implementation.
     fn get_nodes_by_cid(&self, cid: &str) -> Result<Vec<KGNode>, KGError> {
         let nodes = self.list_nodes("", None)?;
-        Ok(nodes.into_iter().filter(|n| n.content_cid.as_deref() == Some(cid)).collect())
+        Ok(nodes
+            .into_iter()
+            .filter(|n| n.content_cid.as_deref() == Some(cid))
+            .collect())
     }
 
     fn personalized_pagerank(
@@ -110,12 +104,7 @@ pub trait KnowledgeGraph: Send + Sync {
     }
 
     /// Compute temporal diff: what edges were added/removed/unchanged between t1 and t2.
-    fn temporal_diff(
-        &self,
-        _agent_id: &str,
-        t1: u64,
-        t2: u64,
-    ) -> Result<TemporalDiff, KGError> {
+    fn temporal_diff(&self, _agent_id: &str, t1: u64, t2: u64) -> Result<TemporalDiff, KGError> {
         let edges_at_t1 = self.get_valid_edges_at(t1)?;
         let edges_at_t2 = self.get_valid_edges_at(t2)?;
 
@@ -128,10 +117,7 @@ pub trait KnowledgeGraph: Send + Sync {
                 true
             })
             .collect();
-        let edges_t2: Vec<KGEdge> = edges_at_t2
-            .into_iter()
-            .filter(|_| true)
-            .collect();
+        let edges_t2: Vec<KGEdge> = edges_at_t2.into_iter().filter(|_| true).collect();
 
         let t1_keys: std::collections::HashSet<String> = edges_t1
             .iter()
@@ -199,9 +185,7 @@ pub trait KnowledgeGraph: Send + Sync {
         }
 
         // Sort by invalid_at descending (most recently invalidated first)
-        invalidated.sort_unstable_by(|a, b| {
-            b.invalid_at.unwrap_or(0).cmp(&a.invalid_at.unwrap_or(0))
-        });
+        invalidated.sort_unstable_by_key(|edge| std::cmp::Reverse(edge.invalid_at.unwrap_or(0)));
 
         // Mark the excess as expired
         let to_expire = &invalidated[keep_last_n..];

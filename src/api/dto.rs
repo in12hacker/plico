@@ -6,10 +6,10 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::fs::{KGNodeType, KGEdgeType};
+use crate::fs::{KGEdgeType, KGNodeType};
 
 // Re-import serde default helpers from semantic.rs
-use super::semantic::{default_importance, default_k, default_priority};
+use super::semantic::{default_importance, default_priority};
 
 /// DTO for procedure steps in API requests.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -27,13 +27,10 @@ pub struct ProcedureStepDto {
 pub enum DiscoveryScope {
     /// Search only entries with scope=Shared.
     Shared,
-    /// Search only entries with scope=Group(id).
-    Group(String),
     /// Search all accessible entries.
     #[default]
     AllAccessible,
 }
-
 
 /// Type of knowledge to filter by in discovery.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -108,9 +105,7 @@ pub struct IntentSpec {
 pub enum QuerySpec {
     /// Read an object by CID.
     #[serde(rename = "read")]
-    Read {
-        cid: String,
-    },
+    Read { cid: String },
     /// Search for objects by query string.
     #[serde(rename = "search")]
     Search {
@@ -125,13 +120,6 @@ pub enum QuerySpec {
     /// Recall ephemeral memories.
     #[serde(rename = "recall")]
     Recall,
-    /// Semantic memory recall.
-    #[serde(rename = "recall_semantic")]
-    RecallSemantic {
-        query: String,
-        #[serde(default = "default_k")]
-        k: usize,
-    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -227,7 +215,9 @@ pub struct KGEdgeDto {
     pub created_at: u64,
 }
 
-fn not_false(b: &bool) -> bool { !*b }
+fn not_false(b: &bool) -> bool {
+    !*b
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoadedContextDto {
@@ -253,14 +243,6 @@ pub struct SkillDto {
     pub description: String,
     pub agent_id: String,
     pub tags: Vec<String>,
-}
-
-/// Tenant descriptor — returned by ListTenants.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TenantDto {
-    pub id: String,
-    pub admin_agent_id: String,
-    pub created_at_ms: u64,
 }
 
 // ── Delta感知 structures (F-7) ─────────────────────────────────────────────────
@@ -449,10 +431,10 @@ pub struct HealthReport {
     pub embedding_backend: String,
     /// List of active degradations.
     pub degradations: Vec<Degradation>,
-    /// True if roundtrip test passed.
-    pub roundtrip_ok: bool,
-    /// Roundtrip latency in milliseconds (0 if failed).
-    pub roundtrip_ms: u64,
+    /// True if the non-mutating CAS probe passed.
+    pub cas_probe_ok: bool,
+    /// Non-mutating CAS probe latency in milliseconds.
+    pub cas_probe_ms: u64,
 }
 
 /// Cache statistics for observability (v19.0).
@@ -472,29 +454,6 @@ pub struct IntentCacheStatsDto {
     pub entries: usize,
     pub memory_bytes: usize,
     pub hits: u64,
-}
-
-/// Cluster status for distributed mode (v20.0).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ClusterStatusDto {
-    pub cluster_name: String,
-    pub total_nodes: usize,
-    pub local_node_id: String,
-    pub is_seed: bool,
-    pub version: u64,
-    pub pending_migrations: usize,
-    pub known_nodes: Vec<NodeInfoDto>,
-}
-
-/// Node information in cluster (v20.0).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct NodeInfoDto {
-    pub node_id: String,
-    pub host: String,
-    pub port: u16,
-    pub is_seed: bool,
-    pub last_heartbeat_ms: u64,
-    pub is_stale: bool,
 }
 
 /// Agent checkpoint result (v21.0).
@@ -533,103 +492,23 @@ pub struct HookEntryDto {
     pub priority: i32,
 }
 
-/// Session started response (F-6).
+/// Durable session start response.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionStarted {
     pub session_id: String,
-    /// Summary of the checkpoint restored (if any).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub restored_checkpoint: Option<CheckpointSummaryDto>,
-    /// Assembly ID for fetching warm context (if intent_hint was provided).
-    /// Client should call FetchAssembledContext with this ID.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub warm_context: Option<String>,
     /// Changes since the last session (based on last_seen_seq).
     #[serde(default)]
     pub changes_since_last: Vec<ChangeEntry>,
-    /// Estimated token count for the changes.
-    pub token_estimate: usize,
+    /// EventBus position observed when the session was started.
+    pub watermark: u64,
 }
 
-/// Session ended response (F-6).
+/// Durable session end response.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionEnded {
-    /// Checkpoint ID if auto_checkpoint was true.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub checkpoint_id: Option<String>,
     /// Current EventBus sequence number.
     /// Client should save this and pass as last_seen_seq in next StartSession.
     pub last_seq: u64,
-    /// Memory consolidation report (F-6).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub consolidation: Option<ConsolidationReport>,
-    /// Cumulative token consumption for this session (F-4).
-    pub total_tokens_consumed: u64,
-}
-
-/// Memory consolidation report (F-6).
-/// Reports the results of the Memory Consolidation Cycle at session-end.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ConsolidationReport {
-    /// Number of ephemeral memories before consolidation.
-    pub ephemeral_before: usize,
-    /// Number of ephemeral memories after consolidation.
-    pub ephemeral_after: usize,
-    /// Number of working memories before consolidation.
-    pub working_before: usize,
-    /// Number of working memories after consolidation.
-    pub working_after: usize,
-    /// Number of memories promoted to long-term.
-    pub promoted: usize,
-    /// Number of memories evicted.
-    pub evicted: usize,
-    /// Number of memories linked to KG.
-    pub linked: usize,
-}
-
-// ── Hybrid Retrieval / Graph-RAG (F-11) ───────────────────────────────────────
-
-/// A single step in the provenance chain showing how a result was reached.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProvenanceStep {
-    /// CID of the source node at this hop.
-    pub from_cid: String,
-    /// Type of edge traversed to reach this node.
-    pub edge_type: String,
-    /// Hop number (0 = direct result).
-    pub hop: u8,
-}
-
-/// A single hybrid retrieval result — combining vector and graph scores.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HybridHit {
-    /// Content identifier of the result.
-    pub cid: String,
-    /// Human-readable content preview (first 200 chars).
-    pub content_preview: String,
-    /// Vector similarity score [0, 1].
-    pub vector_score: f32,
-    /// Knowledge graph authority score [0, 1].
-    pub graph_score: f32,
-    /// Combined score: α × vector_score + (1-α) × graph_score, α = 0.6.
-    pub combined_score: f32,
-    /// Provenance chain showing the path from query to result.
-    pub provenance: Vec<ProvenanceStep>,
-}
-
-/// Hybrid retrieval result — combines vector search with KG traversal.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HybridResult {
-    /// Ordered list of hybrid hits (descending by combined_score).
-    pub items: Vec<HybridHit>,
-    /// Estimated total token count for transmitting all items.
-    pub token_estimate: usize,
-    /// Number of results that came from vector search.
-    pub vector_hits: usize,
-    /// Number of results that came from graph traversal.
-    pub graph_hits: usize,
-    /// Number of causal paths discovered.
-    pub paths_found: usize,
 }
 
 // ── Growth Report (F-13) ─────────────────────────────────────────────────────
@@ -807,7 +686,6 @@ pub struct StorageStatsResult {
     /// Per-tier breakdown of objects and bytes.
     pub by_tier: TierStats,
     /// Number of cold (rarely accessed) objects.
-    pub cold_objects: usize,
     /// Number of objects approaching expiration.
     pub about_to_expire: usize,
 }
@@ -823,17 +701,6 @@ pub struct TierStats {
     pub longterm_bytes: usize,
 }
 
-/// Result of evict_cold operation.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EvictColdResult {
-    /// Number of objects evicted.
-    pub evicted_count: usize,
-    /// Number of bytes freed.
-    pub evicted_bytes: usize,
-    /// Number of cold objects remaining after eviction.
-    pub remaining_cold: usize,
-}
-
 /// Agent resource usage and quota snapshot.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentUsageDto {
@@ -847,9 +714,7 @@ pub struct AgentUsageDto {
     pub last_active_ms: u64,
 }
 
-/// Agent capability card — what an agent can do and its current state.
-/// Enables peer discovery: agents find collaborators by capability match.
-/// A2A-compliant (RFC draft 2025).
+/// Agent capability card — what a local cognitive role can do and its current state.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentCardDto {
     /// Unique agent identifier (UUID).
@@ -932,11 +797,6 @@ mod tests {
             let rt: DiscoveryScope = serde_json::from_str(&json).unwrap();
             assert_eq!(rt, val);
         }
-
-        let group = DiscoveryScope::Group("team-a".into());
-        let json = serde_json::to_string(&group).unwrap();
-        let rt: DiscoveryScope = serde_json::from_str(&json).unwrap();
-        assert_eq!(rt, DiscoveryScope::Group("team-a".into()));
     }
 
     #[test]
@@ -990,16 +850,6 @@ mod tests {
                 assert_eq!(limit, Some(5));
             }
             _ => panic!("expected Search variant"),
-        }
-    }
-
-    #[test]
-    fn query_spec_recall_semantic_default_k() {
-        let json = r#"{"query_type":"recall_semantic","query":"test"}"#;
-        let spec: QuerySpec = serde_json::from_str(json).unwrap();
-        match spec {
-            QuerySpec::RecallSemantic { k, .. } => assert_eq!(k, 10),
-            _ => panic!("expected RecallSemantic"),
         }
     }
 
@@ -1121,12 +971,11 @@ mod tests {
     }
 
     #[test]
-    fn session_started_optional_fields() {
-        let json = r#"{"session_id":"s1","token_estimate":0,"changes_since_last":[]}"#;
+    fn session_started_roundtrip() {
+        let json = r#"{"session_id":"s1","changes_since_last":[],"watermark":7}"#;
         let ss: SessionStarted = serde_json::from_str(json).unwrap();
         assert_eq!(ss.session_id, "s1");
-        assert!(ss.restored_checkpoint.is_none());
-        assert!(ss.warm_context.is_none());
+        assert_eq!(ss.watermark, 7);
     }
 
     #[test]
@@ -1180,24 +1029,5 @@ mod tests {
         assert_eq!(item.content, "hello");
         assert!(item.tags.is_empty());
         assert!(item.intent.is_none());
-    }
-
-    #[test]
-    fn hybrid_hit_roundtrip() {
-        let hit = HybridHit {
-            cid: "c1".into(),
-            content_preview: "preview".into(),
-            vector_score: 0.8,
-            graph_score: 0.6,
-            combined_score: 0.72,
-            provenance: vec![ProvenanceStep {
-                from_cid: "c0".into(),
-                edge_type: "related_to".into(),
-                hop: 0,
-            }],
-        };
-        let rt = roundtrip(&hit);
-        assert_eq!(rt.provenance.len(), 1);
-        assert_eq!(rt.provenance[0].hop, 0);
     }
 }

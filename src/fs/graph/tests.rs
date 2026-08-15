@@ -1,8 +1,7 @@
 //! Graph backend tests.
 
+use crate::fs::graph::{KGEdge, KGEdgeType, KGNode, KGNodeType, KnowledgeGraph, PetgraphBackend};
 use crate::util::now_ms;
-use crate::fs::graph::{KGNode, KGEdge, KGNodeType, KGEdgeType, PetgraphBackend, KnowledgeGraph};
-
 
 fn make_node(id: &str, node_type: KGNodeType, tags: Vec<String>, agent: &str) -> KGNode {
     KGNode {
@@ -118,7 +117,11 @@ fn test_find_weighted_path_acyclic() {
     let path = kg.find_weighted_path("x", "z", 5).unwrap();
     assert!(path.is_some());
     let p = path.unwrap();
-    assert!(p.len() == 2 || p.len() == 3, "expected path of length 2 or 3, got {}", p.len());
+    assert!(
+        p.len() == 2 || p.len() == 3,
+        "expected path of length 2 or 3, got {}",
+        p.len()
+    );
 }
 
 // ── Temporal query tests ────────────────────────────────────────────────────────
@@ -126,8 +129,10 @@ fn test_find_weighted_path_acyclic() {
 #[test]
 fn test_get_valid_edges_at_filters_by_time() {
     let kg = PetgraphBackend::new();
-    kg.add_node(make_node("a", KGNodeType::Entity, vec![], "agent1")).unwrap();
-    kg.add_node(make_node("b", KGNodeType::Entity, vec![], "agent1")).unwrap();
+    kg.add_node(make_node("a", KGNodeType::Entity, vec![], "agent1"))
+        .unwrap();
+    kg.add_node(make_node("b", KGNodeType::Entity, vec![], "agent1"))
+        .unwrap();
 
     let mut edge = make_edge("a", "b", KGEdgeType::RelatedTo, 1.0);
     edge.valid_at = Some(1000);
@@ -136,8 +141,15 @@ fn test_get_valid_edges_at_filters_by_time() {
 
     assert!(kg.get_valid_edges_at(500).unwrap().is_empty(), "before valid_at");
     assert_eq!(kg.get_valid_edges_at(1000).unwrap().len(), 1, "at valid_at");
-    assert_eq!(kg.get_valid_edges_at(1500).unwrap().len(), 1, "between valid_at and invalid_at");
-    assert!(kg.get_valid_edges_at(2000).unwrap().is_empty(), "at invalid_at boundary");
+    assert_eq!(
+        kg.get_valid_edges_at(1500).unwrap().len(),
+        1,
+        "between valid_at and invalid_at"
+    );
+    assert!(
+        kg.get_valid_edges_at(2000).unwrap().is_empty(),
+        "at invalid_at boundary"
+    );
     assert!(kg.get_valid_edges_at(3000).unwrap().is_empty(), "after invalid_at");
 }
 
@@ -195,8 +207,10 @@ fn test_get_valid_edge_between_returns_most_recent() {
 #[test]
 fn test_get_valid_nodes_at_filters_by_time() {
     let kg = PetgraphBackend::new();
-    kg.add_node(make_node("entity1", KGNodeType::Entity, vec![], "agent1")).unwrap();
-    kg.add_node(make_node("entity2", KGNodeType::Entity, vec![], "agent1")).unwrap();
+    kg.add_node(make_node("entity1", KGNodeType::Entity, vec![], "agent1"))
+        .unwrap();
+    kg.add_node(make_node("entity2", KGNodeType::Entity, vec![], "agent1"))
+        .unwrap();
 
     // entity1 becomes valid at t=1000, invalid at t=2000
     let mut node1 = make_node("entity1", KGNodeType::Entity, vec![], "agent1");
@@ -226,9 +240,12 @@ fn test_get_valid_nodes_at_filters_by_time() {
 #[test]
 fn test_get_valid_nodes_at_filters_by_agent_and_type() {
     let kg = PetgraphBackend::new();
-    kg.add_node(make_node("e1", KGNodeType::Entity, vec![], "agent1")).unwrap();
-    kg.add_node(make_node("e2", KGNodeType::Entity, vec![], "agent2")).unwrap();
-    kg.add_node(make_node("d1", KGNodeType::Document, vec![], "agent1")).unwrap();
+    kg.add_node(make_node("e1", KGNodeType::Entity, vec![], "agent1"))
+        .unwrap();
+    kg.add_node(make_node("e2", KGNodeType::Entity, vec![], "agent2"))
+        .unwrap();
+    kg.add_node(make_node("d1", KGNodeType::Document, vec![], "agent1"))
+        .unwrap();
 
     let now = now_ms();
     let all_agent1 = kg.get_valid_nodes_at("agent1", None, now).unwrap();
@@ -284,7 +301,12 @@ fn test_update_node_merges_properties() {
     };
     kg.add_node(node).unwrap();
 
-    kg.update_node("n1", Some("New"), Some(serde_json::json!({"key2": "updated", "key3": "new"}))).unwrap();
+    kg.update_node(
+        "n1",
+        Some("New"),
+        Some(serde_json::json!({"key2": "updated", "key3": "new"})),
+    )
+    .unwrap();
 
     let updated = kg.get_node("n1").unwrap().unwrap();
     assert_eq!(updated.label, "New");
@@ -309,8 +331,10 @@ fn test_update_node_label_only() {
 #[test]
 fn test_save_load_roundtrip() {
     let kg = PetgraphBackend::new();
-    kg.add_node(make_node("a", KGNodeType::Entity, vec!["tag1".into()], "agent1")).unwrap();
-    kg.add_node(make_node("b", KGNodeType::Document, vec![], "agent1")).unwrap();
+    kg.add_node(make_node("a", KGNodeType::Entity, vec!["tag1".into()], "agent1"))
+        .unwrap();
+    kg.add_node(make_node("b", KGNodeType::Document, vec![], "agent1"))
+        .unwrap();
     kg.add_edge(make_edge("a", "b", KGEdgeType::RelatedTo, 0.85)).unwrap();
 
     let dir = tempfile::tempdir().unwrap();
@@ -336,7 +360,8 @@ fn test_load_from_disk_replaces_state() {
     assert_eq!(kg.node_count().unwrap(), 1);
 
     let kg2 = PetgraphBackend::new();
-    kg2.add_node(make_node("new1", KGNodeType::Entity, vec![], "a")).unwrap();
+    kg2.add_node(make_node("new1", KGNodeType::Entity, vec![], "a"))
+        .unwrap();
     kg2.add_node(make_node("new2", KGNodeType::Fact, vec![], "a")).unwrap();
 
     let dir = tempfile::tempdir().unwrap();
@@ -354,8 +379,10 @@ fn test_load_from_disk_replaces_state() {
 #[test]
 fn test_invalidate_conflicts_supersedes() {
     let kg = PetgraphBackend::new();
-    kg.add_node(make_node("n1", KGNodeType::Entity, vec![], "test")).unwrap();
-    kg.add_node(make_node("n2", KGNodeType::Entity, vec![], "test")).unwrap();
+    kg.add_node(make_node("n1", KGNodeType::Entity, vec![], "test"))
+        .unwrap();
+    kg.add_node(make_node("n2", KGNodeType::Entity, vec![], "test"))
+        .unwrap();
 
     kg.add_edge(make_edge("n1", "n2", KGEdgeType::RelatedTo, 0.5)).unwrap();
     kg.add_edge(make_edge("n1", "n2", KGEdgeType::RelatedTo, 0.9)).unwrap();
@@ -373,8 +400,10 @@ fn test_invalidate_conflicts_supersedes() {
 #[test]
 fn test_different_type_edges_coexist() {
     let kg = PetgraphBackend::new();
-    kg.add_node(make_node("n1", KGNodeType::Entity, vec![], "test")).unwrap();
-    kg.add_node(make_node("n2", KGNodeType::Entity, vec![], "test")).unwrap();
+    kg.add_node(make_node("n1", KGNodeType::Entity, vec![], "test"))
+        .unwrap();
+    kg.add_node(make_node("n2", KGNodeType::Entity, vec![], "test"))
+        .unwrap();
 
     kg.add_edge(make_edge("n1", "n2", KGEdgeType::RelatedTo, 0.5)).unwrap();
     kg.add_edge(make_edge("n1", "n2", KGEdgeType::HasFact, 0.8)).unwrap();
@@ -389,11 +418,14 @@ fn test_different_type_edges_coexist() {
 #[test]
 fn test_edge_history_returns_all() {
     let kg = PetgraphBackend::new();
-    kg.add_node(make_node("n1", KGNodeType::Entity, vec![], "test")).unwrap();
-    kg.add_node(make_node("n2", KGNodeType::Entity, vec![], "test")).unwrap();
+    kg.add_node(make_node("n1", KGNodeType::Entity, vec![], "test"))
+        .unwrap();
+    kg.add_node(make_node("n2", KGNodeType::Entity, vec![], "test"))
+        .unwrap();
 
     for i in 0..3 {
-        kg.add_edge(make_edge("n1", "n2", KGEdgeType::RelatedTo, i as f32 * 0.3)).unwrap();
+        kg.add_edge(make_edge("n1", "n2", KGEdgeType::RelatedTo, i as f32 * 0.3))
+            .unwrap();
     }
 
     let history = kg.edge_history("n1", "n2", Some(KGEdgeType::RelatedTo)).unwrap();
@@ -406,8 +438,10 @@ fn test_edge_history_returns_all() {
 #[test]
 fn test_add_edge_auto_invalidates() {
     let kg = PetgraphBackend::new();
-    kg.add_node(make_node("n1", KGNodeType::Entity, vec![], "test")).unwrap();
-    kg.add_node(make_node("n2", KGNodeType::Entity, vec![], "test")).unwrap();
+    kg.add_node(make_node("n1", KGNodeType::Entity, vec![], "test"))
+        .unwrap();
+    kg.add_node(make_node("n2", KGNodeType::Entity, vec![], "test"))
+        .unwrap();
 
     kg.add_edge(make_edge("n1", "n2", KGEdgeType::RelatedTo, 0.5)).unwrap();
 
@@ -420,14 +454,19 @@ fn test_add_edge_auto_invalidates() {
 
     let valid_after = kg.get_valid_edges_at(now + 1).unwrap();
     let matching_after = valid_after.iter().filter(|e| e.src == "n1" && e.dst == "n2").count();
-    assert_eq!(matching_after, 1, "should still have only 1 active edge after supersession");
+    assert_eq!(
+        matching_after, 1,
+        "should still have only 1 active edge after supersession"
+    );
 }
 
 #[test]
 fn test_invalidate_preserves_data() {
     let kg = PetgraphBackend::new();
-    kg.add_node(make_node("n1", KGNodeType::Entity, vec![], "test")).unwrap();
-    kg.add_node(make_node("n2", KGNodeType::Entity, vec![], "test")).unwrap();
+    kg.add_node(make_node("n1", KGNodeType::Entity, vec![], "test"))
+        .unwrap();
+    kg.add_node(make_node("n2", KGNodeType::Entity, vec![], "test"))
+        .unwrap();
 
     let original = make_edge("n1", "n2", KGEdgeType::HasFact, 0.7);
     let original_weight = original.weight;
@@ -447,11 +486,14 @@ fn test_invalidate_preserves_data() {
 fn test_jaccard_weight_scoring() {
     let kg = PetgraphBackend::new();
     // doc_a has 5 tags, doc_b shares 2 of them → Jaccard = 2/5 = 0.4
-    kg.upsert_document("doc_a", &["t1","t2","t3","t4","t5"].map(String::from), "a").unwrap();
-    kg.upsert_document("doc_b", &["t1","t2","t6","t7","t8"].map(String::from), "a").unwrap();
+    kg.upsert_document("doc_a", &["t1", "t2", "t3", "t4", "t5"].map(String::from), "a")
+        .unwrap();
+    kg.upsert_document("doc_b", &["t1", "t2", "t6", "t7", "t8"].map(String::from), "a")
+        .unwrap();
 
     let edges = kg.list_edges("a").unwrap();
-    let assoc: Vec<_> = edges.iter()
+    let assoc: Vec<_> = edges
+        .iter()
         .filter(|e| e.edge_type == KGEdgeType::AssociatesWith && e.src == "doc_b" && e.dst == "doc_a")
         .collect();
     assert_eq!(assoc.len(), 1, "should have association edge");
@@ -463,11 +505,14 @@ fn test_jaccard_weight_scoring() {
 fn test_two_shared_tags_creates_edge() {
     let kg = PetgraphBackend::new();
     // Need >= 2 shared tags per upsert_document logic (shared_tag_count >= 2)
-    kg.upsert_document("d1", &["shared1".into(), "shared2".into(), "unique1".into()], "a").unwrap();
-    kg.upsert_document("d2", &["shared1".into(), "shared2".into(), "unique2".into()], "a").unwrap();
+    kg.upsert_document("d1", &["shared1".into(), "shared2".into(), "unique1".into()], "a")
+        .unwrap();
+    kg.upsert_document("d2", &["shared1".into(), "shared2".into(), "unique2".into()], "a")
+        .unwrap();
 
     let edges = kg.list_edges("a").unwrap();
-    let assoc: Vec<_> = edges.iter()
+    let assoc: Vec<_> = edges
+        .iter()
         .filter(|e| e.edge_type == KGEdgeType::AssociatesWith)
         .collect();
     assert!(assoc.len() >= 2, "2 shared tags should create edges");
@@ -480,7 +525,8 @@ fn test_no_overlap_no_edge() {
     kg.upsert_document("d2", &["b1".into(), "b2".into()], "a").unwrap();
 
     let edges = kg.list_edges("a").unwrap();
-    let assoc: Vec<_> = edges.iter()
+    let assoc: Vec<_> = edges
+        .iter()
         .filter(|e| e.edge_type == KGEdgeType::AssociatesWith)
         .collect();
     assert!(assoc.is_empty(), "0 shared tags should create no edges");
@@ -490,11 +536,14 @@ fn test_no_overlap_no_edge() {
 fn test_weight_not_capped_at_one() {
     let kg = PetgraphBackend::new();
     // 3 shared out of 4 total → Jaccard = 3/4 = 0.75 (not 1.0)
-    kg.upsert_document("d1", &["t1","t2","t3","t4"].map(String::from), "a").unwrap();
-    kg.upsert_document("d2", &["t1","t2","t3","t5"].map(String::from), "a").unwrap();
+    kg.upsert_document("d1", &["t1", "t2", "t3", "t4"].map(String::from), "a")
+        .unwrap();
+    kg.upsert_document("d2", &["t1", "t2", "t3", "t5"].map(String::from), "a")
+        .unwrap();
 
     let edges = kg.list_edges("a").unwrap();
-    let assoc: Vec<_> = edges.iter()
+    let assoc: Vec<_> = edges
+        .iter()
         .filter(|e| e.edge_type == KGEdgeType::AssociatesWith && e.src == "d2" && e.dst == "d1")
         .collect();
     assert_eq!(assoc.len(), 1);
@@ -529,8 +578,10 @@ fn test_redb_edge_crud() {
     let dir = tempfile::TempDir::new().unwrap();
     let kg = PetgraphBackend::open(dir.path().to_path_buf());
 
-    kg.add_node(make_node("n1", KGNodeType::Entity, vec![], "agent1")).unwrap();
-    kg.add_node(make_node("n2", KGNodeType::Entity, vec![], "agent1")).unwrap();
+    kg.add_node(make_node("n1", KGNodeType::Entity, vec![], "agent1"))
+        .unwrap();
+    kg.add_node(make_node("n2", KGNodeType::Entity, vec![], "agent1"))
+        .unwrap();
 
     let edge = make_edge("n1", "n2", KGEdgeType::RelatedTo, 0.8);
     kg.add_edge(edge).unwrap();
@@ -551,17 +602,22 @@ fn test_redb_persist_incremental() {
     let kg = PetgraphBackend::open(dir.path().to_path_buf());
 
     // Add first node/edge
-    kg.add_node(make_node("node1", KGNodeType::Entity, vec![], "a")).unwrap();
-    kg.add_node(make_node("node2", KGNodeType::Entity, vec![], "a")).unwrap();
-    kg.add_edge(make_edge("node1", "node2", KGEdgeType::RelatedTo, 0.5)).unwrap();
+    kg.add_node(make_node("node1", KGNodeType::Entity, vec![], "a"))
+        .unwrap();
+    kg.add_node(make_node("node2", KGNodeType::Entity, vec![], "a"))
+        .unwrap();
+    kg.add_edge(make_edge("node1", "node2", KGEdgeType::RelatedTo, 0.5))
+        .unwrap();
 
     // Verify count immediately
     assert_eq!(kg.node_count().unwrap(), 2);
     assert_eq!(kg.edge_count().unwrap(), 1);
 
     // Add another node/edge incrementally
-    kg.add_node(make_node("node3", KGNodeType::Document, vec![], "a")).unwrap();
-    kg.add_edge(make_edge("node2", "node3", KGEdgeType::AssociatesWith, 0.7)).unwrap();
+    kg.add_node(make_node("node3", KGNodeType::Document, vec![], "a"))
+        .unwrap();
+    kg.add_edge(make_edge("node2", "node3", KGEdgeType::AssociatesWith, 0.7))
+        .unwrap();
 
     assert_eq!(kg.node_count().unwrap(), 3);
     assert_eq!(kg.edge_count().unwrap(), 2);
@@ -579,10 +635,17 @@ fn test_redb_load_all() {
 
     // Create multiple nodes and edges
     for i in 0..5 {
-        kg.add_node(make_node(&format!("n{}", i), KGNodeType::Entity, vec![], "a")).unwrap();
+        kg.add_node(make_node(&format!("n{}", i), KGNodeType::Entity, vec![], "a"))
+            .unwrap();
     }
     for i in 0..4 {
-        kg.add_edge(make_edge(&format!("n{}", i), &format!("n{}", i+1), KGEdgeType::RelatedTo, 0.5)).unwrap();
+        kg.add_edge(make_edge(
+            &format!("n{}", i),
+            &format!("n{}", i + 1),
+            KGEdgeType::RelatedTo,
+            0.5,
+        ))
+        .unwrap();
     }
 
     drop(kg);
@@ -602,8 +665,10 @@ fn test_redb_edge_key_format() {
     let dir = tempfile::TempDir::new().unwrap();
     let kg = PetgraphBackend::open(dir.path().to_path_buf());
 
-    kg.add_node(make_node("src_node", KGNodeType::Entity, vec![], "a")).unwrap();
-    kg.add_node(make_node("dst_node", KGNodeType::Entity, vec![], "a")).unwrap();
+    kg.add_node(make_node("src_node", KGNodeType::Entity, vec![], "a"))
+        .unwrap();
+    kg.add_node(make_node("dst_node", KGNodeType::Entity, vec![], "a"))
+        .unwrap();
 
     let edge = make_edge("src_node", "dst_node", KGEdgeType::AssociatesWith, 0.6);
     kg.add_edge(edge).unwrap();
@@ -622,9 +687,12 @@ fn test_redb_remove_node() {
     let dir = tempfile::TempDir::new().unwrap();
     let kg = PetgraphBackend::open(dir.path().to_path_buf());
 
-    kg.add_node(make_node("remove_node", KGNodeType::Entity, vec![], "a")).unwrap();
-    kg.add_node(make_node("other", KGNodeType::Entity, vec![], "a")).unwrap();
-    kg.add_edge(make_edge("remove_node", "other", KGEdgeType::RelatedTo, 0.5)).unwrap();
+    kg.add_node(make_node("remove_node", KGNodeType::Entity, vec![], "a"))
+        .unwrap();
+    kg.add_node(make_node("other", KGNodeType::Entity, vec![], "a"))
+        .unwrap();
+    kg.add_edge(make_edge("remove_node", "other", KGEdgeType::RelatedTo, 0.5))
+        .unwrap();
 
     assert_eq!(kg.node_count().unwrap(), 2);
     kg.remove_node("remove_node").unwrap();
@@ -679,7 +747,11 @@ fn test_redb_edge_history_survives_restart() {
     drop(kg);
     let kg2 = PetgraphBackend::open(dir.path().to_path_buf());
     let history2 = kg2.edge_history("h1", "h2", Some(KGEdgeType::HasFact)).unwrap();
-    assert_eq!(history2.len(), 2, "redb should preserve both edge versions after restart");
+    assert_eq!(
+        history2.len(),
+        2,
+        "redb should preserve both edge versions after restart"
+    );
 
     let active = history2.iter().filter(|e| e.invalid_at.is_none()).count();
     assert_eq!(active, 1, "only latest edge should be active");
@@ -711,7 +783,10 @@ fn test_redb_invalidate_conflicts_persisted() {
     let kg2 = PetgraphBackend::open(dir.path().to_path_buf());
     let valid2 = kg2.get_valid_edges_at(now_val + 2).unwrap();
     let matching2 = valid2.iter().filter(|e| e.src == "ic1" && e.dst == "ic2").count();
-    assert_eq!(matching2, 1, "after restart, still exactly 1 active edge (invalidation persisted)");
+    assert_eq!(
+        matching2, 1,
+        "after restart, still exactly 1 active edge (invalidation persisted)"
+    );
 }
 
 #[test]
@@ -724,9 +799,12 @@ fn test_redb_remove_node_cleans_edges() {
     kg.add_node(make_node("rn1", KGNodeType::Entity, vec![], "a")).unwrap();
     kg.add_node(make_node("rn2", KGNodeType::Entity, vec![], "a")).unwrap();
     kg.add_node(make_node("rn3", KGNodeType::Entity, vec![], "a")).unwrap();
-    kg.add_edge(KGEdge::new("rn1".into(), "rn2".into(), KGEdgeType::RelatedTo, 0.5)).unwrap();
-    kg.add_edge(KGEdge::new("rn2".into(), "rn3".into(), KGEdgeType::Follows, 0.8)).unwrap();
-    kg.add_edge(KGEdge::new("rn3".into(), "rn1".into(), KGEdgeType::Causes, 0.3)).unwrap();
+    kg.add_edge(KGEdge::new("rn1".into(), "rn2".into(), KGEdgeType::RelatedTo, 0.5))
+        .unwrap();
+    kg.add_edge(KGEdge::new("rn2".into(), "rn3".into(), KGEdgeType::Follows, 0.8))
+        .unwrap();
+    kg.add_edge(KGEdge::new("rn3".into(), "rn1".into(), KGEdgeType::Causes, 0.3))
+        .unwrap();
 
     assert_eq!(kg.edge_count().unwrap(), 3);
     kg.remove_node("rn2").unwrap();
@@ -736,7 +814,11 @@ fn test_redb_remove_node_cleans_edges() {
     drop(kg);
     let kg2 = PetgraphBackend::open(dir.path().to_path_buf());
     assert_eq!(kg2.node_count().unwrap(), 2, "node count preserved after restart");
-    assert_eq!(kg2.edge_count().unwrap(), 1, "orphaned edges should not reappear after restart");
+    assert_eq!(
+        kg2.edge_count().unwrap(),
+        1,
+        "orphaned edges should not reappear after restart"
+    );
     assert!(kg2.get_node("rn2").unwrap().is_none(), "removed node stays removed");
 }
 
@@ -770,7 +852,8 @@ fn test_redb_update_node_persisted() {
     let kg = PetgraphBackend::open(dir.path().to_path_buf());
 
     kg.add_node(make_node("up1", KGNodeType::Entity, vec![], "a")).unwrap();
-    kg.update_node("up1", Some("UpdatedLabel"), Some(serde_json::json!({"key": "value"}))).unwrap();
+    kg.update_node("up1", Some("UpdatedLabel"), Some(serde_json::json!({"key": "value"})))
+        .unwrap();
 
     drop(kg);
     let kg2 = PetgraphBackend::open(dir.path().to_path_buf());
@@ -784,14 +867,21 @@ fn test_ppr_basic() {
     let dir = tempfile::TempDir::new().unwrap();
     let kg = PetgraphBackend::open(dir.path().to_path_buf());
 
-    kg.add_node(make_node("a", KGNodeType::Entity, vec![], "agent1")).unwrap();
-    kg.add_node(make_node("b", KGNodeType::Entity, vec![], "agent1")).unwrap();
-    kg.add_node(make_node("c", KGNodeType::Entity, vec![], "agent1")).unwrap();
-    kg.add_node(make_node("d", KGNodeType::Entity, vec![], "agent1")).unwrap();
+    kg.add_node(make_node("a", KGNodeType::Entity, vec![], "agent1"))
+        .unwrap();
+    kg.add_node(make_node("b", KGNodeType::Entity, vec![], "agent1"))
+        .unwrap();
+    kg.add_node(make_node("c", KGNodeType::Entity, vec![], "agent1"))
+        .unwrap();
+    kg.add_node(make_node("d", KGNodeType::Entity, vec![], "agent1"))
+        .unwrap();
 
-    kg.add_edge(KGEdge::new("a".into(), "b".into(), KGEdgeType::HasFact, 1.0)).unwrap();
-    kg.add_edge(KGEdge::new("b".into(), "c".into(), KGEdgeType::HasFact, 1.0)).unwrap();
-    kg.add_edge(KGEdge::new("a".into(), "d".into(), KGEdgeType::HasFact, 1.0)).unwrap();
+    kg.add_edge(KGEdge::new("a".into(), "b".into(), KGEdgeType::HasFact, 1.0))
+        .unwrap();
+    kg.add_edge(KGEdge::new("b".into(), "c".into(), KGEdgeType::HasFact, 1.0))
+        .unwrap();
+    kg.add_edge(KGEdge::new("a".into(), "d".into(), KGEdgeType::HasFact, 1.0))
+        .unwrap();
 
     let result = kg.personalized_pagerank(&["a".to_string()], 0.15, 50, 4).unwrap();
     assert!(!result.is_empty(), "PPR should return results");
@@ -811,7 +901,8 @@ fn test_ppr_empty_graph() {
 fn test_ppr_no_seeds() {
     let dir = tempfile::TempDir::new().unwrap();
     let kg = PetgraphBackend::open(dir.path().to_path_buf());
-    kg.add_node(make_node("a", KGNodeType::Entity, vec![], "agent1")).unwrap();
+    kg.add_node(make_node("a", KGNodeType::Entity, vec![], "agent1"))
+        .unwrap();
     let result = kg.personalized_pagerank(&[], 0.15, 50, 5).unwrap();
     assert!(result.is_empty());
 }
@@ -821,9 +912,12 @@ fn test_temporal_diff() {
     let dir = tempfile::TempDir::new().unwrap();
     let kg = PetgraphBackend::open(dir.path().to_path_buf());
 
-    kg.add_node(make_node("a", KGNodeType::Entity, vec![], "agent1")).unwrap();
-    kg.add_node(make_node("b", KGNodeType::Entity, vec![], "agent1")).unwrap();
-    kg.add_node(make_node("c", KGNodeType::Entity, vec![], "agent1")).unwrap();
+    kg.add_node(make_node("a", KGNodeType::Entity, vec![], "agent1"))
+        .unwrap();
+    kg.add_node(make_node("b", KGNodeType::Entity, vec![], "agent1"))
+        .unwrap();
+    kg.add_node(make_node("c", KGNodeType::Entity, vec![], "agent1"))
+        .unwrap();
 
     // At t=100: edge a→b
     let mut e1 = make_edge("a", "b", KGEdgeType::RelatedTo, 0.8);
@@ -853,8 +947,10 @@ fn test_consolidate_versions() {
     let dir = tempfile::TempDir::new().unwrap();
     let kg = PetgraphBackend::open(dir.path().to_path_buf());
 
-    kg.add_node(make_node("a", KGNodeType::Entity, vec![], "agent1")).unwrap();
-    kg.add_node(make_node("b", KGNodeType::Entity, vec![], "agent1")).unwrap();
+    kg.add_node(make_node("a", KGNodeType::Entity, vec![], "agent1"))
+        .unwrap();
+    kg.add_node(make_node("b", KGNodeType::Entity, vec![], "agent1"))
+        .unwrap();
 
     // Create 3 temporal versions of the same a→b edge (different created_at)
     let mut e1 = make_edge("a", "b", KGEdgeType::RelatedTo, 0.8);
@@ -887,8 +983,10 @@ fn test_consolidation_preserves_valid() {
     let dir = tempfile::TempDir::new().unwrap();
     let kg = PetgraphBackend::open(dir.path().to_path_buf());
 
-    kg.add_node(make_node("a", KGNodeType::Entity, vec![], "agent1")).unwrap();
-    kg.add_node(make_node("b", KGNodeType::Entity, vec![], "agent1")).unwrap();
+    kg.add_node(make_node("a", KGNodeType::Entity, vec![], "agent1"))
+        .unwrap();
+    kg.add_node(make_node("b", KGNodeType::Entity, vec![], "agent1"))
+        .unwrap();
 
     // Create a valid (non-invalidated) edge
     let e1 = make_edge("a", "b", KGEdgeType::RelatedTo, 0.8);
@@ -899,7 +997,9 @@ fn test_consolidation_preserves_valid() {
     assert_eq!(expired, 0);
 
     // Edge should still be valid
-    let edge = kg.get_valid_edge_between("a", "b", Some(KGEdgeType::RelatedTo), now_ms()).unwrap();
+    let edge = kg
+        .get_valid_edge_between("a", "b", Some(KGEdgeType::RelatedTo), now_ms())
+        .unwrap();
     assert!(edge.is_some());
     assert!(edge.unwrap().expired_at.is_none());
 }

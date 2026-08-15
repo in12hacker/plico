@@ -6,7 +6,7 @@
 //! - **Importance**: explicit agent-set weight — critical knowledge persists
 //!
 //! Used by `recall_relevant()` to select the optimal memory set within a
-//! token budget, and by promotion logic to decide tier transitions.
+//! token budget.
 
 use super::layered::{MemoryEntry, MemoryTier};
 use std::collections::HashMap;
@@ -52,7 +52,11 @@ fn decay_lambda_for_tier(tier: &MemoryTier) -> f64 {
 pub fn score_entry(entry: &MemoryEntry, now_ms: u64, max_access: u32) -> RelevanceScore {
     let age_ms = now_ms.saturating_sub(entry.last_accessed) as f64;
     let lambda = decay_lambda_for_tier(&entry.tier);
-    let recency = if lambda == 0.0 { 1.0 } else { (-lambda * age_ms).exp() as f32 };
+    let recency = if lambda == 0.0 {
+        1.0
+    } else {
+        (-lambda * age_ms).exp() as f32
+    };
 
     let max_a = max_access.max(1) as f32;
     let frequency = entry.access_count as f32 / max_a;
@@ -61,7 +65,12 @@ pub fn score_entry(entry: &MemoryEntry, now_ms: u64, max_access: u32) -> Relevan
 
     let combined = W_RECENCY * recency + W_FREQUENCY * frequency + W_IMPORTANCE * importance;
 
-    RelevanceScore { recency, frequency, importance, combined }
+    RelevanceScore {
+        recency,
+        frequency,
+        importance,
+        combined,
+    }
 }
 
 /// Rank entries by relevance and return the top entries fitting within
@@ -77,14 +86,19 @@ pub fn select_within_budget(
 
     let max_access = entries.iter().map(|e| e.access_count).max().unwrap_or(1);
 
-    let mut scored: Vec<(MemoryEntry, RelevanceScore)> = entries.iter()
+    let mut scored: Vec<(MemoryEntry, RelevanceScore)> = entries
+        .iter()
         .map(|e| {
             let s = score_entry(e, now_ms, max_access);
             (e.clone(), s)
         })
         .collect();
 
-    scored.sort_by(|a, b| b.1.combined.partial_cmp(&a.1.combined).unwrap_or(std::cmp::Ordering::Equal));
+    scored.sort_by(|a, b| {
+        b.1.combined
+            .partial_cmp(&a.1.combined)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     let mut used_tokens = 0usize;
     let mut result = Vec::new();
@@ -139,7 +153,8 @@ pub fn select_within_budget_semantic(
 
     let max_access = entries.iter().map(|e| e.access_count).max().unwrap_or(1);
 
-    let mut scored: Vec<(MemoryEntry, RelevanceScore)> = entries.iter()
+    let mut scored: Vec<(MemoryEntry, RelevanceScore)> = entries
+        .iter()
         .map(|e| {
             let sem = semantic_scores.get(&e.id).copied();
             let s = score_entry_with_semantic(e, now_ms, max_access, sem);
@@ -147,7 +162,11 @@ pub fn select_within_budget_semantic(
         })
         .collect();
 
-    scored.sort_by(|a, b| b.1.combined.partial_cmp(&a.1.combined).unwrap_or(std::cmp::Ordering::Equal));
+    scored.sort_by(|a, b| {
+        b.1.combined
+            .partial_cmp(&a.1.combined)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     let mut used_tokens = 0usize;
     let mut result = Vec::new();
@@ -177,47 +196,6 @@ pub fn is_expired(entry: &MemoryEntry, now_ms: u64) -> bool {
     }
 }
 
-/// Promotion thresholds — determines when entries should move to a higher tier.
-pub struct PromotionThresholds {
-    pub ephemeral_to_working_access: u32,
-    pub working_to_longterm_access: u32,
-    pub working_to_longterm_importance: u8,
-}
-
-impl Default for PromotionThresholds {
-    fn default() -> Self {
-        Self {
-            ephemeral_to_working_access: 3,
-            working_to_longterm_access: 10,
-            working_to_longterm_importance: 50,
-        }
-    }
-}
-
-/// Determine the target tier for an entry based on promotion rules.
-/// Returns `Some(new_tier)` if promotion should occur, `None` otherwise.
-pub fn check_promotion(entry: &MemoryEntry, thresholds: &PromotionThresholds) -> Option<MemoryTier> {
-    match entry.tier {
-        MemoryTier::Ephemeral => {
-            if entry.access_count >= thresholds.ephemeral_to_working_access {
-                Some(MemoryTier::Working)
-            } else {
-                None
-            }
-        }
-        MemoryTier::Working => {
-            if entry.access_count >= thresholds.working_to_longterm_access
-                && entry.importance >= thresholds.working_to_longterm_importance
-            {
-                Some(MemoryTier::LongTerm)
-            } else {
-                None
-            }
-        }
-        _ => None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -233,6 +211,9 @@ mod tests {
     fn make_entry(text: &str, access: u32, importance: u8, age_ms: u64) -> MemoryEntry {
         let now = now_ms();
         MemoryEntry {
+            memory_id: Default::default(),
+            parent_revision_id: None,
+            canonical_content_hash: Default::default(),
             id: uuid::Uuid::new_v4().to_string(),
             agent_id: "test".into(),
             tenant_id: "default".to_string(),
@@ -243,7 +224,6 @@ mod tests {
             last_accessed: now.saturating_sub(age_ms),
             created_at: now.saturating_sub(age_ms),
             tags: Vec::new(),
-            embedding: None,
             ttl_ms: None,
             original_ttl_ms: None,
             scope: crate::memory::layered::MemoryScope::Private,
@@ -311,43 +291,17 @@ mod tests {
     }
 
     #[test]
-    fn promotion_ephemeral_to_working() {
-        let thresholds = PromotionThresholds::default();
-        let mut entry = make_entry("x", 2, 50, 0);
-        assert!(check_promotion(&entry, &thresholds).is_none());
-        entry.access_count = 3;
-        assert_eq!(check_promotion(&entry, &thresholds), Some(MemoryTier::Working));
-    }
-
-    #[test]
-    fn promotion_working_to_longterm() {
-        let thresholds = PromotionThresholds::default();
-        let mut entry = make_entry("x", 10, 50, 0);
-        entry.tier = MemoryTier::Working;
-        assert_eq!(check_promotion(&entry, &thresholds), Some(MemoryTier::LongTerm));
-
-        entry.importance = 30;
-        assert!(check_promotion(&entry, &thresholds).is_none());
-    }
-
-    #[test]
-    fn no_promotion_for_longterm_or_procedural() {
-        let thresholds = PromotionThresholds::default();
-        let mut entry = make_entry("x", 100, 100, 0);
-        entry.tier = MemoryTier::LongTerm;
-        assert!(check_promotion(&entry, &thresholds).is_none());
-        entry.tier = MemoryTier::Procedural;
-        assert!(check_promotion(&entry, &thresholds).is_none());
-    }
-
-    #[test]
     fn semantic_score_boosts_relevance() {
         let now = now_ms();
         let entry = make_entry("x", 1, 50, 1000);
         let base = score_entry(&entry, now, 1);
         let with_sem = score_entry_with_semantic(&entry, now, 1, Some(0.9));
-        assert!(with_sem.combined > base.combined,
-            "Semantic score should boost combined relevance: {} vs {}", with_sem.combined, base.combined);
+        assert!(
+            with_sem.combined > base.combined,
+            "Semantic score should boost combined relevance: {} vs {}",
+            with_sem.combined,
+            base.combined
+        );
     }
 
     #[test]
@@ -356,7 +310,9 @@ mod tests {
         let entry = make_entry("x", 1, 50, 1000);
         let base = score_entry(&entry, now, 1);
         let no_sem = score_entry_with_semantic(&entry, now, 1, None);
-        assert!((no_sem.combined - base.combined).abs() < f32::EPSILON,
-            "Without semantic score, should equal base scoring");
+        assert!(
+            (no_sem.combined - base.combined).abs() < f32::EPSILON,
+            "Without semantic score, should equal base scoring"
+        );
     }
 }

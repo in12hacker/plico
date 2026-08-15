@@ -1,8 +1,7 @@
 //! 技能组合器 —— 组合多个技能形成新技能
 
 use super::{
-    CognitiveResult, Skill, KnowledgeSkill, KnowledgeItem, ConfigSkill, ToolCallStep,
-    ValidationStatus, SkillUsageStats,
+    CognitiveResult, ConfigSkill, KnowledgeItem, KnowledgeSkill, Skill, SkillUsageStats, ToolCallStep, ValidationStatus,
 };
 
 fn knowledge_item_to_json(item: &KnowledgeItem) -> serde_json::Value {
@@ -132,8 +131,8 @@ impl SkillComposer {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::KnowledgeItem;
+    use super::*;
 
     fn make_skill(name: &str, knowledge: Vec<KnowledgeItem>) -> Skill {
         Skill::Knowledge(KnowledgeSkill {
@@ -166,20 +165,26 @@ mod tests {
     fn test_compose_merges_knowledge_items() {
         let composer = SkillComposer::new();
         let skills = vec![
-            make_skill("a", vec![KnowledgeItem::Rule {
-                condition: "c1".to_string(),
-                action: "a1".to_string(),
-            }]),
-            make_skill("b", vec![
-                KnowledgeItem::Rule {
-                    condition: "c2".to_string(),
-                    action: "a2".to_string(),
-                },
-                KnowledgeItem::Lesson {
-                    situation: "s".to_string(),
-                    insight: "i".to_string(),
-                },
-            ]),
+            make_skill(
+                "a",
+                vec![KnowledgeItem::Rule {
+                    condition: "c1".to_string(),
+                    action: "a1".to_string(),
+                }],
+            ),
+            make_skill(
+                "b",
+                vec![
+                    KnowledgeItem::Rule {
+                        condition: "c2".to_string(),
+                        action: "a2".to_string(),
+                    },
+                    KnowledgeItem::Lesson {
+                        situation: "s".to_string(),
+                        insight: "i".to_string(),
+                    },
+                ],
+            ),
         ];
         let result = composer.compose(&skills).unwrap();
         assert!(result.is_some());
@@ -236,10 +241,13 @@ mod tests {
     fn test_compose_mixed_knowledge_and_config() {
         let composer = SkillComposer::new();
         let skills = vec![
-            make_skill("k1", vec![KnowledgeItem::Rule {
-                condition: "cond".to_string(),
-                action: "act".to_string(),
-            }]),
+            make_skill(
+                "k1",
+                vec![KnowledgeItem::Rule {
+                    condition: "cond".to_string(),
+                    action: "act".to_string(),
+                }],
+            ),
             make_config_skill("c1", vec![make_step("search", "r1")]),
         ];
         let result = composer.compose(&skills).unwrap();

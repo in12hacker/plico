@@ -18,17 +18,21 @@
 //! - **Training-intent** (throughput-sensitive): Lower priority, batched.
 
 pub mod agent;
-pub mod queue;
 pub mod dispatch;
 pub mod messaging;
+pub mod queue;
 
-pub use agent::{Agent, AgentId, AgentState, AgentResources, AgentUsage, Intent, IntentPriority, IntentId, TransitionError};
-pub use queue::{SchedulerQueue, SchedulerError};
-pub use dispatch::{DispatchHandle, AgentExecutor, LocalExecutor, KernelExecutor, TokioDispatchLoop, DispatchError, ExecutionResult};
+pub use agent::{
+    Agent, AgentId, AgentResources, AgentState, AgentUsage, Intent, IntentId, IntentPriority, TransitionError,
+};
+pub use dispatch::{
+    AgentExecutor, DispatchError, DispatchHandle, ExecutionResult, KernelExecutor, LocalExecutor, TokioDispatchLoop,
+};
+pub use queue::{SchedulerError, SchedulerQueue};
 
+use agent::now_ms;
 use serde::{Deserialize, Serialize};
 use std::sync::RwLock;
-use agent::now_ms;
 
 /// The scheduler — global agent lifecycle manager.
 pub struct AgentScheduler {
@@ -201,7 +205,9 @@ impl AgentScheduler {
 
     /// Snapshot all usage data for persistence.
     pub fn snapshot_usage(&self) -> HashMap<String, AgentUsage> {
-        self.usage.read().unwrap()
+        self.usage
+            .read()
+            .unwrap()
             .iter()
             .map(|(id, usage)| (id.0.clone(), usage.clone()))
             .collect()
@@ -217,10 +223,7 @@ impl AgentScheduler {
 
     /// Get an agent's runtime usage counters.
     pub fn get_usage(&self, agent_id: &AgentId) -> AgentUsage {
-        self.usage.read().unwrap()
-            .get(agent_id)
-            .cloned()
-            .unwrap_or_default()
+        self.usage.read().unwrap().get(agent_id).cloned().unwrap_or_default()
     }
 
     /// Record a tool call for an agent.

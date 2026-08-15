@@ -3,11 +3,14 @@
 //! Extracted from `prefetch.rs` for independent evolution.
 //! Cache management changes independently from the core prefetch engine.
 
-use std::sync::{RwLock, atomic::{AtomicUsize, AtomicU64, Ordering}};
 use std::path::Path;
+use std::sync::{
+    atomic::{AtomicU64, AtomicUsize, Ordering},
+    RwLock,
+};
 
-use serde::{Deserialize, Serialize};
 use crate::fs::context_budget::BudgetAllocation;
+use serde::{Deserialize, Serialize};
 
 use super::prefetch::now_ms;
 
@@ -57,23 +60,11 @@ impl CachedAssembly {
         }
     }
 
-    fn estimate_size(
-        intent_text: &str,
-        intent_embedding: &Option<Vec<f32>>,
-        assembly: &BudgetAllocation,
-    ) -> usize {
+    fn estimate_size(intent_text: &str, intent_embedding: &Option<Vec<f32>>, assembly: &BudgetAllocation) -> usize {
         let text_size = intent_text.len();
         let embedding_size = intent_embedding.as_ref().map_or(0, |e| e.len() * 4);
-        let items_size: usize = assembly
-            .items
-            .iter()
-            .map(|item| item.content.len())
-            .sum();
-        let cids_size: usize = assembly
-            .items
-            .iter()
-            .map(|item| item.cid.len())
-            .sum();
+        let items_size: usize = assembly.items.iter().map(|item| item.content.len()).sum();
+        let cids_size: usize = assembly.items.iter().map(|item| item.cid.len()).sum();
         text_size + embedding_size + items_size + cids_size
     }
 
@@ -98,12 +89,7 @@ pub(crate) struct IntentAssemblyCache {
 }
 
 impl IntentAssemblyCache {
-    pub(crate) fn new(
-        max_entries: usize,
-        max_memory_bytes: usize,
-        similarity_threshold: f32,
-        ttl_ms: u64,
-    ) -> Self {
+    pub(crate) fn new(max_entries: usize, max_memory_bytes: usize, similarity_threshold: f32, ttl_ms: u64) -> Self {
         Self {
             entries: RwLock::new(Vec::new()),
             max_entries,
@@ -125,7 +111,8 @@ impl IntentAssemblyCache {
 
             if entry.is_expired(self.ttl_ms) {
                 let removed = entries.remove(pos);
-                self.current_memory_bytes.fetch_sub(removed.estimated_size_bytes, Ordering::Relaxed);
+                self.current_memory_bytes
+                    .fetch_sub(removed.estimated_size_bytes, Ordering::Relaxed);
                 return None;
             }
 
@@ -142,7 +129,8 @@ impl IntentAssemblyCache {
 
                 if entry.is_expired(self.ttl_ms) {
                     let removed = entries.remove(pos);
-                    self.current_memory_bytes.fetch_sub(removed.estimated_size_bytes, Ordering::Relaxed);
+                    self.current_memory_bytes
+                        .fetch_sub(removed.estimated_size_bytes, Ordering::Relaxed);
                     return None;
                 }
 
@@ -229,7 +217,8 @@ impl IntentAssemblyCache {
 
             if let Some(pos) = min_pos {
                 let removed = entries.remove(pos);
-                self.current_memory_bytes.fetch_sub(removed.estimated_size_bytes, Ordering::Relaxed);
+                self.current_memory_bytes
+                    .fetch_sub(removed.estimated_size_bytes, Ordering::Relaxed);
             } else {
                 break;
             }
@@ -295,8 +284,8 @@ impl IntentAssemblyCache {
             return Ok(0);
         }
         let json = std::fs::read_to_string(&path)?;
-        let entries: Vec<CachedAssembly> = serde_json::from_str(&json)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        let entries: Vec<CachedAssembly> =
+            serde_json::from_str(&json).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
 
         let mut restored = 0;
         let mut total_mem = 0usize;
@@ -422,7 +411,7 @@ pub struct IntentCacheStats {
 mod tests {
     use super::*;
     use crate::fs::context_budget::BudgetAllocation;
-    use crate::fs::context_loader::{LoadedContext, ContextLayer};
+    use crate::fs::context_loader::{ContextLayer, LoadedContext};
 
     fn make_allocation(cid: &str) -> BudgetAllocation {
         BudgetAllocation {
@@ -491,7 +480,12 @@ mod tests {
         let cache = IntentAssemblyCache::default();
         cache.store("a".into(), None, make_allocation("c1"), vec!["dep1".into()]);
         cache.store("b".into(), None, make_allocation("c2"), vec!["dep2".into()]);
-        cache.store("c".into(), None, make_allocation("c3"), vec!["dep1".into(), "dep3".into()]);
+        cache.store(
+            "c".into(),
+            None,
+            make_allocation("c3"),
+            vec!["dep1".into(), "dep3".into()],
+        );
 
         assert_eq!(cache.stats().entries, 3);
 

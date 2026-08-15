@@ -31,11 +31,7 @@ pub struct BudgetAllocation {
 ///
 /// Candidates should be pre-sorted by relevance (highest first).
 /// The engine greedily assigns the highest layer that fits the remaining budget.
-pub fn assemble(
-    loader: &ContextLoader,
-    candidates: &[ContextCandidate],
-    budget_tokens: usize,
-) -> BudgetAllocation {
+pub fn assemble(loader: &ContextLoader, candidates: &[ContextCandidate], budget_tokens: usize) -> BudgetAllocation {
     let mut items = Vec::new();
     let mut remaining = budget_tokens;
     let candidates_considered = candidates.len();
@@ -82,11 +78,7 @@ pub fn assemble(
 }
 
 /// Pick the highest layer that fits the remaining budget.
-fn pick_layer(
-    loader: &ContextLoader,
-    cid: &str,
-    remaining_tokens: usize,
-) -> Option<ContextLayer> {
+fn pick_layer(loader: &ContextLoader, cid: &str, remaining_tokens: usize) -> Option<ContextLayer> {
     if remaining_tokens >= ContextLayer::L2.tokens_approx() {
         return Some(ContextLayer::L2);
     }
@@ -122,17 +114,13 @@ fn pick_layer(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
     use crate::cas::CASStorage;
+    use std::sync::Arc;
 
     fn make_loader() -> (ContextLoader, tempfile::TempDir, Arc<CASStorage>) {
         let dir = tempfile::tempdir().unwrap();
         let cas = Arc::new(CASStorage::new(dir.path().join("cas")).unwrap());
-        let loader = ContextLoader::new(
-            dir.path().join("context"),
-            None,
-            Arc::clone(&cas),
-        ).unwrap();
+        let loader = ContextLoader::new(dir.path().join("context"), None, Arc::clone(&cas)).unwrap();
         (loader, dir, cas)
     }
 
@@ -157,7 +145,10 @@ mod tests {
         let cid = store_object(&cas, "Hello world, this is a test document.");
         loader.store_l0(&cid, "test doc summary".to_string()).unwrap();
 
-        let candidates = vec![ContextCandidate { cid: cid.clone(), relevance: 1.0 }];
+        let candidates = vec![ContextCandidate {
+            cid: cid.clone(),
+            relevance: 1.0,
+        }];
         let result = assemble(&loader, &candidates, 10000);
 
         assert_eq!(result.candidates_included, 1);
@@ -172,7 +163,10 @@ mod tests {
         let cid = store_object(&cas, &content);
         loader.store_l0(&cid, "short summary".to_string()).unwrap();
 
-        let candidates = vec![ContextCandidate { cid: cid.clone(), relevance: 1.0 }];
+        let candidates = vec![ContextCandidate {
+            cid: cid.clone(),
+            relevance: 1.0,
+        }];
         // Budget too small for L2 (3000 words ≈ 2250 tokens) but big enough for L0
         let result = assemble(&loader, &candidates, 50);
 
@@ -194,9 +188,18 @@ mod tests {
         loader.store_l0(&cid3, "Go concurrency".to_string()).unwrap();
 
         let candidates = vec![
-            ContextCandidate { cid: cid1.clone(), relevance: 0.9 },
-            ContextCandidate { cid: cid2.clone(), relevance: 0.7 },
-            ContextCandidate { cid: cid3.clone(), relevance: 0.5 },
+            ContextCandidate {
+                cid: cid1.clone(),
+                relevance: 0.9,
+            },
+            ContextCandidate {
+                cid: cid2.clone(),
+                relevance: 0.7,
+            },
+            ContextCandidate {
+                cid: cid3.clone(),
+                relevance: 0.5,
+            },
         ];
 
         let result = assemble(&loader, &candidates, 10000);
@@ -233,7 +236,10 @@ mod tests {
             let content = format!("Document {} content. ", i).repeat(20);
             let cid = store_object(&cas, &content);
             loader.store_l0(&cid, format!("Doc {} summary", i)).unwrap();
-            candidates.push(ContextCandidate { cid, relevance: 1.0 - i as f32 * 0.1 });
+            candidates.push(ContextCandidate {
+                cid,
+                relevance: 1.0 - i as f32 * 0.1,
+            });
         }
 
         // Budget for ~3 L2 items

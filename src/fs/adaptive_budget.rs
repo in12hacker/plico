@@ -107,8 +107,7 @@ impl Ucb1Bandit {
         }
 
         let exploitation = stats.avg_reward();
-        let exploration = self.exploration_constant
-            * ((self.total_pulls as f64).ln() / stats.pulls as f64).sqrt();
+        let exploration = self.exploration_constant * ((self.total_pulls as f64).ln() / stats.pulls as f64).sqrt();
 
         exploitation + exploration
     }
@@ -160,21 +159,6 @@ impl Ucb1Bandit {
     pub fn total_pulls(&self) -> u64 {
         self.total_pulls
     }
-
-    /// Convert weights to vector_weight and bm25_weight for RetrievalConfig.
-    pub fn to_retrieval_weights(&self) -> (f32, f32) {
-        let weights = self.strategy_weights();
-        let vector_w = weights.get(&StrategyArm::Vector).copied().unwrap_or(0.25);
-        let bm25_w = weights.get(&StrategyArm::Bm25).copied().unwrap_or(0.25);
-        let total = vector_w + bm25_w;
-        if total == 0.0 {
-            return (0.5, 0.5);
-        }
-        (
-            (vector_w / total) as f32,
-            (bm25_w / total) as f32,
-        )
-    }
 }
 
 #[cfg(test)]
@@ -188,10 +172,7 @@ mod tests {
         let values: Vec<f64> = weights.values().copied().collect();
         let first = values[0];
         for v in &values {
-            assert!(
-                (v - first).abs() < 0.01,
-                "cold start should have uniform weights"
-            );
+            assert!((v - first).abs() < 0.01, "cold start should have uniform weights");
         }
     }
 
@@ -202,11 +183,7 @@ mod tests {
         bandit.record(StrategyArm::Vector, 0.5);
 
         let selected = bandit.select_arm();
-        assert_ne!(
-            selected,
-            StrategyArm::Vector,
-            "should explore unpulled arms first"
-        );
+        assert_ne!(selected, StrategyArm::Vector, "should explore unpulled arms first");
     }
 
     #[test]
@@ -225,7 +202,8 @@ mod tests {
         assert!(
             vector_w > bm25_w,
             "higher-reward strategy should get higher weight: vector={}, bm25={}",
-            vector_w, bm25_w
+            vector_w,
+            bm25_w
         );
     }
 
@@ -237,11 +215,7 @@ mod tests {
 
         let weights = bandit.strategy_weights();
         let sum: f64 = weights.values().sum();
-        assert!(
-            (sum - 1.0).abs() < 0.01,
-            "weights should sum to 1.0, got {}",
-            sum
-        );
+        assert!((sum - 1.0).abs() < 0.01, "weights should sum to 1.0, got {}", sum);
     }
 
     #[test]
@@ -263,21 +237,6 @@ mod tests {
     }
 
     #[test]
-    fn test_to_retrieval_weights() {
-        let mut bandit = Ucb1Bandit::new(0.1);
-        for _ in 0..50 {
-            bandit.record(StrategyArm::Vector, 0.8);
-            bandit.record(StrategyArm::Bm25, 0.2);
-            bandit.record(StrategyArm::KnowledgeGraph, 0.5);
-            bandit.record(StrategyArm::TypedRecall, 0.5);
-        }
-
-        let (vector_w, bm25_w) = bandit.to_retrieval_weights();
-        assert!(vector_w > bm25_w, "vector should have higher weight");
-        assert!((vector_w + bm25_w - 1.0).abs() < 0.01, "should sum to 1.0");
-    }
-
-    #[test]
     fn test_exploration_bonus_decreases_with_more_pulls() {
         let mut bandit = Ucb1Bandit::default_bandit();
         for _ in 0..10 {
@@ -295,7 +254,8 @@ mod tests {
         assert!(
             score_at_10 > score_at_100,
             "exploration bonus should shrink with more data: {} vs {}",
-            score_at_10, score_at_100
+            score_at_10,
+            score_at_100
         );
     }
 }

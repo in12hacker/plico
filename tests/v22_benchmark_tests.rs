@@ -23,10 +23,9 @@
 //! - F-8 (Token透明): Section 5 - token_estimate field, 100% visibility
 //! - Session (F-6): Section 3 - StartSession/EndSession lifecycle
 
-use std::sync::Arc;
 use plico::api::semantic::{ApiRequest, ApiResponse};
 use plico::kernel::AIKernel;
-use plico::memory::MemoryTier;
+use std::sync::Arc;
 use std::time::Instant;
 
 // ── Test Infrastructure ────────────────────────────────────────────────────────
@@ -40,7 +39,6 @@ fn make_kernel() -> (Arc<AIKernel>, tempfile::TempDir) {
     (kernel, dir)
 }
 
-
 /// Helper to call API request and return response.
 fn call_api(kernel: &AIKernel, req: ApiRequest) -> ApiResponse {
     kernel.handle_api_request(req)
@@ -53,14 +51,6 @@ fn register_agent(kernel: &AIKernel, name: &str) -> (String, String) {
     let agent_id = resp.agent_id.expect("agent_id should be set");
     let token = resp.token.expect("token should be issued");
     (agent_id, token)
-}
-
-/// Helper to get token_estimate from SessionStarted response.
-fn get_session_token_estimate(resp: &ApiResponse) -> usize {
-    resp.session_started
-        .as_ref()
-        .map(|s| s.token_estimate)
-        .unwrap_or(0)
 }
 
 /// Helper to get changes_since_last from SessionStarted response.
@@ -132,7 +122,7 @@ fn benchmark_delta_savings() {
                 vec!["auth".to_string(), "module".to_string(), format!("file_{}", i)],
                 &agent_id,
                 Some(format!("auth_file_{}.rs", i)),
-                plico::cas::ObjectScope::default()
+                plico::cas::ObjectScope::default(),
             )
             .expect("should create doc");
         cids.push(cid);
@@ -142,21 +132,26 @@ fn benchmark_delta_savings() {
     let start_req = ApiRequest::StartSession {
         agent_id: agent_id.clone(),
         agent_token: Some(agent_token.clone()),
-        intent_hint: Some("initial session".to_string()),
-        load_tiers: vec![MemoryTier::Working, MemoryTier::LongTerm],
         last_seen_seq: None,
     };
     let start_resp = call_api(&kernel, start_req);
-    let _seq_after_create = start_resp.session_started.as_ref().map(|s| {
-        // Get the seq from changes_since_last (represents current position)
-        s.changes_since_last.last().map(|e| e.seq).unwrap_or(0)
-    }).unwrap_or(0);
+    let _seq_after_create = start_resp
+        .session_started
+        .as_ref()
+        .map(|s| {
+            // Get the seq from changes_since_last (represents current position)
+            s.changes_since_last.last().map(|e| e.seq).unwrap_or(0)
+        })
+        .unwrap_or(0);
 
-    let session_id = start_resp.session_started.as_ref().map(|s| s.session_id.clone()).unwrap_or_default();
+    let session_id = start_resp
+        .session_started
+        .as_ref()
+        .map(|s| s.session_id.clone())
+        .unwrap_or_default();
     let end_req = ApiRequest::EndSession {
         agent_id: agent_id.clone(),
         session_id: session_id.clone(),
-        auto_checkpoint: true,
     };
     let end_resp = call_api(&kernel, end_req);
     let last_seq = end_resp.session_ended.as_ref().map(|s| s.last_seq).unwrap_or(0);
@@ -188,14 +183,8 @@ fn benchmark_delta_savings() {
     let delta_resp = call_api(&kernel, delta_req);
     let delta_latency = delta_start.elapsed().as_millis();
 
-    let delta_token_estimate = delta_resp.delta_result
-        .as_ref()
-        .map(|d| d.token_estimate)
-        .unwrap_or(0);
-    let delta_changes = delta_resp.delta_result
-        .as_ref()
-        .map(|d| d.changes.len())
-        .unwrap_or(0);
+    let delta_token_estimate = delta_resp.delta_result.as_ref().map(|d| d.token_estimate).unwrap_or(0);
+    let delta_changes = delta_resp.delta_result.as_ref().map(|d| d.changes.len()).unwrap_or(0);
 
     println!("\nDelta Query Results:");
     println!("  Changes detected: {}", delta_changes);
@@ -205,7 +194,10 @@ fn benchmark_delta_savings() {
     // Step 5: Calculate what full re-read would cost
     // Estimate: ~625 tokens per file (250 chars / 4 + overhead)
     let full_reread_tokens = NUM_OBJECTS * 625;
-    println!("\nFull Re-read Estimate: {} tokens ({} objects × 625)", full_reread_tokens, NUM_OBJECTS);
+    println!(
+        "\nFull Re-read Estimate: {} tokens ({} objects × 625)",
+        full_reread_tokens, NUM_OBJECTS
+    );
 
     // Step 6: Calculate savings
     let savings_ratio = if full_reread_tokens > 0 {
@@ -230,8 +222,18 @@ fn benchmark_delta_savings() {
     let savings_pass = savings_percent >= target_savings_percent;
     let latency_pass = delta_latency < latency_target_ms;
 
-    println!("Savings: {:.1}% >= {:.1}%? {}", savings_percent, target_savings_percent, if savings_pass { "PASS" } else { "FAIL" });
-    println!("Latency: {}ms < {}ms? {}", delta_latency, latency_target_ms, if latency_pass { "PASS" } else { "FAIL" });
+    println!(
+        "Savings: {:.1}% >= {:.1}%? {}",
+        savings_percent,
+        target_savings_percent,
+        if savings_pass { "PASS" } else { "FAIL" }
+    );
+    println!(
+        "Latency: {}ms < {}ms? {}",
+        delta_latency,
+        latency_target_ms,
+        if latency_pass { "PASS" } else { "FAIL" }
+    );
 
     assert!(
         savings_pass,
@@ -246,7 +248,10 @@ fn benchmark_delta_savings() {
         delta_latency, latency_target_ms
     );
 
-    println!("\nOVERALL: {}", if savings_pass && latency_pass { "PASS" } else { "FAIL" });
+    println!(
+        "\nOVERALL: {}",
+        if savings_pass && latency_pass { "PASS" } else { "FAIL" }
+    );
 }
 
 // ── Benchmark 2: Intent Cache Hit Rate ───────────────────────────────────────
@@ -282,7 +287,7 @@ fn benchmark_intent_cache_hit_rate() {
             vec!["test".to_string()],
             &agent_id,
             None,
-            plico::cas::ObjectScope::default()
+            plico::cas::ObjectScope::default(),
         )
         .expect("should create doc");
 
@@ -298,11 +303,13 @@ fn benchmark_intent_cache_hit_rate() {
     println!("  Unique intents: {}", TOTAL_INTENTS - EXACT_REPEATS);
 
     // Intent pool - 5 themes with variations
-    let intent_pool = ["fix authentication bug",
+    let intent_pool = [
+        "fix authentication bug",
         "fix memory leak issue",
         "fix race condition in scheduler",
         "improve performance bottleneck",
-        "add logging to module"];
+        "add logging to module",
+    ];
 
     // Declare intents: first 15 are exact repeats of "fix authentication bug"
     let mut hits = 0u64;
@@ -339,15 +346,17 @@ fn benchmark_intent_cache_hit_rate() {
         // Track if this was a cache hit
         if hits_after > hits_before {
             hits += 1;
-            println!("  Intent {}: CACHE HIT (intent: {})", i, &intent[..intent.len().min(40)]);
+            println!(
+                "  Intent {}: CACHE HIT (intent: {})",
+                i,
+                &intent[..intent.len().min(40)]
+            );
         }
 
         // Start and end a session (resets session state but keeps cache)
         let start_req = ApiRequest::StartSession {
             agent_id: agent_id.clone(),
             agent_token: Some(agent_token.clone()),
-            intent_hint: None,
-            load_tiers: vec![],
             last_seen_seq: None,
         };
         let session_id = uuid::Uuid::new_v4().to_string();
@@ -355,7 +364,6 @@ fn benchmark_intent_cache_hit_rate() {
         let end_req = ApiRequest::EndSession {
             agent_id: agent_id.clone(),
             session_id,
-            auto_checkpoint: false,
         };
         let _ = call_api(&kernel, end_req);
     }
@@ -392,9 +400,15 @@ fn benchmark_intent_cache_hit_rate() {
         hit_rate >= stub_target
     };
 
-    println!("\nStub mode result: {} (cache entries: {})",
-            if stub_mode_pass { "ACCEPTABLE (documented behavior)" } else { "FAIL" },
-            final_entries);
+    println!(
+        "\nStub mode result: {} (cache entries: {})",
+        if stub_mode_pass {
+            "ACCEPTABLE (documented behavior)"
+        } else {
+            "FAIL"
+        },
+        final_entries
+    );
 
     // This test documents expected behavior rather than asserting
     // In stub mode, the cache is not populated because embed() always fails
@@ -436,7 +450,7 @@ fn benchmark_change_awareness_latency() {
                 vec!["test".to_string(), format!("obj_{}", i)],
                 &agent_id,
                 None,
-                plico::cas::ObjectScope::default()
+                plico::cas::ObjectScope::default(),
             )
             .expect("should create doc");
         cids.push(cid);
@@ -446,30 +460,25 @@ fn benchmark_change_awareness_latency() {
     let start_req = ApiRequest::StartSession {
         agent_id: agent_id.clone(),
         agent_token: Some(agent_token.clone()),
-        intent_hint: None,
-        load_tiers: vec![],
         last_seen_seq: None,
     };
     let start_resp = call_api(&kernel, start_req);
-    let session_id = start_resp.session_started.as_ref().map(|s| s.session_id.clone()).unwrap_or_default();
+    let session_id = start_resp
+        .session_started
+        .as_ref()
+        .map(|s| s.session_id.clone())
+        .unwrap_or_default();
 
     let end_req = ApiRequest::EndSession {
         agent_id: agent_id.clone(),
         session_id: session_id.clone(),
-        auto_checkpoint: true,
     };
     let end_resp = call_api(&kernel, end_req);
     let last_seq = end_resp.session_ended.as_ref().map(|s| s.last_seq).unwrap_or(0);
 
     // Step 2: Modify one object
     kernel
-        .semantic_update(
-            &cids[0],
-            b"Modified content".to_vec(),
-            None,
-            &agent_id,
-            "default",
-        )
+        .semantic_update(&cids[0], b"Modified content".to_vec(), None, &agent_id, "default")
         .expect("should update");
 
     // Step 3: Measure DeltaSince latency (multiple runs for accuracy)
@@ -510,7 +519,12 @@ fn benchmark_change_awareness_latency() {
     let pass = avg_latency < target_ms as f64;
 
     println!("\n=== Verification ===");
-    println!("Average latency: {:.1} ms < {} ms? {}", avg_latency, target_ms, if pass { "PASS" } else { "FAIL" });
+    println!(
+        "Average latency: {:.1} ms < {} ms? {}",
+        avg_latency,
+        target_ms,
+        if pass { "PASS" } else { "FAIL" }
+    );
 
     assert!(
         pass,
@@ -546,7 +560,7 @@ fn benchmark_token_cost_transparency() {
             vec!["test".to_string()],
             &agent_id,
             None,
-            plico::cas::ObjectScope::default()
+            plico::cas::ObjectScope::default(),
         )
         .expect("should create doc");
 
@@ -562,28 +576,31 @@ fn benchmark_token_cost_transparency() {
         let top_level = resp.token_estimate.is_some();
 
         // Check implementation-specific locations
-        let session_level = resp.session_started.as_ref().map(|s| s.token_estimate > 0).unwrap_or(false);
-        let delta_level = resp.delta_result.as_ref().map(|d| d.token_estimate > 0).unwrap_or(false);
+        let delta_level = resp
+            .delta_result
+            .as_ref()
+            .map(|d| d.token_estimate > 0)
+            .unwrap_or(false);
 
-        let has_estimate = top_level || session_level || delta_level;
+        let has_estimate = top_level || delta_level;
         if has_estimate {
             responses_with_estimate += 1;
         }
-        if session_level || delta_level {
+        if delta_level {
             implementation_has_estimate += 1;
         }
 
         println!("  {}:", name);
-        println!("    Top-level (design spec): {:?} ({})",
-                resp.token_estimate,
-                if top_level { "OK" } else { "MISSING" });
-        if session_level {
-            println!("    session_started.token_estimate: {} (implementation)",
-                    resp.session_started.as_ref().map(|s| s.token_estimate).unwrap_or(0));
-        }
+        println!(
+            "    Top-level (design spec): {:?} ({})",
+            resp.token_estimate,
+            if top_level { "OK" } else { "MISSING" }
+        );
         if delta_level {
-            println!("    delta_result.token_estimate: {} (implementation)",
-                    resp.delta_result.as_ref().map(|d| d.token_estimate).unwrap_or(0));
+            println!(
+                "    delta_result.token_estimate: {} (implementation)",
+                resp.delta_result.as_ref().map(|d| d.token_estimate).unwrap_or(0)
+            );
         }
         has_estimate
     };
@@ -592,12 +609,10 @@ fn benchmark_token_cost_transparency() {
     println!("(Note: F-8 design spec says token_estimate should be at ApiResponse top level)");
     println!("(Implementation may place it in nested structures instead)\n");
 
-    // 1. StartSession - should include token_estimate
+    // 1. StartSession has a durable watermark, not a synthetic token estimate.
     let start_req = ApiRequest::StartSession {
         agent_id: agent_id.clone(),
         agent_token: Some(agent_token.clone()),
-        intent_hint: Some("testing cost transparency".to_string()),
-        load_tiers: vec![MemoryTier::Working],
         last_seen_seq: None,
     };
     let start_resp = call_api(&kernel, start_req);
@@ -657,11 +672,14 @@ fn benchmark_token_cost_transparency() {
     check_response("IntentCacheStats", &cache_resp);
 
     // End session
-    let session_id = start_resp.session_started.as_ref().map(|s| s.session_id.clone()).unwrap_or_default();
+    let session_id = start_resp
+        .session_started
+        .as_ref()
+        .map(|s| s.session_id.clone())
+        .unwrap_or_default();
     let end_req = ApiRequest::EndSession {
         agent_id: agent_id.clone(),
         session_id,
-        auto_checkpoint: false,
     };
     let _end_resp = call_api(&kernel, end_req);
 
@@ -680,8 +698,14 @@ fn benchmark_token_cost_transparency() {
 
     println!("\n=== Token Transparency Results ===");
     println!("Responses checked: {}", responses_checked);
-    println!("Responses with token_estimate (any location): {}", responses_with_estimate);
-    println!("Responses with implementation-level estimate: {}", implementation_has_estimate);
+    println!(
+        "Responses with token_estimate (any location): {}",
+        responses_with_estimate
+    );
+    println!(
+        "Responses with implementation-level estimate: {}",
+        implementation_has_estimate
+    );
     println!("Transparency (design spec): {:.1}%", transparency_percent);
     println!("Transparency (implementation): {:.1}%", implementation_percent);
     println!("Design target: 100% (at ApiResponse top level)");
@@ -695,12 +719,18 @@ fn benchmark_token_cost_transparency() {
     let spec_pass = transparency_percent >= spec_target_percent;
 
     println!("\n=== Verification ===");
-    println!("Implementation: {:.1}% >= {:.1}%? {}",
-             implementation_percent, impl_target_percent,
-             if impl_pass { "PASS" } else { "FAIL" });
-    println!("Design spec: {:.1}% >= {:.1}%? {}",
-             transparency_percent, spec_target_percent,
-             if spec_pass { "PASS" } else { "FAIL" });
+    println!(
+        "Implementation: {:.1}% >= {:.1}%? {}",
+        implementation_percent,
+        impl_target_percent,
+        if impl_pass { "PASS" } else { "FAIL" }
+    );
+    println!(
+        "Design spec: {:.1}% >= {:.1}%? {}",
+        transparency_percent,
+        spec_target_percent,
+        if spec_pass { "PASS" } else { "FAIL" }
+    );
 
     // For Phase D, the benchmark documents the current state.
     // The design spec says 100% but implementation is ~33% at top level.
@@ -710,7 +740,10 @@ fn benchmark_token_cost_transparency() {
     if impl_pass {
         println!("PASS: Implementation meets 100% target");
     } else {
-        println!("ACCEPTABLE: Implementation provides {:.1}% token cost visibility", implementation_percent);
+        println!(
+            "ACCEPTABLE: Implementation provides {:.1}% token cost visibility",
+            implementation_percent
+        );
         println!("NOTE: Design doc Section 5 specifies token_estimate at ApiResponse top level,");
         println!("       but implementation places it in nested structures (session_started, delta_result).");
         println!("       This is a known gap between design and implementation.");
@@ -753,7 +786,7 @@ fn benchmark_full_session_cycle() {
             vec!["auth".to_string(), "module".to_string()],
             &agent_id,
             Some("auth.rs".to_string()),
-            plico::cas::ObjectScope::default()
+            plico::cas::ObjectScope::default(),
         )
         .expect("create doc 1");
 
@@ -763,7 +796,7 @@ fn benchmark_full_session_cycle() {
             vec!["session".to_string(), "module".to_string()],
             &agent_id,
             Some("session.rs".to_string()),
-            plico::cas::ObjectScope::default()
+            plico::cas::ObjectScope::default(),
         )
         .expect("create doc 2");
 
@@ -771,21 +804,25 @@ fn benchmark_full_session_cycle() {
     let start1 = ApiRequest::StartSession {
         agent_id: agent_id.clone(),
         agent_token: Some(agent_token.clone()),
-        intent_hint: Some("work on auth module".to_string()),
-        load_tiers: vec![MemoryTier::Working, MemoryTier::LongTerm],
         last_seen_seq: None,
     };
     let resp1 = call_api(&kernel, start1);
-    println!("  Session 1 started: token_estimate={}", get_session_token_estimate(&resp1));
+    println!(
+        "  Session 1 started: watermark={}",
+        resp1.session_started.as_ref().map(|s| s.watermark).unwrap_or(0)
+    );
     println!("  Changes since last: {}", get_changes_count(&resp1));
 
-    let session1_id = resp1.session_started.as_ref().map(|s| s.session_id.clone()).unwrap_or_default();
+    let session1_id = resp1
+        .session_started
+        .as_ref()
+        .map(|s| s.session_id.clone())
+        .unwrap_or_default();
 
     // Step 3: End session 1
     let end1 = ApiRequest::EndSession {
         agent_id: agent_id.clone(),
         session_id: session1_id.clone(),
-        auto_checkpoint: true,
     };
     let end_resp1 = call_api(&kernel, end1);
     let last_seq1 = end_resp1.session_ended.as_ref().map(|s| s.last_seq).unwrap_or(0);
@@ -803,14 +840,12 @@ fn benchmark_full_session_cycle() {
     let start2 = ApiRequest::StartSession {
         agent_id: agent_id.clone(),
         agent_token: Some(agent_token.clone()),
-        intent_hint: Some("continue auth work".to_string()),
-        load_tiers: vec![MemoryTier::Working, MemoryTier::LongTerm],
         last_seen_seq: Some(last_seq1),
     };
     let resp2 = call_api(&kernel, start2);
     let changes_count = get_changes_count(&resp2);
-    let token_estimate = get_session_token_estimate(&resp2);
-    println!("  Session 2 started: token_estimate={}", token_estimate);
+    let watermark = resp2.session_started.as_ref().map(|s| s.watermark).unwrap_or(0);
+    println!("  Session 2 started: watermark={}", watermark);
     println!("  Changes since last: {} (delta detected)", changes_count);
 
     // Verify delta detected the change
@@ -832,14 +867,20 @@ fn benchmark_full_session_cycle() {
     let delta_resp = call_api(&kernel, delta_req);
     let delta_changes = delta_resp.delta_result.as_ref().map(|d| d.changes.len()).unwrap_or(0);
     let delta_tokens = delta_resp.delta_result.as_ref().map(|d| d.token_estimate).unwrap_or(0);
-    println!("\n  DeltaSince query: {} changes, {} tokens", delta_changes, delta_tokens);
+    println!(
+        "\n  DeltaSince query: {} changes, {} tokens",
+        delta_changes, delta_tokens
+    );
 
     // Step 7: End session 2
-    let session2_id = resp2.session_started.as_ref().map(|s| s.session_id.clone()).unwrap_or_default();
+    let session2_id = resp2
+        .session_started
+        .as_ref()
+        .map(|s| s.session_id.clone())
+        .unwrap_or_default();
     let end2 = ApiRequest::EndSession {
         agent_id: agent_id.clone(),
         session_id: session2_id.clone(),
-        auto_checkpoint: true,
     };
     let end_resp2 = call_api(&kernel, end2);
     let last_seq2 = end_resp2.session_ended.as_ref().map(|s| s.last_seq).unwrap_or(0);
@@ -858,6 +899,8 @@ fn benchmark_full_session_cycle() {
 
     // All Phase D features working?
     let phase_d_working = changes_count > 0 && delta_changes > 0;
-    println!("\nPhase D Features: {}",
-             if phase_d_working { "ALL WORKING" } else { "PARTIAL" });
+    println!(
+        "\nPhase D Features: {}",
+        if phase_d_working { "ALL WORKING" } else { "PARTIAL" }
+    );
 }

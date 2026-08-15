@@ -77,9 +77,17 @@ impl<'de> serde::Deserialize<'de> for ApiVersion {
 
 impl ApiVersion {
     /// Version 1.0.0 — initial stable release.
-    pub const V1: ApiVersion = ApiVersion { major: 1, minor: 0, patch: 0 };
+    pub const V1: ApiVersion = ApiVersion {
+        major: 1,
+        minor: 0,
+        patch: 0,
+    };
     /// Current stable version.
-    pub const CURRENT: ApiVersion = ApiVersion { major: 26, minor: 0, patch: 0 };
+    pub const CURRENT: ApiVersion = ApiVersion {
+        major: 26,
+        minor: 0,
+        patch: 0,
+    };
 
     /// Parse a version string like "1.2.0" into an ApiVersion.
     pub fn parse(s: &str) -> Result<Self, String> {
@@ -87,12 +95,17 @@ impl ApiVersion {
         if parts.len() != 3 {
             return Err(format!("invalid version format '{}', expected 'major.minor.patch'", s));
         }
-        let major = parts[0].parse().map_err(|_| format!("invalid major version: {}", parts[0]))?;
-        let minor = parts[1].parse().map_err(|_| format!("invalid minor version: {}", parts[1]))?;
-        let patch = parts[2].parse().map_err(|_| format!("invalid patch version: {}", parts[2]))?;
+        let major = parts[0]
+            .parse()
+            .map_err(|_| format!("invalid major version: {}", parts[0]))?;
+        let minor = parts[1]
+            .parse()
+            .map_err(|_| format!("invalid minor version: {}", parts[1]))?;
+        let patch = parts[2]
+            .parse()
+            .map_err(|_| format!("invalid patch version: {}", parts[2]))?;
         Ok(ApiVersion { major, minor, patch })
     }
-
 }
 
 impl Default for ApiVersion {
@@ -114,7 +127,6 @@ impl std::str::FromStr for ApiVersion {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -122,7 +134,14 @@ mod tests {
     #[test]
     fn parse_valid_version() {
         let v = ApiVersion::parse("1.2.3").unwrap();
-        assert_eq!(v, ApiVersion { major: 1, minor: 2, patch: 3 });
+        assert_eq!(
+            v,
+            ApiVersion {
+                major: 1,
+                minor: 2,
+                patch: 3
+            }
+        );
     }
 
     #[test]
@@ -134,7 +153,11 @@ mod tests {
 
     #[test]
     fn display_roundtrip() {
-        let v = ApiVersion { major: 18, minor: 0, patch: 0 };
+        let v = ApiVersion {
+            major: 18,
+            minor: 0,
+            patch: 0,
+        };
         assert_eq!(v.to_string(), "18.0.0");
         let parsed: ApiVersion = "18.0.0".parse().unwrap();
         assert_eq!(parsed, v);
@@ -142,7 +165,11 @@ mod tests {
 
     #[test]
     fn serialize_as_string() {
-        let v = ApiVersion { major: 1, minor: 2, patch: 3 };
+        let v = ApiVersion {
+            major: 1,
+            minor: 2,
+            patch: 3,
+        };
         let json = serde_json::to_string(&v).unwrap();
         assert_eq!(json, r#""1.2.3""#);
     }
@@ -150,26 +177,59 @@ mod tests {
     #[test]
     fn deserialize_from_string() {
         let v: ApiVersion = serde_json::from_str(r#""1.2.3""#).unwrap();
-        assert_eq!(v, ApiVersion { major: 1, minor: 2, patch: 3 });
+        assert_eq!(
+            v,
+            ApiVersion {
+                major: 1,
+                minor: 2,
+                patch: 3
+            }
+        );
     }
 
     #[test]
     fn deserialize_from_object() {
         let v: ApiVersion = serde_json::from_str(r#"{"major":2,"minor":1,"patch":0}"#).unwrap();
-        assert_eq!(v, ApiVersion { major: 2, minor: 1, patch: 0 });
+        assert_eq!(
+            v,
+            ApiVersion {
+                major: 2,
+                minor: 1,
+                patch: 0
+            }
+        );
     }
 
     #[test]
     fn deserialize_object_missing_fields_default_zero() {
         let v: ApiVersion = serde_json::from_str(r#"{"major":5}"#).unwrap();
-        assert_eq!(v, ApiVersion { major: 5, minor: 0, patch: 0 });
+        assert_eq!(
+            v,
+            ApiVersion {
+                major: 5,
+                minor: 0,
+                patch: 0
+            }
+        );
     }
 
     #[test]
     fn ordering() {
-        let v1 = ApiVersion { major: 1, minor: 0, patch: 0 };
-        let v2 = ApiVersion { major: 2, minor: 0, patch: 0 };
-        let v1_1 = ApiVersion { major: 1, minor: 1, patch: 0 };
+        let v1 = ApiVersion {
+            major: 1,
+            minor: 0,
+            patch: 0,
+        };
+        let v2 = ApiVersion {
+            major: 2,
+            minor: 0,
+            patch: 0,
+        };
+        let v1_1 = ApiVersion {
+            major: 1,
+            minor: 1,
+            patch: 0,
+        };
         assert!(v1 < v2);
         assert!(v1 < v1_1);
         assert!(v1_1 < v2);
@@ -179,5 +239,4 @@ mod tests {
     fn default_is_current() {
         assert_eq!(ApiVersion::default(), ApiVersion::CURRENT);
     }
-
 }

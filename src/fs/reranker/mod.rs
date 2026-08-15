@@ -32,11 +32,15 @@ impl std::fmt::Display for RerankError {
 impl std::error::Error for RerankError {}
 
 impl From<reqwest::Error> for RerankError {
-    fn from(e: reqwest::Error) -> Self { Self::Http(e) }
+    fn from(e: reqwest::Error) -> Self {
+        Self::Http(e)
+    }
 }
 
 impl From<std::io::Error> for RerankError {
-    fn from(e: std::io::Error) -> Self { Self::Io(e) }
+    fn from(e: std::io::Error) -> Self {
+        Self::Io(e)
+    }
 }
 
 /// A scored document returned by the reranker.
@@ -51,11 +55,7 @@ pub struct RerankResult {
 /// Input: a query and a list of `(id, text)` document pairs.
 /// Output: the same documents re-scored and sorted by relevance.
 pub trait RerankerProvider: Send + Sync {
-    fn rerank(
-        &self,
-        query: &str,
-        documents: &[(String, String)],
-    ) -> Result<Vec<RerankResult>, RerankError>;
+    fn rerank(&self, query: &str, documents: &[(String, String)]) -> Result<Vec<RerankResult>, RerankError>;
 
     fn model_name(&self) -> &str;
 }
@@ -116,12 +116,7 @@ impl LlamaCppReranker {
         });
 
         let url = format!("{}/rerank", base_url);
-        let resp = client
-            .post(&url)
-            .json(&body)
-            .send()
-            .await
-            .map_err(RerankError::Http)?;
+        let resp = client.post(&url).json(&body).send().await.map_err(RerankError::Http)?;
 
         if !resp.status().is_success() {
             let status = resp.status();
@@ -131,10 +126,7 @@ impl LlamaCppReranker {
             )));
         }
 
-        let json: serde_json::Value = resp
-            .json()
-            .await
-            .map_err(RerankError::Http)?;
+        let json: serde_json::Value = resp.json().await.map_err(RerankError::Http)?;
 
         let results = json
             .get("results")
@@ -143,17 +135,15 @@ impl LlamaCppReranker {
 
         let mut out = Vec::with_capacity(results.len());
         for item in results {
-            let index = item
-                .get("index")
-                .and_then(|v| v.as_u64())
-                .ok_or_else(|| RerankError::Parse("missing 'index' in result".into()))?
-                as usize;
+            let index =
+                item.get("index")
+                    .and_then(|v| v.as_u64())
+                    .ok_or_else(|| RerankError::Parse("missing 'index' in result".into()))? as usize;
 
             let score = item
                 .get("relevance_score")
                 .and_then(|v| v.as_f64())
-                .ok_or_else(|| RerankError::Parse("missing 'relevance_score'".into()))?
-                as f32;
+                .ok_or_else(|| RerankError::Parse("missing 'relevance_score'".into()))? as f32;
 
             if index < documents.len() {
                 out.push(RerankResult {
@@ -169,23 +159,12 @@ impl LlamaCppReranker {
 }
 
 impl RerankerProvider for LlamaCppReranker {
-    fn rerank(
-        &self,
-        query: &str,
-        documents: &[(String, String)],
-    ) -> Result<Vec<RerankResult>, RerankError> {
+    fn rerank(&self, query: &str, documents: &[(String, String)]) -> Result<Vec<RerankResult>, RerankError> {
         if documents.is_empty() {
             return Ok(vec![]);
         }
 
-        let fut = Self::rerank_async(
-            &self.client,
-            &self.base_url,
-            &self.model,
-            self.top_n,
-            query,
-            documents,
-        );
+        let fut = Self::rerank_async(&self.client, &self.base_url, &self.model, self.top_n, query, documents);
 
         match tokio::runtime::Handle::try_current() {
             Ok(handle) => tokio::task::block_in_place(|| handle.block_on(fut)),
@@ -218,8 +197,7 @@ pub fn create_reranker_provider() -> Option<Arc<dyn RerankerProvider>> {
         return None;
     }
 
-    let model = std::env::var("PLICO_RERANKER_MODEL")
-        .unwrap_or_else(|_| "bge-reranker-v2-m3".to_string());
+    let model = std::env::var("PLICO_RERANKER_MODEL").unwrap_or_else(|_| "bge-reranker-v2-m3".to_string());
     let top_n: usize = std::env::var("PLICO_RERANKER_TOP_N")
         .ok()
         .and_then(|v| v.parse().ok())
@@ -227,11 +205,23 @@ pub fn create_reranker_provider() -> Option<Arc<dyn RerankerProvider>> {
 
     match LlamaCppReranker::new(&base_url, &model, top_n) {
         Ok(r) => {
-            tracing::info!("Reranker enabled: {} via {}", model, base_url);
+            tracing::info!(
+                phase = "configure",
+                outcome = "success",
+                model_name = %model,
+                endpoint_configured = true,
+                top_n,
+                "reranker enabled"
+            );
             Some(Arc::new(r) as Arc<dyn RerankerProvider>)
         }
-        Err(e) => {
-            tracing::warn!("Failed to create reranker: {e}. Reranking disabled.");
+        Err(_) => {
+            tracing::warn!(
+                phase = "configure",
+                outcome = "disabled",
+                error_category = "invalid_configuration",
+                "reranker configuration rejected"
+            );
             None
         }
     }
@@ -290,7 +280,10 @@ mod tests {
 
     #[test]
     fn test_rerank_result_clone() {
-        let r = RerankResult { id: "abc".into(), score: 0.9 };
+        let r = RerankResult {
+            id: "abc".into(),
+            score: 0.9,
+        };
         let r2 = r.clone();
         assert_eq!(r2.id, "abc");
         assert!((r2.score - 0.9).abs() < f32::EPSILON);

@@ -8,18 +8,18 @@
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-use crate::kernel::cognition::skill_registry::SkillRegistry;
-use crate::kernel::cognition::skill_validator::SkillValidator;
+use crate::kernel::cognition::dsl_interpreter::DslInterpreter;
 use crate::kernel::cognition::experience_miner::ExperienceMiner;
 use crate::kernel::cognition::skill_composer::SkillComposer;
+use crate::kernel::cognition::skill_registry::SkillRegistry;
+use crate::kernel::cognition::skill_validator::SkillValidator;
 use crate::kernel::cognition::wasm_runtime::WasmRuntime;
-use crate::kernel::cognition::dsl_interpreter::DslInterpreter;
 
-use super::{
-    CognitiveError, CognitiveResult, CodeSkill, ConfigSkill, DslSkill, KnowledgeSkill,
-    Skill, SkillCandidate, SkillExecutionResult, SkillType, SkillUsageStats,
-};
 use super::SessionCognitiveState;
+use super::{
+    CodeSkill, CognitiveError, CognitiveResult, ConfigSkill, DslSkill, KnowledgeSkill, Skill, SkillCandidate,
+    SkillExecutionResult, SkillType, SkillUsageStats,
+};
 use crate::fs::embedding::EmbeddingProvider;
 use crate::util::cosine_similarity;
 
@@ -95,11 +95,7 @@ impl SkillForge {
     }
 
     /// 从单次操作中提取技能候选
-    pub async fn extract_candidate(
-        &self,
-        agent_id: &str,
-        operation: &str,
-    ) -> CognitiveResult<Vec<SkillCandidate>> {
+    pub async fn extract_candidate(&self, agent_id: &str, operation: &str) -> CognitiveResult<Vec<SkillCandidate>> {
         self.experience_miner.extract(agent_id, operation).await
     }
 
@@ -121,22 +117,14 @@ impl SkillForge {
     }
 
     /// 注册通过验证的技能
-    pub async fn register_skill(
-        &self,
-        agent_id: &str,
-        skill: Skill,
-    ) -> CognitiveResult<String> {
+    pub async fn register_skill(&self, agent_id: &str, skill: Skill) -> CognitiveResult<String> {
         let mut registry = self.skill_registry.write().await;
         let skill_id = registry.register(agent_id, skill).await?;
         Ok(skill_id)
     }
 
     /// 为给定意图推荐相关技能
-    pub async fn recommend(
-        &self,
-        agent_id: &str,
-        intent: &str,
-    ) -> CognitiveResult<Vec<SkillRecommendation>> {
+    pub async fn recommend(&self, agent_id: &str, intent: &str) -> CognitiveResult<Vec<SkillRecommendation>> {
         let registry = self.skill_registry.read().await;
         let all_skills = registry.list_for_agent(agent_id).await;
 
@@ -175,7 +163,9 @@ impl SkillForge {
         inputs: serde_json::Value,
     ) -> CognitiveResult<SkillExecutionResult> {
         let registry = self.skill_registry.read().await;
-        let skill = registry.get(skill_id).await
+        let skill = registry
+            .get(skill_id)
+            .await
             .ok_or_else(|| CognitiveError::SkillFailed(format!("Skill not found: {}", skill_id)))?;
 
         match skill {
@@ -186,10 +176,7 @@ impl SkillForge {
     }
 
     /// 组合多个技能
-    pub async fn compose_skills(
-        &self,
-        skill_ids: &[String],
-    ) -> CognitiveResult<Option<Skill>> {
+    pub async fn compose_skills(&self, skill_ids: &[String]) -> CognitiveResult<Option<Skill>> {
         let registry = self.skill_registry.read().await;
         let mut skills = Vec::new();
         for id in skill_ids {
@@ -213,9 +200,7 @@ impl SkillForge {
         skill: KnowledgeSkill,
         _inputs: serde_json::Value,
     ) -> CognitiveResult<SkillExecutionResult> {
-        Ok(SkillExecutionResult::Knowledge {
-            items: skill.knowledge,
-        })
+        Ok(SkillExecutionResult::Knowledge { items: skill.knowledge })
     }
 
     async fn execute_config_skill(
@@ -224,23 +209,30 @@ impl SkillForge {
         inputs: serde_json::Value,
         agent_id: &str,
     ) -> CognitiveResult<SkillExecutionResult> {
-        let interpreter = self.dsl_interpreter.as_ref()
-            .ok_or(CognitiveError::DslExecutionFailed("DSL interpreter not available".to_string()))?;
+        let interpreter = self.dsl_interpreter.as_ref().ok_or(CognitiveError::DslExecutionFailed(
+            "DSL interpreter not available".to_string(),
+        ))?;
 
         // Infer inputs from parameter mappings
-        let dsl_inputs: Vec<super::dsl_interpreter::DslInput> = skill.parameter_mappings.iter().map(|m| {
-            super::dsl_interpreter::DslInput {
+        let dsl_inputs: Vec<super::dsl_interpreter::DslInput> = skill
+            .parameter_mappings
+            .iter()
+            .map(|m| super::dsl_interpreter::DslInput {
                 name: m.from.clone(),
                 dtype: "any".to_string(),
                 required: true,
                 default: None,
-            }
-        }).collect();
+            })
+            .collect();
 
         // Infer outputs from tool chain output_as fields
-        let dsl_outputs: Vec<super::dsl_interpreter::DslOutput> = skill.tool_chain.iter()
+        let dsl_outputs: Vec<super::dsl_interpreter::DslOutput> = skill
+            .tool_chain
+            .iter()
             .filter_map(|step| {
-                if step.output_as.is_empty() { return None; }
+                if step.output_as.is_empty() {
+                    return None;
+                }
                 Some(super::dsl_interpreter::DslOutput {
                     name: step.output_as.clone(),
                     dtype: "any".to_string(),
@@ -253,17 +245,20 @@ impl SkillForge {
             name: skill.name,
             description: skill.description,
             inputs: dsl_inputs,
-            steps: skill.tool_chain.into_iter().map(|step| {
-                super::dsl_interpreter::DslStep::ToolCall {
+            steps: skill
+                .tool_chain
+                .into_iter()
+                .map(|step| super::dsl_interpreter::DslStep::ToolCall {
                     tool: step.tool_name,
                     params: step.parameters,
                     output_as: Some(step.output_as),
-                }
-            }).collect(),
+                })
+                .collect(),
             outputs: dsl_outputs,
         };
 
-        let outputs = interpreter.execute(&dsl, inputs, Some(agent_id))
+        let outputs = interpreter
+            .execute(&dsl, inputs, Some(agent_id))
             .map_err(|e| CognitiveError::DslExecutionFailed(e.to_string()))?;
 
         Ok(SkillExecutionResult::Config { outputs })
@@ -274,18 +269,18 @@ impl SkillForge {
         skill: CodeSkill,
         inputs: serde_json::Value,
     ) -> CognitiveResult<SkillExecutionResult> {
-        let runtime = self.wasm_runtime.as_ref()
+        let runtime = self
+            .wasm_runtime
+            .as_ref()
             .ok_or(CognitiveError::WasmRuntimeNotAvailable)?;
 
-        let outputs = runtime.execute(&skill.wasm_bytes, inputs, &skill.resource_limits, None).await?;
+        let outputs = runtime
+            .execute(&skill.wasm_bytes, inputs, &skill.resource_limits, None)
+            .await?;
         Ok(SkillExecutionResult::Code { outputs })
     }
 
-    async fn compute_intent_skill_relevance(
-        &self,
-        intent: &str,
-        skill: &Skill,
-    ) -> CognitiveResult<f32> {
+    async fn compute_intent_skill_relevance(&self, intent: &str, skill: &Skill) -> CognitiveResult<f32> {
         // Get skill description text for comparison
         let skill_text = match skill {
             Skill::Knowledge(k) => {
@@ -306,9 +301,11 @@ impl SkillForge {
 
         // Use embedding similarity if available
         if let Some(ref embedding) = self.embedding {
-            let intent_emb = embedding.embed(intent)
+            let intent_emb = embedding
+                .embed(intent)
                 .map_err(|e| CognitiveError::EmbeddingFailed(e.to_string()))?;
-            let skill_emb = embedding.embed(&skill_text)
+            let skill_emb = embedding
+                .embed(&skill_text)
                 .map_err(|e| CognitiveError::EmbeddingFailed(e.to_string()))?;
             let sim = cosine_similarity(&intent_emb.embedding, &skill_emb.embedding);
             return Ok(sim.clamp(0.0, 1.0));
@@ -327,8 +324,8 @@ impl SkillForge {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::*;
+    use super::*;
 
     fn make_knowledge_skill(name: &str, desc: &str) -> Skill {
         Skill::Knowledge(KnowledgeSkill {
@@ -407,7 +404,10 @@ mod tests {
         let skill = make_knowledge_skill("my_knowledge", "some knowledge");
         let skill_id = forge.register_skill("agent1", skill).await.unwrap();
 
-        let result = forge.execute_skill("agent1", &skill_id, serde_json::json!({})).await.unwrap();
+        let result = forge
+            .execute_skill("agent1", &skill_id, serde_json::json!({}))
+            .await
+            .unwrap();
         match result {
             SkillExecutionResult::Knowledge { items } => {
                 assert_eq!(items.len(), 1);
@@ -419,7 +419,9 @@ mod tests {
     #[tokio::test]
     async fn test_execute_skill_not_found() {
         let forge = SkillForge::new();
-        let result = forge.execute_skill("agent1", "nonexistent", serde_json::json!({})).await;
+        let result = forge
+            .execute_skill("agent1", "nonexistent", serde_json::json!({}))
+            .await;
         assert!(result.is_err());
     }
 
@@ -477,7 +479,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_with_embedding() {
-        use crate::fs::embedding::{EmbedResult, EmbedError};
+        use crate::fs::embedding::{EmbedError, EmbedResult};
 
         struct MockEmbed;
         impl crate::fs::embedding::EmbeddingProvider for MockEmbed {
@@ -488,14 +490,29 @@ mod tests {
                     vec[i % dim] += byte as f32;
                 }
                 let norm = vec.iter().map(|x| x * x).sum::<f32>().sqrt();
-                if norm > 0.0 { for v in &mut vec { *v /= norm; } }
+                if norm > 0.0 {
+                    for v in &mut vec {
+                        *v /= norm;
+                    }
+                }
                 Ok(EmbedResult::new(vec, text.len() as u32 / 4))
             }
             fn embed_batch(&self, texts: &[&str]) -> Result<Vec<EmbedResult>, EmbedError> {
                 texts.iter().map(|t| self.embed(t)).collect()
             }
-            fn dimension(&self) -> usize { 8 }
-            fn model_name(&self) -> &str { "mock" }
+            fn dimension(&self) -> usize {
+                8
+            }
+            fn builder_identity(
+                &self,
+            ) -> Result<crate::fs::EmbeddingBuilderIdentity, crate::fs::EmbeddingIdentityError> {
+                Ok(crate::fs::EmbeddingBuilderIdentity::test_deterministic(
+                    "mock", 8, "mock-v1",
+                ))
+            }
+            fn model_name(&self) -> String {
+                "mock".into()
+            }
         }
 
         let forge = SkillForge::new().with_embedding(Arc::new(MockEmbed));
@@ -524,7 +541,12 @@ mod tests {
 
         struct MockExec;
         impl ToolExecutor for MockExec {
-            fn execute_tool(&self, name: &str, params: &serde_json::Value, _agent_id: &str) -> Result<serde_json::Value, String> {
+            fn execute_tool(
+                &self,
+                name: &str,
+                params: &serde_json::Value,
+                _agent_id: &str,
+            ) -> Result<serde_json::Value, String> {
                 Ok(serde_json::json!({"tool": name, "params": params, "mock": true}))
             }
         }
@@ -551,7 +573,9 @@ mod tests {
         });
         let skill_id = forge.register_skill("agent1", skill).await.unwrap();
 
-        let result = forge.execute_skill("agent1", &skill_id, serde_json::json!({"param1": "hello"})).await;
+        let result = forge
+            .execute_skill("agent1", &skill_id, serde_json::json!({"param1": "hello"}))
+            .await;
         // Should succeed — DSL interpreter handles unknown tools gracefully
         assert!(result.is_ok());
         match result.unwrap() {

@@ -3,9 +3,9 @@
 //! Validates that the intent system correctly submits intents with priorities,
 //! and that intent-based operations work through the kernel API.
 
-use std::sync::Arc;
 use plico::api::semantic::ApiRequest;
 use plico::kernel::AIKernel;
+use std::sync::Arc;
 
 fn make_kernel() -> (Arc<AIKernel>, tempfile::TempDir) {
     std::env::set_var("EMBEDDING_BACKEND", "stub");
@@ -15,16 +15,11 @@ fn make_kernel() -> (Arc<AIKernel>, tempfile::TempDir) {
     (kernel, dir)
 }
 
-
 #[test]
 fn axiom2_submit_intent_with_priority() {
     let (kernel, _dir) = make_kernel();
     let agent_id = kernel.register_agent("intent-agent".into()).unwrap();
-    kernel.permission_grant(
-        &agent_id,
-        plico::api::permission::PermissionAction::Write,
-        None, None,
-    );
+    kernel.permission_grant(&agent_id, plico::api::permission::PermissionAction::Write, None, None);
 
     let resp = kernel.handle_api_request(ApiRequest::SubmitIntent {
         description: "Store a knowledge fact about Rust".to_string(),
@@ -40,11 +35,7 @@ fn axiom2_submit_intent_with_priority() {
 fn axiom2_submit_intent_default_priority() {
     let (kernel, _dir) = make_kernel();
     let agent_id = kernel.register_agent("default-prio-agent".into()).unwrap();
-    kernel.permission_grant(
-        &agent_id,
-        plico::api::permission::PermissionAction::Write,
-        None, None,
-    );
+    kernel.permission_grant(&agent_id, plico::api::permission::PermissionAction::Write, None, None);
 
     let resp = kernel.handle_api_request(ApiRequest::SubmitIntent {
         description: "Analyze codebase for security issues".to_string(),
@@ -52,7 +43,11 @@ fn axiom2_submit_intent_default_priority() {
         action: None,
         agent_id: agent_id.clone(),
     });
-    assert!(resp.ok, "SubmitIntent with normal priority should succeed: {:?}", resp.error);
+    assert!(
+        resp.ok,
+        "SubmitIntent with normal priority should succeed: {:?}",
+        resp.error
+    );
     assert!(resp.intent_id.is_some());
 }
 
@@ -60,16 +55,8 @@ fn axiom2_submit_intent_default_priority() {
 fn axiom2_intent_drives_search() {
     let (kernel, _dir) = make_kernel();
     let agent_id = kernel.register_agent("search-intent-agent".into()).unwrap();
-    kernel.permission_grant(
-        &agent_id,
-        plico::api::permission::PermissionAction::Write,
-        None, None,
-    );
-    kernel.permission_grant(
-        &agent_id,
-        plico::api::permission::PermissionAction::Read,
-        None, None,
-    );
+    kernel.permission_grant(&agent_id, plico::api::permission::PermissionAction::Write, None, None);
+    kernel.permission_grant(&agent_id, plico::api::permission::PermissionAction::Read, None, None);
 
     kernel.handle_api_request(ApiRequest::Create {
         api_version: None,
@@ -80,8 +67,8 @@ fn axiom2_intent_drives_search() {
         tenant_id: None,
         agent_token: None,
         intent: Some("study rust async".to_string()),
-            scope: None,
-});
+        scope: None,
+    });
 
     let resp = kernel.handle_api_request(ApiRequest::Search {
         query: "async".to_string(),
@@ -103,11 +90,7 @@ fn axiom2_intent_drives_search() {
 fn axiom2_batch_submit_intents() {
     let (kernel, _dir) = make_kernel();
     let agent_id = kernel.register_agent("batch-intent-agent".into()).unwrap();
-    kernel.permission_grant(
-        &agent_id,
-        plico::api::permission::PermissionAction::Write,
-        None, None,
-    );
+    kernel.permission_grant(&agent_id, plico::api::permission::PermissionAction::Write, None, None);
 
     let resp = kernel.handle_api_request(ApiRequest::BatchSubmitIntent {
         intents: vec![

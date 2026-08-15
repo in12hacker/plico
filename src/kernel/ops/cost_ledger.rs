@@ -6,9 +6,9 @@
 //! - Per-agent cost trend analysis
 //! - Cost anomaly detection
 
-use std::sync::{RwLock, Arc};
-use std::collections::{HashMap, VecDeque};
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, VecDeque};
+use std::sync::{Arc, RwLock};
 
 /// Global cost ledger registry — allows LLM/embedding providers to record costs
 /// without direct dependency injection. Set via `set_global()` at kernel startup.
@@ -53,7 +53,7 @@ pub struct SessionCostSummary {
     pub agent_id: String,
     pub total_input_tokens: u64,
     pub total_output_tokens: u64,
-    pub total_cost_millicents: u64,  // 0.01 USD cents
+    pub total_cost_millicents: u64, // 0.01 USD cents
     pub operations_count: u32,
     pub cache_hits: u32,
     pub cache_misses: u32,
@@ -64,7 +64,7 @@ pub struct SessionCostSummary {
 #[derive(Debug, Clone)]
 pub struct CostAnomaly {
     pub agent_id: String,
-    pub severity: String,  // "warning" | "critical"
+    pub severity: String, // "warning" | "critical"
     pub message: String,
     pub avg_cost_per_session_before: u64,
     pub avg_cost_per_session_after: u64,
@@ -177,10 +177,7 @@ impl TokenCostLedger {
     /// Get cost trend for an agent over last N sessions.
     pub fn agent_trend(&self, agent_id: &str, last_n_sessions: usize) -> Vec<SessionCostSummary> {
         let totals = self.session_totals.read().unwrap();
-        let mut summaries: Vec<_> = totals.values()
-            .filter(|s| s.agent_id == agent_id)
-            .cloned()
-            .collect();
+        let mut summaries: Vec<_> = totals.values().filter(|s| s.agent_id == agent_id).cloned().collect();
         summaries.sort_by_key(|s| std::cmp::Reverse(s.timestamp_ms));
         summaries.truncate(last_n_sessions);
         summaries
@@ -202,7 +199,12 @@ impl TokenCostLedger {
         if avg_before > 0 && avg_after > avg_before * 15 / 10 {
             return Some(CostAnomaly {
                 agent_id: agent_id.to_string(),
-                severity: if avg_after > avg_before * 2 { "critical" } else { "warning" }.to_string(),
+                severity: if avg_after > avg_before * 2 {
+                    "critical"
+                } else {
+                    "warning"
+                }
+                .to_string(),
                 message: format!("Cost increased from {} to {} millicents avg", avg_before, avg_after),
                 avg_cost_per_session_before: avg_before,
                 avg_cost_per_session_after: avg_after,
@@ -232,8 +234,8 @@ impl TokenCostLedger {
             return Ok(0);
         }
         let json = std::fs::read_to_string(&path)?;
-        let loaded: std::collections::HashMap<String, SessionCostSummary> = serde_json::from_str(&json)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        let loaded: std::collections::HashMap<String, SessionCostSummary> =
+            serde_json::from_str(&json).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
         let mut totals = self.session_totals.write().unwrap();
         for (id, summary) in loaded {
             totals.insert(id, summary);
@@ -282,7 +284,13 @@ mod tests {
     fn test_record_single_entry() {
         let ledger = TokenCostLedger::new();
         let entry = CostEntry::new(
-            "s1".into(), "a1".into(), CostOperation::LlmCall, 100, 200, "qwen".into(), 50
+            "s1".into(),
+            "a1".into(),
+            CostOperation::LlmCall,
+            100,
+            200,
+            "qwen".into(),
+            50,
         );
         ledger.record(entry);
         assert_eq!(ledger.entry_count(), 1);
@@ -291,8 +299,24 @@ mod tests {
     #[test]
     fn test_session_summary_aggregation() {
         let ledger = TokenCostLedger::new();
-        ledger.record(CostEntry::new("s1".into(), "a1".into(), CostOperation::LlmCall, 100, 200, "qwen".into(), 50));
-        ledger.record(CostEntry::new("s1".into(), "a1".into(), CostOperation::EmbeddingCall, 50, 0, "qwen".into(), 10));
+        ledger.record(CostEntry::new(
+            "s1".into(),
+            "a1".into(),
+            CostOperation::LlmCall,
+            100,
+            200,
+            "qwen".into(),
+            50,
+        ));
+        ledger.record(CostEntry::new(
+            "s1".into(),
+            "a1".into(),
+            CostOperation::EmbeddingCall,
+            50,
+            0,
+            "qwen".into(),
+            10,
+        ));
         let summary = ledger.session_summary("s1").unwrap();
         assert_eq!(summary.total_input_tokens, 150);
         assert_eq!(summary.total_output_tokens, 200);
@@ -302,8 +326,24 @@ mod tests {
     #[test]
     fn test_agent_trend_multiple_sessions() {
         let ledger = TokenCostLedger::new();
-        ledger.record(CostEntry::new("s1".into(), "a1".into(), CostOperation::LlmCall, 100, 100, "qwen".into(), 50));
-        ledger.record(CostEntry::new("s2".into(), "a1".into(), CostOperation::LlmCall, 200, 200, "qwen".into(), 50));
+        ledger.record(CostEntry::new(
+            "s1".into(),
+            "a1".into(),
+            CostOperation::LlmCall,
+            100,
+            100,
+            "qwen".into(),
+            50,
+        ));
+        ledger.record(CostEntry::new(
+            "s2".into(),
+            "a1".into(),
+            CostOperation::LlmCall,
+            200,
+            200,
+            "qwen".into(),
+            50,
+        ));
         let trend = ledger.agent_trend("a1", 10);
         assert_eq!(trend.len(), 2);
     }
@@ -314,14 +354,26 @@ mod tests {
         // Add 5 sessions with low cost (with delay to ensure distinct timestamps)
         for i in 0..5 {
             ledger.record(CostEntry::new(
-                format!("s{}", i), "a1".into(), CostOperation::LlmCall, 100, 100, "qwen".into(), 50
+                format!("s{}", i),
+                "a1".into(),
+                CostOperation::LlmCall,
+                100,
+                100,
+                "qwen".into(),
+                50,
             ));
             std::thread::sleep(std::time::Duration::from_millis(2));
         }
         // Add 5 sessions with high cost (10x increase — should trigger anomaly)
         for i in 5..10 {
             ledger.record(CostEntry::new(
-                format!("s{}", i), "a1".into(), CostOperation::LlmCall, 1000, 1000, "qwen".into(), 50
+                format!("s{}", i),
+                "a1".into(),
+                CostOperation::LlmCall,
+                1000,
+                1000,
+                "qwen".into(),
+                50,
             ));
             std::thread::sleep(std::time::Duration::from_millis(2));
         }
@@ -343,7 +395,13 @@ mod tests {
         let ledger = TokenCostLedger::new();
         for i in 0..100 {
             ledger.record(CostEntry::new(
-                format!("s{}", i % 10), "a1".into(), CostOperation::LlmCall, 100, 100, "qwen".into(), 50
+                format!("s{}", i % 10),
+                "a1".into(),
+                CostOperation::LlmCall,
+                100,
+                100,
+                "qwen".into(),
+                50,
             ));
         }
         assert_eq!(ledger.entry_count(), 100);
@@ -352,8 +410,24 @@ mod tests {
     #[test]
     fn test_cost_by_operation_type() {
         let ledger = TokenCostLedger::new();
-        ledger.record(CostEntry::new("s1".into(), "a1".into(), CostOperation::LlmCall, 100, 100, "qwen".into(), 50));
-        ledger.record(CostEntry::new("s1".into(), "a1".into(), CostOperation::EmbeddingCall, 50, 0, "qwen".into(), 10));
+        ledger.record(CostEntry::new(
+            "s1".into(),
+            "a1".into(),
+            CostOperation::LlmCall,
+            100,
+            100,
+            "qwen".into(),
+            50,
+        ));
+        ledger.record(CostEntry::new(
+            "s1".into(),
+            "a1".into(),
+            CostOperation::EmbeddingCall,
+            50,
+            0,
+            "qwen".into(),
+            10,
+        ));
         let summary = ledger.session_summary("s1").unwrap();
         assert_eq!(summary.operations_count, 2);
     }

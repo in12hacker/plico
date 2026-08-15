@@ -5,11 +5,11 @@
 //! never decides what to do with events (that's upper-layer policy).
 
 use crate::util::now_ms;
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, RwLock};
-use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -195,11 +195,7 @@ impl RingEventLog {
             );
         }
         let effective_seq = since_seq.max(self.min_seq.saturating_sub(1));
-        self.events
-            .iter()
-            .filter(|e| e.seq > effective_seq)
-            .cloned()
-            .collect()
+        self.events.iter().filter(|e| e.seq > effective_seq).cloned().collect()
     }
 
     fn events_by_agent(&self, agent_id: &str) -> Vec<SequencedEvent> {
@@ -248,7 +244,6 @@ pub struct EventBus {
     /// F-25: Max archive segments to retain (default 4 = ~1 month).
     retention_segments: usize,
 }
-
 
 const DEFAULT_ROTATION_INTERVAL_MS: u64 = 7 * 24 * 3600 * 1000; // 7 days
 const DEFAULT_RETENTION_SEGMENTS: usize = 4;
@@ -314,13 +309,8 @@ impl EventBus {
             return Ok(());
         };
         use std::io::Write;
-        let mut file = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)?;
-        let json = serde_json::to_string(entry).map_err(|e| {
-            std::io::Error::new(std::io::ErrorKind::InvalidData, e)
-        })?;
+        let mut file = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
+        let json = serde_json::to_string(entry).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
         writeln!(file, "{}", json)?;
         Ok(())
     }
@@ -353,7 +343,8 @@ impl EventBus {
             return Ok(None);
         }
 
-        let archive_dir = current_path.parent()
+        let archive_dir = current_path
+            .parent()
             .unwrap_or_else(|| std::path::Path::new("."))
             .join("event_archive");
         std::fs::create_dir_all(&archive_dir)?;
@@ -389,11 +380,16 @@ impl EventBus {
 
     /// List archive segment paths in chronological order.
     pub fn list_archive_segments(&self) -> Vec<PathBuf> {
-        let Some(ref current_path) = self.event_log_path else { return vec![]; };
-        let archive_dir = current_path.parent()
+        let Some(ref current_path) = self.event_log_path else {
+            return vec![];
+        };
+        let archive_dir = current_path
+            .parent()
             .unwrap_or_else(|| std::path::Path::new("."))
             .join("event_archive");
-        if !archive_dir.exists() { return vec![]; }
+        if !archive_dir.exists() {
+            return vec![];
+        }
 
         let mut segments: Vec<PathBuf> = std::fs::read_dir(&archive_dir)
             .into_iter()
@@ -465,8 +461,8 @@ impl EventBus {
 
     /// Load events from a JSONL file on disk.
     pub fn load_event_log(path: &std::path::Path) -> Result<Vec<SequencedEvent>, std::io::Error> {
-        use std::io::{BufRead, BufReader};
         use std::collections::HashMap;
+        use std::io::{BufRead, BufReader};
         if !path.exists() {
             return Ok(Vec::new());
         }
@@ -517,14 +513,14 @@ impl EventBus {
         let id = format!("sub-{}", self.next_sub_id.fetch_add(1, Ordering::Relaxed));
         let rx = self.sender.subscribe();
         let current = self.next_seq.load(Ordering::Relaxed);
-        self.subscriptions
-            .write()
-            .unwrap()
-            .insert(id.clone(), Subscription {
+        self.subscriptions.write().unwrap().insert(
+            id.clone(),
+            Subscription {
                 receiver: Mutex::new(rx),
                 filter,
                 last_seen_seq: AtomicU64::new(current),
-            });
+            },
+        );
         id
     }
 
@@ -567,11 +563,7 @@ impl EventBus {
     }
 
     pub fn unsubscribe(&self, subscription_id: &str) -> bool {
-        self.subscriptions
-            .write()
-            .unwrap()
-            .remove(subscription_id)
-            .is_some()
+        self.subscriptions.write().unwrap().remove(subscription_id).is_some()
     }
 
     pub fn subscription_count(&self) -> usize {
@@ -884,28 +876,62 @@ mod tests {
 
     #[test]
     fn test_event_type_name() {
-        assert_eq!(KernelEvent::AgentStateChanged {
-            agent_id: "a".into(), old_state: "x".into(), new_state: "y".into(),
-        }.event_type_name(), "AgentStateChanged");
-        assert_eq!(KernelEvent::ObjectStored {
-            cid: "c".into(), agent_id: "a".into(), tags: vec![],
-        }.event_type_name(), "ObjectStored");
-        assert_eq!(KernelEvent::IntentCompleted {
-            intent_id: "i".into(), success: true,
-        }.event_type_name(), "IntentCompleted");
+        assert_eq!(
+            KernelEvent::AgentStateChanged {
+                agent_id: "a".into(),
+                old_state: "x".into(),
+                new_state: "y".into(),
+            }
+            .event_type_name(),
+            "AgentStateChanged"
+        );
+        assert_eq!(
+            KernelEvent::ObjectStored {
+                cid: "c".into(),
+                agent_id: "a".into(),
+                tags: vec![],
+            }
+            .event_type_name(),
+            "ObjectStored"
+        );
+        assert_eq!(
+            KernelEvent::IntentCompleted {
+                intent_id: "i".into(),
+                success: true,
+            }
+            .event_type_name(),
+            "IntentCompleted"
+        );
     }
 
     #[test]
     fn test_event_agent_id_extraction() {
-        assert_eq!(KernelEvent::AgentStateChanged {
-            agent_id: "a1".into(), old_state: "x".into(), new_state: "y".into(),
-        }.agent_id(), Some("a1"));
-        assert_eq!(KernelEvent::IntentSubmitted {
-            intent_id: "i".into(), agent_id: None, priority: "Low".into(),
-        }.agent_id(), None);
-        assert_eq!(KernelEvent::IntentCompleted {
-            intent_id: "i".into(), success: true,
-        }.agent_id(), None);
+        assert_eq!(
+            KernelEvent::AgentStateChanged {
+                agent_id: "a1".into(),
+                old_state: "x".into(),
+                new_state: "y".into(),
+            }
+            .agent_id(),
+            Some("a1")
+        );
+        assert_eq!(
+            KernelEvent::IntentSubmitted {
+                intent_id: "i".into(),
+                agent_id: None,
+                priority: "Low".into(),
+            }
+            .agent_id(),
+            None
+        );
+        assert_eq!(
+            KernelEvent::IntentCompleted {
+                intent_id: "i".into(),
+                success: true,
+            }
+            .agent_id(),
+            None
+        );
     }
 
     #[test]
@@ -914,10 +940,13 @@ mod tests {
         assert_eq!(bus.event_count(), 0);
 
         bus.emit(KernelEvent::ObjectStored {
-            cid: "c1".into(), agent_id: "a1".into(), tags: vec![],
+            cid: "c1".into(),
+            agent_id: "a1".into(),
+            tags: vec![],
         });
         bus.emit(KernelEvent::MemoryStored {
-            agent_id: "a1".into(), tier: "working".into(),
+            agent_id: "a1".into(),
+            tier: "working".into(),
         });
 
         assert_eq!(bus.event_count(), 2);
@@ -927,13 +956,17 @@ mod tests {
     fn test_event_log_sequencing() {
         let bus = EventBus::new();
         bus.emit(KernelEvent::ObjectStored {
-            cid: "c1".into(), agent_id: "a1".into(), tags: vec![],
+            cid: "c1".into(),
+            agent_id: "a1".into(),
+            tags: vec![],
         });
         bus.emit(KernelEvent::MemoryStored {
-            agent_id: "a1".into(), tier: "working".into(),
+            agent_id: "a1".into(),
+            tier: "working".into(),
         });
         bus.emit(KernelEvent::IntentCompleted {
-            intent_id: "i1".into(), success: true,
+            intent_id: "i1".into(),
+            success: true,
         });
 
         let log = bus.snapshot_events();
@@ -949,13 +982,19 @@ mod tests {
     fn test_events_since() {
         let bus = EventBus::new();
         bus.emit(KernelEvent::ObjectStored {
-            cid: "c1".into(), agent_id: "a1".into(), tags: vec![],
+            cid: "c1".into(),
+            agent_id: "a1".into(),
+            tags: vec![],
         });
         bus.emit(KernelEvent::ObjectStored {
-            cid: "c2".into(), agent_id: "a1".into(), tags: vec![],
+            cid: "c2".into(),
+            agent_id: "a1".into(),
+            tags: vec![],
         });
         bus.emit(KernelEvent::ObjectStored {
-            cid: "c3".into(), agent_id: "a1".into(), tags: vec![],
+            cid: "c3".into(),
+            agent_id: "a1".into(),
+            tags: vec![],
         });
 
         let since_0 = bus.events_since(0);
@@ -973,16 +1012,22 @@ mod tests {
     fn test_events_by_agent() {
         let bus = EventBus::new();
         bus.emit(KernelEvent::ObjectStored {
-            cid: "c1".into(), agent_id: "agent-a".into(), tags: vec![],
+            cid: "c1".into(),
+            agent_id: "agent-a".into(),
+            tags: vec![],
         });
         bus.emit(KernelEvent::ObjectStored {
-            cid: "c2".into(), agent_id: "agent-b".into(), tags: vec![],
+            cid: "c2".into(),
+            agent_id: "agent-b".into(),
+            tags: vec![],
         });
         bus.emit(KernelEvent::MemoryStored {
-            agent_id: "agent-a".into(), tier: "working".into(),
+            agent_id: "agent-a".into(),
+            tier: "working".into(),
         });
         bus.emit(KernelEvent::IntentCompleted {
-            intent_id: "i1".into(), success: true,
+            intent_id: "i1".into(),
+            success: true,
         });
 
         let a_events = bus.events_by_agent("agent-a");
@@ -999,10 +1044,13 @@ mod tests {
     fn test_snapshot_and_restore() {
         let bus = EventBus::new();
         bus.emit(KernelEvent::ObjectStored {
-            cid: "c1".into(), agent_id: "a1".into(), tags: vec![],
+            cid: "c1".into(),
+            agent_id: "a1".into(),
+            tags: vec![],
         });
         bus.emit(KernelEvent::MemoryStored {
-            agent_id: "a1".into(), tier: "long_term".into(),
+            agent_id: "a1".into(),
+            tier: "long_term".into(),
         });
 
         let snapshot = bus.snapshot_events();
@@ -1013,7 +1061,8 @@ mod tests {
         assert_eq!(bus2.event_count(), 2);
 
         bus2.emit(KernelEvent::IntentCompleted {
-            intent_id: "i1".into(), success: true,
+            intent_id: "i1".into(),
+            success: true,
         });
         assert_eq!(bus2.event_count(), 3);
         let log = bus2.snapshot_events();
@@ -1026,7 +1075,9 @@ mod tests {
         let sub = bus.subscribe();
 
         bus.emit(KernelEvent::ObjectStored {
-            cid: "c1".into(), agent_id: "a1".into(), tags: vec![],
+            cid: "c1".into(),
+            agent_id: "a1".into(),
+            tags: vec![],
         });
 
         let polled = bus.poll(&sub).unwrap();
@@ -1040,12 +1091,15 @@ mod tests {
         assert_eq!(bus.current_seq(), 1);
 
         bus.emit(KernelEvent::ObjectStored {
-            cid: "c1".into(), agent_id: "a1".into(), tags: vec![],
+            cid: "c1".into(),
+            agent_id: "a1".into(),
+            tags: vec![],
         });
         assert_eq!(bus.current_seq(), 2);
 
         bus.emit(KernelEvent::MemoryStored {
-            agent_id: "a1".into(), tier: "working".into(),
+            agent_id: "a1".into(),
+            tier: "working".into(),
         });
         assert_eq!(bus.current_seq(), 3);
     }
@@ -1060,7 +1114,9 @@ mod tests {
 
         for i in 0..10 {
             bus.emit(KernelEvent::ObjectStored {
-                cid: format!("c{}", i), agent_id: "a1".into(), tags: vec![],
+                cid: format!("c{}", i),
+                agent_id: "a1".into(),
+                tags: vec![],
             });
         }
 
@@ -1084,7 +1140,9 @@ mod tests {
 
         for i in 0..10 {
             bus.emit(KernelEvent::ObjectStored {
-                cid: format!("c{}", i), agent_id: "a1".into(), tags: vec![],
+                cid: format!("c{}", i),
+                agent_id: "a1".into(),
+                tags: vec![],
             });
         }
 
@@ -1105,13 +1163,17 @@ mod tests {
             *log = RingEventLog::new(3);
         }
 
-        let events: Vec<SequencedEvent> = (1..=10).map(|i| SequencedEvent {
-            seq: i,
-            timestamp_ms: 1000 + i,
-            event: KernelEvent::ObjectStored {
-                cid: format!("c{}", i), agent_id: "a1".into(), tags: vec![],
-            },
-        }).collect();
+        let events: Vec<SequencedEvent> = (1..=10)
+            .map(|i| SequencedEvent {
+                seq: i,
+                timestamp_ms: 1000 + i,
+                event: KernelEvent::ObjectStored {
+                    cid: format!("c{}", i),
+                    agent_id: "a1".into(),
+                    tags: vec![],
+                },
+            })
+            .collect();
 
         bus.restore_events(events);
         assert_eq!(bus.event_count(), 3);
@@ -1131,10 +1193,13 @@ mod tests {
         let bus = EventBus::with_persistence(log_path.clone());
 
         bus.emit(KernelEvent::ObjectStored {
-            cid: "c1".into(), agent_id: "a1".into(), tags: vec!["t1".into()],
+            cid: "c1".into(),
+            agent_id: "a1".into(),
+            tags: vec!["t1".into()],
         });
         bus.emit(KernelEvent::MemoryStored {
-            agent_id: "a1".into(), tier: "working".into(),
+            agent_id: "a1".into(),
+            tier: "working".into(),
         });
 
         // Read back from file
@@ -1169,7 +1234,9 @@ mod tests {
             seq: 1,
             timestamp_ms: 1000,
             event: KernelEvent::ObjectStored {
-                cid: "c1".into(), agent_id: "a1".into(), tags: vec![],
+                cid: "c1".into(),
+                agent_id: "a1".into(),
+                tags: vec![],
             },
         };
         let valid_json = serde_json::to_string(&valid).unwrap();
@@ -1203,7 +1270,9 @@ mod tests {
         let bus = EventBus::with_persistence(log_path.clone());
 
         bus.emit(KernelEvent::ObjectStored {
-            cid: "c1".into(), agent_id: "a1".into(), tags: vec![],
+            cid: "c1".into(),
+            agent_id: "a1".into(),
+            tags: vec![],
         });
 
         let result = bus.rotate_segment().unwrap();
@@ -1232,7 +1301,9 @@ mod tests {
         let bus = EventBus::with_rotation(log_path, 60_000, 2);
 
         bus.emit(KernelEvent::ObjectStored {
-            cid: "c1".into(), agent_id: "a1".into(), tags: vec![],
+            cid: "c1".into(),
+            agent_id: "a1".into(),
+            tags: vec![],
         });
         assert_eq!(bus.event_count(), 1);
     }
@@ -1244,7 +1315,9 @@ mod tests {
             agent_ids: None,
         };
         let event = KernelEvent::ObjectStored {
-            cid: "c1".into(), agent_id: "a1".into(), tags: vec![],
+            cid: "c1".into(),
+            agent_id: "a1".into(),
+            tags: vec![],
         };
         assert!(!filter.matches(&event));
     }
@@ -1256,7 +1329,9 @@ mod tests {
             agent_ids: Some(vec!["other-agent".into()]),
         };
         let event = KernelEvent::ObjectStored {
-            cid: "c1".into(), agent_id: "a1".into(), tags: vec![],
+            cid: "c1".into(),
+            agent_id: "a1".into(),
+            tags: vec![],
         };
         assert!(!filter.matches(&event));
     }
@@ -1278,13 +1353,17 @@ mod tests {
     #[test]
     fn test_ring_event_log_restore_within_capacity() {
         let mut log = RingEventLog::new(10);
-        let events: Vec<SequencedEvent> = (1..=3).map(|i| SequencedEvent {
-            seq: i,
-            timestamp_ms: 1000 + i,
-            event: KernelEvent::ObjectStored {
-                cid: format!("c{}", i), agent_id: "a1".into(), tags: vec![],
-            },
-        }).collect();
+        let events: Vec<SequencedEvent> = (1..=3)
+            .map(|i| SequencedEvent {
+                seq: i,
+                timestamp_ms: 1000 + i,
+                event: KernelEvent::ObjectStored {
+                    cid: format!("c{}", i),
+                    agent_id: "a1".into(),
+                    tags: vec![],
+                },
+            })
+            .collect();
         log.restore(events);
         assert_eq!(log.len(), 3);
         assert_eq!(log.min_seq, 0);
@@ -1306,64 +1385,140 @@ mod tests {
 
     #[test]
     fn test_kernel_event_all_variants_agent_id() {
-        assert_eq!(KernelEvent::KnowledgeShared {
-            cid: "c".into(), agent_id: "a".into(), scope: "shared".into(),
-            tags: vec![], summary: "s".into(),
-        }.agent_id(), Some("a"));
+        assert_eq!(
+            KernelEvent::KnowledgeShared {
+                cid: "c".into(),
+                agent_id: "a".into(),
+                scope: "shared".into(),
+                tags: vec![],
+                summary: "s".into(),
+            }
+            .agent_id(),
+            Some("a")
+        );
 
-        assert_eq!(KernelEvent::KnowledgeSuperseded {
-            old_cid: "o".into(), new_cid: "n".into(), agent_id: "a".into(),
-        }.agent_id(), Some("a"));
+        assert_eq!(
+            KernelEvent::KnowledgeSuperseded {
+                old_cid: "o".into(),
+                new_cid: "n".into(),
+                agent_id: "a".into(),
+            }
+            .agent_id(),
+            Some("a")
+        );
 
-        assert_eq!(KernelEvent::TaskDelegated {
-            task_id: "t".into(), from_agent: "f".into(), to_agent: "t".into(),
-        }.agent_id(), Some("f"));
+        assert_eq!(
+            KernelEvent::TaskDelegated {
+                task_id: "t".into(),
+                from_agent: "f".into(),
+                to_agent: "t".into(),
+            }
+            .agent_id(),
+            Some("f")
+        );
 
-        assert_eq!(KernelEvent::TaskCompleted {
-            task_id: "t".into(), agent_id: "a".into(), result_cids: vec![],
-        }.agent_id(), Some("a"));
+        assert_eq!(
+            KernelEvent::TaskCompleted {
+                task_id: "t".into(),
+                agent_id: "a".into(),
+                result_cids: vec![],
+            }
+            .agent_id(),
+            Some("a")
+        );
 
-        assert_eq!(KernelEvent::VerificationFailed {
-            tool_name: "t".into(), operation: "o".into(),
-            reason: "r".into(), agent_id: "a".into(),
-        }.agent_id(), Some("a"));
+        assert_eq!(
+            KernelEvent::VerificationFailed {
+                tool_name: "t".into(),
+                operation: "o".into(),
+                reason: "r".into(),
+                agent_id: "a".into(),
+            }
+            .agent_id(),
+            Some("a")
+        );
 
-        assert_eq!(KernelEvent::CognitiveConflictDetected {
-            conflict_id: "c".into(), conflict_type: "t".into(),
-            description: "d".into(), involved_cids: vec![],
-            agent_id: "a".into(), severity: "high".into(),
-        }.agent_id(), Some("a"));
+        assert_eq!(
+            KernelEvent::CognitiveConflictDetected {
+                conflict_id: "c".into(),
+                conflict_type: "t".into(),
+                description: "d".into(),
+                involved_cids: vec![],
+                agent_id: "a".into(),
+                severity: "high".into(),
+            }
+            .agent_id(),
+            Some("a")
+        );
     }
 
     #[test]
     fn test_kernel_event_all_variants_event_type_name() {
-        assert_eq!(KernelEvent::KnowledgeShared {
-            cid: "c".into(), agent_id: "a".into(), scope: "s".into(),
-            tags: vec![], summary: "s".into(),
-        }.event_type_name(), "KnowledgeShared");
+        assert_eq!(
+            KernelEvent::KnowledgeShared {
+                cid: "c".into(),
+                agent_id: "a".into(),
+                scope: "s".into(),
+                tags: vec![],
+                summary: "s".into(),
+            }
+            .event_type_name(),
+            "KnowledgeShared"
+        );
 
-        assert_eq!(KernelEvent::KnowledgeSuperseded {
-            old_cid: "o".into(), new_cid: "n".into(), agent_id: "a".into(),
-        }.event_type_name(), "KnowledgeSuperseded");
+        assert_eq!(
+            KernelEvent::KnowledgeSuperseded {
+                old_cid: "o".into(),
+                new_cid: "n".into(),
+                agent_id: "a".into(),
+            }
+            .event_type_name(),
+            "KnowledgeSuperseded"
+        );
 
-        assert_eq!(KernelEvent::TaskDelegated {
-            task_id: "t".into(), from_agent: "f".into(), to_agent: "t".into(),
-        }.event_type_name(), "TaskDelegated");
+        assert_eq!(
+            KernelEvent::TaskDelegated {
+                task_id: "t".into(),
+                from_agent: "f".into(),
+                to_agent: "t".into(),
+            }
+            .event_type_name(),
+            "TaskDelegated"
+        );
 
-        assert_eq!(KernelEvent::TaskCompleted {
-            task_id: "t".into(), agent_id: "a".into(), result_cids: vec![],
-        }.event_type_name(), "TaskCompleted");
+        assert_eq!(
+            KernelEvent::TaskCompleted {
+                task_id: "t".into(),
+                agent_id: "a".into(),
+                result_cids: vec![],
+            }
+            .event_type_name(),
+            "TaskCompleted"
+        );
 
-        assert_eq!(KernelEvent::VerificationFailed {
-            tool_name: "t".into(), operation: "o".into(),
-            reason: "r".into(), agent_id: "a".into(),
-        }.event_type_name(), "VerificationFailed");
+        assert_eq!(
+            KernelEvent::VerificationFailed {
+                tool_name: "t".into(),
+                operation: "o".into(),
+                reason: "r".into(),
+                agent_id: "a".into(),
+            }
+            .event_type_name(),
+            "VerificationFailed"
+        );
 
-        assert_eq!(KernelEvent::CognitiveConflictDetected {
-            conflict_id: "c".into(), conflict_type: "t".into(),
-            description: "d".into(), involved_cids: vec![],
-            agent_id: "a".into(), severity: "high".into(),
-        }.event_type_name(), "CognitiveConflictDetected");
+        assert_eq!(
+            KernelEvent::CognitiveConflictDetected {
+                conflict_id: "c".into(),
+                conflict_type: "t".into(),
+                description: "d".into(),
+                involved_cids: vec![],
+                agent_id: "a".into(),
+                severity: "high".into(),
+            }
+            .event_type_name(),
+            "CognitiveConflictDetected"
+        );
     }
 
     #[test]

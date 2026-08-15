@@ -10,10 +10,10 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
-use serde::{Deserialize, Serialize};
 use crate::api::semantic::TaskStatus;
 use crate::kernel::event_bus::{EventBus, KernelEvent};
 use crate::kernel::persistence::atomic_write_json;
+use serde::{Deserialize, Serialize};
 
 /// A delegated task with full state tracking.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -134,18 +134,16 @@ impl TaskStore {
         let path = root.join("tasks.json");
         let tasks = if path.exists() {
             match std::fs::read_to_string(&path) {
-                Ok(json) => {
-                    match serde_json::from_str::<HashMap<String, Task>>(&json) {
-                        Ok(t) => {
-                            tracing::info!("Restored {} tasks from persistent storage", t.len());
-                            t
-                        }
-                        Err(e) => {
-                            tracing::warn!("Failed to parse tasks.json: {e}. Starting fresh.");
-                            HashMap::new()
-                        }
+                Ok(json) => match serde_json::from_str::<HashMap<String, Task>>(&json) {
+                    Ok(t) => {
+                        tracing::info!("Restored {} tasks from persistent storage", t.len());
+                        t
                     }
-                }
+                    Err(e) => {
+                        tracing::warn!("Failed to parse tasks.json: {e}. Starting fresh.");
+                        HashMap::new()
+                    }
+                },
                 Err(e) => {
                     tracing::warn!("Failed to read tasks.json: {e}. Starting fresh.");
                     HashMap::new()
@@ -182,7 +180,14 @@ impl TaskStore {
         context_cids: Vec<String>,
         deadline_ms: Option<u64>,
     ) -> Task {
-        let task = Task::new(task_id, from_agent.clone(), to_agent.clone(), intent, context_cids, deadline_ms);
+        let task = Task::new(
+            task_id,
+            from_agent.clone(),
+            to_agent.clone(),
+            intent,
+            context_cids,
+            deadline_ms,
+        );
 
         // Emit TaskDelegated event for the target agent to subscribe to
         self.event_bus.emit(KernelEvent::TaskDelegated {
@@ -205,15 +210,22 @@ impl TaskStore {
     /// Transition a task to InProgress (target agent picks up the task).
     pub fn start_task(&self, task_id: &str, agent_id: &str) -> Result<Task, String> {
         let mut tasks = self.tasks.write().unwrap();
-        let task = tasks.get_mut(task_id)
+        let task = tasks
+            .get_mut(task_id)
             .ok_or_else(|| format!("Task not found: {}", task_id))?;
 
         if task.to_agent != agent_id {
-            return Err(format!("Task {} is assigned to {}, not {}", task_id, task.to_agent, agent_id));
+            return Err(format!(
+                "Task {} is assigned to {}, not {}",
+                task_id, task.to_agent, agent_id
+            ));
         }
 
         if task.status != TaskStatus::Pending {
-            return Err(format!("Task {} is not pending (current status: {:?})", task_id, task.status));
+            return Err(format!(
+                "Task {} is not pending (current status: {:?})",
+                task_id, task.status
+            ));
         }
 
         task.start();
@@ -224,15 +236,22 @@ impl TaskStore {
     /// Complete a task with result CIDs (target agent reports completion).
     pub fn complete_task(&self, task_id: &str, agent_id: &str, result_cids: Vec<String>) -> Result<Task, String> {
         let mut tasks = self.tasks.write().unwrap();
-        let task = tasks.get_mut(task_id)
+        let task = tasks
+            .get_mut(task_id)
             .ok_or_else(|| format!("Task not found: {}", task_id))?;
 
         if task.to_agent != agent_id {
-            return Err(format!("Task {} is assigned to {}, not {}", task_id, task.to_agent, agent_id));
+            return Err(format!(
+                "Task {} is assigned to {}, not {}",
+                task_id, task.to_agent, agent_id
+            ));
         }
 
         if task.status != TaskStatus::InProgress {
-            return Err(format!("Task {} is not in_progress (current status: {:?})", task_id, task.status));
+            return Err(format!(
+                "Task {} is not in_progress (current status: {:?})",
+                task_id, task.status
+            ));
         }
 
         task.complete(result_cids.clone());
@@ -252,11 +271,15 @@ impl TaskStore {
     /// Fail a task with reason (target agent reports failure or deadline expired).
     pub fn fail_task(&self, task_id: &str, agent_id: &str, reason: String) -> Result<Task, String> {
         let mut tasks = self.tasks.write().unwrap();
-        let task = tasks.get_mut(task_id)
+        let task = tasks
+            .get_mut(task_id)
             .ok_or_else(|| format!("Task not found: {}", task_id))?;
 
         if task.to_agent != agent_id {
-            return Err(format!("Task {} is assigned to {}, not {}", task_id, task.to_agent, agent_id));
+            return Err(format!(
+                "Task {} is assigned to {}, not {}",
+                task_id, task.to_agent, agent_id
+            ));
         }
 
         if task.status == TaskStatus::Completed || task.status == TaskStatus::Failed {
@@ -291,19 +314,13 @@ impl TaskStore {
     /// List all tasks assigned to a specific agent.
     pub fn tasks_for_agent(&self, agent_id: &str) -> Vec<Task> {
         let tasks = self.tasks.read().unwrap();
-        tasks.values()
-            .filter(|t| t.to_agent == agent_id)
-            .cloned()
-            .collect()
+        tasks.values().filter(|t| t.to_agent == agent_id).cloned().collect()
     }
 
     /// List all tasks owned by a specific agent (delegated by).
     pub fn tasks_by_agent(&self, agent_id: &str) -> Vec<Task> {
         let tasks = self.tasks.read().unwrap();
-        tasks.values()
-            .filter(|t| t.from_agent == agent_id)
-            .cloned()
-            .collect()
+        tasks.values().filter(|t| t.from_agent == agent_id).cloned().collect()
     }
 
     /// Get total task count.
@@ -318,7 +335,6 @@ impl TaskStore {
         tasks.is_empty()
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -377,7 +393,9 @@ mod tests {
         );
         store.start_task("t1", "agent-b").unwrap();
 
-        let completed = store.complete_task("t1", "agent-b", vec!["result-cid".to_string()]).unwrap();
+        let completed = store
+            .complete_task("t1", "agent-b", vec!["result-cid".to_string()])
+            .unwrap();
         assert_eq!(completed.status, TaskStatus::Completed);
         assert_eq!(completed.result_cids, vec!["result-cid".to_string()]);
     }
@@ -457,9 +475,30 @@ mod tests {
     #[test]
     fn test_tasks_for_agent() {
         let (store, _tmp) = temp_store();
-        store.create_task("t1".to_string(), "a".to_string(), "b".to_string(), "T1".to_string(), vec![], None);
-        store.create_task("t2".to_string(), "a".to_string(), "c".to_string(), "T2".to_string(), vec![], None);
-        store.create_task("t3".to_string(), "b".to_string(), "c".to_string(), "T3".to_string(), vec![], None);
+        store.create_task(
+            "t1".to_string(),
+            "a".to_string(),
+            "b".to_string(),
+            "T1".to_string(),
+            vec![],
+            None,
+        );
+        store.create_task(
+            "t2".to_string(),
+            "a".to_string(),
+            "c".to_string(),
+            "T2".to_string(),
+            vec![],
+            None,
+        );
+        store.create_task(
+            "t3".to_string(),
+            "b".to_string(),
+            "c".to_string(),
+            "T3".to_string(),
+            vec![],
+            None,
+        );
 
         let b_tasks = store.tasks_for_agent("b");
         assert_eq!(b_tasks.len(), 1);

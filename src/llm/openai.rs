@@ -7,7 +7,7 @@
 use std::sync::Arc;
 use tokio::runtime::Runtime;
 
-use super::{LlmProvider, ChatMessage, ChatOptions, LlmError};
+use super::{ChatMessage, ChatOptions, LlmError, LlmProvider};
 
 pub struct OpenAICompatibleProvider {
     /// Only created when no Tokio runtime is active (standalone/CLI mode).
@@ -23,12 +23,12 @@ impl OpenAICompatibleProvider {
     pub fn new(base_url: &str, model: &str, api_key: Option<String>) -> Result<Self, LlmError> {
         let rt = match tokio::runtime::Handle::try_current() {
             Ok(_) => None,
-            Err(_) => {
-                Some(Arc::new(tokio::runtime::Builder::new_multi_thread()
+            Err(_) => Some(Arc::new(
+                tokio::runtime::Builder::new_multi_thread()
                     .worker_threads(1)
                     .enable_all()
-                    .build()?))
-            }
+                    .build()?,
+            )),
         };
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(120))
@@ -43,11 +43,7 @@ impl OpenAICompatibleProvider {
         })
     }
 
-    pub(crate) fn build_request_body(
-        &self,
-        messages: &[ChatMessage],
-        options: &ChatOptions,
-    ) -> serde_json::Value {
+    pub(crate) fn build_request_body(&self, messages: &[ChatMessage], options: &ChatOptions) -> serde_json::Value {
         let api_messages: Vec<serde_json::Value> = messages
             .iter()
             .map(|m| serde_json::json!({"role": m.role, "content": m.content}))
@@ -82,28 +78,29 @@ impl OpenAICompatibleProvider {
             req = req.header("Authorization", format!("Bearer {key}"));
         }
 
-        let resp = req.send().await.map_err(|e| {
-            if e.is_connect() {
-                LlmError::Unavailable(format!("cannot connect to {}", self.base_url))
-            } else {
-                LlmError::Http(e)
-            }
-        })?;
+        let resp = req
+            .send()
+            .await
+            .map_err(|_| LlmError::Unavailable("provider request failed".into()))?;
 
         let status = resp.status();
-        let body_bytes = resp.bytes().await.map_err(LlmError::Http)?;
-
         if !status.is_success() {
-            let body_str = String::from_utf8_lossy(&body_bytes);
-            if status == reqwest::StatusCode::UNAUTHORIZED {
-                return Err(LlmError::Api(format!(
-                    "401 Unauthorized (is OPENAI_API_KEY set?) body={body_str}"
-                )));
-            }
-            return Err(LlmError::Api(format!("status={status} body={body_str}")));
+            return Err(provider_status_error(status));
         }
+        let body_bytes = resp
+            .bytes()
+            .await
+            .map_err(|_| LlmError::Api("provider response read failed".into()))?;
 
         parse_response(&body_bytes)
+    }
+}
+
+fn provider_status_error(status: reqwest::StatusCode) -> LlmError {
+    if status == reqwest::StatusCode::UNAUTHORIZED {
+        LlmError::Api("provider authentication rejected (status=401)".into())
+    } else {
+        LlmError::Api(format!("provider returned HTTP status {}", status.as_u16()))
     }
 }
 
@@ -130,8 +127,8 @@ pub(crate) fn parse_response(body: &[u8]) -> Result<(String, u32, u32), LlmError
         completion_tokens: u32,
     }
 
-    let parsed: ChatCompletionResponse = serde_json::from_slice(body)
-        .map_err(|e| LlmError::Parse(format!("response parse error: {e}")))?;
+    let parsed: ChatCompletionResponse =
+        serde_json::from_slice(body).map_err(|e| LlmError::Parse(format!("response parse error: {e}")))?;
 
     let msg = parsed
         .choices
@@ -156,17 +153,15 @@ pub(crate) fn parse_response(body: &[u8]) -> Result<(String, u32, u32), LlmError
 impl LlmProvider for OpenAICompatibleProvider {
     fn chat(&self, messages: &[ChatMessage], options: &ChatOptions) -> Result<(String, u32, u32), LlmError> {
         match tokio::runtime::Handle::try_current() {
-            Ok(handle) => {
-                tokio::task::block_in_place(|| {
-                    handle.block_on(self.chat_async(messages, options))
-                })
-            }
+            Ok(handle) => tokio::task::block_in_place(|| handle.block_on(self.chat_async(messages, options))),
             Err(_) => {
                 if let Some(ref rt) = self.rt {
                     rt.block_on(self.chat_async(messages, options))
                 } else {
                     // Fallback to a temporary runtime to avoid panic during cross-thread handoffs
-                    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build()
+                    let rt = tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
                         .map_err(|e| LlmError::Parse(format!("Runtime fallback failed: {e}")))?;
                     rt.block_on(self.chat_async(messages, options))
                 }
@@ -244,7 +239,10 @@ mod tests {
     fn test_build_body_with_max_tokens() {
         let provider = OpenAICompatibleProvider::new("http://localhost:8000/v1", "gpt-4", None).unwrap();
         let msgs = vec![ChatMessage::user("hi")];
-        let opts = ChatOptions { temperature: 0.5, max_tokens: Some(512) };
+        let opts = ChatOptions {
+            temperature: 0.5,
+            max_tokens: Some(512),
+        };
         let body = provider.build_request_body(&msgs, &opts);
         assert_eq!(body["max_tokens"], 512);
         assert_eq!(body["model"], "gpt-4");
@@ -255,7 +253,10 @@ mod tests {
     fn test_build_body_without_max_tokens() {
         let provider = OpenAICompatibleProvider::new("http://localhost:8000/v1", "llama3.2", None).unwrap();
         let msgs = vec![ChatMessage::system("sys"), ChatMessage::user("hi")];
-        let opts = ChatOptions { temperature: 0.7, max_tokens: None };
+        let opts = ChatOptions {
+            temperature: 0.7,
+            max_tokens: None,
+        };
         let body = provider.build_request_body(&msgs, &opts);
         assert!(body.get("max_tokens").is_none());
         assert_eq!(body["messages"].as_array().unwrap().len(), 2);
@@ -265,6 +266,17 @@ mod tests {
     fn test_model_name() {
         let provider = OpenAICompatibleProvider::new("http://localhost:8000/v1", "deepseek-chat", None).unwrap();
         assert_eq!(provider.model_name(), "deepseek-chat");
+    }
+
+    #[test]
+    fn provider_error_body_and_endpoint_are_not_exposed() {
+        const BODY_CANARY: &str = "PROVIDER_BODY_PERSONAL_CANARY_17f2";
+        const PATH_CANARY: &str = "PROVIDER_PATH_PERSONAL_CANARY_61ac";
+        let error = provider_status_error(reqwest::StatusCode::BAD_REQUEST).to_string();
+
+        assert!(error.contains("status 400"));
+        assert!(!error.contains(BODY_CANARY));
+        assert!(!error.contains(PATH_CANARY));
     }
 
     // ─── Integration tests against local llama-server ─────────────────────────
@@ -279,8 +291,8 @@ mod tests {
     macro_rules! skip_if_unavailable {
         ($result:expr) => {
             match $result {
-                Err(ref e) if e.to_string().contains("Unavailable") || e.to_string().contains("connect") => {
-                    eprintln!("llama-server not reachable, skipping: {e}");
+                Err(LlmError::Unavailable(_)) => {
+                    eprintln!("llama-server not reachable; skipping live-provider test");
                     return;
                 }
                 other => other,
@@ -293,12 +305,18 @@ mod tests {
         let provider = OpenAICompatibleProvider::new(&llama_server_url(), &llama_model(), None)
             .expect("provider should be constructible");
         let msgs = vec![ChatMessage::user("Say hello in 3 words")];
-        let opts = ChatOptions { temperature: 0.7, max_tokens: Some(20) };
+        let opts = ChatOptions {
+            temperature: 0.7,
+            max_tokens: Some(20),
+        };
         let result = skip_if_unavailable!(provider.chat(&msgs, &opts));
         assert!(result.is_ok(), "chat should succeed: {:?}", result);
         let (reply, input_tokens, output_tokens) = result.unwrap();
         assert!(!reply.is_empty(), "reply should not be empty, got: {:?}", reply);
-        println!("[llama-server] simple reply: {:?}, tokens: in={} out={}", reply, input_tokens, output_tokens);
+        println!(
+            "[llama-server] simple reply: {:?}, tokens: in={} out={}",
+            reply, input_tokens, output_tokens
+        );
     }
 
     #[test]
@@ -309,12 +327,18 @@ mod tests {
             ChatMessage::system("You are a helpful assistant."),
             ChatMessage::user("What is 1+1?"),
         ];
-        let opts = ChatOptions { temperature: 0.5, max_tokens: Some(20) };
+        let opts = ChatOptions {
+            temperature: 0.5,
+            max_tokens: Some(20),
+        };
         let result = skip_if_unavailable!(provider.chat(&msgs, &opts));
         assert!(result.is_ok(), "chat should succeed: {:?}", result);
         let (reply, input_tokens, output_tokens) = result.unwrap();
         assert!(!reply.is_empty(), "reply should not be empty, got: {:?}", reply);
-        println!("[llama-server] system-prompt reply: {:?}, tokens: in={} out={}", reply, input_tokens, output_tokens);
+        println!(
+            "[llama-server] system-prompt reply: {:?}, tokens: in={} out={}",
+            reply, input_tokens, output_tokens
+        );
     }
 
     #[test]
@@ -325,7 +349,10 @@ mod tests {
             ChatMessage::user("My favorite color is blue."),
             ChatMessage::user("What is my favorite color?"),
         ];
-        let opts = ChatOptions { temperature: 0.0, max_tokens: Some(30) };
+        let opts = ChatOptions {
+            temperature: 0.0,
+            max_tokens: Some(30),
+        };
         let result = skip_if_unavailable!(provider.chat(&msgs, &opts));
         assert!(result.is_ok(), "chat should succeed: {:?}", result);
         let (reply, _, _) = result.unwrap();
@@ -339,14 +366,21 @@ mod tests {
         let provider = OpenAICompatibleProvider::new(&llama_server_url(), &llama_model(), None)
             .expect("provider should be constructible");
         let msgs = vec![ChatMessage::user("What is 1+1?")];
-        let opts = ChatOptions { temperature: 0.0, max_tokens: Some(200) };
+        let opts = ChatOptions {
+            temperature: 0.0,
+            max_tokens: Some(200),
+        };
         let r1 = skip_if_unavailable!(provider.chat(&msgs, &opts));
         let r2 = skip_if_unavailable!(provider.chat(&msgs, &opts));
         assert!(r1.is_ok() && r2.is_ok());
         let (c1, _, _) = r1.unwrap();
         let (c2, _, _) = r2.unwrap();
-        assert!(c1.contains('2') && c2.contains('2'),
-            "both replies should contain '2', got r1={:?} r2={:?}", c1, c2);
+        assert!(
+            c1.contains('2') && c2.contains('2'),
+            "both replies should contain '2', got r1={:?} r2={:?}",
+            c1,
+            c2
+        );
         println!("[llama-server] temp=0 replies: r1={:?} r2={:?}", c1, c2);
     }
 

@@ -6,8 +6,8 @@
 //!
 //! Resolution order: agent override > global override > compiled default.
 
-mod registry;
 mod defaults;
+mod registry;
 
-pub use registry::{PromptRegistry, PromptTemplate, RenderError};
 pub use defaults::register_defaults;
+pub use registry::{PromptRegistry, PromptTemplate, RenderError};

@@ -3,11 +3,11 @@
 //! Tests cover: create, read, update, logical delete,
 //! tag index, search, and context loading.
 
-use plico::fs::{
-    SemanticFS, Query, ContextLoader, ContextLayer, AuditAction,
-    EmbeddingProvider, InMemoryBackend, EmbedError, EmbedResult,
-};
 use plico::cas::CASStorage;
+use plico::fs::{
+    AuditAction, ContextLayer, ContextLoader, EmbedError, EmbedResult, EmbeddingProvider, InMemoryBackend, Query,
+    SemanticFS,
+};
 use std::sync::Arc;
 use tempfile::tempdir;
 
@@ -20,8 +20,15 @@ impl EmbeddingProvider for StubProvider {
     fn embed_batch(&self, _: &[&str]) -> Result<Vec<EmbedResult>, EmbedError> {
         Err(EmbedError::ServerUnavailable("stub".to_string()))
     }
-    fn dimension(&self) -> usize { 384 }
-    fn model_name(&self) -> &str { "stub" }
+    fn dimension(&self) -> usize {
+        384
+    }
+    fn builder_identity(&self) -> Result<plico::fs::EmbeddingBuilderIdentity, plico::fs::EmbeddingIdentityError> {
+        Err(plico::fs::EmbeddingIdentityError::StubProvider)
+    }
+    fn model_name(&self) -> String {
+        "stub".into()
+    }
 }
 
 fn make_fs_at(path: &std::path::Path) -> (SemanticFS, ()) {
@@ -33,7 +40,8 @@ fn make_fs_at(path: &std::path::Path) -> (SemanticFS, ()) {
         std::sync::Arc::new(InMemoryBackend::new()),
         None,
         None,
-    ).unwrap();
+    )
+    .unwrap();
     (fs, ())
 }
 
@@ -67,12 +75,30 @@ fn test_create_and_get() {
 fn test_search_by_tags() {
     let (fs, _dir) = make_fs();
 
-    fs.create(b"doc1".to_vec(), vec!["embedding".to_string()], "a".to_string(), None, plico::cas::ObjectScope::default())
-        .unwrap();
-    fs.create(b"doc2".to_vec(), vec!["embedding".to_string(), "batch-result".to_string()], "a".to_string(), None, plico::cas::ObjectScope::default())
-        .unwrap();
-    fs.create(b"doc3".to_vec(), vec!["batch-result".to_string()], "a".to_string(), None, plico::cas::ObjectScope::default())
-        .unwrap();
+    fs.create(
+        b"doc1".to_vec(),
+        vec!["embedding".to_string()],
+        "a".to_string(),
+        None,
+        plico::cas::ObjectScope::default(),
+    )
+    .unwrap();
+    fs.create(
+        b"doc2".to_vec(),
+        vec!["embedding".to_string(), "batch-result".to_string()],
+        "a".to_string(),
+        None,
+        plico::cas::ObjectScope::default(),
+    )
+    .unwrap();
+    fs.create(
+        b"doc3".to_vec(),
+        vec!["batch-result".to_string()],
+        "a".to_string(),
+        None,
+        plico::cas::ObjectScope::default(),
+    )
+    .unwrap();
 
     let results = fs.read(&Query::ByTags(vec!["embedding".to_string()])).unwrap();
     assert_eq!(results.len(), 2);
@@ -85,8 +111,14 @@ fn test_search_by_tags() {
 fn test_search_query() {
     let (fs, _dir) = make_fs();
 
-    fs.create(b"doc about rust".to_vec(), vec!["embedding".to_string()], "a".to_string(), None, plico::cas::ObjectScope::default())
-        .unwrap();
+    fs.create(
+        b"doc about rust".to_vec(),
+        vec!["embedding".to_string()],
+        "a".to_string(),
+        None,
+        plico::cas::ObjectScope::default(),
+    )
+    .unwrap();
 
     let results = fs.search("embedding", 10);
     assert!(!results.is_empty());
@@ -97,16 +129,17 @@ fn test_update_generates_new_cid() {
     let (fs, _dir) = make_fs();
 
     let old_cid = fs
-        .create(b"original content".to_vec(), vec!["test".to_string()], "a".to_string(), None, plico::cas::ObjectScope::default())
+        .create(
+            b"original content".to_vec(),
+            vec!["test".to_string()],
+            "a".to_string(),
+            None,
+            plico::cas::ObjectScope::default(),
+        )
         .unwrap();
 
     let new_cid = fs
-        .update(
-            &old_cid,
-            b"updated content".to_vec(),
-            None,
-            "a".to_string(),
-        )
+        .update(&old_cid, b"updated content".to_vec(), None, "a".to_string())
         .unwrap();
 
     // Content changed → new CID
@@ -126,7 +159,13 @@ fn test_update_with_new_tags() {
     let (fs, _dir) = make_fs();
 
     let old_cid = fs
-        .create(b"content".to_vec(), vec!["old-tag".to_string()], "a".to_string(), None, plico::cas::ObjectScope::default())
+        .create(
+            b"content".to_vec(),
+            vec!["old-tag".to_string()],
+            "a".to_string(),
+            None,
+            plico::cas::ObjectScope::default(),
+        )
         .unwrap();
 
     let new_cid = fs
@@ -148,7 +187,13 @@ fn test_delete_is_logical() {
     let (fs, _dir) = make_fs();
 
     let cid = fs
-        .create(b"to delete".to_vec(), vec!["test".to_string()], "a".to_string(), None, plico::cas::ObjectScope::default())
+        .create(
+            b"to delete".to_vec(),
+            vec!["test".to_string()],
+            "a".to_string(),
+            None,
+            plico::cas::ObjectScope::default(),
+        )
         .unwrap();
 
     // Delete (logical)
@@ -164,8 +209,14 @@ fn test_delete_is_logical() {
 fn test_audit_log_records_create() {
     let (fs, _dir) = make_fs();
 
-    fs.create(b"test".to_vec(), vec!["test".to_string()], "agent1".to_string(), None, plico::cas::ObjectScope::default())
-        .unwrap();
+    fs.create(
+        b"test".to_vec(),
+        vec!["test".to_string()],
+        "agent1".to_string(),
+        None,
+        plico::cas::ObjectScope::default(),
+    )
+    .unwrap();
 
     let log = fs.audit_log();
     assert!(!log.is_empty());
@@ -179,7 +230,15 @@ fn test_audit_log_records_create() {
 fn test_audit_log_records_update() {
     let (fs, _dir) = make_fs();
 
-    let cid = fs.create(b"v1".to_vec(), vec!["test".to_string()], "a".to_string(), None, plico::cas::ObjectScope::default()).unwrap();
+    let cid = fs
+        .create(
+            b"v1".to_vec(),
+            vec!["test".to_string()],
+            "a".to_string(),
+            None,
+            plico::cas::ObjectScope::default(),
+        )
+        .unwrap();
     fs.update(&cid, b"v2".to_vec(), None, "a".to_string()).unwrap();
 
     let log = fs.audit_log();
@@ -196,10 +255,22 @@ fn test_audit_log_records_update() {
 fn test_list_tags() {
     let (fs, _dir) = make_fs();
 
-    fs.create(b"doc1".to_vec(), vec!["a".to_string(), "b".to_string()], "x".to_string(), None, plico::cas::ObjectScope::default())
-        .unwrap();
-    fs.create(b"doc2".to_vec(), vec!["b".to_string(), "c".to_string()], "x".to_string(), None, plico::cas::ObjectScope::default())
-        .unwrap();
+    fs.create(
+        b"doc1".to_vec(),
+        vec!["a".to_string(), "b".to_string()],
+        "x".to_string(),
+        None,
+        plico::cas::ObjectScope::default(),
+    )
+    .unwrap();
+    fs.create(
+        b"doc2".to_vec(),
+        vec!["b".to_string(), "c".to_string()],
+        "x".to_string(),
+        None,
+        plico::cas::ObjectScope::default(),
+    )
+    .unwrap();
 
     let tags = fs.list_tags();
     assert!(tags.contains(&"a".to_string()));
@@ -212,8 +283,24 @@ fn test_list_tags() {
 fn test_deduplication_by_content() {
     let (fs, _dir) = make_fs();
 
-    let cid1 = fs.create(b"same content".to_vec(), vec!["tag1".to_string()], "a".to_string(), None, plico::cas::ObjectScope::default()).unwrap();
-    let cid2 = fs.create(b"same content".to_vec(), vec!["tag2".to_string()], "b".to_string(), None, plico::cas::ObjectScope::default()).unwrap();
+    let cid1 = fs
+        .create(
+            b"same content".to_vec(),
+            vec!["tag1".to_string()],
+            "a".to_string(),
+            None,
+            plico::cas::ObjectScope::default(),
+        )
+        .unwrap();
+    let cid2 = fs
+        .create(
+            b"same content".to_vec(),
+            vec!["tag2".to_string()],
+            "b".to_string(),
+            None,
+            plico::cas::ObjectScope::default(),
+        )
+        .unwrap();
 
     // Same content → same CID (CAS deduplication)
     assert_eq!(cid1, cid2);
@@ -228,7 +315,8 @@ fn test_context_loader_l0_cache() {
     let loader = ContextLoader::new(dir.path().to_path_buf(), None, cas).unwrap();
 
     // Compute L0 summary (fallback heuristic since no summarizer)
-    let summary = loader.compute_l0("This is a very long document with many words that should be summarized for the L0 layer.");
+    let summary =
+        loader.compute_l0("This is a very long document with many words that should be summarized for the L0 layer.");
     assert!(!summary.is_empty());
     assert!(summary.len() < 200); // L0 should be short
 }
@@ -243,7 +331,9 @@ fn test_context_loader_l0_round_trip() {
     let content = "Vector embedding batch result: 384-dim output for 50 documents using bge-small-en-v1.5.";
     let cid = plico::cas::object::AIObject::compute_cid(content.as_bytes());
 
-    loader.store_l0(&cid, "Embedding batch: 50 docs, bge-small-en-v1.5.".to_string()).unwrap();
+    loader
+        .store_l0(&cid, "Embedding batch: 50 docs, bge-small-en-v1.5.".to_string())
+        .unwrap();
 
     let ctx = loader.load(&cid, ContextLayer::L0).unwrap();
     assert_eq!(ctx.layer, ContextLayer::L0);
@@ -257,7 +347,10 @@ fn test_context_loader_l0_not_found_returns_error() {
     let loader = ContextLoader::new(dir.path().to_path_buf(), None, cas).unwrap();
 
     // Load nonexistent CID → should return an error (or placeholder)
-    let result = loader.load("nonexistent00000000000000000000000000000000000000000000000000000000", ContextLayer::L0);
+    let result = loader.load(
+        "nonexistent00000000000000000000000000000000000000000000000000000000",
+        ContextLayer::L0,
+    );
     // Should handle gracefully — either error or placeholder
     // Current implementation: placeholder
     assert!(result.is_ok());
@@ -271,7 +364,12 @@ fn test_context_loader_l1_fallback_for_unknown_cid() {
     let cas = Arc::new(CASStorage::new(dir.path().join("cas_loader_test")).unwrap());
     let loader = ContextLoader::new(dir.path().to_path_buf(), None, cas).unwrap();
 
-    let ctx = loader.load("somecid0000000000000000000000000000000000000000000000000000000000", ContextLayer::L1).unwrap();
+    let ctx = loader
+        .load(
+            "somecid0000000000000000000000000000000000000000000000000000000000",
+            ContextLayer::L1,
+        )
+        .unwrap();
     assert_eq!(ctx.layer, ContextLayer::L1);
     // CID not in CAS → empty content, no error
     assert!(ctx.content.is_empty());
@@ -319,7 +417,10 @@ fn test_context_loader_l2_real_content() {
     assert_eq!(ctx.content.as_bytes(), content);
 
     // L2 for nonexistent CID should return an error
-    let err = loader.load("0000000000000000000000000000000000000000000000000000000000000000", ContextLayer::L2);
+    let err = loader.load(
+        "0000000000000000000000000000000000000000000000000000000000000000",
+        ContextLayer::L2,
+    );
     assert!(err.is_err());
 }
 
@@ -396,7 +497,15 @@ fn test_content_type_predicates() {
 fn test_list_deleted_after_delete() {
     let (fs, _dir) = make_fs();
 
-    let cid = fs.create(b"will be deleted".to_vec(), vec!["trash".to_string()], "a".to_string(), None, plico::cas::ObjectScope::default()).unwrap();
+    let cid = fs
+        .create(
+            b"will be deleted".to_vec(),
+            vec!["trash".to_string()],
+            "a".to_string(),
+            None,
+            plico::cas::ObjectScope::default(),
+        )
+        .unwrap();
     assert!(fs.list_deleted().is_empty());
 
     fs.delete(&cid, "a".to_string()).unwrap();
@@ -411,7 +520,15 @@ fn test_list_deleted_after_delete() {
 fn test_restore_puts_back_in_tag_index() {
     let (fs, _dir) = make_fs();
 
-    let cid = fs.create(b"restorable content".to_vec(), vec!["restore-me".to_string()], "a".to_string(), None, plico::cas::ObjectScope::default()).unwrap();
+    let cid = fs
+        .create(
+            b"restorable content".to_vec(),
+            vec!["restore-me".to_string()],
+            "a".to_string(),
+            None,
+            plico::cas::ObjectScope::default(),
+        )
+        .unwrap();
     fs.delete(&cid, "a".to_string()).unwrap();
 
     // After delete: not in tag index
@@ -435,7 +552,15 @@ fn test_recycle_bin_persists_across_restart() {
     let dir = tempdir().unwrap();
     let cid = {
         let (fs, _) = make_fs_at(dir.path());
-        let cid = fs.create(b"survive restart".to_vec(), vec!["persist-test".to_string()], "a".to_string(), None, plico::cas::ObjectScope::default()).unwrap();
+        let cid = fs
+            .create(
+                b"survive restart".to_vec(),
+                vec!["persist-test".to_string()],
+                "a".to_string(),
+                None,
+                plico::cas::ObjectScope::default(),
+            )
+            .unwrap();
         fs.delete(&cid, "a".to_string()).unwrap();
         cid
     }; // fs dropped here — simulates process restart
@@ -450,6 +575,9 @@ fn test_recycle_bin_persists_across_restart() {
 #[test]
 fn test_restore_nonexistent_cid_returns_error() {
     let (fs, _dir) = make_fs();
-    let result = fs.restore("nonexistentcid000000000000000000000000000000000000000000000000000", "a".to_string());
+    let result = fs.restore(
+        "nonexistentcid000000000000000000000000000000000000000000000000000",
+        "a".to_string(),
+    );
     assert!(result.is_err());
 }

@@ -13,17 +13,16 @@
 //! └── ChainRouter      — tries Heuristic first, falls back to LLM
 //! ```
 
+pub mod execution;
 pub mod heuristic;
 pub mod llm;
-pub mod execution;
 
-use serde::{Deserialize, Serialize};
 use crate::api::semantic::ApiRequest;
+use serde::{Deserialize, Serialize};
 
 /// Routing action — first-class routing decision type (AgentGate-inspired).
 /// Explicit representation of what the router decided to do with the query.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum RoutingAction {
     /// Route to a single API action (CRUD, agent management, etc.)
     #[default]
@@ -37,7 +36,6 @@ pub enum RoutingAction {
     /// Fallback when routing confidence is below threshold.
     LowConfidence,
 }
-
 
 /// A resolved intent — a structured action derived from natural language.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -102,9 +100,7 @@ impl IntentRouter for ChainRouter {
         let heuristic_results = self.heuristic.resolve(text, agent_id);
 
         match heuristic_results {
-            Ok(ref results) if !results.is_empty()
-                && results[0].confidence >= self.confidence_threshold =>
-            {
+            Ok(ref results) if !results.is_empty() && results[0].confidence >= self.confidence_threshold => {
                 heuristic_results
             }
             _ => {
@@ -116,9 +112,7 @@ impl IntentRouter for ChainRouter {
                             // LLM failed, return heuristic results even if low confidence
                             match heuristic_results {
                                 Ok(r) if !r.is_empty() => Ok(r),
-                                _ => Err(IntentError::Unresolvable(
-                                    format!("Could not resolve: '{}'", text),
-                                )),
+                                _ => Err(IntentError::Unresolvable(format!("Could not resolve: '{}'", text))),
                             }
                         }
                         Err(e) => Err(e),
@@ -126,9 +120,10 @@ impl IntentRouter for ChainRouter {
                 } else {
                     match heuristic_results {
                         Ok(r) if !r.is_empty() => Ok(r),
-                        _ => Err(IntentError::Unresolvable(
-                            format!("Could not resolve: '{}' (no LLM available)", text),
-                        )),
+                        _ => Err(IntentError::Unresolvable(format!(
+                            "Could not resolve: '{}' (no LLM available)",
+                            text
+                        ))),
                     }
                 }
             }

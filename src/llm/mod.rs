@@ -29,10 +29,16 @@ pub struct ChatMessage {
 
 impl ChatMessage {
     pub fn system(content: impl Into<String>) -> Self {
-        Self { role: "system".into(), content: content.into() }
+        Self {
+            role: "system".into(),
+            content: content.into(),
+        }
     }
     pub fn user(content: impl Into<String>) -> Self {
-        Self { role: "user".into(), content: content.into() }
+        Self {
+            role: "user".into(),
+            content: content.into(),
+        }
     }
 }
 
@@ -45,7 +51,10 @@ pub struct ChatOptions {
 
 impl Default for ChatOptions {
     fn default() -> Self {
-        Self { temperature: 0.7, max_tokens: None }
+        Self {
+            temperature: 0.7,
+            max_tokens: None,
+        }
     }
 }
 
@@ -97,10 +106,7 @@ mod tests {
     #[test]
     fn test_stub_provider_chat() {
         let provider = StubProvider::new("test response");
-        let result = provider.chat(
-            &[ChatMessage::user("anything")],
-            &ChatOptions::default(),
-        );
+        let result = provider.chat(&[ChatMessage::user("anything")], &ChatOptions::default());
         assert!(result.is_ok());
         let (response, input_tokens, output_tokens) = result.unwrap();
         assert_eq!(response, "test response");

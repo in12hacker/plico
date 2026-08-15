@@ -1,20 +1,10 @@
-//! Storage governance and hybrid retrieval handlers.
+//! Storage governance handlers.
 
 use crate::api::semantic::{ApiRequest, ApiResponse};
-use crate::DEFAULT_TENANT;
 
 impl super::super::AIKernel {
     pub(crate) fn handle_storage(&self, req: ApiRequest) -> ApiResponse {
         match req {
-            ApiRequest::HybridRetrieve { query_text, seed_tags, graph_depth, edge_types, max_results, token_budget, agent_id: _, tenant_id } => {
-                let _tenant = tenant_id.unwrap_or_else(|| DEFAULT_TENANT.to_string());
-                let depth = if graph_depth == 0 { 2 } else { graph_depth };
-                let max = if max_results == 0 { 20 } else { max_results };
-                let result = self.hybrid_retrieve(&query_text, &seed_tags, depth, &edge_types, max, token_budget);
-                let mut r = ApiResponse::ok();
-                r.hybrid_result = Some(result);
-                r
-            }
             ApiRequest::ObjectUsage { cid, agent_id: _ } => {
                 let usage = self.get_object_usage(&cid);
                 let mut r = ApiResponse::ok();
@@ -42,18 +32,7 @@ impl super::super::AIKernel {
                         longterm_count: memory_stats.longterm_entries,
                         longterm_bytes: 0,
                     },
-                    cold_objects: stats.cold_objects,
                     about_to_expire: stats.about_to_expire,
-                });
-                r
-            }
-            ApiRequest::EvictCold { agent_id: _, dry_run } => {
-                let result = self.evict_cold(dry_run);
-                let mut r = ApiResponse::ok();
-                r.evict_result = Some(crate::api::semantic::EvictColdResult {
-                    evicted_count: result.evicted_count,
-                    evicted_bytes: result.evicted_bytes,
-                    remaining_cold: result.remaining_cold,
                 });
                 r
             }
@@ -64,42 +43,8 @@ impl super::super::AIKernel {
 
 #[cfg(test)]
 mod tests {
-    use crate::kernel::tests::make_kernel;
     use crate::api::semantic::ApiRequest;
-
-    #[test]
-    fn test_hybrid_retrieve() {
-        let (kernel, _dir) = make_kernel();
-        let resp = kernel.handle_api_request(ApiRequest::HybridRetrieve {
-            query_text: "test query".to_string(),
-            seed_tags: vec![],
-            graph_depth: 0,
-            edge_types: vec![],
-            max_results: 0,
-            token_budget: None,
-            agent_id: "test_agent".to_string(),
-            tenant_id: None,
-        });
-        assert!(resp.ok, "HybridRetrieve should succeed: {:?}", resp.error);
-        assert!(resp.hybrid_result.is_some());
-    }
-
-    #[test]
-    fn test_hybrid_retrieve_with_options() {
-        let (kernel, _dir) = make_kernel();
-        let resp = kernel.handle_api_request(ApiRequest::HybridRetrieve {
-            query_text: "search something".to_string(),
-            seed_tags: vec!["tag1".to_string()],
-            graph_depth: 3,
-            edge_types: vec!["causes".to_string()],
-            max_results: 5,
-            token_budget: Some(2048),
-            agent_id: "test_agent".to_string(),
-            tenant_id: None,
-        });
-        assert!(resp.ok, "HybridRetrieve with options should succeed: {:?}", resp.error);
-        assert!(resp.hybrid_result.is_some());
-    }
+    use crate::kernel::tests::make_kernel;
 
     #[test]
     fn test_object_usage() {
@@ -186,33 +131,5 @@ mod tests {
         let stats = resp.storage_stats.unwrap();
         assert_eq!(stats.total_objects, 2);
         assert!(stats.total_bytes > 0);
-    }
-
-    #[test]
-    fn test_evict_cold_dry_run() {
-        use crate::api::permission::PermissionAction;
-        let (kernel, _dir) = make_kernel();
-        kernel.permission_grant("test_agent", PermissionAction::Delete, None, None);
-        let resp = kernel.handle_api_request(ApiRequest::EvictCold {
-            agent_id: "test_agent".to_string(),
-            dry_run: true,
-        });
-        assert!(resp.ok, "EvictCold dry_run should succeed: {:?}", resp.error);
-        assert!(resp.evict_result.is_some());
-        let result = resp.evict_result.unwrap();
-        assert_eq!(result.evicted_count, 0);
-    }
-
-    #[test]
-    fn test_evict_cold_real() {
-        use crate::api::permission::PermissionAction;
-        let (kernel, _dir) = make_kernel();
-        kernel.permission_grant("test_agent", PermissionAction::Delete, None, None);
-        let resp = kernel.handle_api_request(ApiRequest::EvictCold {
-            agent_id: "test_agent".to_string(),
-            dry_run: false,
-        });
-        assert!(resp.ok, "EvictCold real should succeed: {:?}", resp.error);
-        assert!(resp.evict_result.is_some());
     }
 }

@@ -6,9 +6,7 @@
 //! - BatchSubmitIntent: bulk intent submission
 //! - BatchQuery: bulk querying
 
-use plico::api::semantic::{
-    ApiRequest, BatchCreateItem, BatchMemoryEntry, ContentEncoding, IntentSpec, QuerySpec,
-};
+use plico::api::semantic::{ApiRequest, BatchCreateItem, BatchMemoryEntry, ContentEncoding, IntentSpec, QuerySpec};
 use plico::kernel::AIKernel;
 use std::sync::Arc;
 use tempfile::tempdir;
@@ -159,7 +157,9 @@ fn test_batch_memory_store() {
     let response = kernel.handle_api_request(req);
 
     assert!(response.ok, "batch memory store should succeed");
-    let batch = response.batch_memory_store.expect("batch_memory_store should be present");
+    let batch = response
+        .batch_memory_store
+        .expect("batch_memory_store should be present");
     assert_eq!(batch.successful, 3, "all 3 entries should succeed");
     assert_eq!(batch.failed, 0, "no entries should fail");
 
@@ -167,7 +167,6 @@ fn test_batch_memory_store() {
     let recall_req = ApiRequest::Recall {
         tier: None,
         agent_id: "MemAgent".to_string(),
-        scope: None,
         query: None,
         limit: None,
     };
@@ -207,7 +206,9 @@ fn test_batch_submit_intent() {
     let response = kernel.handle_api_request(req);
 
     assert!(response.ok, "batch submit intent should succeed");
-    let batch = response.batch_submit_intent.expect("batch_submit_intent should be present");
+    let batch = response
+        .batch_submit_intent
+        .expect("batch_submit_intent should be present");
     assert_eq!(batch.successful, 3, "all 3 intents should succeed");
     assert_eq!(batch.failed, 0, "no intents should fail");
 
@@ -229,7 +230,7 @@ fn test_batch_query() {
             vec!["rust".to_string(), "programming".to_string()],
             "QueryAgent",
             None,
-            plico::cas::ObjectScope::default()
+            plico::cas::ObjectScope::default(),
         )
         .expect("create should succeed");
 
@@ -239,7 +240,7 @@ fn test_batch_query() {
             vec!["python".to_string(), "programming".to_string()],
             "QueryAgent",
             None,
-            plico::cas::ObjectScope::default()
+            plico::cas::ObjectScope::default(),
         )
         .expect("create should succeed");
 
@@ -249,15 +250,13 @@ fn test_batch_query() {
             vec!["web".to_string(), "development".to_string()],
             "QueryAgent",
             None,
-            plico::cas::ObjectScope::default()
+            plico::cas::ObjectScope::default(),
         )
         .expect("create should succeed");
 
     let queries = vec![
         // Read query for first object
-        QuerySpec::Read {
-            cid: cid1.clone(),
-        },
+        QuerySpec::Read { cid: cid1.clone() },
         // Search query
         QuerySpec::Search {
             query: "programming".to_string(),
@@ -266,9 +265,7 @@ fn test_batch_query() {
             exclude_tags: vec![],
         },
         // Read query for third object
-        QuerySpec::Read {
-            cid: cid3.clone(),
-        },
+        QuerySpec::Read { cid: cid3.clone() },
     ];
 
     let req = ApiRequest::BatchQuery {
@@ -286,23 +283,17 @@ fn test_batch_query() {
 
     // First result: read should return the object content
     let first = batch.results[0].as_ref().expect("first query should succeed");
-    let first_json: serde_json::Value = serde_json::from_str(
-        &serde_json::to_string(first).unwrap()
-    ).unwrap();
+    let first_json: serde_json::Value = serde_json::from_str(&serde_json::to_string(first).unwrap()).unwrap();
     assert_eq!(first_json["cid"], cid1);
 
     // Second result: search should return results
     let second = batch.results[1].as_ref().expect("second query should succeed");
-    let second_json: serde_json::Value = serde_json::from_str(
-        &serde_json::to_string(second).unwrap()
-    ).unwrap();
+    let second_json: serde_json::Value = serde_json::from_str(&serde_json::to_string(second).unwrap()).unwrap();
     assert!(second_json["count"].as_i64().unwrap() >= 2); // at least rust and python
 
     // Third result: read should return the object content
     let third = batch.results[2].as_ref().expect("third query should succeed");
-    let third_json: serde_json::Value = serde_json::from_str(
-        &serde_json::to_string(third).unwrap()
-    ).unwrap();
+    let third_json: serde_json::Value = serde_json::from_str(&serde_json::to_string(third).unwrap()).unwrap();
     assert_eq!(third_json["cid"], cid3);
 }
 
@@ -369,7 +360,9 @@ fn test_batch_intent_priority() {
     let response = kernel.handle_api_request(req);
 
     assert!(response.ok);
-    let batch = response.batch_submit_intent.expect("batch_submit_intent should be present");
+    let batch = response
+        .batch_submit_intent
+        .expect("batch_submit_intent should be present");
     assert_eq!(batch.successful, 3);
 
     // All intents should have been submitted successfully regardless of priority
@@ -405,7 +398,9 @@ fn test_batch_empty_items() {
 
     let response = kernel.handle_api_request(req);
     assert!(response.ok);
-    let batch = response.batch_memory_store.expect("batch_memory_store should be present");
+    let batch = response
+        .batch_memory_store
+        .expect("batch_memory_store should be present");
     assert_eq!(batch.successful, 0);
     assert_eq!(batch.failed, 0);
 
@@ -417,7 +412,9 @@ fn test_batch_empty_items() {
 
     let response = kernel.handle_api_request(req);
     assert!(response.ok);
-    let batch = response.batch_submit_intent.expect("batch_submit_intent should be present");
+    let batch = response
+        .batch_submit_intent
+        .expect("batch_submit_intent should be present");
     assert_eq!(batch.successful, 0);
     assert_eq!(batch.failed, 0);
 

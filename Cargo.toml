@@ -11,41 +11,38 @@ categories = ["command-line-utilities", "database", "compilers"]
 
 [features]
 default = []
-ort-backend = ["ort", "tokenizers", "ndarray"]
 wasmtime-backend = ["wasmtime", "wat"]
+offline-migration = []
 
 [dependencies]
 sha2 = "0.10"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+serde_json_canonicalizer = "0.3.2"
 thiserror = "2.0"
 tokio = { version = "1.0", features = ["full"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "multipart", "blocking"] }
 tiny_http = "0.12"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-uuid = { version = "1.0", features = ["v4", "serde"] }
+uuid = { version = "1.0", features = ["v4", "v5", "serde"] }
 base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
 lru = "0.17"
 bm25 = "2.3.2"
 hmac = "0.12"
 time = "0.3"
-axum = "0.7"
-tokio-stream = { version = "0.1", features = ["sync"] }
-tower = "0.4"
-tower-http = { version = "0.5", features = ["cors"] }
-futures = "0.3"
 rand = "0.9"
 dirs = "5.0"
 # edgevec removed: replaced by usearch (458K downloads, industry-standard HNSW)
 subtle = "2.6.1"
 redb = "4.0"
+tempfile = "3.0"
+rustix = { version = "1.1", features = ["fs"] }
+parcopy = "0.3.2"
+walkdir = "2.5.0"
+zeroize = { version = "1.8", features = ["derive"] }
 
-# ONNX Runtime embedding backend (optional)
-ort = { version = "2.0.0-rc.12", default-features = false, features = ["std", "ndarray", "tracing", "copy-dylibs", "api-24"], optional = true }
-tokenizers = { version = "0.22", optional = true, default-features = false, features = ["fancy-regex", "hf-hub", "http"] }
-ndarray = { version = "0.16", optional = true }
 libc = "0.2.186"
 usearch = "2.25.1"
 
@@ -54,7 +51,6 @@ wasmtime = { version = "44.0.1", optional = true }
 wat = { version = "1.248.0", optional = true }
 
 [dev-dependencies]
-tempfile = "3.0"
 criterion = "0.5"
 
 [[bin]]
@@ -70,16 +66,9 @@ name = "plico-mcp"
 path = "src/bin/plico_mcp/main.rs"
 
 [[bin]]
-name = "plico-sse"
-path = "src/bin/plico_sse.rs"
-
-[[example]]
-name = "ingest_agent"
-path = "examples/ingest_agent.rs"
-
-[[example]]
-name = "knowledge_agent"
-path = "examples/knowledge_agent.rs"
+name = "plico-memory-migrate"
+path = "src/bin/plico_memory_migrate/main.rs"
+required-features = ["offline-migration"]
 
 [profile.release]
 opt-level = 3

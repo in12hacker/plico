@@ -7,6 +7,8 @@ Cargo.lock
 # ── Runtime data (plicod runtime, auto-generated) ──
 .runtime/
 .logs/
+.guardrails/
+xtaskx/
 
 # ── IDE ──
 .idea/
@@ -25,10 +27,12 @@ Thumbs.db
 # ── Benchmark ──
 bench/
 benchmarks/.venv/
+benchmarks/.uv_sync.log
 benchmarks/**/__pycache__/
 benchmarks/**/*.pyc
 benchmarks/datasets/
-benchmarks/results/*.json
+benchmarks/results/**
+!benchmarks/results/.gitkeep
 .runtime/bench_legacy/
 bench/archive/
 
@@ -39,6 +43,7 @@ bench/archive/
 __pycache__/
 *.pyc
 .venv/
+.mimosa/
 
 # ── Secrets (never commit) ──
 *.key

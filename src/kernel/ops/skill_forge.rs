@@ -1,17 +1,17 @@
 //! Intelligent Skill Forge — pattern-driven skill evolution (v41).
 //!
-//! Replaces mechanical hit-counters with semantic density detection. 
+//! Replaces mechanical hit-counters with semantic density detection.
 //! Fulfills Soul 3.0 Axiom 9: "Better with Use" through skill auto-generation.
 
+use crate::util::cosine_similarity;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::RwLock;
-use serde::{Deserialize, Serialize};
-use crate::util::cosine_similarity;
 
 /// agent_id -> tool_name -> [vector_samples]
 type TraceMemory = HashMap<String, HashMap<String, Vec<Vec<f32>>>>;
 
-/// Threshold for semantic density. If average similarity within a cluster 
+/// Threshold for semantic density. If average similarity within a cluster
 /// exceeds this, it's considered a "stable pattern" (muscle memory).
 const DENSITY_THRESHOLD: f32 = 0.92;
 /// Minimum number of samples to trigger density check.
@@ -66,8 +66,12 @@ impl IntelligentSkillForge {
         // Calculate Semantic Density (average pairwise similarity)
         let mut total_sim = 0.0;
         let mut count = 0;
-        let recent_samples = if tool_samples.len() > 10 { &tool_samples[tool_samples.len()-10..] } else { &tool_samples[..] };
-        
+        let recent_samples = if tool_samples.len() > 10 {
+            &tool_samples[tool_samples.len() - 10..]
+        } else {
+            &tool_samples[..]
+        };
+
         for (i, a) in recent_samples.iter().enumerate() {
             for b in recent_samples.iter().skip(i + 1) {
                 total_sim += cosine_similarity(a, b);
@@ -78,8 +82,13 @@ impl IntelligentSkillForge {
         let density = if count > 0 { total_sim / count as f32 } else { 0.0 };
 
         if density > DENSITY_THRESHOLD {
-            tracing::info!(agent_id, tool_name, density, "Tight semantic cluster detected - suggesting skill solidification");
-            
+            tracing::info!(
+                agent_id,
+                tool_name,
+                density,
+                "Tight semantic cluster detected - suggesting skill solidification"
+            );
+
             // Clear samples once suggested to avoid spamming
             tool_samples.clear();
 
@@ -112,7 +121,9 @@ mod tests {
 
         // 3 samples < MIN_SAMPLES (4)
         for _ in 0..3 {
-            assert!(forge.record_and_evaluate("agent", "tool", &params, emb.clone()).is_none());
+            assert!(forge
+                .record_and_evaluate("agent", "tool", &params, emb.clone())
+                .is_none());
         }
     }
 

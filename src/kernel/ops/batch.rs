@@ -6,13 +6,13 @@
 //! - BatchSubmitIntent: submit multiple intents in one call
 //! - BatchQuery: query multiple objects/memories in one call
 
+use super::observability::{OpType, OperationTimer};
 use crate::api::semantic::{
-    BatchCreateItem, BatchCreateResponse, BatchMemoryEntry, BatchMemoryStoreResponse,
-    BatchQueryResponse, BatchSubmitIntentResponse, ContentEncoding, IntentSpec, QuerySpec,
+    BatchCreateItem, BatchCreateResponse, BatchMemoryEntry, BatchMemoryStoreResponse, BatchQueryResponse,
+    BatchSubmitIntentResponse, ContentEncoding, IntentSpec, QuerySpec,
 };
 use crate::fs::embedding::EmbeddingProvider;
 use crate::scheduler::IntentPriority;
-use super::observability::{OpType, OperationTimer};
 
 impl crate::kernel::AIKernel {
     /// Handle batch create operation.
@@ -50,10 +50,15 @@ impl crate::kernel::AIKernel {
 
             for item in items {
                 let result = (|| {
-                    let bytes = decode_content(&item.content, &item.content_encoding)
-                        .map_err(|e| e.to_string())?;
-                    self.semantic_create(bytes, item.tags, agent_id, item.intent, crate::cas::ObjectScope::default())
-                        .map_err(|e| e.to_string())
+                    let bytes = decode_content(&item.content, &item.content_encoding).map_err(|e| e.to_string())?;
+                    self.semantic_create(
+                        bytes,
+                        item.tags,
+                        agent_id,
+                        item.intent,
+                        crate::cas::ObjectScope::default(),
+                    )
+                    .map_err(|e| e.to_string())
                 })();
 
                 match &result {
@@ -64,24 +69,32 @@ impl crate::kernel::AIKernel {
             }
 
             self.maybe_persist_search_index();
-            return BatchCreateResponse { results, successful, failed };
+            return BatchCreateResponse {
+                results,
+                successful,
+                failed,
+            };
         }
 
         // Batch embedding optimization: decode all items, batch-embed texts, then create with precomputed vectors
         let agent_id_str = agent_id.to_string();
 
-        let items_data: Vec<_> = items.into_iter().map(|item| {
-            let bytes_result: Result<Vec<u8>, String> = decode_content(&item.content, &item.content_encoding);
-            (bytes_result, item.tags, item.intent)
-        }).collect();
+        let items_data: Vec<_> = items
+            .into_iter()
+            .map(|item| {
+                let bytes_result: Result<Vec<u8>, String> = decode_content(&item.content, &item.content_encoding);
+                (bytes_result, item.tags, item.intent)
+            })
+            .collect();
 
         // Collect texts for batch embedding
-        let texts: Vec<String> = items_data.iter().map(|(bytes_result, _, _)| {
-            match bytes_result {
+        let texts: Vec<String> = items_data
+            .iter()
+            .map(|(bytes_result, _, _)| match bytes_result {
                 Ok(bytes) => String::from_utf8_lossy(bytes).to_string(),
                 Err(_) => String::new(),
-            }
-        }).collect();
+            })
+            .collect();
 
         let text_refs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
         let embeddings: Option<Vec<crate::fs::embedding::types::EmbedResult>> =
@@ -97,12 +110,18 @@ impl crate::kernel::AIKernel {
             let result = bytes_result.and_then(|bytes| {
                 if let Some(ref embs) = embeddings {
                     if let Some(emb_result) = embs.get(i) {
-                        let cid = self.fs.create_with_embedding(
-                            bytes, tags, agent_id_str.clone(), intent,
-                            crate::cas::ObjectScope::default(),
-                            emb_result.embedding.clone(),
-                            true, // skip_kg_edges: batch create avoids per-item similarity search
-                        ).map_err(|e| e.to_string())?;
+                        let cid = self
+                            .fs
+                            .create_with_embedding(
+                                bytes,
+                                tags,
+                                agent_id_str.clone(),
+                                intent,
+                                crate::cas::ObjectScope::default(),
+                                emb_result.embedding.clone(),
+                                true, // skip_kg_edges: batch create avoids per-item similarity search
+                            )
+                            .map_err(|e| e.to_string())?;
                         // Notify KG builder for batch-created items
                         if let Some(ref handle) = self.kg_builder {
                             handle.notify(super::kg_builder::WriteEvent {
@@ -129,7 +148,11 @@ impl crate::kernel::AIKernel {
 
         self.maybe_persist_search_index();
 
-        BatchCreateResponse { results, successful, failed }
+        BatchCreateResponse {
+            results,
+            successful,
+            failed,
+        }
     }
 
     /// Handle batch memory store operation.
@@ -149,37 +172,108 @@ impl crate::kernel::AIKernel {
         );
         let _guard = span.enter();
 
-        let mut results = Vec::with_capacity(entries.len());
-        let mut successful = 0usize;
-        let mut failed = 0usize;
-
-        for entry in entries {
-            let result = self
-                .remember_working_scoped(
-                    agent_id,
-                    tenant_id,
-                    entry.content,
-                    entry.tags,
-                    crate::memory::MemoryScope::Private,
-                )
-                .map_err(|e| e.to_string());
-
-            match &result {
-                Ok(_) => successful += 1,
-                Err(_) => failed += 1,
-            }
-            results.push(result.map(|_| String::new()));
+        let permission = crate::api::permission::PermissionContext::new(agent_id.to_string(), tenant_id.to_string());
+        if let Err(error) = self
+            .permissions
+            .check(&permission, crate::api::permission::PermissionAction::Write)
+        {
+            let results = entries.iter().map(|_| Err(error.to_string())).collect::<Vec<_>>();
+            return BatchMemoryStoreResponse {
+                successful: 0,
+                failed: results.len(),
+                results,
+            };
         }
 
-        BatchMemoryStoreResponse { results, successful, failed }
+        let quota = self.agent_memory_quota(agent_id);
+        let mut results = entries
+            .iter()
+            .map(|_| Err("memory entry was not processed".to_string()))
+            .collect::<Vec<_>>();
+        let mut candidates = Vec::new();
+
+        for (index, item) in entries.into_iter().enumerate() {
+            if !item.tier.is_empty() && !item.tier.eq_ignore_ascii_case("working") {
+                results[index] = Err(format!(
+                    "unsupported batch memory tier '{}'; only working is supported",
+                    item.tier
+                ));
+                continue;
+            }
+            if item.importance > 100 {
+                results[index] = Err("importance must be between 0 and 100".to_string());
+                continue;
+            }
+
+            let entry_id = uuid::Uuid::new_v4().to_string();
+            let now = crate::memory::layered::now_ms();
+            let memory_entry = crate::memory::MemoryEntry {
+                memory_id: Default::default(),
+                parent_revision_id: None,
+                canonical_content_hash: Default::default(),
+                id: entry_id.clone(),
+                agent_id: agent_id.to_string(),
+                tenant_id: tenant_id.to_string(),
+                tier: crate::memory::MemoryTier::Working,
+                content: crate::memory::MemoryContent::Text(item.content),
+                importance: item.importance,
+                access_count: 0,
+                last_accessed: now,
+                created_at: now,
+                tags: item.tags,
+                ttl_ms: None,
+                original_ttl_ms: None,
+                scope: crate::memory::MemoryScope::Private,
+                memory_type: crate::memory::MemoryType::default(),
+                causal_parent: None,
+                supersedes: None,
+                superseded_by: None,
+                deleted_at: None,
+            };
+            candidates.push((index, memory_entry));
+        }
+
+        if !candidates.is_empty() {
+            let candidate_entries = candidates.iter().map(|(_, entry)| entry.clone()).collect();
+            match self.memory.create_working_batch_durable(candidate_entries, quota) {
+                Ok(stored) => {
+                    for ((index, _), entry) in candidates.iter().zip(stored) {
+                        results[*index] = Ok(entry.id.clone());
+                        self.event_bus
+                            .emit(crate::kernel::event_bus::KernelEvent::MemoryStored {
+                                agent_id: agent_id.to_string(),
+                                tier: "working".into(),
+                            });
+                        self.projection.notify_current(&entry, None);
+                    }
+                }
+                Err(error) => {
+                    let category = error.category();
+                    tracing::warn!(
+                        phase = "persist",
+                        outcome = "error",
+                        error_category = category,
+                        revision_count = candidates.len(),
+                        "Working Memory batch was not published"
+                    );
+                    for (index, _) in &candidates {
+                        results[*index] = Err(error.to_string());
+                    }
+                }
+            }
+        }
+
+        let successful = results.iter().filter(|result| result.is_ok()).count();
+        let failed = results.len() - successful;
+        BatchMemoryStoreResponse {
+            results,
+            successful,
+            failed,
+        }
     }
 
     /// Handle batch submit intent operation.
-    pub fn handle_batch_submit_intent(
-        &self,
-        intents: Vec<IntentSpec>,
-        agent_id: &str,
-    ) -> BatchSubmitIntentResponse {
+    pub fn handle_batch_submit_intent(&self, intents: Vec<IntentSpec>, agent_id: &str) -> BatchSubmitIntentResponse {
         let _timer = OperationTimer::new(&self.metrics, OpType::BatchSubmitIntent);
         let span = tracing::info_span!(
             "handle_batch_submit_intent",
@@ -201,9 +295,9 @@ impl crate::kernel::AIKernel {
                 _ => IntentPriority::Low,
             };
 
-            let result =
-                self.submit_intent(priority, spec.description, spec.action, Some(agent_id.to_string()))
-                    .map_err(|e| e.to_string());
+            let result = self
+                .submit_intent(priority, spec.description, spec.action, Some(agent_id.to_string()))
+                .map_err(|e| e.to_string());
 
             match &result {
                 Ok(_) => successful += 1,
@@ -212,16 +306,15 @@ impl crate::kernel::AIKernel {
             results.push(result);
         }
 
-        BatchSubmitIntentResponse { results, successful, failed }
+        BatchSubmitIntentResponse {
+            results,
+            successful,
+            failed,
+        }
     }
 
     /// Handle batch query operation.
-    pub fn handle_batch_query(
-        &self,
-        queries: Vec<QuerySpec>,
-        agent_id: &str,
-        tenant_id: &str,
-    ) -> BatchQueryResponse {
+    pub fn handle_batch_query(&self, queries: Vec<QuerySpec>, agent_id: &str, tenant_id: &str) -> BatchQueryResponse {
         let _timer = OperationTimer::new(&self.metrics, OpType::BatchQuery);
         let span = tracing::info_span!(
             "handle_batch_query",
@@ -237,23 +330,31 @@ impl crate::kernel::AIKernel {
 
         for query in queries {
             let result = match query {
-                QuerySpec::Read { cid } => {
-                    match self.get_object(&cid, agent_id, tenant_id) {
-                        Ok(obj) => Ok(serde_json::json!({
-                            "cid": cid,
-                            "content": String::from_utf8_lossy(&obj.data).to_string(),
-                            "tags": obj.meta.tags,
-                        })),
-                        Err(e) => Err(e.to_string()),
-                    }
-                }
-                QuerySpec::Search { query, limit, require_tags, exclude_tags } => {
+                QuerySpec::Read { cid } => match self.get_object(&cid, agent_id, tenant_id) {
+                    Ok(obj) => Ok(serde_json::json!({
+                        "cid": cid,
+                        "content": String::from_utf8_lossy(&obj.data).to_string(),
+                        "tags": obj.meta.tags,
+                    })),
+                    Err(e) => Err(e.to_string()),
+                },
+                QuerySpec::Search {
+                    query,
+                    limit,
+                    require_tags,
+                    exclude_tags,
+                } => {
                     let results_vec = self.semantic_search_with_time(
                         super::fs::SearchQuery {
-                            query: &query, agent_id, tenant_id,
-                            limit: limit.unwrap_or(10), require_tags, exclude_tags,
+                            query: &query,
+                            agent_id,
+                            tenant_id,
+                            limit: limit.unwrap_or(10),
+                            require_tags,
+                            exclude_tags,
                         },
-                        None, None,
+                        None,
+                        None,
                     );
 
                     match results_vec {
@@ -279,21 +380,6 @@ impl crate::kernel::AIKernel {
                         .collect();
                     Ok(serde_json::json!({ "memories": memories }))
                 }
-                QuerySpec::RecallSemantic { query, k } => {
-                    match self.recall_semantic(agent_id, tenant_id, &query, k) {
-                        Ok(entries) => {
-                            let memories: Vec<String> = entries
-                                .into_iter()
-                                .filter_map(|m| match m.content {
-                                    crate::memory::MemoryContent::Text(t) => Some(t),
-                                    _ => None,
-                                })
-                                .collect();
-                            Ok(serde_json::json!({ "memories": memories }))
-                        }
-                        Err(e) => Err(e),
-                    }
-                }
             };
 
             match &result {
@@ -303,7 +389,11 @@ impl crate::kernel::AIKernel {
             results.push(result);
         }
 
-        BatchQueryResponse { results, successful, failed }
+        BatchQueryResponse {
+            results,
+            successful,
+            failed,
+        }
     }
 }
 
@@ -313,8 +403,8 @@ fn decode_content(content: &str, encoding: &ContentEncoding) -> Result<Vec<u8>, 
 
 #[cfg(test)]
 mod tests {
-    use crate::kernel::tests::make_kernel;
     use crate::api::semantic::{BatchCreateItem, ContentEncoding};
+    use crate::kernel::tests::make_kernel;
 
     // ─── Batch Create ────────────────────────────────────────────────────────
 
@@ -437,9 +527,21 @@ mod tests {
     fn test_batch_submit_intent_multiple_priorities() {
         let (kernel, _dir) = make_kernel();
         let intents = vec![
-            crate::api::semantic::IntentSpec { priority: "critical".to_string(), description: "c".to_string(), action: None },
-            crate::api::semantic::IntentSpec { priority: "high".to_string(), description: "h".to_string(), action: None },
-            crate::api::semantic::IntentSpec { priority: "low".to_string(), description: "l".to_string(), action: None },
+            crate::api::semantic::IntentSpec {
+                priority: "critical".to_string(),
+                description: "c".to_string(),
+                action: None,
+            },
+            crate::api::semantic::IntentSpec {
+                priority: "high".to_string(),
+                description: "h".to_string(),
+                action: None,
+            },
+            crate::api::semantic::IntentSpec {
+                priority: "low".to_string(),
+                description: "l".to_string(),
+                action: None,
+            },
         ];
         let resp = kernel.handle_batch_submit_intent(intents, "TestAgent");
         assert_eq!(resp.successful + resp.failed, 3);
@@ -480,7 +582,12 @@ mod tests {
         let (kernel, _dir) = make_kernel();
         let queries = vec![
             crate::api::semantic::QuerySpec::Recall,
-            crate::api::semantic::QuerySpec::RecallSemantic { query: "test".to_string(), k: 5 },
+            crate::api::semantic::QuerySpec::Search {
+                query: "test".to_string(),
+                limit: Some(5),
+                require_tags: Vec::new(),
+                exclude_tags: Vec::new(),
+            },
         ];
         let resp = kernel.handle_batch_query(queries, "TestAgent", "default");
         assert_eq!(resp.successful + resp.failed, 2);

@@ -1,170 +1,163 @@
-//! MCP Client tests — self-referential: uses plico-mcp as the MCP server.
-//! Tests both the MCP-specific client and the protocol-agnostic ExternalToolProvider trait.
+//! MCP client cross-validation against the typed `plico-mcp` server.
 
 #[cfg(test)]
 mod test {
     use std::sync::Arc;
+
+    use base64::Engine;
+
+    use crate::api::public::PUBLIC_OPERATIONS;
     use crate::mcp::McpClient;
     use crate::tool::ExternalToolProvider;
 
-    fn plico_mcp_bin() -> String {
-        let manifest_dir = env!("CARGO_MANIFEST_DIR");
-        format!("{}/target/debug/plico-mcp", manifest_dir)
+    struct TestClient {
+        client: McpClient,
+        _root: tempfile::TempDir,
     }
 
-    fn make_client() -> McpClient {
-        let dir = tempfile::TempDir::new().unwrap();
-        McpClient::new(
+    fn plico_mcp_bin() -> String {
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        format!("{manifest_dir}/target/debug/plico-mcp")
+    }
+
+    fn make_client() -> TestClient {
+        let root = tempfile::TempDir::new().unwrap();
+        let client = McpClient::new(
             &plico_mcp_bin(),
             &[],
             &[
-                ("PLICO_ROOT", dir.path().to_str().unwrap()),
+                ("PLICO_ROOT", root.path().to_str().unwrap()),
                 ("EMBEDDING_BACKEND", "stub"),
+                ("LLM_BACKEND", "stub"),
             ],
-        ).expect("failed to create MCP client")
+        )
+        .expect("failed to create MCP client");
+        TestClient { client, _root: root }
+    }
+
+    fn call_json(client: &McpClient, name: &str, input: serde_json::Value) -> serde_json::Value {
+        let text = client.call_tool(name, &input).unwrap();
+        serde_json::from_str(&text).unwrap()
     }
 
     #[test]
     fn client_discovers_server_info() {
-        let client = make_client();
-        assert_eq!(client.server_info().name, "plico-mcp");
-        assert_eq!(client.server_info().version, "1.0.0");
+        let fixture = make_client();
+        assert_eq!(fixture.client.server_info().name, "plico-mcp");
+        assert_eq!(fixture.client.server_info().version, env!("CARGO_PKG_VERSION"));
     }
 
     #[test]
-    fn client_discovers_tools() {
-        let client = make_client();
-        let tools = client.tools();
-        assert_eq!(tools.len(), 3, "should have 3 tools: plico, plico_store, plico_skills");
-        let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
-        assert!(names.contains(&"plico"));
-        assert!(names.contains(&"plico_store"));
-        assert!(names.contains(&"plico_skills"));
+    fn client_discovers_exact_public_tool_catalog() {
+        let fixture = make_client();
+        let names: Vec<&str> = fixture.client.tools().iter().map(|tool| tool.name.as_str()).collect();
+        assert_eq!(names, PUBLIC_OPERATIONS);
     }
 
     #[test]
     fn client_put_and_read_roundtrip() {
-        let client = make_client();
-        // Use plico_store put
-        let put_text = client.call_tool("plico_store", &serde_json::json!({
-            "action": "put",
-            "content": "MCP client test content",
-            "tags": ["mcp-client-test"],
-            "agent_id": "test"
-        })).unwrap();
-        let put_resp: serde_json::Value = serde_json::from_str(&put_text).unwrap();
-        assert!(put_resp["ok"].as_bool().unwrap());
-        let cid = put_resp["cid"].as_str().unwrap();
+        let fixture = make_client();
+        let put = call_json(
+            &fixture.client,
+            "object.put",
+            serde_json::json!({
+                "content": "MCP client test content",
+                "tags": ["mcp-client-test"],
+            }),
+        );
+        assert_eq!(put["ok"], true);
+        let cid = put["data"]["result"]["cid"].as_str().unwrap();
 
-        // Use plico_store read
-        let read_text = client.call_tool("plico_store", &serde_json::json!({
-            "action": "read",
-            "cid": cid,
-            "agent_id": "test"
-        })).unwrap();
-        let read_resp: serde_json::Value = serde_json::from_str(&read_text).unwrap();
-        assert_eq!(read_resp["data"].as_str().unwrap(), "MCP client test content");
+        let read = call_json(&fixture.client, "object.get", serde_json::json!({ "cid": cid }));
+        let encoded = read["data"]["result"]["content_base64"].as_str().unwrap();
+        assert_eq!(
+            base64::engine::general_purpose::STANDARD.decode(encoded).unwrap(),
+            b"MCP client test content"
+        );
     }
 
     #[test]
-    fn client_search_api_responds() {
-        let client = make_client();
-        // Store via plico_store
-        let put_text = client.call_tool("plico_store", &serde_json::json!({
-            "action": "put",
-            "content": "Dijkstra shortest path algorithm weighted graph",
-            "tags": ["plico:type:experience", "plico:module:graph"],
-            "agent_id": "test"
-        })).unwrap();
-        let put_resp: serde_json::Value = serde_json::from_str(&put_text).unwrap();
-        let cid = put_resp["cid"].as_str().unwrap();
+    fn client_search_api_returns_typed_diagnostics() {
+        let fixture = make_client();
+        let put = call_json(
+            &fixture.client,
+            "object.put",
+            serde_json::json!({
+                "content": "Dijkstra shortest path algorithm weighted graph",
+                "tags": ["experience", "graph"],
+            }),
+        );
+        let cid = put["data"]["result"]["cid"].as_str().unwrap();
 
-        // Search via plico action — with stub embedding semantic hits may be empty,
-        // but the API must respond with a well-formed result.
-        let text = client.call_tool("plico", &serde_json::json!({
-            "action": "search",
-            "agent_id": "test",
-            "query": "Dijkstra weighted path"
-        })).unwrap();
-        let resp: serde_json::Value = serde_json::from_str(&text).unwrap();
-        assert!(resp["ok"].as_bool().unwrap_or(false), "search should succeed: {}", text);
-        assert!(resp.get("results").is_some(), "search response should contain results field");
+        let search = call_json(
+            &fixture.client,
+            "object.search",
+            serde_json::json!({ "query": "Dijkstra weighted path" }),
+        );
+        assert_eq!(search["ok"], true);
+        assert!(search["data"]["result"]["hits"].is_array());
+        assert!(search["data"]["result"]["retrieval"].is_array());
+        assert!(search["data"]["result"]["embedding_query"].is_object());
 
-        // Verify the stored object can be read back (proves put worked)
-        let read_text = client.call_tool("plico_store", &serde_json::json!({
-            "action": "read",
-            "cid": cid,
-            "agent_id": "test"
-        })).unwrap();
-        let read_resp: serde_json::Value = serde_json::from_str(&read_text).unwrap();
-        assert_eq!(read_resp["data"].as_str().unwrap(), "Dijkstra shortest path algorithm weighted graph");
+        let read = call_json(&fixture.client, "object.get", serde_json::json!({ "cid": cid }));
+        assert_eq!(read["ok"], true);
     }
 
     #[test]
     fn client_unknown_tool_returns_error() {
-        let client = make_client();
-        let result = client.call_tool("nonexistent_tool", &serde_json::json!({}));
-        assert!(result.is_err());
+        let fixture = make_client();
+        assert!(fixture
+            .client
+            .call_tool("nonexistent_tool", &serde_json::json!({}))
+            .is_err());
     }
 
-    // ── ExternalToolProvider trait tests ──────────────────────────────────
-
     #[test]
-    fn trait_provider_name_matches() {
-        let client = make_client();
-        let provider: &dyn ExternalToolProvider = &client;
+    fn trait_provider_discovers_exact_descriptors() {
+        let fixture = make_client();
+        let provider: &dyn ExternalToolProvider = &fixture.client;
         assert_eq!(provider.provider_name(), "plico-mcp");
-    }
-
-    #[test]
-    fn trait_discover_tools_returns_descriptors() {
-        let client = make_client();
-        let provider: &dyn ExternalToolProvider = &client;
-        let tools = provider.discover_tools();
-        assert_eq!(tools.len(), 3);
-        assert!(tools.iter().any(|t| t.name == "plico"));
+        let names: Vec<String> = provider.discover_tools().into_iter().map(|tool| tool.name).collect();
+        assert_eq!(names, PUBLIC_OPERATIONS);
     }
 
     #[test]
     fn trait_call_tool_succeeds() {
-        let client = make_client();
-        let provider: &dyn ExternalToolProvider = &client;
-
-        // Use plico_store put
-        let put_result = provider.call_tool("plico_store", &serde_json::json!({
-            "action": "put",
-            "content": "trait test data",
-            "tags": ["trait-test"],
-            "agent_id": "test"
-        }));
-        assert!(put_result.success, "ExternalToolProvider::call_tool failed: {:?}", put_result.error);
+        let fixture = make_client();
+        let provider: &dyn ExternalToolProvider = &fixture.client;
+        let result = provider.call_tool(
+            "object.put",
+            &serde_json::json!({
+                "content": "trait test data",
+                "tags": ["trait-test"],
+            }),
+        );
+        assert!(result.success, "tool call failed: {:?}", result.error);
     }
 
     #[test]
-    fn kernel_add_tool_provider_integration() {
-        let client = make_client();
-        let provider: Arc<dyn ExternalToolProvider> = Arc::new(client);
-
-        let kernel = {
-            let dir = tempfile::TempDir::new().unwrap();
-            crate::kernel::AIKernel::new(dir.path().to_path_buf()).unwrap()
-        };
+    fn kernel_add_tool_provider_uses_typed_names() {
+        let fixture = make_client();
+        let provider: Arc<dyn ExternalToolProvider> = Arc::new(fixture.client);
+        let root = tempfile::TempDir::new().unwrap();
+        let kernel = crate::kernel::AIKernel::new(root.path().to_path_buf()).unwrap();
 
         let names = kernel.add_tool_provider(provider, "ext");
-        assert_eq!(names.len(), 3);
-        assert!(names.contains(&"ext.plico".to_string()));
-        assert!(names.contains(&"ext.plico_store".to_string()));
+        assert_eq!(names.len(), PUBLIC_OPERATIONS.len());
+        assert!(names.contains(&"ext.object.put".to_string()));
+        assert!(names.contains(&"ext.memory.recall".to_string()));
 
-        let tools = kernel.tool_registry.list();
-        assert!(tools.iter().any(|t| t.name == "ext.plico"));
-
-        let handler = kernel.tool_registry.get_handler("ext.plico_store").expect("handler should exist");
-        let result = handler.execute(&serde_json::json!({
-            "action": "put",
-            "content": "kernel integration test",
-            "tags": ["kernel-test"],
-            "agent_id": "test-agent"
-        }), "test-agent");
+        let handler = kernel
+            .tool_registry
+            .get_handler("ext.object.put")
+            .expect("typed MCP handler should exist");
+        let result = handler.execute(
+            &serde_json::json!({
+                "content": "kernel integration test",
+                "tags": ["kernel-test"],
+            }),
+            "local-cognitive-role",
+        );
         assert!(result.success, "handler failed: {:?}", result.error);
     }
 }

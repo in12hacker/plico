@@ -8,8 +8,8 @@
 
 pub mod writer;
 
-use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
 /// Trace span status.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -84,7 +84,9 @@ impl TraceStore {
 
     /// File path for a specific agent on a specific date.
     pub fn file_path(&self, date: &str, agent_id: &str) -> PathBuf {
-        self.trace_dir().join(date).join(format!("{}.jsonl", sanitize_agent_id(agent_id)))
+        self.trace_dir()
+            .join(date)
+            .join(format!("{}.jsonl", sanitize_agent_id(agent_id)))
     }
 
     /// Clean up trace files older than retention period.
@@ -195,7 +197,16 @@ impl TraceStore {
 
 /// Sanitize agent ID for use as filename (replace non-alphanumeric with underscore).
 fn sanitize_agent_id(agent_id: &str) -> String {
-    agent_id.chars().map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect()
+    agent_id
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
 }
 
 /// Today's date string in YYYY-MM-DD format.

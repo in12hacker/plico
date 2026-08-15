@@ -3,9 +3,7 @@
 //! Tests cover: default policy, grant/revoke, trust bypass,
 //! expiry, and scope restrictions.
 
-use plico::api::permission::{
-    PermissionAction, PermissionContext, PermissionGrant, PermissionGuard,
-};
+use plico::api::permission::{PermissionAction, PermissionContext, PermissionGrant, PermissionGuard};
 
 fn check_ok(guard: &PermissionGuard, agent: &str, action: PermissionAction) {
     let ctx = PermissionContext::new(agent.to_string(), "default".to_string());
@@ -292,8 +290,14 @@ fn test_permission_persistence_roundtrip() {
 fn test_parse_action() {
     assert_eq!(PermissionGuard::parse_action("read"), Some(PermissionAction::Read));
     assert_eq!(PermissionGuard::parse_action("Delete"), Some(PermissionAction::Delete));
-    assert_eq!(PermissionGuard::parse_action("EXECUTE"), Some(PermissionAction::Execute));
-    assert_eq!(PermissionGuard::parse_action("send_message"), Some(PermissionAction::SendMessage));
+    assert_eq!(
+        PermissionGuard::parse_action("EXECUTE"),
+        Some(PermissionAction::Execute)
+    );
+    assert_eq!(
+        PermissionGuard::parse_action("send_message"),
+        Some(PermissionAction::SendMessage)
+    );
     assert_eq!(PermissionGuard::parse_action("all"), Some(PermissionAction::All));
     assert_eq!(PermissionGuard::parse_action("unknown"), None);
 }
@@ -302,15 +306,13 @@ fn test_parse_action() {
 
 #[test]
 fn test_covers_scoped_exact_match() {
-    let grant = PermissionGrant::new(PermissionAction::Execute)
-        .with_scope("tool:web_search");
+    let grant = PermissionGrant::new(PermissionAction::Execute).with_scope("tool:web_search");
     assert!(grant.covers_scoped(PermissionAction::Execute, Some("tool:web_search")));
 }
 
 #[test]
 fn test_covers_scoped_mismatch() {
-    let grant = PermissionGrant::new(PermissionAction::Execute)
-        .with_scope("tool:web_search");
+    let grant = PermissionGrant::new(PermissionAction::Execute).with_scope("tool:web_search");
     assert!(!grant.covers_scoped(PermissionAction::Execute, Some("tool:cas.search")));
 }
 
@@ -323,8 +325,7 @@ fn test_covers_scoped_wildcard_grant() {
 
 #[test]
 fn test_covers_scoped_glob_match() {
-    let grant = PermissionGrant::new(PermissionAction::Execute)
-        .with_scope("tool:*");
+    let grant = PermissionGrant::new(PermissionAction::Execute).with_scope("tool:*");
     assert!(grant.covers_scoped(PermissionAction::Execute, Some("tool:web_search")));
     assert!(grant.covers_scoped(PermissionAction::Execute, Some("tool:cas.search")));
     assert!(!grant.covers_scoped(PermissionAction::Execute, Some("memory:write")));
@@ -340,13 +341,16 @@ fn test_check_scoped_on_guard() {
     );
 
     let ctx = PermissionContext::new("agent1".to_string(), "default".to_string());
-    assert!(guard.check_scoped(&ctx, PermissionAction::Execute, Some("tool:cas.search")).is_ok());
-    assert!(guard.check_scoped(&ctx, PermissionAction::Execute, Some("tool:web_search")).is_err());
+    assert!(guard
+        .check_scoped(&ctx, PermissionAction::Execute, Some("tool:cas.search"))
+        .is_ok());
+    assert!(guard
+        .check_scoped(&ctx, PermissionAction::Execute, Some("tool:web_search"))
+        .is_err());
 }
 
 #[test]
 fn test_covers_scoped_backward_compat() {
-    let grant = PermissionGrant::new(PermissionAction::Execute)
-        .with_scope("tool:web_search");
+    let grant = PermissionGrant::new(PermissionAction::Execute).with_scope("tool:web_search");
     assert!(grant.covers(PermissionAction::Execute));
 }

@@ -11,8 +11,9 @@ dependencies = [
     "httpx>=0.27",
     "numpy>=1.26",
     "requests>=2.31",
-    "sentence-transformers>=3.0",
     "datasets>=2.14",
+    "bm25s==0.3.10",
+    "ir-measures==0.4.3",
     "tqdm>=4.66",
 ]
 

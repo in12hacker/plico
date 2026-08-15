@@ -80,7 +80,10 @@ pub fn extract_facts(llm: &dyn LlmProvider, text: &str) -> Vec<ExtractedFact> {
     }
 
     let prompt = FACT_EXTRACTION_PROMPT.replace("{text}", text);
-    let opts = ChatOptions { temperature: 0.0, max_tokens: Some(500) };
+    let opts = ChatOptions {
+        temperature: 0.0,
+        max_tokens: Some(500),
+    };
     let msgs = [
         ChatMessage::system("You are a fact extraction engine. Output only the requested format."),
         ChatMessage::user(prompt),
@@ -95,8 +98,12 @@ pub fn extract_facts(llm: &dyn LlmProvider, text: &str) -> Vec<ExtractedFact> {
                 facts
             }
         }
-        Err(e) => {
-            tracing::warn!("fact extraction LLM call failed: {e}, using passthrough");
+        Err(_) => {
+            tracing::warn!(
+                outcome = "degraded",
+                error_category = "llm_fact_extraction_failed",
+                "fact extraction unavailable; using passthrough"
+            );
             vec![passthrough_fact(text)]
         }
     }
@@ -202,10 +209,7 @@ pub fn extract_preference_signals(text: &str) -> Vec<ExtractedFact> {
             if !value.is_empty() {
                 let synthetic = format!("{prefix}{value}");
                 let entities = extract_entities_regex(value);
-                let mut tags = vec![
-                    "preference".to_string(),
-                    "synthetic".to_string(),
-                ];
+                let mut tags = vec!["preference".to_string(), "synthetic".to_string()];
                 for e in &entities {
                     tags.push(format!("entity:{}", e.to_lowercase()));
                 }
@@ -230,14 +234,17 @@ pub fn extract_entities_regex(text: &str) -> Vec<String> {
 
     for word in text.split_whitespace() {
         let clean = word.trim_matches(|c: char| !c.is_alphanumeric());
-        if clean.len() < 2 { continue; }
+        if clean.len() < 2 {
+            continue;
+        }
 
         let first_char = clean.chars().next().unwrap();
         if first_char.is_uppercase() && clean.len() > 1 {
-            let skip_words = ["The", "This", "That", "What", "When", "Where",
-                "How", "Why", "Who", "Which", "And", "But", "For", "Not",
-                "Are", "Was", "Were", "Has", "Have", "Had", "Can", "Could",
-                "Will", "Would", "Should", "May", "Must", "Its", "Our"];
+            let skip_words = [
+                "The", "This", "That", "What", "When", "Where", "How", "Why", "Who", "Which", "And", "But", "For",
+                "Not", "Are", "Was", "Were", "Has", "Have", "Had", "Can", "Could", "Will", "Would", "Should", "May",
+                "Must", "Its", "Our",
+            ];
             if !skip_words.contains(&clean) {
                 let lower = clean.to_lowercase();
                 if seen.insert(lower) {
@@ -254,14 +261,57 @@ pub fn extract_entities_regex(text: &str) -> Vec<String> {
 fn extract_temporal_hint(text: &str) -> Option<String> {
     let lower = text.to_lowercase();
     let temporal_patterns = [
-        "yesterday", "today", "tomorrow", "last week", "this week", "next week",
-        "last month", "this month", "next month", "last year", "ago",
-        "recently", "just now", "earlier", "later", "morning", "evening",
-        "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
-        "january", "february", "march", "april", "may", "june",
-        "july", "august", "september", "october", "november", "december",
-        "昨天", "今天", "明天", "上周", "本周", "下周", "上个月", "本月", "下个月",
-        "去年", "今年", "明年", "前天", "最近", "刚才",
+        "yesterday",
+        "today",
+        "tomorrow",
+        "last week",
+        "this week",
+        "next week",
+        "last month",
+        "this month",
+        "next month",
+        "last year",
+        "ago",
+        "recently",
+        "just now",
+        "earlier",
+        "later",
+        "morning",
+        "evening",
+        "monday",
+        "tuesday",
+        "wednesday",
+        "thursday",
+        "friday",
+        "saturday",
+        "sunday",
+        "january",
+        "february",
+        "march",
+        "april",
+        "may",
+        "june",
+        "july",
+        "august",
+        "september",
+        "october",
+        "november",
+        "december",
+        "昨天",
+        "今天",
+        "明天",
+        "上周",
+        "本周",
+        "下周",
+        "上个月",
+        "本月",
+        "下个月",
+        "去年",
+        "今年",
+        "明年",
+        "前天",
+        "最近",
+        "刚才",
     ];
 
     for pattern in &temporal_patterns {
@@ -271,9 +321,8 @@ fn extract_temporal_hint(text: &str) -> Option<String> {
     }
 
     // Check for date-like patterns (YYYY-MM-DD, MM/DD, etc.)
-    let has_date = text.chars().any(|c| c.is_ascii_digit())
-        && (text.contains('/') || text.contains('-'))
-        && text.len() > 5;
+    let has_date =
+        text.chars().any(|c| c.is_ascii_digit()) && (text.contains('/') || text.contains('-')) && text.len() > 5;
     if has_date {
         return Some("date_reference".to_string());
     }
@@ -331,7 +380,9 @@ mod tests {
             fn chat(&self, _: &[ChatMessage], _: &ChatOptions) -> Result<(String, u32, u32), crate::llm::LlmError> {
                 Ok(("".into(), 0, 0))
             }
-            fn model_name(&self) -> &str { "dummy" }
+            fn model_name(&self) -> &str {
+                "dummy"
+            }
         }
         let facts = extract_facts(&DummyLlm, "hi");
         assert_eq!(facts.len(), 1);

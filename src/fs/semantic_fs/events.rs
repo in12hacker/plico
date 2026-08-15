@@ -2,7 +2,7 @@
 
 use std::collections::HashSet;
 
-use crate::fs::graph::{KGNode, KGNodeType, KGEdge, KGEdgeType};
+use crate::fs::graph::{KGEdge, KGEdgeType, KGNode, KGNodeType};
 use crate::fs::types::{EventMeta, EventRelation, EventSummary, EventType, FSError};
 use crate::temporal::TemporalResolver;
 
@@ -32,7 +32,15 @@ fn relation_to_edge_type(rel: EventRelation) -> KGEdgeType {
 impl SemanticFS {
     /// Create an event container — stored as a KG node with EventMeta.
     pub fn create_event(&self, params: CreateEventParams<'_>) -> Result<String, FSError> {
-        let CreateEventParams { label, event_type, start_time, end_time, location, tags, agent_id } = params;
+        let CreateEventParams {
+            label,
+            event_type,
+            start_time,
+            end_time,
+            location,
+            tags,
+            agent_id,
+        } = params;
         let node_id = format!("evt:{}", uuid::Uuid::new_v4());
 
         if let Some(ref kg) = self.knowledge_graph {
@@ -69,8 +77,7 @@ impl SemanticFS {
                 tag_index.entry(tag.clone()).or_default().push(node_id.clone());
             }
             drop(tag_index);
-            self.persist_tag_index()
-                .map_err(FSError::Io)?;
+            self.persist_tag_index().map_err(FSError::Io)?;
         }
 
         Ok(node_id)
@@ -98,7 +105,9 @@ impl SemanticFS {
             for tag in tags {
                 let ids = tag_index.get(tag);
                 // Tag not in index → no candidate can match ALL required tags
-                let Some(set) = ids else { return Ok(Vec::new()); };
+                let Some(set) = ids else {
+                    return Ok(Vec::new());
+                };
                 let set: HashSet<String> = set.iter().cloned().collect();
                 match intersection.take() {
                     Some(existing) => intersection = Some(existing.intersection(&set).cloned().collect()),
@@ -114,7 +123,9 @@ impl SemanticFS {
                 Ok(Some(n)) => n,
                 _ => continue,
             };
-            if node.node_type != KGNodeType::Entity { continue; }
+            if node.node_type != KGNodeType::Entity {
+                continue;
+            }
 
             // L-2 / B14: Filter by agent_id if specified
             if let Some(aid) = agent_id {
@@ -127,9 +138,13 @@ impl SemanticFS {
                 Ok(m) => m,
                 Err(_) => continue,
             };
-            if !meta.in_range(since, until) { continue; }
+            if !meta.in_range(since, until) {
+                continue;
+            }
             if let Some(et) = event_type {
-                if meta.event_type != et { continue; }
+                if meta.event_type != et {
+                    continue;
+                }
             }
             results.push(EventSummary {
                 id: node.id,
@@ -155,14 +170,17 @@ impl SemanticFS {
         resolver: &dyn TemporalResolver,
         agent_id: Option<&str>,
     ) -> Result<Vec<EventSummary>, FSError> {
-        let range = resolver.resolve(time_expression, None)
-            .ok_or_else(|| {
-                FSError::Io(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    format!("Cannot resolve time expression: {time_expression}"),
-                ))
-            })?;
-        let since = if range.since >= 0 { Some(range.since as u64) } else { None };
+        let range = resolver.resolve(time_expression, None).ok_or_else(|| {
+            FSError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("Cannot resolve time expression: {time_expression}"),
+            ))
+        })?;
+        let since = if range.since >= 0 {
+            Some(range.since as u64)
+        } else {
+            None
+        };
         let until = Some(range.until as u64);
         self.list_events(since, until, tags, event_type, agent_id)
     }
@@ -175,7 +193,9 @@ impl SemanticFS {
         relation: EventRelation,
         _agent_id: &str,
     ) -> Result<(), FSError> {
-        let kg = self.knowledge_graph.as_ref()
+        let kg = self
+            .knowledge_graph
+            .as_ref()
             .ok_or_else(|| FSError::Io(std::io::Error::other("knowledge graph not initialized")))?;
 
         let edge = KGEdge::new_with_episode(
@@ -188,7 +208,8 @@ impl SemanticFS {
         kg.add_edge(edge)
             .map_err(|e| FSError::Io(std::io::Error::other(e.to_string())))?;
 
-        let mut node = kg.get_node(event_id)
+        let mut node = kg
+            .get_node(event_id)
             .map_err(|e| FSError::Io(std::io::Error::other(e.to_string())))?
             .ok_or_else(|| FSError::Io(std::io::Error::new(std::io::ErrorKind::NotFound, "event not found")))?;
         let mut meta: EventMeta = serde_json::from_value(node.properties.clone())
@@ -232,12 +253,12 @@ impl RuleBasedResolver {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
-    use tempfile::tempdir;
     use crate::cas::storage::CASStorage;
     use crate::fs::embedding::StubEmbeddingProvider;
-    use crate::fs::search::InMemoryBackend;
     use crate::fs::graph::PetgraphBackend;
+    use crate::fs::search::InMemoryBackend;
+    use std::sync::Arc;
+    use tempfile::tempdir;
 
     fn make_fs() -> (SemanticFS, tempfile::TempDir) {
         let dir = tempdir().unwrap();
@@ -249,7 +270,8 @@ mod tests {
             Arc::new(InMemoryBackend::new()),
             None,
             None,
-        ).unwrap();
+        )
+        .unwrap();
         (fs, dir)
     }
 
@@ -263,7 +285,8 @@ mod tests {
             Arc::new(InMemoryBackend::new()),
             None,
             Some(Arc::new(PetgraphBackend::new())),
-        ).unwrap();
+        )
+        .unwrap();
         (fs, dir)
     }
 
@@ -271,10 +294,19 @@ mod tests {
 
     #[test]
     fn test_relation_to_edge_type() {
-        assert_eq!(relation_to_edge_type(EventRelation::Participant), KGEdgeType::HasParticipant);
+        assert_eq!(
+            relation_to_edge_type(EventRelation::Participant),
+            KGEdgeType::HasParticipant
+        );
         assert_eq!(relation_to_edge_type(EventRelation::Artifact), KGEdgeType::HasArtifact);
-        assert_eq!(relation_to_edge_type(EventRelation::Recording), KGEdgeType::HasRecording);
-        assert_eq!(relation_to_edge_type(EventRelation::Resolution), KGEdgeType::HasResolution);
+        assert_eq!(
+            relation_to_edge_type(EventRelation::Recording),
+            KGEdgeType::HasRecording
+        );
+        assert_eq!(
+            relation_to_edge_type(EventRelation::Resolution),
+            KGEdgeType::HasResolution
+        );
     }
 
     // ─── create_event ────────────────────────────────────────────────────────
@@ -283,7 +315,17 @@ mod tests {
     fn test_create_event_returns_valid_id() {
         // Works even without KG
         let (fs, _dir) = make_fs();
-        let id = fs.create_event(CreateEventParams { label: "test-event", event_type: EventType::Task, start_time: None, end_time: None, location: None, tags: vec![], agent_id: "agent1" }).unwrap();
+        let id = fs
+            .create_event(CreateEventParams {
+                label: "test-event",
+                event_type: EventType::Task,
+                start_time: None,
+                end_time: None,
+                location: None,
+                tags: vec![],
+                agent_id: "agent1",
+            })
+            .unwrap();
         assert!(id.starts_with("evt:"));
     }
 
@@ -291,17 +333,21 @@ mod tests {
     fn test_create_event_with_tags() {
         // Requires KG for list_events to work
         let (fs, _dir) = make_fs_with_kg();
-        let _id = fs.create_event(CreateEventParams {
-            label: "tagged-event",
-            event_type: EventType::Task,
-            start_time: None,
-            end_time: None,
-            location: Some("room-1"),
-            tags: vec!["meeting".to_string(), "weekly".to_string()],
-            agent_id: "agent1",
-        }).unwrap();
+        let _id = fs
+            .create_event(CreateEventParams {
+                label: "tagged-event",
+                event_type: EventType::Task,
+                start_time: None,
+                end_time: None,
+                location: Some("room-1"),
+                tags: vec!["meeting".to_string(), "weekly".to_string()],
+                agent_id: "agent1",
+            })
+            .unwrap();
         // List events should find it
-        let events = fs.list_events(None, None, &["meeting".to_string()], None, None).unwrap();
+        let events = fs
+            .list_events(None, None, &["meeting".to_string()], None, None)
+            .unwrap();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].label, "tagged-event");
     }
@@ -310,16 +356,20 @@ mod tests {
     fn test_create_event_with_time_range() {
         let (fs, _dir) = make_fs_with_kg();
         let now = chrono::Utc::now().timestamp_millis() as u64;
-        let id = fs.create_event(CreateEventParams {
-            label: "timed-event",
-            event_type: EventType::Task,
-            start_time: Some(now - 3_600_000),
-            end_time: Some(now),
-            location: None,
-            tags: vec![],
-            agent_id: "agent1",
-        }).unwrap();
-        let events = fs.list_events(Some(now - 86_400_000), Some(now + 1000), &[], None, None).unwrap();
+        let id = fs
+            .create_event(CreateEventParams {
+                label: "timed-event",
+                event_type: EventType::Task,
+                start_time: Some(now - 3_600_000),
+                end_time: Some(now),
+                location: None,
+                tags: vec![],
+                agent_id: "agent1",
+            })
+            .unwrap();
+        let events = fs
+            .list_events(Some(now - 86_400_000), Some(now + 1000), &[], None, None)
+            .unwrap();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].id, id);
     }
@@ -336,8 +386,26 @@ mod tests {
     #[test]
     fn test_list_events_filters_by_agent() {
         let (fs, _dir) = make_fs_with_kg();
-        fs.create_event(CreateEventParams { label: "event-a", event_type: EventType::Task, start_time: None, end_time: None, location: None, tags: vec![], agent_id: "agent-a" }).unwrap();
-        fs.create_event(CreateEventParams { label: "event-b", event_type: EventType::Task, start_time: None, end_time: None, location: None, tags: vec![], agent_id: "agent-b" }).unwrap();
+        fs.create_event(CreateEventParams {
+            label: "event-a",
+            event_type: EventType::Task,
+            start_time: None,
+            end_time: None,
+            location: None,
+            tags: vec![],
+            agent_id: "agent-a",
+        })
+        .unwrap();
+        fs.create_event(CreateEventParams {
+            label: "event-b",
+            event_type: EventType::Task,
+            start_time: None,
+            end_time: None,
+            location: None,
+            tags: vec![],
+            agent_id: "agent-b",
+        })
+        .unwrap();
 
         let events_a = fs.list_events(None, None, &[], None, Some("agent-a")).unwrap();
         assert_eq!(events_a.len(), 1);
@@ -350,8 +418,26 @@ mod tests {
     #[test]
     fn test_list_events_filters_by_type() {
         let (fs, _dir) = make_fs_with_kg();
-        fs.create_event(CreateEventParams { label: "task-e", event_type: EventType::Task, start_time: None, end_time: None, location: None, tags: vec![], agent_id: "a" }).unwrap();
-        fs.create_event(CreateEventParams { label: "meet-e", event_type: EventType::Task, start_time: None, end_time: None, location: None, tags: vec![], agent_id: "a" }).unwrap();
+        fs.create_event(CreateEventParams {
+            label: "task-e",
+            event_type: EventType::Task,
+            start_time: None,
+            end_time: None,
+            location: None,
+            tags: vec![],
+            agent_id: "a",
+        })
+        .unwrap();
+        fs.create_event(CreateEventParams {
+            label: "meet-e",
+            event_type: EventType::Task,
+            start_time: None,
+            end_time: None,
+            location: None,
+            tags: vec![],
+            agent_id: "a",
+        })
+        .unwrap();
 
         let tasks = fs.list_events(None, None, &[], Some(EventType::Task), None).unwrap();
         assert_eq!(tasks.len(), 2); // both are Task type
@@ -362,12 +448,36 @@ mod tests {
         let (fs, _dir) = make_fs_with_kg();
         let now = chrono::Utc::now().timestamp_millis() as u64;
         // Event starts 2 days ago, ends yesterday — fully within [since, until]
-        fs.create_event(CreateEventParams { label: "old", event_type: EventType::Task, start_time: Some(now - 86_400_000), end_time: Some(now - 43_200_000), location: None, tags: vec![], agent_id: "a" }).unwrap();
-        fs.create_event(CreateEventParams { label: "ancient", event_type: EventType::Task, start_time: Some(now - 864_000_000), end_time: None, location: None, tags: vec![], agent_id: "a" }).unwrap();
+        fs.create_event(CreateEventParams {
+            label: "old",
+            event_type: EventType::Task,
+            start_time: Some(now - 86_400_000),
+            end_time: Some(now - 43_200_000),
+            location: None,
+            tags: vec![],
+            agent_id: "a",
+        })
+        .unwrap();
+        fs.create_event(CreateEventParams {
+            label: "ancient",
+            event_type: EventType::Task,
+            start_time: Some(now - 864_000_000),
+            end_time: None,
+            location: None,
+            tags: vec![],
+            agent_id: "a",
+        })
+        .unwrap();
 
         // [since, until] = [now - 86_400_000, now]
-        let events = fs.list_events(Some(now - 86_400_000), Some(now), &[], None, None).unwrap();
-        assert_eq!(events.len(), 1, "only 'old' within range (ancient starts at now-864000000)");
+        let events = fs
+            .list_events(Some(now - 86_400_000), Some(now), &[], None, None)
+            .unwrap();
+        assert_eq!(
+            events.len(),
+            1,
+            "only 'old' within range (ancient starts at now-864000000)"
+        );
         assert_eq!(events[0].label, "old");
     }
 
@@ -377,7 +487,17 @@ mod tests {
     fn test_event_attach_requires_kg() {
         let (fs, _dir) = make_fs();
         // Without KG, event_attach should fail
-        let id = fs.create_event(CreateEventParams { label: "no-kg-event", event_type: EventType::Task, start_time: None, end_time: None, location: None, tags: vec![], agent_id: "a" }).unwrap();
+        let id = fs
+            .create_event(CreateEventParams {
+                label: "no-kg-event",
+                event_type: EventType::Task,
+                start_time: None,
+                end_time: None,
+                location: None,
+                tags: vec![],
+                agent_id: "a",
+            })
+            .unwrap();
         let result = fs.event_attach(&id, "target-id", EventRelation::Participant, "a");
         assert!(result.is_err());
     }
@@ -395,4 +515,3 @@ mod tests {
         assert!((6 * 86_400_000..=8 * 86_400_000).contains(&diff));
     }
 }
-

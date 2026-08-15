@@ -3,10 +3,10 @@
 //! Fulfills Soul 3.0 Axiom 7: "All active optimization behaviors are observable."
 //! Provides actionable recovery hints for Agents to self-heal their cognitive environment.
 
+use crate::util::now_ms;
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::sync::RwLock;
-use serde::{Deserialize, Serialize};
-use crate::util::now_ms;
 
 /// Maximum number of diagnostic entries to keep in memory.
 const MAX_DIAGNOSTICS: usize = 1000;
@@ -82,7 +82,8 @@ impl DiagnosticStore {
 
     pub fn list_for_agent(&self, agent_id: &str) -> Vec<DiagnosticReport> {
         let reports = self.reports.read().unwrap();
-        reports.iter()
+        reports
+            .iter()
             .filter(|r| r.agent_id == agent_id && r.status == DiagnosticStatus::Pending)
             .cloned()
             .collect()

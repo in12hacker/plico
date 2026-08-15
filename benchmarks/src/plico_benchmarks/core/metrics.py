@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 import re
 import statistics
+from collections import Counter
 from typing import Any
 
 import numpy as np
@@ -12,15 +13,15 @@ import numpy as np
 
 def token_level_f1(pred: str, ref: str) -> float:
     """Compute token-level F1 after normalization."""
-    pred_tokens = set(_normalize(pred).split())
-    ref_tokens = set(_normalize(ref).split())
+    pred_tokens = _normalize(pred).split()
+    ref_tokens = _normalize(ref).split()
     if not pred_tokens and not ref_tokens:
         return 1.0
     if not pred_tokens or not ref_tokens:
         return 0.0
-    common = pred_tokens & ref_tokens
-    prec = len(common) / len(pred_tokens)
-    rec = len(common) / len(ref_tokens)
+    common = sum((Counter(pred_tokens) & Counter(ref_tokens)).values())
+    prec = common / len(pred_tokens)
+    rec = common / len(ref_tokens)
     if prec + rec == 0:
         return 0.0
     return 2 * prec * rec / (prec + rec)
@@ -53,7 +54,11 @@ def bleu1(pred: str, ref: str) -> float:
     for t, c in pred_counts.items():
         clipped += min(c, ref_counts.get(t, 0))
     precision = clipped / len(pred_tokens)
-    bp = math.exp(1 - len(ref_tokens) / len(pred_tokens)) if len(pred_tokens) < len(ref_tokens) else 1.0
+    bp = (
+        math.exp(1 - len(ref_tokens) / len(pred_tokens))
+        if len(pred_tokens) < len(ref_tokens)
+        else 1.0
+    )
     return precision * bp
 
 
@@ -83,21 +88,44 @@ def mrr(relevants: set[Any], retrieved: list[Any]) -> float:
     return 0.0
 
 
-def compute_statistics(values: list[float]) -> dict[str, float]:
-    """Compute mean, std, and 95% CI."""
+def compute_statistics(
+    values: list[float], *, seed: int = 42, bootstrap_resamples: int = 10_000
+) -> dict[str, float | int | str]:
+    """Compute descriptive statistics and a deterministic bootstrap mean CI."""
     if not values:
-        return {"mean": 0.0, "std": 0.0, "ci95_low": 0.0, "ci95_high": 0.0}
-    arr = np.array(values)
+        return {
+            "count": 0,
+            "mean": 0.0,
+            "median": 0.0,
+            "std": 0.0,
+            "ci95_low": 0.0,
+            "ci95_high": 0.0,
+            "ci_method": "paired_sample_bootstrap_percentile_v1",
+            "bootstrap_resamples": bootstrap_resamples,
+        }
+    if bootstrap_resamples < 1000:
+        raise ValueError("bootstrap_resamples must be at least 1000")
+    arr = np.asarray(values, dtype=np.float64)
+    if not np.isfinite(arr).all():
+        raise ValueError("statistics input contains a non-finite value")
     mean = float(np.mean(arr))
     std = float(np.std(arr, ddof=1)) if len(arr) > 1 else 0.0
-    sem = std / math.sqrt(len(arr))
-    # approximate 95% CI using t-distribution (large n ~ 1.96)
-    z = 1.96 if len(arr) >= 30 else 2.228  # t-value for df=10 approx
+    rng = np.random.default_rng(seed)
+    means = np.empty(bootstrap_resamples, dtype=np.float64)
+    for offset in range(0, bootstrap_resamples, 1000):
+        count = min(1000, bootstrap_resamples - offset)
+        indices = rng.integers(0, len(arr), size=(count, len(arr)))
+        means[offset : offset + count] = arr[indices].mean(axis=1)
+    low, high = np.percentile(means, [2.5, 97.5])
     return {
+        "count": len(arr),
         "mean": mean,
+        "median": float(np.median(arr)),
         "std": std,
-        "ci95_low": mean - z * sem,
-        "ci95_high": mean + z * sem,
+        "ci95_low": float(low),
+        "ci95_high": float(high),
+        "ci_method": "paired_sample_bootstrap_percentile_v1",
+        "bootstrap_resamples": bootstrap_resamples,
     }
 
 
@@ -117,7 +145,7 @@ def estimate_tokens(text: str) -> int:
     if not text:
         return 0
     # Count CJK characters (roughly 1 token each)
-    cjk = sum(1 for c in text if '\u4e00' <= c <= '\u9fff')
+    cjk = sum(1 for c in text if "\u4e00" <= c <= "\u9fff")
     remaining = len(text) - cjk
     return cjk + max(1, remaining // 4)
 
@@ -153,8 +181,12 @@ def aggregate_category(
         llm_scores = [r["llm_score"] for r in items if "llm_score" in r]
         summary[cat] = {
             "count": len(items),
-            "f1": statistics.mean([r["f1"] for r in items]) if any("f1" in r for r in items) else None,
-            "em": statistics.mean([r["em"] for r in items]) if any("em" in r for r in items) else None,
+            "f1": (
+                statistics.mean([r["f1"] for r in items]) if any("f1" in r for r in items) else None
+            ),
+            "em": (
+                statistics.mean([r["em"] for r in items]) if any("em" in r for r in items) else None
+            ),
             "llm_score": statistics.mean(llm_scores) if llm_scores else None,
             "accuracy_pct": accuracy_pct(llm_scores) if llm_scores else None,
         }

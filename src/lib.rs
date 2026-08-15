@@ -13,27 +13,36 @@
 //! - [`api`] — AI-friendly semantic API (permission + semantic protocol)
 //! - [`temporal`] — Temporal reasoning (natural language time → time ranges)
 
-pub mod cas;
-pub mod memory;
-pub mod scheduler;
-pub mod fs;
-pub mod kernel;
 pub mod api;
-pub mod temporal;
-pub mod tool;
-pub mod intent;
-pub mod llm;
-pub mod mcp;
+pub mod cas;
 pub mod client;
 pub mod config;
+pub mod fs;
+pub mod intent;
+pub mod kernel;
+pub mod llm;
+pub mod mcp;
+pub mod memory;
 pub mod prompt;
+pub mod scheduler;
+pub mod temporal;
+pub mod tool;
 pub mod util;
 
 /// Default tenant ID used when no tenant is specified.
 pub const DEFAULT_TENANT: &str = "default";
 
+/// Stable trusted role identity of the owner of the personal vault.
+pub const PERSONAL_OWNER_ROLE_ID: &str = "personal-owner";
+
+/// Serializes only scoped tracing-capture tests because tracing callsite
+/// interest caches are process-global. Poison is explicitly recoverable so a
+/// failing canary cannot cascade into unrelated tests.
+#[cfg(test)]
+pub(crate) static TRACE_CAPTURE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 // Permission re-exports for ergonomic access
-pub use api::permission::{PermissionGuard, PermissionContext, PermissionAction, PermissionGrant};
+pub use api::permission::{PermissionAction, PermissionContext, PermissionGrant, PermissionGuard};
 
 pub use cas::object::{AIObject, AIObjectMeta};
 pub use cas::storage::CASStorage;

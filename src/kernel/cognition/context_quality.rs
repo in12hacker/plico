@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use crate::cas::CASStorage;
 use crate::fs::embedding::EmbeddingProvider;
-use crate::fs::graph::{KnowledgeGraph, KGEdgeType};
+use crate::fs::graph::{KGEdgeType, KnowledgeGraph};
 use crate::fs::search::SemanticSearch;
 use crate::memory::LayeredMemory;
 
@@ -75,7 +75,16 @@ pub struct ContextQualityEngine {
     cas: Arc<CASStorage>,
 }
 
-const TEMPORARY_TAGS: &[&str] = &["temp", "debug", "scratch", "log", "stderr", "stdout", "tmp", "ephemeral"];
+const TEMPORARY_TAGS: &[&str] = &[
+    "temp",
+    "debug",
+    "scratch",
+    "log",
+    "stderr",
+    "stdout",
+    "tmp",
+    "ephemeral",
+];
 
 impl ContextQualityEngine {
     pub fn new(
@@ -120,11 +129,16 @@ impl ContextQualityEngine {
 
             let tags = self.cid_tags(cid);
             let lower_tags: Vec<String> = tags.iter().map(|t| t.to_lowercase()).collect();
-            let is_temp = TEMPORARY_TAGS.iter().any(|t| lower_tags.iter().any(|lt| lt.contains(t)));
+            let is_temp = TEMPORARY_TAGS
+                .iter()
+                .any(|t| lower_tags.iter().any(|lt| lt.contains(t)));
 
             if is_temp {
                 breakdown.temporary_data += tokens;
-            } else if lower_tags.iter().any(|t| t.starts_with("skill:") || t.contains("procedural")) {
+            } else if lower_tags
+                .iter()
+                .any(|t| t.starts_with("skill:") || t.contains("procedural"))
+            {
                 breakdown.procedural_info += tokens;
             } else {
                 breakdown.core_knowledge += tokens;
@@ -136,9 +150,13 @@ impl ContextQualityEngine {
         let mut redundant_tokens = 0usize;
         let mut seen_redundant = std::collections::HashSet::new();
         for (i, emb_i) in embeddings.iter().enumerate() {
-            if emb_i.is_empty() { continue; }
+            if emb_i.is_empty() {
+                continue;
+            }
             for (j, emb_j) in embeddings.iter().enumerate().skip(i + 1) {
-                if emb_j.is_empty() { continue; }
+                if emb_j.is_empty() {
+                    continue;
+                }
                 if cosine_similarity(emb_i, emb_j) > 0.95 && !seen_redundant.contains(&j) {
                     redundant_tokens += self.cid_token_count(&context_cids[j]);
                     seen_redundant.insert(j);
@@ -163,7 +181,8 @@ impl ContextQualityEngine {
         // Calculate quality score
         let total = total_tokens as f32;
         let score = if total > 0.0 {
-            let noise_ratio = (breakdown.temporary_data + breakdown.redundant_info + breakdown.stale_info) as f32 / total;
+            let noise_ratio =
+                (breakdown.temporary_data + breakdown.redundant_info + breakdown.stale_info) as f32 / total;
             (1.0 - noise_ratio).clamp(0.0, 1.0)
         } else {
             1.0
@@ -341,15 +360,18 @@ impl ContextQualityEngine {
         // Concatenate into a summary document (cap at ~2000 chars total)
         let mut summary = String::new();
         for (i, part) in parts.iter().enumerate() {
-            if summary.len() > 2000 { break; }
-            if i > 0 { summary.push_str("\n---\n"); }
+            if summary.len() > 2000 {
+                break;
+            }
+            if i > 0 {
+                summary.push_str("\n---\n");
+            }
             summary.push_str(part);
         }
 
         // Store summary as CAS object
         use crate::cas::AIObject;
-        let meta = crate::cas::AIObjectMeta::text(["summary", "l0", "auto-generated"])
-            .with_agent(agent_id);
+        let meta = crate::cas::AIObjectMeta::text(["summary", "l0", "auto-generated"]).with_agent(agent_id);
         let obj = AIObject::new(summary.into_bytes(), meta);
         let cid = obj.cid.clone();
         match self.cas.put(&obj) {
@@ -387,7 +409,8 @@ impl ContextQualityEngine {
 
     /// 获取CID的实际token数量（按字符数估算，~4 chars/token）
     fn cid_token_count(&self, cid: &str) -> usize {
-        self.cas.get_raw(cid)
+        self.cas
+            .get_raw(cid)
             .ok()
             .map(|obj| (obj.data.len() / 4).max(1))
             .unwrap_or(0)
@@ -395,21 +418,15 @@ impl ContextQualityEngine {
 
     /// 获取CID的元数据标签
     fn cid_tags(&self, cid: &str) -> Vec<String> {
-        self.cas.get_raw(cid)
-            .ok()
-            .map(|obj| obj.meta.tags)
-            .unwrap_or_default()
+        self.cas.get_raw(cid).ok().map(|obj| obj.meta.tags).unwrap_or_default()
     }
 
     /// 在因果图谱中查找覆盖者（Supersedes边）
-    async fn find_superseder(
-        &self,
-        kg: &Arc<dyn KnowledgeGraph>,
-        cid: &str,
-    ) -> CognitiveResult<Option<String>> {
+    async fn find_superseder(&self, kg: &Arc<dyn KnowledgeGraph>, cid: &str) -> CognitiveResult<Option<String>> {
         // Supersedes边方向: new_cid --Supersedes--> old_cid
         // 所以查old_cid的incoming Supersedes边可以找到new_cid
-        let neighbors = kg.get_neighbors(cid, Some(KGEdgeType::Supersedes), 1)
+        let neighbors = kg
+            .get_neighbors(cid, Some(KGEdgeType::Supersedes), 1)
             .map_err(|e| super::CognitiveError::AnalysisFailed(e.to_string()))?;
         // 返回最近的superseder
         Ok(neighbors.first().map(|(node, _)| node.id.clone()))
@@ -428,9 +445,9 @@ impl ContextQualityEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
     use crate::fs::graph::backend::PetgraphBackend;
     use crate::fs::graph::types::{KGEdge, KGNode, KGNodeType};
+    use std::sync::Arc;
 
     fn make_engine() -> (ContextQualityEngine, Arc<CASStorage>, tempfile::TempDir) {
         let dir = tempfile::tempdir().unwrap();
@@ -554,7 +571,10 @@ mod tests {
         }
         let quality = engine.analyze("agent-1", &cids).await.unwrap();
         // Should detect high temporary ratio
-        let has_temp_issue = quality.issues.iter().any(|i| matches!(i, ContextIssue::HighTemporaryRatio { .. }));
+        let has_temp_issue = quality
+            .issues
+            .iter()
+            .any(|i| matches!(i, ContextIssue::HighTemporaryRatio { .. }));
         // With all temp content, ratio should be > 0.2
         assert!(has_temp_issue || quality.breakdown.temporary_data > 0);
     }
@@ -646,7 +666,12 @@ mod tests {
         assert!(!engine.is_temporary(&cid2).await.unwrap());
     }
 
-    fn make_engine_with_kg() -> (ContextQualityEngine, Arc<CASStorage>, Arc<PetgraphBackend>, tempfile::TempDir) {
+    fn make_engine_with_kg() -> (
+        ContextQualityEngine,
+        Arc<CASStorage>,
+        Arc<PetgraphBackend>,
+        tempfile::TempDir,
+    ) {
         let dir = tempfile::tempdir().unwrap();
         let cas = Arc::new(CASStorage::new(dir.path().join("cas")).unwrap());
         let embedding = Arc::new(crate::fs::StubEmbeddingProvider::new());
@@ -689,7 +714,12 @@ mod tests {
     async fn test_find_superseder_no_kg_edge() {
         let (engine, cas, kg, _dir) = make_engine_with_kg();
         let cid = store_text_object(&cas, "standalone doc", &["knowledge"]);
-        let mut node = KGNode::new("standalone".into(), KGNodeType::Document, "test".into(), "default".into());
+        let mut node = KGNode::new(
+            "standalone".into(),
+            KGNodeType::Document,
+            "test".into(),
+            "default".into(),
+        );
         node.id = cid.clone();
         node.content_cid = Some(cid.clone());
         kg.add_node(node).unwrap();
@@ -737,7 +767,10 @@ mod tests {
         add_supersedes_edge(&kg, &new_cid, &old_cid);
 
         let quality = engine.analyze("agent-1", &[old_cid]).await.unwrap();
-        let has_stale = quality.issues.iter().any(|i| matches!(i, ContextIssue::ContainsStaleInfo { .. }));
+        let has_stale = quality
+            .issues
+            .iter()
+            .any(|i| matches!(i, ContextIssue::ContainsStaleInfo { .. }));
         assert!(has_stale, "should detect stale info via KG");
         assert!(quality.breakdown.stale_info > 0);
     }
@@ -755,16 +788,27 @@ mod tests {
 
         let compressed = engine.compress("agent-1", &cids).await.unwrap();
         // Should have removed at least 4 temporary items
-        assert!(compressed.removed.len() >= 4, "expected >= 4 removed, got {}", compressed.removed.len());
+        assert!(
+            compressed.removed.len() >= 4,
+            "expected >= 4 removed, got {}",
+            compressed.removed.len()
+        );
         // retained < 6/2 = 3 → should generate summaries
-        assert!(compressed.retained_cids.len() < 3, "expected < 3 retained, got {}", compressed.retained_cids.len());
+        assert!(
+            compressed.retained_cids.len() < 3,
+            "expected < 3 retained, got {}",
+            compressed.retained_cids.len()
+        );
         // generate_summaries should have been called
-        assert!(!compressed.summary_cids.is_empty(), "expected summary CIDs to be generated");
+        assert!(
+            !compressed.summary_cids.is_empty(),
+            "expected summary CIDs to be generated"
+        );
     }
 
     #[tokio::test]
     async fn test_high_redundancy_issue_detected() {
-        use crate::fs::embedding::{EmbedResult, EmbedError};
+        use crate::fs::embedding::{EmbedError, EmbedResult};
 
         // Create a custom embedding that returns identical vectors for similar text
         struct RedundantEmbedding;
@@ -781,14 +825,31 @@ mod tests {
                     v
                 };
                 let norm = vec.iter().map(|x| x * x).sum::<f32>().sqrt();
-                if norm > 0.0 { for v in &mut vec { *v /= norm; } }
+                if norm > 0.0 {
+                    for v in &mut vec {
+                        *v /= norm;
+                    }
+                }
                 Ok(EmbedResult::new(vec, text.len() as u32 / 4))
             }
             fn embed_batch(&self, texts: &[&str]) -> Result<Vec<EmbedResult>, EmbedError> {
                 texts.iter().map(|t| self.embed(t)).collect()
             }
-            fn dimension(&self) -> usize { 4 }
-            fn model_name(&self) -> &str { "redundant" }
+            fn dimension(&self) -> usize {
+                4
+            }
+            fn builder_identity(
+                &self,
+            ) -> Result<crate::fs::EmbeddingBuilderIdentity, crate::fs::EmbeddingIdentityError> {
+                Ok(crate::fs::EmbeddingBuilderIdentity::test_deterministic(
+                    "redundant",
+                    4,
+                    "redundant-v1",
+                ))
+            }
+            fn model_name(&self) -> String {
+                "redundant".into()
+            }
         }
 
         let dir = tempfile::tempdir().unwrap();
@@ -801,13 +862,23 @@ mod tests {
         // Create items with "duplicate" text to trigger high similarity
         let mut cids = Vec::new();
         for i in 0..5 {
-            cids.push(store_text_object(&cas, &format!("duplicate content {}", i), &["knowledge"]));
+            cids.push(store_text_object(
+                &cas,
+                &format!("duplicate content {}", i),
+                &["knowledge"],
+            ));
         }
         // Add one unique item
         cids.push(store_text_object(&cas, "unique content xyz", &["knowledge"]));
 
         let quality = engine.analyze("agent-1", &cids).await.unwrap();
-        let has_redundancy = quality.issues.iter().any(|i| matches!(i, ContextIssue::HighRedundancy { .. }));
-        assert!(has_redundancy, "should detect high redundancy with identical embeddings");
+        let has_redundancy = quality
+            .issues
+            .iter()
+            .any(|i| matches!(i, ContextIssue::HighRedundancy { .. }));
+        assert!(
+            has_redundancy,
+            "should detect high redundancy with identical embeddings"
+        );
     }
 }

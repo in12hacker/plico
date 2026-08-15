@@ -3,39 +3,40 @@
 [![CI](https://github.com/in12hacker/plico/actions/workflows/ci.yml/badge.svg)](https://github.com/in12hacker/plico/actions/workflows/ci.yml)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-2021-edition.svg)](https://www.rust-lang.org)
-[![Tests](https://img.shields.io/badge/tests-2%2C075-brightgreen.svg)](#status)
 
 **Languages / 语言：** [English](README.md) · [简体中文](README_zh.md)
 
-An operating system kernel designed **entirely from an AI perspective**. No human-first CLI/GUI, no path-centric filesystem. Upper-layer agents interact through **semantic APIs** (content, tags, intents, graphs). The stack is **inference-framework-agnostic**: both embedding and LLM backends support any server exposing an OpenAI-compatible API (llama.cpp, vLLM, SGLang, TensorRT-LLM, Ollama, etc.), plus local ONNX or stubs for tests.
+An AI-native kernel for a **personal digital twin**. Canonical objects and memories are the primary
+data; documents, spreadsheets, slides, and graphical interfaces are projections generated when a
+person needs them. AI clients use the typed `plico.personal.v2`
+memory/object/session/projection API rather than path-centric files or internal kernel controls. The
+inference stack remains provider-independent.
 
 "太初" means "Genesis / In the Beginning" — the primordial state where an AI-OS becomes self-aware.
 
 ## Status
 
-**v46 — 212 source files, 85,116 lines of Rust, 2,075 unit tests (0 failures), 44 integration test files.**
+Active development. Current verification evidence is reported per change rather than kept as a hand-maintained counter here.
 
-Core stack: CAS, semantic filesystem (vectors + BM25 + knowledge graph with redb, 17 edge types), layered memory (4-tier + MemoryScope), agent scheduler, kernel event bus (pub/sub + filtering + persistent log), permission guardrails, hook system (5 interception points), intent system (DAG decomposition + autonomous execution), context budget engine (L0/L1/L2), tool registry (37 built-in + external MCP), agent lifecycle (checkpoint/restore/discover/delegate), learning loop (execution stats + skill discovery + self-healing), retrieval fusion engine (RFE, 7-signal adaptive ranking), unified configuration (`config.json` + env vars + CLI), `plicod` (TCP+UDS daemon with `start/stop/status` lifecycle), `plico-sse` (A2A SSE adapter), `plico-mcp` (stdio JSON-RPC), and `aicli` (semantic CLI).
-
-Soul 3.0 alignment: **94.7%**. Architecture red lines: **9/9 (100%)**.
+Core stack: CAS, semantic filesystem (vectors + BM25 + knowledge graph), layered memory, agent scheduler, kernel event bus, permission guardrails, intent and context-budget systems, retrieval fusion, model-independent inference providers, `plicod`, `plico-mcp`, and `aicli`.
 
 ## Architecture
 
 ```
-External AI agents / MCP clients
+Personal AI clients / MCP clients
         ↓  semantic JSON
 ┌────────────────────────────────────────────────────┐
 │  Interface Adapters                                │
-│  ┌─────────┐  ┌───────────┐  ┌──────────┐         │
-│  │  aicli   │  │ plico-mcp │  │ plico-sse│         │
-│  └────┬─────┘  └─────┬─────┘  └────┬─────┘         │
-│       └───────────────┼─────────────┘               │
+│          ┌─────────┐  ┌───────────┐                 │
+│          │  aicli  │  │ plico-mcp │                 │
+│          └────┬────┘  └─────┬─────┘                 │
+│               └─────────────┤                       │
 │               ┌───────▼────────┐                    │
 │               │  KernelClient  │ (UDS / TCP / embed) │
 │               └───────┬────────┘                    │
 ├───────────────────────┼────────────────────────────┤
 │  AI Kernel            │                             │
-│  ├─ Agent scheduler + dispatch loop                │
+│  ├─ Typed personal-vault public service (14 ops)   │
 │  ├─ Layered memory (4-tier + MemoryScope)          │
 │  ├─ Event bus (typed pub/sub + persistent log)     │
 │  ├─ Hook system (5 interception points)            │
@@ -53,7 +54,12 @@ External AI agents / MCP clients
 └────────────────────────────────────────────────────┘
 ```
 
-**Daemon-First**: `plicod` hosts the kernel with `start/stop/status` lifecycle commands and PID-file multi-instance protection. Clients connect via UDS or TCP using length-prefixed JSON framing. `--embedded` mode available for testing.
+**One public contract**: `plicod`, `KernelClient`, `plico-mcp`, and `aicli` use the same 14 typed
+operations: `capabilities.describe`, `runtime.readiness`, `object.put/get/search`,
+`memory.create/get/recall/update/delete`, `projection.status/rebuild`, and `session.start/end`. UDS,
+MCP, and embedded mode are trusted local-owner paths. TCP requires a bearer and defaults to loopback.
+`projection.rebuild` is owner-only. The memory embedding control plane is supported, while Memory
+vector/hybrid/BM25 retrieval remains unsupported; `memory.recall` is still lexical.
 
 ## Quick Start
 
@@ -73,26 +79,31 @@ EMBEDDING_BACKEND=stub LLM_BACKEND=stub cargo llvm-cov --lib
 # Clippy (zero warnings required)
 cargo clippy -- -D warnings
 
-# Start daemon (recommended — binds 127.0.0.1:7878 by default)
+# Start daemon (recommended — binds 127.0.0.1:7878 by default).
+# First start creates/reuses the personal-owner credential in the 0600
+# agent_tokens.json under PLICO_ROOT; no token is printed or logged.
 cargo run --bin plicod -- start
-cargo run --bin plicod -- start --host 0.0.0.0 --port 9000
 
 # Daemon lifecycle
 cargo run --bin plicod -- stop       # graceful shutdown
 cargo run --bin plicod -- status     # JSON status output
 
-# CLI (connects to daemon by default)
-cargo run --bin aicli -- agent --name my-agent
-cargo run --bin aicli -- put --content "knowledge about Plico architecture" --tags "plico,arch"
-cargo run --bin aicli -- search "architecture"
-cargo run --bin aicli -- remember --content "important insight" --tier working --agent my-agent
-cargo run --bin aicli -- recall --agent my-agent
+# CLI (UDS by default; operation names exactly match the public protocol)
+cargo run --bin aicli -- capabilities.describe
+cargo run --bin aicli -- object.put --content "knowledge about Plico" --tag plico --tag architecture
+cargo run --bin aicli -- object.search --query "architecture"
+cargo run --bin aicli -- memory.create --content "important insight" --tag insight
+cargo run --bin aicli -- memory.recall --query "insight"
+cargo run --bin aicli -- projection.status --revision-id UUID
+cargo run --bin aicli -- projection.rebuild --all-eligible
 
 # CLI in embedded mode (no daemon needed)
-cargo run --bin aicli -- --embedded put --content "hello" --tags "test"
+cargo run --bin aicli -- --embedded object.put --content "hello" --tag test
 
-# SSE adapter (A2A protocol, binds 127.0.0.1:7879 by default)
-cargo run --bin plico-sse
+# TCP: read the owner-only credential locally; do not paste it into arguments/logs.
+export PLICO_ROOT="${PLICO_ROOT:-$HOME/.plico}"
+export PLICO_BEARER_TOKEN="$(jq -r '.\"personal-owner\".token' "$PLICO_ROOT/agent_tokens.json")"
+cargo run --bin aicli -- --tcp 127.0.0.1:7878 runtime.readiness
 
 # MCP adapter (stdio JSON-RPC 2.0)
 cargo run --bin plico-mcp
@@ -131,13 +142,13 @@ Plico uses a three-layer cascade (lowest → highest priority):
 | 1 | **Token is the scarcest resource** | Layered return L0/L1/L2, track consumption |
 | 2 | **Intent before operation** | Agent declares intent, OS assembles context |
 | 3 | **Memory crosses boundaries** | 4-tier memory, checkpoint/restore across "death" |
-| 4 | **Sharing before duplication** | MemoryScope: Private / Shared / Group |
+| 4 | **Canonical before projection** | Personal memory/CAS are primary; human files are generated views |
 | 5 | **Mechanism, not policy** | Kernel provides primitives, never decides for agents |
 | 6 | **Structure before language** | JSON is the only kernel interface |
 | 7 | **Proactive before reactive** | Intent prefetch, warm context, goal generation |
 | 8 | **Causation before correlation** | KG records CausedBy / DependsOn / Produces chains |
 | 9 | **Better with use** | AgentProfile accumulates, skills discovered |
-| 10 | **Sessions are first-class** | session-start/end, warm_context, delta tracking |
+| 10 | **Sessions are first-class** | durable session start/end and monotonic event watermarks |
 
 ## Crate Layout
 
@@ -145,10 +156,10 @@ Plico uses a three-layer cascade (lowest → highest priority):
 src/
 ├── cas/                 # SHA-256 content-addressed object store
 ├── memory/              # Tiered memory (ephemeral → long-term) + persistence
-├── intent/              # NL → structured ApiRequest (interface layer, NOT kernel)
+├── intent/              # Internal NL intent routing; not the public wire protocol
 ├── scheduler/           # Agents, priorities, messaging, execution dispatch
 ├── fs/                  # Semantic store: tags, embeddings, graph, context loader
-│   ├── embedding/       # EmbeddingProvider (OpenAI-compatible, Ollama, ONNX, stub)
+│   ├── embedding/       # EmbeddingProvider (OpenAI-compatible, Ollama, local worker, stub)
 │   ├── search/          # SemanticSearch (BM25, HNSW)
 │   ├── graph/           # KnowledgeGraph (redb backend, 17 edge types)
 │   ├── semantic_fs/     # Core CRUD + event storage
@@ -161,7 +172,7 @@ src/
 │   ├── hook.rs          # Hook registry (5 interception points)
 │   ├── event_bus.rs     # Typed pub/sub + persistent event log
 │   └── ops/             # 24 operation modules
-├── api/                 # ApiRequest / ApiResponse + permission + auth
+├── api/                 # plico.personal.v2 typed protocol + internal legacy commands
 ├── tool/                # Tool trait and registry ("everything is a tool")
 ├── temporal/            # Temporal reasoning (NL time → time ranges)
 ├── llm/                 # LlmProvider trait (OpenAI-compatible / Ollama / stub)
@@ -169,7 +180,6 @@ src/
 ├── client.rs            # KernelClient trait (Embedded / UDS / TCP)
 └── bin/
     ├── plicod.rs        # Daemon (TCP + UDS, start/stop/status lifecycle, PID file)
-    ├── plico_sse.rs     # SSE adapter (A2A protocol)
     ├── plico_mcp/       # MCP stdio server (JSON-RPC 2.0)
     └── aicli/           # Semantic CLI (daemon-first, --embedded fallback)
 

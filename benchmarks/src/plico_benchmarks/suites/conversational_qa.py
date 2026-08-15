@@ -2,16 +2,36 @@
 
 from __future__ import annotations
 
-import json
+import hashlib
 import os
-import random
 import re
 import time
-from concurrent.futures import ThreadPoolExecutor
+import uuid
+from collections import Counter
+from dataclasses import asdict, is_dataclass
+from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
+from pathlib import Path
 from typing import Any
 
+from plico_benchmarks.core.config import get_config
+from plico_benchmarks.core.llm_evidence import (
+    summarize_llm_costs,
+    summarize_llm_identity,
+)
+from plico_benchmarks.core.llm_journal import (
+    JOURNAL_DIR_ENV,
+    mark_attempt_journal_complete,
+    read_attempt_journal,
+)
 from plico_benchmarks.core.metrics import accuracy_pct, bleu1, compute_statistics, token_level_f1
 from plico_benchmarks.core.reporter import Report
+from plico_benchmarks.core.sampling import (
+    configured_limit,
+    configured_profile,
+    selection_artifact,
+    stable_stratified_sample,
+)
 from plico_benchmarks.datasets.locomo import LoCoMoDataset
 from plico_benchmarks.datasets.longmemeval import LongMemEvalDataset
 from plico_benchmarks.suites.base import SuiteBase
@@ -28,191 +48,14 @@ Rules:
 - If the context has enough information to make a reasonable inference, give the answer
 - Only say "I don't know" if truly no relevant information exists in the context
 - Be concise — maximum 15 words
-- Do NOT start with "Based on" or "The text says"
-
-<|think|>
-Let me find the relevant information in the context.
-</think>"""
-
-# Intent-specific reader prompts (incorporating HippoRAG CoT + 0gmem techniques)
-READER_PROMPT_FACTUAL = """Answer the factual question using ONLY the context below.
-
-Context:
-{context}
-
-Question: {question}
-
-Rules:
-- Find the specific fact, name, number, or detail asked about
-- Answer with the exact information from the context
-- If the context has enough info to make a reasonable inference, give the answer
-- Only say "I don't know" if truly no relevant information exists
-- For names: output ONLY the name
-- For numbers: output ONLY the number
-- For yes/no questions: start with "Yes" or "No"
-
-<|think|>
-Let me find the specific fact asked about.
-</think>"""
-
-READER_PROMPT_MULTI_HOP = """Answer the question by connecting information from MULTIPLE parts of the context.
-
-Context:
-{context}
-
-Question: {question}
-
-Method — use this reasoning chain:
-1. FIND: Identify which parts of the context mention the entities in the question
-2. CONNECT: Link the pieces together (cause→effect, entity→attribute, event→date)
-3. INFER: Derive the answer from the connected information
-
-Rules:
-- For "why" questions: find the cause-effect chain across speakers/events
-- For "relationship" questions: identify how entities are connected
-- For "who did X with Y": find both X and Y in context, check if they interacted
-- DO NOT explain your reasoning steps — ONLY give the final answer
-- If the context has partial info, give the best answer you can infer
-- Only say "I don't know" if the entities in the question are not mentioned at all
-
-<|think|>
-Let me connect the relevant pieces of information.
-</think>"""
-
-READER_PROMPT_TEMPORAL = """Answer the time-related question using ONLY the context below.
-
-Context:
-{context}
-
-Question: {question}
-
-The context includes [Date: ...] tags showing when each conversation session took place.
-
-Method:
-1. Find the event mentioned in the question in the conversation context
-2. Find the [Date: ...] tag of the session where that event is discussed
-3. If the speaker says "yesterday", "last week", etc., compute the absolute date using the session date
-4. Output the absolute date (e.g., "7 May 2023", "July 2023")
-
-Rules:
-- Use dates in the format found in the context (e.g., "7 May 2023", "20 July 2023")
-- If the speaker says "yesterday" and the session date is "8:56 pm on 20 July, 2023", then yesterday = 19 July 2023
-- If the speaker says "last week" and the session is in July 2023, output the specific week
-- Only say "I don't know" if no date information exists at all
-- Do NOT use relative words like "yesterday" or "last week" in your final answer
-
-<|think|>
-Let me find the event and its session date in the context.
-</think>"""
-
-READER_PROMPT_ADVERSARIAL = """Answer the question using ONLY the context below. The question may contain false premises.
-
-Context:
-{context}
-
-Question: {question}
-
-Method:
-1. Identify WHO the question asks about
-2. Find statements FROM that specific person in the context
-3. Verify the question's assumptions against the context
-4. If the premise is false, correct it and answer based on the context
-
-Rules:
-- ONLY use first-person statements from the entity asked about
-- If the question assumes something false, point out the correction
-- If the question asks about something not in the context, say "I don't know"
-- Be concise — maximum 15 words
-
-<|think|>
-Let me verify the question's assumptions against the context.
-</think>"""
-
-CATEGORY_PROMPTS = {
-    "single_hop": READER_PROMPT_FACTUAL,
-    "multi_hop": READER_PROMPT_MULTI_HOP,
-    "temporal": READER_PROMPT_TEMPORAL,
-    "open_domain": READER_PROMPT,
-    "adversarial": READER_PROMPT_ADVERSARIAL,
-    "unknown": READER_PROMPT,
-}
+- Do NOT start with "Based on" or "The text says"""
 
 
-def _extract_answer(raw: str) -> str:
-    """Extract the final answer from CoT-style response.
-
-    Handles: Gemma 4 `</think>` tag, "Answer:" marker, "Final Answer:" marker,
-    "A:" marker, JSON-formatted responses, and plain text fallback.
-    """
-    if not raw or not raw.strip():
-        return ""
-    stripped = raw.strip()
-    # Try JSON parse — LLM may return {"answer": "..."} or just "..."
-    if stripped.startswith("{"):
-        try:
-            obj = json.loads(stripped)
-            for key in ("answer", "final_answer", "result", "response"):
-                if key in obj:
-                    return str(obj[key]).strip()
-        except (json.JSONDecodeError, ValueError):
-            pass
-    # Gemma 4 native thinking: extract text after </think>
-    think_close = stripped.lower().rfind("</think>")
-    if think_close >= 0:
-        return stripped[think_close + len("</think>"):].strip()
-    # Try markers in priority order (longest first to avoid "A:" matching inside "Answer:")
-    for marker in ("final answer:", "answer:", "a:"):
-        idx = stripped.lower().rfind(marker)
-        if idx >= 0:
-            return stripped[idx + len(marker):].strip()
-    return stripped
-
-
-# Relative time expressions that should never appear in temporal answers
-_RELATIVE_TIME_RE = re.compile(
-    r"\b(yesterday|today|tomorrow|last\s+week|last\s+month|last\s+year|"
-    r"next\s+week|next\s+month|next\s+year|this\s+week|this\s+month|this\s+year|"
-    r"recently|lately|earlier|later|ago|"
-    r"last\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)|"
-    r"next\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)|"
-    r"this\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday))\b",
-    re.IGNORECASE,
-)
-
-# Absolute date patterns: year numbers, month names, ISO dates
-_ABS_DATE_RE = re.compile(
-    r"(\d{4}|\b(?:january|february|march|april|may|june|july|august|"
-    r"september|october|november|december|"
-    r"jan|feb|mar|apr|jun|jul|aug|sep|oct|nov|dec)\b|"
-    r"\d{1,2}[/\-\.]\d{1,2}[/\-\.]\d{2,4})",
-    re.IGNORECASE,
-)
-
-
-def _sanitize_temporal_answer(answer: str) -> str:
-    """Post-process temporal answers to reject relative time expressions.
-
-    If the LLM outputs relative time (e.g., "yesterday") instead of an absolute
-    date (e.g., "7 May 2023"), replace with "I don't know". This improves the
-    LLM-as-Judge score from 1 (confident wrong) to 1 (honest unknown) — same
-    score but avoids misleading downstream consumers.
-    """
-    if not answer or answer.lower().strip() in ("i don't know", "i don't know."):
-        return answer
-
-    # Check if answer contains relative time expressions
-    has_relative = bool(_RELATIVE_TIME_RE.search(answer))
-    if not has_relative:
-        return answer
-
-    # If answer also contains an absolute date pattern, keep it
-    # (e.g., "on May 7th, which was yesterday" — the absolute date is present)
-    has_absolute = bool(_ABS_DATE_RE.search(answer))
-    if has_absolute:
-        return answer
-
-    # Answer has relative time but no absolute date — reject
-    return "I don't know"
+def _reader_answer(raw: str) -> str:
+    answer = raw.strip()
+    if not answer:
+        raise RuntimeError("reader returned an empty answer")
+    return answer
 
 
 class ConversationalQASuite(SuiteBase):
@@ -221,23 +64,62 @@ class ConversationalQASuite(SuiteBase):
 
     def setup(self) -> None:
         self.wait_for_plico()
-        self.locomo = LoCoMoDataset().load()
-        self.longmemeval = LongMemEvalDataset().load()
+        self._locomo_dataset = LoCoMoDataset()
+        self._longmemeval_dataset = LongMemEvalDataset()
+        self.locomo = self._locomo_dataset.load()
+        self.longmemeval = self._longmemeval_dataset.load()
 
     def run(self) -> list[dict[str, Any]]:
-        max_total = self.samples or 50
-        # Split budget between datasets
-        locomo_budget = max_total // 2
-        longmemeval_budget = max_total - locomo_budget
+        section = self._config()
+        self._profile = configured_profile(section)
+        self._qa_attempt_evidence: list[dict[str, Any]] = []
+        self._qa_attempt_keys: set[int] = set()
+        self._qa_request_refs: dict[str, list[dict[str, Any]]] = {}
+        self._qa_budget_before = self._budget_snapshots()
+        locomo_budget, longmemeval_budget = self._sample_limits(section)
 
-        # Deterministic random sampling if seed provided
-        self._seed = os.environ.get("PLICO_SEED")
-        if self._seed is not None:
-            random.seed(int(self._seed))
+        locomo_source = (
+            self.locomo if isinstance(self.locomo, list) else self.locomo.get("data", [])
+        )
+        locomo_candidates = [
+            (conv_idx, question_idx, conv, question)
+            for conv_idx, conv in enumerate(locomo_source)
+            for question_idx, question in enumerate(conv.get("qa", []))
+        ]
+        self._locomo_sample = stable_stratified_sample(
+            locomo_candidates,
+            limit=locomo_budget,
+            seed=self.seed,
+            namespace="conversational-qa:locomo",
+            sample_id=lambda item: f"locomo:conv-{item[0]}:qa-{item[1]}",
+            stratum=lambda item: self._map_locomo_category(item[3].get("category", 0)),
+        )
 
-        # Phase 1: Ingest all data
-        self._ingest_locomo(locomo_budget)
-        self._ingest_longmemeval(longmemeval_budget)
+        longmemeval_data = self.longmemeval if isinstance(self.longmemeval, list) else []
+        self._longmemeval_sample = stable_stratified_sample(
+            longmemeval_data,
+            limit=longmemeval_budget,
+            seed=self.seed,
+            namespace="conversational-qa:longmemeval",
+            sample_id=lambda item: f"longmemeval:{item.get('question_id', '')}",
+            stratum=lambda item: str(item.get("question_type", "unknown")),
+        )
+        selected_ids = [
+            *(f"locomo:conv-{item[0]}:qa-{item[1]}" for item in self._locomo_sample),
+            *(f"longmemeval:{item.get('question_id', '')}" for item in self._longmemeval_sample),
+        ]
+        self._selected_sample_ids = selected_ids
+        self._selection_artifact = selection_artifact(
+            role="conversational_qa_sample_selection",
+            seed=self.seed,
+            profile=self._profile,
+            sample_ids=selected_ids,
+        )
+        self._qa_config = section
+
+        # Phase 1: ingest exactly the sampled evaluation domains.
+        self._ingest_locomo()
+        self._ingest_longmemeval()
 
         # Phase 2: Wait for async indexing (embedding + HNSW)
         timeout = getattr(self, "_preprocess_timeout", 120.0)
@@ -245,12 +127,22 @@ class ConversationalQASuite(SuiteBase):
 
         # Phase 3: Query
         results = []
-        results.extend(self._query_locomo(locomo_budget))
-        results.extend(self._query_longmemeval(longmemeval_budget))
+        results.extend(self._query_locomo())
+        results.extend(self._query_longmemeval())
         return results
 
     def evaluate(self, raw: list[dict[str, Any]]) -> dict[str, Any]:
         from collections import defaultdict
+
+        selected_ids = list(getattr(self, "_selected_sample_ids", []))
+        scored_ids = [str(item.get("sample_id", "")) for item in raw]
+        if (
+            not selected_ids
+            or any(not sample_id for sample_id in scored_ids)
+            or len(set(scored_ids)) != len(scored_ids)
+            or set(scored_ids) != set(selected_ids)
+        ):
+            raise RuntimeError("QA selected and scored sample identities do not match exactly")
 
         by_cat: dict[str, list[dict[str, Any]]] = defaultdict(list)
         for r in raw:
@@ -266,79 +158,228 @@ class ConversationalQASuite(SuiteBase):
             bleus = [r["bleu1"] for r in items if r.get("bleu1") is not None]
             llms = [r.get("llm_score", 0) for r in items]
             correct = sum(1 for s in llms if s >= ACCURACY_THRESHOLD)
+            evidence_recalls = [
+                r["evidence_recall@10"] for r in items if r.get("evidence_recall@10") is not None
+            ]
             per_category[cat] = {
                 "count": len(items),
                 "f1": sum(f1s) / len(f1s) if f1s else 0.0,
                 "bleu1": sum(bleus) / len(bleus) if bleus else 0.0,
                 "llm_score": sum(llms) / len(llms) if llms else 0.0,
                 "accuracy_pct": round(correct / len(items) * 100, 1) if items else 0.0,
-                "context_hit_rate": sum(1 for r in items if r.get("has_context")) / len(items) if items else 0.0,
+                "evidence_recall@10": (
+                    sum(evidence_recalls) / len(evidence_recalls) if evidence_recalls else None
+                ),
             }
 
         all_f1 = [r["f1"] for r in raw if r.get("f1") is not None]
         all_bleus = [r["bleu1"] for r in raw if r.get("bleu1") is not None]
         all_llms = [r.get("llm_score", 0) for r in raw]
+        all_evidence_recalls = [
+            r["evidence_recall@10"] for r in raw if r.get("evidence_recall@10") is not None
+        ]
         overall = {
             "count": len(raw),
             "f1": sum(all_f1) / len(all_f1) if all_f1 else 0.0,
             "bleu1": sum(all_bleus) / len(all_bleus) if all_bleus else 0.0,
             "llm_score": sum(all_llms) / len(all_llms) if all_llms else 0.0,
             "accuracy_pct": accuracy_pct(all_llms),
-            "context_hit_rate": sum(1 for r in raw if r.get("has_context")) / len(raw) if raw else 0.0,
-            **compute_statistics(all_f1),
+            "evidence_recall@10": (
+                sum(all_evidence_recalls) / len(all_evidence_recalls)
+                if all_evidence_recalls
+                else None
+            ),
+            "f1_statistics": compute_statistics(all_f1, seed=self.seed),
         }
 
-        # RAGAS evaluation on 20-item sample
-        ragas_sample = random.sample(raw, min(20, len(raw))) if raw else []
-        ragas_scores = {"faithfulness": [], "answer_relevancy": [], "context_precision": [], "context_recall": []}
-        for item in ragas_sample:
+        # RAGAS-style LLM-judge proxy on a deterministic 20-item sample. This
+        # is not the official RAGAS package and must not be compared as such.
+        proxy_limit = int(self._qa_config["ragas_style_proxy_samples"])
+        proxy_sample = (
+            stable_stratified_sample(
+                raw,
+                limit=min(proxy_limit, len(raw)) if raw else None,
+                seed=self.seed,
+                namespace="conversational-qa:ragas-style-proxy",
+                sample_id=lambda item: str(item["sample_id"]),
+                stratum=lambda item: str(item["category"]),
+            )
+            if raw
+            else []
+        )
+        proxy_scores = {
+            "faithfulness": [],
+            "answer_relevancy": [],
+            "context_precision": [],
+            "context_recall": [],
+        }
+        proxy_evaluated = 0
+        for item in proxy_sample:
             ctx = item.get("context", "")
             if not ctx:
                 continue
-            scores = self.judge.evaluate_ragas(
+            scores = self.judge.evaluate_ragas_style_proxy(
                 question=item["question"],
                 answer=item["predicted"],
                 context=ctx,
                 ground_truth=item["expected"],
+                sample_id=item["sample_id"],
+                request_id=str(uuid.uuid4()),
             )
+            self._record_request_evidence(
+                item["sample_id"],
+                getattr(scores, "role_request_ids", ()),
+                getattr(scores, "attempt_evidence", ()),
+                boundary="ragas_style_proxy",
+            )
+            proxy_evaluated += 1
             for k, v in scores.items():
-                ragas_scores[k].append(v)
-        ragas_metrics = {}
-        for k, vals in ragas_scores.items():
-            ragas_metrics[k] = round(sum(vals) / len(vals), 3) if vals else 0.0
-
-        return {"overall": overall, "per_category": per_category, "ragas": ragas_metrics}
-
-    def report(self, metrics: dict[str, Any]) -> Report:
-        from plico_benchmarks.core.competitors import get_memory_competitors
-
-        # Load competitor baselines for comparison
-        competitors = {
-            "longmemeval": get_memory_competitors("longmemeval"),
-            "locomo": get_memory_competitors("locomo"),
+                proxy_scores[k].append(v)
+        proxy_metrics = {
+            key: round(sum(values) / len(values), 3) if values else 0.0
+            for key, values in proxy_scores.items()
         }
 
+        budget_after = self._budget_snapshots()
+        costs = self._cost_summary(budget_after)
+        journal = self._complete_attempt_journal(costs)
+        identity = self._llm_identity_summary()
+        evidence_by_sample = {
+            sample_id: self._qa_request_refs.get(sample_id, []) for sample_id in scored_ids
+        }
+        return {
+            "overall": overall,
+            "per_category": per_category,
+            "ragas_style_proxy": proxy_metrics,
+            "capability_ledger": [
+                {
+                    "sample_id": item["sample_id"],
+                    "dataset": item["dataset"],
+                    "stratum": item["category"],
+                    "capability": "conversational_memory_qa",
+                    "domain": "plico_object_projection_plus_reader",
+                    "status": item.get("status", "ok"),
+                    "f1": item["f1"],
+                    "bleu1": item["bleu1"],
+                    "llm_score": item["llm_score"],
+                    "evidence_recall@10": item["evidence_recall@10"],
+                    "evidence_recall_counts": {
+                        "expected_count": item["evidence_expected_count"],
+                        "retrieved_expected_count": item["evidence_retrieved_count"],
+                    },
+                    "token_overlap": item["token_overlap"],
+                    "expected_sha256": item["expected_sha256"],
+                    "predicted_sha256": item["predicted_sha256"],
+                    "llm_request_evidence": evidence_by_sample[item["sample_id"]],
+                }
+                for item in raw
+            ],
+            "sample_accounting": {
+                "selected_ids": selected_ids,
+                "scored_ids": scored_ids,
+                "failed_ids": [],
+                "excluded_ids": [],
+            },
+            "llm_evidence": {
+                "schema": "plico.benchmark.deepseek-attempt-ledger/v1",
+                "journal": journal,
+                "identity": identity,
+                "costs": costs,
+            },
+            "metric_metadata": {
+                "ragas_style_proxy": {
+                    "implementation": "custom_single_llm_judge_prompts",
+                    "official_ragas": False,
+                    "scale": "0.0-1.0",
+                    "samples_requested": min(proxy_limit, len(raw)),
+                    "samples_evaluated": proxy_evaluated,
+                    "seed": self.seed,
+                    "judge": self.judge.describe(),
+                }
+            },
+        }
+
+    def report(self, metrics: dict[str, Any]) -> Report:
         report_data = {
             "metadata": {
                 "suite": self.name,
                 "version": os.environ.get("PLICO_BENCH_VERSION", "dev"),
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             },
-            "config": {"samples": self.samples},
+            "config": {
+                "samples": self.samples,
+                "run_id": self.run_id,
+                "sampling_profile": self._profile,
+                "sampling_strategy": "deterministic_sha256_stratified_v1",
+                "evaluation_scope": "single-owner run plus per-sample evidence tags",
+            },
             "metrics": metrics,
-            "competitors": competitors,
-            "costs": {},
+            "costs": metrics["llm_evidence"]["costs"],
             "raw_results": self._raw_results,
         }
         return Report(report_data)
 
+    def input_artifacts(self) -> list[dict[str, Any]]:
+        artifacts = [
+            self._locomo_dataset.artifact_manifest(),
+            self._longmemeval_dataset.artifact_manifest(),
+        ]
+        selection = getattr(self, "_selection_artifact", None)
+        if selection is not None:
+            artifacts.append(selection)
+        return artifacts
+
+    def external_evidence(self) -> list[dict[str, Any]]:
+        summary = getattr(self, "_qa_journal_summary", None)
+        if not isinstance(summary, dict) or summary.get("status") != "verified_complete":
+            return []
+        return [
+            {
+                "role": "deepseek_paid_attempt_journal",
+                "run_id": self.run_id,
+                "inventory_sha256": summary["inventory_sha256"],
+                "attempt_count": summary["attempt_count"],
+                "finalized_attempt_count": summary["finalized_attempt_count"],
+                "total_usd_accounted": summary["total_usd_accounted"],
+            }
+        ]
+
+    def _config(self) -> dict[str, Any]:
+        section = get_config().benchmark.get("suites", {}).get("conversational_qa")
+        if not isinstance(section, dict):
+            raise ValueError("conversational QA configuration is missing")
+        if section.get("top_k") != 10:
+            raise ValueError("conversational QA evidence top_k must be 10")
+        reader_tokens = section.get("reader_max_tokens")
+        if (
+            isinstance(reader_tokens, bool)
+            or not isinstance(reader_tokens, int)
+            or reader_tokens <= 0
+        ):
+            raise ValueError("conversational QA reader token budget must be positive")
+        return section
+
+    def _sample_limits(self, section: dict[str, Any]) -> tuple[int | None, int | None]:
+        if self.samples is not None:
+            if isinstance(self.samples, bool) or self.samples <= 0:
+                raise ValueError("samples override must be positive")
+            locomo = self.samples // 2
+            longmemeval = self.samples - locomo
+            return locomo, longmemeval
+        return (
+            configured_limit(section, profile=self._profile, dataset="locomo", override=None),
+            configured_limit(section, profile=self._profile, dataset="longmemeval", override=None),
+        )
+
     # ── LoCoMo ─────────────────────────────────────────────────────
 
-    def _ingest_locomo(self, budget: int) -> None:
-        if not self.locomo or budget <= 0:
+    def _ingest_locomo(self) -> None:
+        sample = getattr(self, "_locomo_sample", [])
+        if not sample:
             return
-        conversations = self.locomo if isinstance(self.locomo, list) else self.locomo.get("data", [])
-        for conv_idx, conv in enumerate(conversations):
+        self._locomo_evidence_cids: dict[tuple[int, str], str] = {}
+        sampled_conversations = {conv_idx: conv for conv_idx, _, conv, _ in sample}
+        for conv_idx, conv in sampled_conversations.items():
             conversation_dict = conv.get("conversation", {})
             if isinstance(conversation_dict, dict):
                 # Build session date map: "session_1" -> "8:56 pm on 20 July, 2023"
@@ -348,62 +389,112 @@ class ConversationalQASuite(SuiteBase):
                         session_dates[key.replace("_date_time", "")] = value
                 # Ingest each session's turns with date context
                 for key, value in conversation_dict.items():
-                    if key.startswith("session_") and not key.endswith("_date_time") and isinstance(value, list):
+                    if (
+                        key.startswith("session_")
+                        and not key.endswith("_date_time")
+                        and isinstance(value, list)
+                    ):
                         session_date = session_dates.get(key, "")
                         date_prefix = f"[Date: {session_date}] " if session_date else ""
                         for turn in value:
                             if isinstance(turn, dict):
-                                content = f"{date_prefix}{turn.get('speaker', 'User')}: {turn.get('text', '')}"
-                                self.client.create(content, tags=["locomo", f"conv-{conv_idx}"])
+                                speaker = turn.get("speaker", "User")
+                                content = f"{date_prefix}{speaker}: {turn.get('text', '')}"
+                                response = self.client.object_put(
+                                    content,
+                                    tags=[f"run:{self.run_id}", "locomo", f"conv-{conv_idx}"],
+                                )
+                                cid = self._require_created_cid(response, "LoCoMo turn")
+                                dialogue_id = turn.get("dia_id")
+                                if dialogue_id:
+                                    self._locomo_evidence_cids[(conv_idx, str(dialogue_id))] = cid
             elif isinstance(conversation_dict, list):
                 for turn in conversation_dict:
                     if isinstance(turn, dict):
                         content = f"{turn.get('speaker', 'User')}: {turn.get('text', '')}"
-                        self.client.create(content, tags=["locomo", f"conv-{conv_idx}"])
+                        response = self.client.object_put(
+                            content,
+                            tags=[f"run:{self.run_id}", "locomo", f"conv-{conv_idx}"],
+                        )
+                        cid = self._require_created_cid(response, "LoCoMo turn")
+                        dialogue_id = turn.get("dia_id")
+                        if dialogue_id:
+                            self._locomo_evidence_cids[(conv_idx, str(dialogue_id))] = cid
 
-    def _query_locomo(self, budget: int) -> list[dict[str, Any]]:
-        if not self.locomo or budget <= 0:
+    def _query_locomo(self) -> list[dict[str, Any]]:
+        sample = getattr(self, "_locomo_sample", [])
+        if not sample:
             return []
-        conversations = self.locomo if isinstance(self.locomo, list) else self.locomo.get("data", [])
-        # Random sampling if seed is set
-        if getattr(self, '_seed', None) is not None:
-            random.shuffle(conversations)
+        if not hasattr(self, "_qa_config"):
+            self._qa_config = self._config()
         results = []
-        q_count = 0
-        for conv in conversations:
-            if q_count >= budget:
-                break
-            qa_list = conv.get("qa", [])
-            for q in qa_list:
-                if q_count >= budget:
-                    break
-                question = str(q.get("question", ""))
-                answer = str(q.get("answer", "")) if q.get("answer") is not None else ""
-                category = self._map_locomo_category(q.get("category", 0))
+        evidence_cids = getattr(self, "_locomo_evidence_cids", {})
+        for conv_idx, question_idx, _, q in sample:
+            sample_id = f"locomo:conv-{conv_idx}:qa-{question_idx}"
+            question = str(q.get("question", ""))
+            answer = str(q.get("answer", "")) if q.get("answer") is not None else ""
+            category = self._map_locomo_category(q.get("category", 0))
 
-                # Pass category as intent hint + locomo tag filter for retrieval precision
-                resp = self.client.search(question, limit=15, intent=category, require_tags=["locomo"])
-                hits = resp.get("results", [])
-                context = "\n".join(h.get("snippet", "") for h in hits[:10])
-                has_context = bool(context.strip())
+            resp = self.client.object_search(
+                question,
+                limit=self._qa_config["top_k"],
+                require_tags=[f"run:{self.run_id}", "locomo", f"conv-{conv_idx}"],
+            )
+            hits = resp.get("hits", [])
+            context = "\n".join(h.get("snippet", "") for h in hits[:10])
+            retrieved_cids = [str(hit.get("cid", "")) for hit in hits[:10]]
+            expected_cids = self._resolve_evidence_cids(
+                evidence_cids,
+                conv_idx,
+                q.get("evidence", []),
+                f"LoCoMo conv-{conv_idx}:qa-{question_idx}",
+            )
+            evidence_recall = self._evidence_recall(expected_cids, retrieved_cids)
 
-                # Use intent-specific prompt based on LoCoMo category
-                prompt_template = CATEGORY_PROMPTS.get(category, READER_PROMPT)
-                prompt = prompt_template.format(context=context, question=question)
-                t_online = time.perf_counter()
-                # CoT prompts need more tokens for reasoning before answer
-                max_tok = 192 if category in ("multi_hop", "temporal") else 128
-                raw_pred = self.llm.chat([{"role": "user", "content": prompt}], max_tokens=max_tok)
-                # Extract answer after "Answer:" marker (HippoRAG-style)
-                pred = _extract_answer(raw_pred)
-                # Post-process temporal answers to reject relative time expressions
-                if category == "temporal":
-                    pred = _sanitize_temporal_answer(pred)
-                online_lat = (time.perf_counter() - t_online) * 1000
+            prompt = READER_PROMPT.format(context=context, question=question)
+            t_online = time.perf_counter()
+            max_tok = self._qa_config["reader_max_tokens"]
+            reader_request_id = str(uuid.uuid4())
+            watermark = self._evidence_watermark(self.llm)
+            raw_pred = self.llm.chat(
+                [{"role": "user", "content": prompt}],
+                max_tokens=max_tok,
+                request_id=reader_request_id,
+                sample_id=sample_id,
+            )
+            self._record_request_evidence(
+                sample_id,
+                (reader_request_id,),
+                self._evidence_since(self.llm, watermark, reader_request_id),
+                boundary="reader",
+                evidence_required=callable(getattr(self.llm, "evidence_since", None)),
+            )
+            pred = _reader_answer(raw_pred)
+            online_lat = (time.perf_counter() - t_online) * 1000
 
-                score, raw_judge = self.judge.evaluate_scored(question, answer, pred)
-                results.append({
+            judge_request_id = str(uuid.uuid4())
+            judge_result = self.judge.evaluate_scored(
+                question,
+                answer,
+                pred,
+                sample_id=sample_id,
+                request_id=judge_request_id,
+            )
+            score = _judge_score(judge_result)
+            self._record_request_evidence(
+                sample_id,
+                (judge_request_id,),
+                getattr(judge_result, "attempt_evidence", ()),
+                boundary="scored_judge",
+                evidence_required=callable(
+                    getattr(getattr(self.judge, "llm", None), "evidence_since", None)
+                ),
+            )
+            overlap = _token_overlap(pred, answer)
+            results.append(
+                {
                     "dataset": "locomo",
+                    "sample_id": sample_id,
                     "category": category,
                     "question": question,
                     "expected": answer,
@@ -412,68 +503,422 @@ class ConversationalQASuite(SuiteBase):
                     "f1": token_level_f1(pred, answer),
                     "bleu1": bleu1(pred, answer),
                     "llm_score": score,
-                    "has_context": has_context,
+                    "evidence_recall@10": evidence_recall,
+                    "evidence_expected_count": len(expected_cids),
+                    "evidence_retrieved_count": len(expected_cids.intersection(retrieved_cids)),
                     "latency_online_ms": online_lat,
-                })
-                q_count += 1
+                    "token_overlap": overlap,
+                    "expected_sha256": _answer_digest(self.run_id, sample_id, answer),
+                    "predicted_sha256": _answer_digest(self.run_id, sample_id, pred),
+                }
+            )
         return results
 
     # ── LongMemEval ────────────────────────────────────────────────
 
-    def _ingest_longmemeval(self, budget: int) -> None:
-        if not self.longmemeval or budget <= 0:
+    def _ingest_longmemeval(self) -> None:
+        if not self.longmemeval:
             return
-        data = self.longmemeval if isinstance(self.longmemeval, list) else []
-        for item in data[:budget]:
+        data = self._longmemeval_sample
+        self._longmemeval_evidence_cids: dict[tuple[str, str], str] = {}
+        for item_idx, item in enumerate(data):
+            question_id = str(item.get("question_id") or f"sample-{item_idx}")
             sessions = item.get("haystack_sessions", [])
-            for session in sessions:
+            session_ids = item.get("haystack_session_ids", [])
+            for session_idx, session in enumerate(sessions):
                 if isinstance(session, list):
                     text = "\n".join(
-                        f"{t.get('role','?')}: {t.get('content','')}"
-                        for t in session if isinstance(t, dict)
+                        f"{t.get('role', '?')}: {t.get('content', '')}"
+                        for t in session
+                        if isinstance(t, dict)
                     )
                     if text.strip():
-                        self.client.create(text, tags=["longmemeval"])
+                        session_id = str(
+                            session_ids[session_idx]
+                            if session_idx < len(session_ids)
+                            else f"session-{session_idx}"
+                        )
+                        response = self.client.object_put(
+                            text,
+                            tags=[
+                                f"run:{self.run_id}",
+                                "longmemeval",
+                                f"question:{question_id}",
+                            ],
+                        )
+                        cid = self._require_created_cid(response, "LongMemEval session")
+                        self._longmemeval_evidence_cids[(question_id, session_id)] = cid
 
-    def _query_longmemeval(self, budget: int) -> list[dict[str, Any]]:
-        if not self.longmemeval or budget <= 0:
+    def _query_longmemeval(self) -> list[dict[str, Any]]:
+        if not self.longmemeval:
             return []
-        data = self.longmemeval if isinstance(self.longmemeval, list) else []
-        # Random sampling if seed is set
-        if getattr(self, '_seed', None) is not None:
-            random.shuffle(data)
+        if not hasattr(self, "_qa_config"):
+            self._qa_config = self._config()
+        data = self._longmemeval_sample
         results = []
-        for item in data[:budget]:
+        evidence_cids = getattr(self, "_longmemeval_evidence_cids", {})
+        for item_idx, item in enumerate(data):
+            question_id = str(item.get("question_id") or f"sample-{item_idx}")
+            sample_id = f"longmemeval:{question_id}"
             question = str(item.get("question", ""))
             answer = str(item.get("answer", "")) if item.get("answer") is not None else ""
             category = item.get("question_type", "unknown")
 
-            resp = self.client.search(question, limit=15, require_tags=["longmemeval"])
-            hits = resp.get("results", [])
+            resp = self.client.object_search(
+                question,
+                limit=self._qa_config["top_k"],
+                require_tags=[
+                    f"run:{self.run_id}",
+                    "longmemeval",
+                    f"question:{question_id}",
+                ],
+            )
+            hits = resp.get("hits", [])
             context = "\n".join(h.get("snippet", "") for h in hits[:10])
+            retrieved_cids = [str(hit.get("cid", "")) for hit in hits[:10]]
+            expected_cids = self._resolve_evidence_cids(
+                evidence_cids,
+                question_id,
+                item.get("answer_session_ids", []),
+                f"LongMemEval {question_id}",
+            )
+            evidence_recall = self._evidence_recall(expected_cids, retrieved_cids)
 
-            # Use category-specific prompt if available, otherwise generic
-            prompt_template = CATEGORY_PROMPTS.get(category, READER_PROMPT)
-            prompt = prompt_template.format(context=context, question=question)
-            raw_pred = self.llm.chat([{"role": "user", "content": prompt}], max_tokens=128)
-            pred = _extract_answer(raw_pred)
-            score, _ = self.judge.evaluate_scored(question, answer, pred)
-            results.append({
-                "dataset": "longmemeval",
-                "category": category,
-                "question": question,
-                "expected": answer,
-                "predicted": pred,
-                "context": context,
-                "f1": token_level_f1(pred, answer),
-                "bleu1": bleu1(pred, answer),
-                "llm_score": score,
-                "has_context": bool(context.strip()),
-            })
+            prompt = READER_PROMPT.format(context=context, question=question)
+            reader_request_id = str(uuid.uuid4())
+            watermark = self._evidence_watermark(self.llm)
+            raw_pred = self.llm.chat(
+                [{"role": "user", "content": prompt}],
+                max_tokens=self._qa_config["reader_max_tokens"],
+                request_id=reader_request_id,
+                sample_id=sample_id,
+            )
+            self._record_request_evidence(
+                sample_id,
+                (reader_request_id,),
+                self._evidence_since(self.llm, watermark, reader_request_id),
+                boundary="reader",
+                evidence_required=callable(getattr(self.llm, "evidence_since", None)),
+            )
+            pred = _reader_answer(raw_pred)
+            judge_request_id = str(uuid.uuid4())
+            judge_result = self.judge.evaluate_scored(
+                question,
+                answer,
+                pred,
+                sample_id=sample_id,
+                request_id=judge_request_id,
+            )
+            score = _judge_score(judge_result)
+            self._record_request_evidence(
+                sample_id,
+                (judge_request_id,),
+                getattr(judge_result, "attempt_evidence", ()),
+                boundary="scored_judge",
+                evidence_required=callable(
+                    getattr(getattr(self.judge, "llm", None), "evidence_since", None)
+                ),
+            )
+            overlap = _token_overlap(pred, answer)
+            results.append(
+                {
+                    "dataset": "longmemeval",
+                    "sample_id": sample_id,
+                    "category": category,
+                    "question": question,
+                    "expected": answer,
+                    "predicted": pred,
+                    "context": context,
+                    "f1": token_level_f1(pred, answer),
+                    "bleu1": bleu1(pred, answer),
+                    "llm_score": score,
+                    "evidence_recall@10": evidence_recall,
+                    "evidence_expected_count": len(expected_cids),
+                    "evidence_retrieved_count": len(expected_cids.intersection(retrieved_cids)),
+                    "token_overlap": overlap,
+                    "expected_sha256": _answer_digest(self.run_id, sample_id, answer),
+                    "predicted_sha256": _answer_digest(self.run_id, sample_id, pred),
+                }
+            )
         return results
 
+    @staticmethod
+    def _require_created_cid(response: dict[str, Any], source: str) -> str:
+        cid = response.get("cid")
+        if not cid:
+            raise RuntimeError(f"{source} ingest did not return a CID: {response!r}")
+        return str(cid)
+
+    @staticmethod
+    def _evidence_recall(expected_cids: set[str], retrieved_cids: list[str]) -> float | None:
+        if not expected_cids:
+            return None
+        return len(expected_cids.intersection(retrieved_cids)) / len(expected_cids)
+
+    @staticmethod
+    def _resolve_evidence_cids(
+        evidence_map: dict[tuple[Any, str], str],
+        domain_id: Any,
+        evidence_ids: list[Any],
+        sample_id: str,
+    ) -> set[str]:
+        normalized_ids = [str(evidence_id) for evidence_id in evidence_ids]
+        missing = [
+            evidence_id
+            for evidence_id in normalized_ids
+            if (domain_id, evidence_id) not in evidence_map
+        ]
+        if missing:
+            raise RuntimeError(f"{sample_id} has unmapped evidence IDs: {missing!r}")
+        return {evidence_map[(domain_id, evidence_id)] for evidence_id in normalized_ids}
+
     def _map_locomo_category(self, cat: int) -> str:
-        # LoCoMo category mapping (verified against v45 baseline):
-        # 1=single_hop(282), 2=temporal(321), 3=multi_hop(96), 4=open_domain(841), 5=adversarial(446)
-        mapping = {1: "single_hop", 2: "temporal", 3: "multi_hop", 4: "open_domain", 5: "adversarial"}
+        # LoCoMo dataset category IDs:
+        # 1=single_hop(282), 2=temporal(321), 3=multi_hop(96),
+        # 4=open_domain(841), 5=adversarial(446)
+        mapping = {
+            1: "single_hop",
+            2: "temporal",
+            3: "multi_hop",
+            4: "open_domain",
+            5: "adversarial",
+        }
         return mapping.get(cat, "unknown")
+
+    @staticmethod
+    def _evidence_watermark(provider: Any) -> int:
+        attempts = getattr(provider, "attempts", None)
+        if not callable(attempts):
+            return 0
+        current = attempts()
+        return current[-1].attempt_sequence if current else 0
+
+    @staticmethod
+    def _evidence_since(provider: Any, watermark: int, request_id: str) -> tuple[Any, ...]:
+        evidence_since = getattr(provider, "evidence_since", None)
+        if not callable(evidence_since):
+            return ()
+        return tuple(evidence_since(watermark, role_request_id=request_id))
+
+    def _record_request_evidence(
+        self,
+        sample_id: str,
+        request_ids: tuple[str, ...],
+        evidence: tuple[Any, ...],
+        *,
+        boundary: str,
+        evidence_required: bool = True,
+    ) -> None:
+        if not hasattr(self, "_qa_attempt_evidence"):
+            self._qa_attempt_evidence = []
+            self._qa_attempt_keys = set()
+            self._qa_request_refs = {}
+        if evidence_required and not evidence:
+            raise RuntimeError(f"{boundary} produced no paid attempt evidence")
+        if not evidence:
+            self._qa_request_refs.setdefault(sample_id, []).append(
+                {
+                    "boundary": boundary,
+                    "evidence_status": "unavailable_test_double",
+                    "request_ids": list(request_ids),
+                    "attempt_sequences": [],
+                    "usd_accounted": "0",
+                }
+            )
+            return
+        allowed_requests = set(request_ids)
+        serialized = []
+        total = Decimal(0)
+        for attempt in evidence:
+            record = attempt.to_dict() if hasattr(attempt, "to_dict") else asdict(attempt)
+            if record.get("sample_id") != sample_id or record.get("role_request_id") not in (
+                allowed_requests
+            ):
+                raise RuntimeError(f"{boundary} attempt evidence identity mismatch")
+            sequence = record.get("attempt_sequence")
+            role = record.get("role")
+            if (
+                isinstance(sequence, bool)
+                or not isinstance(sequence, int)
+                or sequence <= 0
+                or not isinstance(role, str)
+                or not role
+                or sequence in self._qa_attempt_keys
+            ):
+                raise RuntimeError(f"{boundary} attempt evidence sequence is invalid")
+            self._qa_attempt_keys.add(sequence)
+            _verify_attempt_cost(record)
+            total += Decimal(record["usd_accounted"])
+            serialized.append(record)
+        if serialized[-1].get("status") != "ok":
+            raise RuntimeError(f"{boundary} has no successful terminal attempt")
+        self._qa_attempt_evidence.extend(serialized)
+        self._qa_request_refs.setdefault(sample_id, []).append(
+            {
+                "boundary": boundary,
+                "evidence_status": "verified",
+                "request_ids": list(request_ids),
+                "attempt_sequences": [record["attempt_sequence"] for record in serialized],
+                "attempts": [
+                    {
+                        "attempt_sequence": record["attempt_sequence"],
+                        "role": record["role"],
+                        "role_request_id": record["role_request_id"],
+                        "status": record["status"],
+                        "usd_accounted": record["usd_accounted"],
+                    }
+                    for record in serialized
+                ],
+                "usd_accounted": format(total, "f"),
+            }
+        )
+
+    def _budget_snapshots(self) -> dict[str, Any]:
+        providers = {
+            "reader": self.llm,
+            "judge": getattr(self.judge, "llm", None),
+        }
+        snapshots = {}
+        for role, provider in providers.items():
+            snapshot = getattr(provider, "budget_snapshot", None)
+            if not callable(snapshot):
+                snapshots[role] = {"status": "unavailable_test_double"}
+                continue
+            value = snapshot()
+            snapshots[role] = asdict(value) if is_dataclass(value) else dict(value)
+        return snapshots
+
+    def _cost_summary(self, budget_after: dict[str, Any]) -> dict[str, Any]:
+        role_totals: dict[str, Decimal] = {}
+        for record in self._qa_attempt_evidence:
+            role = record["role"]
+            role_totals[role] = role_totals.get(role, Decimal(0)) + Decimal(record["usd_accounted"])
+        for role, after in budget_after.items():
+            if after.get("status") == "unavailable_test_double":
+                continue
+            before = self._qa_budget_before[role]
+            delta = Decimal(after["usd_accounted"]) - Decimal(before["usd_accounted"])
+            if delta != role_totals.get(role, Decimal(0)):
+                raise RuntimeError("LLM budget and per-attempt cost evidence disagree")
+        costs = summarize_llm_costs(self._qa_attempt_evidence)
+        expected_roles = {role: format(value, "f") for role, value in sorted(role_totals.items())}
+        if costs["by_role_usd"] != expected_roles:
+            raise RuntimeError("LLM cost summary does not match the attempt ledger")
+        return costs
+
+    def _complete_attempt_journal(self, costs: dict[str, Any]) -> dict[str, Any]:
+        if not self._qa_attempt_evidence:
+            summary = {
+                "status": "unavailable_test_double",
+                "attempt_count": 0,
+                "finalized_attempt_count": 0,
+                "total_usd_accounted": "0",
+            }
+            self._qa_journal_summary = summary
+            return summary
+        raw_directory = os.environ.get(JOURNAL_DIR_ENV)
+        if raw_directory is None:
+            raise RuntimeError("paid QA has no durable attempt journal directory")
+        journal_directory = Path(raw_directory)
+        if journal_directory.name != f"llm-journal-{self.run_id}":
+            raise RuntimeError("paid attempt journal directory has no safe run-scoped name")
+        snapshot = read_attempt_journal(journal_directory, self.run_id)
+        ordered_memory = sorted(
+            self._qa_attempt_evidence, key=lambda record: record["attempt_sequence"]
+        )
+        if (
+            snapshot.run_complete
+            or snapshot.incomplete_prepared_attempts != 0
+            or snapshot.incomplete_pending_files != 0
+            or snapshot.attempt_count != len(self._qa_attempt_evidence)
+            or snapshot.finalized_attempt_count != snapshot.attempt_count
+            or Decimal(snapshot.total_usd_accounted) != Decimal(costs["total_usd"])
+            or any(
+                entry.phase != "finalized" or entry.finalized != record
+                for entry, record in zip(snapshot.entries, ordered_memory, strict=True)
+            )
+        ):
+            raise RuntimeError("paid attempt journal does not match the QA request ledger")
+        snapshot = mark_attempt_journal_complete(journal_directory, self.run_id)
+        if not snapshot.run_complete:
+            raise RuntimeError("paid attempt journal completion is indeterminate")
+        summary = {
+            "status": "verified_complete",
+            "run_id": snapshot.run_id,
+            "inventory_sha256": snapshot.inventory_sha256,
+            "attempt_count": snapshot.attempt_count,
+            "finalized_attempt_count": snapshot.finalized_attempt_count,
+            "incomplete_prepared_attempts": snapshot.incomplete_prepared_attempts,
+            "incomplete_pending_files": snapshot.incomplete_pending_files,
+            "total_usd_accounted": snapshot.total_usd_accounted,
+        }
+        self._qa_journal_summary = summary
+        return summary
+
+    def _llm_identity_summary(self) -> dict[str, Any]:
+        if not self._qa_attempt_evidence:
+            return {"status": "unavailable_test_double", "roles": {}}
+        return summarize_llm_identity(self._qa_attempt_evidence)
+
+
+def _answer_digest(run_id: str, sample_id: str, answer: str) -> str:
+    digest = hashlib.sha256()
+    digest.update(b"plico.benchmark.qa-answer.v1\0")
+    digest.update(run_id.encode("ascii"))
+    digest.update(b"\0")
+    digest.update(sample_id.encode("utf-8"))
+    digest.update(b"\0")
+    digest.update(answer.encode("utf-8"))
+    return digest.hexdigest()
+
+
+def _judge_score(result: Any) -> int:
+    score = getattr(result, "score", None)
+    if score is None and isinstance(result, tuple) and result:
+        score = result[0]
+    if isinstance(score, bool) or not isinstance(score, int) or score not in range(1, 6):
+        raise RuntimeError("scored judge returned an invalid typed score")
+    return score
+
+
+def _token_overlap(predicted: str, expected: str) -> dict[str, int]:
+    def tokens(value: str) -> list[str]:
+        normalized = re.sub(r"[^\w\s]", " ", value.lower().strip())
+        return re.sub(r"\s+", " ", normalized).split()
+
+    predicted_tokens = tokens(predicted)
+    expected_tokens = tokens(expected)
+    return {
+        "predicted_token_count": len(predicted_tokens),
+        "expected_token_count": len(expected_tokens),
+        "common_token_count": sum((Counter(predicted_tokens) & Counter(expected_tokens)).values()),
+    }
+
+
+def _verify_attempt_cost(record: dict[str, Any]) -> None:
+    try:
+        if record.get("usd_basis") == "actual_usage":
+            usage = record.get("usage")
+            if not isinstance(usage, dict):
+                raise ValueError("actual usage is missing")
+            recomputed = (
+                Decimal(usage["prompt_cache_hit_tokens"])
+                * Decimal(record["pricing_cache_hit_per_million_usd"])
+                + Decimal(usage["prompt_cache_miss_tokens"])
+                * Decimal(record["pricing_cache_miss_per_million_usd"])
+                + Decimal(usage["completion_tokens"])
+                * Decimal(record["pricing_output_per_million_usd"])
+            ) / Decimal(1_000_000)
+        elif record.get("usd_basis") == "reserved_upper_bound":
+            recomputed = (
+                Decimal(record["reserved_input_tokens_upper_bound"])
+                * Decimal(record["reservation_cache_miss_per_million_usd"])
+                + Decimal(record["reserved_output_tokens"])
+                * Decimal(record["reservation_output_per_million_usd"])
+            ) / Decimal(1_000_000)
+        else:
+            raise ValueError("unsupported cost basis")
+        if recomputed != Decimal(record["usd_accounted"]):
+            raise ValueError("attempt cost does not recompute")
+    except (InvalidOperation, KeyError, TypeError, ValueError) as error:
+        raise RuntimeError("LLM attempt cost evidence is invalid") from error

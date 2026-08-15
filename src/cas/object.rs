@@ -11,7 +11,7 @@
 
 use crate::util::now_ms;
 use serde::{Deserialize, Serialize};
-use sha2::{Sha256, Digest};
+use sha2::{Digest, Sha256};
 
 /// Visibility scope for CAS objects — controls cross-agent access.
 ///
@@ -105,12 +105,11 @@ pub struct AIObjectMeta {
     /// Optional intent description — what this object is FOR.
     pub intent: Option<String>,
 
-    /// Tenant ID — provides multi-tenant isolation.
+    /// Legacy namespace retained only for personal-vault migration.
     #[serde(default)]
     pub tenant_id: String,
 
-    /// Visibility scope — controls cross-agent access within a tenant.
-    /// Default: `Shared` (any agent in the same tenant can read).
+    /// Legacy visibility metadata retained for offline migration.
     #[serde(default)]
     pub scope: ObjectScope,
 }
@@ -207,7 +206,6 @@ impl std::fmt::Display for ContentType {
         }
     }
 }
-
 
 #[cfg(test)]
 mod tests {

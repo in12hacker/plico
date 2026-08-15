@@ -4,7 +4,12 @@ use crate::kernel::AIKernel;
 use crate::tool::ToolResult;
 use serde_json::json;
 
-pub(in crate::kernel) fn handle(kernel: &AIKernel, name: &str, params: &serde_json::Value, agent_id: &str) -> ToolResult {
+pub(in crate::kernel) fn handle(
+    kernel: &AIKernel,
+    name: &str,
+    params: &serde_json::Value,
+    agent_id: &str,
+) -> ToolResult {
     match name {
         "message.send" => {
             let to = params.get("to").and_then(|v| v.as_str()).unwrap_or("");
@@ -34,24 +39,29 @@ pub(in crate::kernel) fn handle(kernel: &AIKernel, name: &str, params: &serde_js
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::api::permission::PermissionAction;
     use crate::kernel::tests::make_kernel;
     use crate::kernel::tools::messaging::handle;
-    use crate::api::permission::PermissionAction;
 
     #[test]
     fn test_message_send() {
         let (kernel, _tmp) = make_kernel();
         kernel.register_agent("receiver".to_string()).unwrap();
         kernel.permission_grant("test", PermissionAction::SendMessage, None, None);
-        let result = handle(&*kernel, "message.send", &json!({"to": "receiver", "payload": {"text": "hello"}}), "test");
+        let result = handle(
+            &kernel,
+            "message.send",
+            &json!({"to": "receiver", "payload": {"text": "hello"}}),
+            "test",
+        );
         assert!(result.error.is_none(), "send should succeed: {:?}", result.error);
-        assert!(result.output["message_id"].as_str().unwrap().len() > 0);
+        assert!(!result.output["message_id"].as_str().unwrap().is_empty());
     }
 
     #[test]
     fn test_message_read_empty() {
         let (kernel, _tmp) = make_kernel();
-        let result = handle(&*kernel, "message.read", &json!({}), "test");
+        let result = handle(&kernel, "message.read", &json!({}), "test");
         assert!(result.error.is_none());
     }
 
@@ -60,23 +70,28 @@ mod tests {
         let (kernel, _tmp) = make_kernel();
         kernel.register_agent("reader".to_string()).unwrap();
         kernel.permission_grant("test", PermissionAction::SendMessage, None, None);
-        handle(&*kernel, "message.send", &json!({"to": "reader", "payload": {"msg": "hi"}}), "test");
+        handle(
+            &kernel,
+            "message.send",
+            &json!({"to": "reader", "payload": {"msg": "hi"}}),
+            "test",
+        );
 
-        let result = handle(&*kernel, "message.read", &json!({}), "reader");
+        let result = handle(&kernel, "message.read", &json!({}), "reader");
         assert!(result.error.is_none());
     }
 
     #[test]
     fn test_message_ack_nonexistent() {
         let (kernel, _tmp) = make_kernel();
-        let result = handle(&*kernel, "message.ack", &json!({"message_id": "nonexistent"}), "test");
+        let result = handle(&kernel, "message.ack", &json!({"message_id": "nonexistent"}), "test");
         assert!(result.error.is_some());
     }
 
     #[test]
     fn test_message_unknown_tool() {
         let (kernel, _tmp) = make_kernel();
-        let result = handle(&*kernel, "message.nonexistent", &json!({}), "test");
+        let result = handle(&kernel, "message.nonexistent", &json!({}), "test");
         assert!(result.error.is_some());
     }
 }

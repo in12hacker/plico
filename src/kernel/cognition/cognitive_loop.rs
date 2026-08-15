@@ -10,9 +10,8 @@ use tokio::sync::RwLock;
 use crate::kernel::event_bus::KernelEvent;
 
 use super::{
-    CognitiveConfig, CognitivePattern, CognitiveResult,
-    ContextQualityEngine, IntentSemanticNetwork, SkillForge,
-    TrajectoryTracker, now_ms,
+    now_ms, CognitiveConfig, CognitivePattern, CognitiveResult, ContextQualityEngine, IntentSemanticNetwork,
+    SkillForge, TrajectoryTracker,
 };
 
 /// 认知循环引擎
@@ -145,8 +144,8 @@ impl CognitiveLoop {
         let mut optimized_context = current_context.to_vec();
 
         // 2. 如果质量低于阈值或利用率过高，执行压缩
-        let should_compress = quality.score < 0.6
-            || (quality.token_count as f32 / 8192.0) > self.config.context_compression_threshold;
+        let should_compress =
+            quality.score < 0.6 || (quality.token_count as f32 / 8192.0) > self.config.context_compression_threshold;
 
         if should_compress {
             let compressed = self.context_analyzer.compress(agent_id, current_context).await?;
@@ -212,7 +211,8 @@ impl CognitiveLoop {
         report.quality_delta = after_quality.score - quality.score;
 
         // 8. 更新会话状态
-        self.update_session_state(agent_id, session_id, &report, &optimized_context).await;
+        self.update_session_state(agent_id, session_id, &report, &optimized_context)
+            .await;
 
         // 9. 更新全局统计
         {
@@ -235,7 +235,9 @@ impl CognitiveLoop {
         _context_after: &[String],
     ) -> CognitiveResult<()> {
         // 1. 追踪认知轨迹
-        self.trajectory_tracker.record_operation(agent_id, operation, success).await;
+        self.trajectory_tracker
+            .record_operation(agent_id, operation, success)
+            .await;
 
         // 2. 如果成功，提取技能候选
         if success && self.config.skill_extraction_enabled {
@@ -279,17 +281,16 @@ impl CognitiveLoop {
                     let session_id = &session_state.session_id;
                     let context = &session_state.attention_focus;
 
-                    match self.on_intent_declared(
-                        agent_id,
-                        session_id,
-                        "periodic_check",
-                        context,
-                    ).await {
+                    match self
+                        .on_intent_declared(agent_id, session_id, "periodic_check", context)
+                        .await
+                    {
                         Ok(report) => reports.push(report),
                         Err(e) => tracing::warn!(
                             agent = agent_id,
                             session = session_id,
-                            "Periodic context check failed: {}", e
+                            "Periodic context check failed: {}",
+                            e
                         ),
                     }
                 }
@@ -304,15 +305,18 @@ impl CognitiveLoop {
         self.trajectory_tracker.set_session(agent_id, session_id).await;
         let mut state = self.state.write().await;
         let key = format!("{}:{}", agent_id, session_id);
-        state.active_sessions.insert(key, SessionCognitiveState {
-            agent_id: agent_id.to_string(),
-            session_id: session_id.to_string(),
-            context_quality_score: 1.0,
-            context_utilization: 0.0,
-            attention_focus: Vec::new(),
-            detected_patterns: Vec::new(),
-            last_optimization: None,
-        });
+        state.active_sessions.insert(
+            key,
+            SessionCognitiveState {
+                agent_id: agent_id.to_string(),
+                session_id: session_id.to_string(),
+                context_quality_score: 1.0,
+                context_utilization: 0.0,
+                attention_focus: Vec::new(),
+                detected_patterns: Vec::new(),
+                last_optimization: None,
+            },
+        );
     }
 
     /// 结束会话
@@ -362,12 +366,7 @@ impl CognitiveLoop {
     }
 
     /// 更新会话上下文利用率
-    pub async fn update_context_utilization(
-        &self,
-        agent_id: &str,
-        session_id: &str,
-        utilization: f32,
-    ) {
+    pub async fn update_context_utilization(&self, agent_id: &str, session_id: &str, utilization: f32) {
         let key = format!("{}:{}", agent_id, session_id);
         let mut state = self.state.write().await;
         if let Some(session) = state.active_sessions.get_mut(&key) {
@@ -377,17 +376,16 @@ impl CognitiveLoop {
 
     // --- Private helpers ---
 
-    async fn detect_failure_lessons(
-        &self,
-        agent_id: &str,
-        intent: &str,
-    ) -> CognitiveResult<Vec<FailureLesson>> {
+    async fn detect_failure_lessons(&self, agent_id: &str, intent: &str) -> CognitiveResult<Vec<FailureLesson>> {
         let failures = self.trajectory_tracker.get_recent_failures(agent_id, 10).await;
         let mut lessons = Vec::new();
 
         for failure in failures {
             // Check if this failure is semantically related to current intent
-            let related = self.intent_network.is_semantically_related(&failure.intent, intent).await?;
+            let related = self
+                .intent_network
+                .is_semantically_related(&failure.intent, intent)
+                .await?;
             if related {
                 lessons.push(FailureLesson {
                     text: format!("Previous attempt on '{}' failed: {}", failure.intent, failure.operation),
@@ -426,9 +424,10 @@ impl CognitiveLoop {
                 let success = *success;
                 tokio::spawn(async move {
                     if success {
-                        let _ = this.trajectory_tracker.record_operation(
-                            "system", &intent_id, true
-                        ).await;
+                        let _ = this
+                            .trajectory_tracker
+                            .record_operation("system", &intent_id, true)
+                            .await;
                     }
                 });
             }
@@ -462,9 +461,10 @@ impl CognitiveLoop {
                 let this = Arc::clone(self);
                 let desc = description.clone();
                 tokio::spawn(async move {
-                    let _ = this.trajectory_tracker.record_operation(
-                        "system", &format!("conflict:{}", desc), false
-                    ).await;
+                    let _ = this
+                        .trajectory_tracker
+                        .record_operation("system", &format!("conflict:{}", desc), false)
+                        .await;
                 });
             }
             _ => {}
@@ -476,15 +476,26 @@ impl CognitiveLoop {
 #[derive(Debug, Clone)]
 pub enum OptimizationAction {
     /// 压缩冗余上下文
-    ContextCompressed { original_tokens: usize, compressed_tokens: usize, reason: String },
+    ContextCompressed {
+        original_tokens: usize,
+        compressed_tokens: usize,
+        reason: String,
+    },
     /// 预加载相关上下文
-    ContextPrefetched { cids: Vec<String>, relevance_scores: Vec<f32> },
+    ContextPrefetched {
+        cids: Vec<String>,
+        relevance_scores: Vec<f32>,
+    },
     /// 注入经验教训
     LessonInjected { lesson: String, source: String },
     /// 标记过时信息
     StaleInfoMarked { cids: Vec<String>, reason: String },
     /// 推荐技能
-    SkillRecommended { skill_id: String, skill_name: String, confidence: f32 },
+    SkillRecommended {
+        skill_id: String,
+        skill_name: String,
+        confidence: f32,
+    },
 }
 
 /// 失败经验教训
@@ -582,18 +593,16 @@ mod tests {
     #[tokio::test]
     async fn test_on_operation_completed_success() {
         let loop_ = make_cognitive_loop();
-        let result = loop_.on_operation_completed(
-            "agent-1", "test_op", true, &[], &[]
-        ).await;
+        let result = loop_.on_operation_completed("agent-1", "test_op", true, &[], &[]).await;
         assert!(result.is_ok());
     }
 
     #[tokio::test]
     async fn test_on_operation_completed_failure() {
         let loop_ = make_cognitive_loop();
-        let result = loop_.on_operation_completed(
-            "agent-1", "test_op", false, &[], &[]
-        ).await;
+        let result = loop_
+            .on_operation_completed("agent-1", "test_op", false, &[], &[])
+            .await;
         assert!(result.is_ok());
     }
 
@@ -616,8 +625,7 @@ mod tests {
             report_verbosity: crate::kernel::cognition::ReportVerbosity::Detailed,
         };
 
-        let loop_ = CognitiveLoop::new(context_analyzer, intent_network, skill_forge)
-            .with_config(config);
+        let loop_ = CognitiveLoop::new(context_analyzer, intent_network, skill_forge).with_config(config);
         assert!((loop_.config.context_compression_threshold - 0.5).abs() < 0.01);
         assert!(!loop_.config.proactive_prefetch_enabled);
     }
@@ -634,9 +642,7 @@ mod tests {
         let skill_forge = Arc::new(SkillForge::new());
         let tracker = Arc::new(TrajectoryTracker::new());
 
-        let loop_ = CognitiveLoop::with_shared_tracker(
-            context_analyzer, intent_network, skill_forge, tracker
-        );
+        let loop_ = CognitiveLoop::with_shared_tracker(context_analyzer, intent_network, skill_forge, tracker);
         let traj = loop_.trajectory_tracker.get_recent_trajectory("agent-1", 10).await;
         assert_eq!(traj.len(), 0);
     }
@@ -646,9 +652,10 @@ mod tests {
         let loop_ = make_cognitive_loop();
         loop_.register_session("agent-1", "session-1").await;
 
-        let report = loop_.on_intent_declared(
-            "agent-1", "session-1", "test intent", &[]
-        ).await.unwrap();
+        let report = loop_
+            .on_intent_declared("agent-1", "session-1", "test intent", &[])
+            .await
+            .unwrap();
 
         assert_eq!(report.agent_id, "agent-1");
         assert_eq!(report.session_id, "session-1");
@@ -660,9 +667,10 @@ mod tests {
         let loop_ = make_cognitive_loop();
         loop_.register_session("agent-1", "session-1").await;
 
-        loop_.on_intent_declared(
-            "agent-1", "session-1", "test", &[]
-        ).await.unwrap();
+        loop_
+            .on_intent_declared("agent-1", "session-1", "test", &[])
+            .await
+            .unwrap();
 
         let stats = loop_.stats().await;
         assert_eq!(stats.total_optimizations, 1);

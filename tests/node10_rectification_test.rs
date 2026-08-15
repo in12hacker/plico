@@ -3,11 +3,11 @@
 //! Tests for F-43 (soft-delete search isolation), F-44 (hybrid BM25 fallback),
 //! F-47 (unified response envelope), F-48 (structured error diagnosis).
 
-use plico::fs::semantic_fs::SemanticFS;
-use plico::fs::embedding::StubEmbeddingProvider;
-use plico::fs::search::InMemoryBackend;
 use plico::api::semantic::ApiResponse;
 use plico::cas::CASStorage;
+use plico::fs::embedding::StubEmbeddingProvider;
+use plico::fs::search::InMemoryBackend;
+use plico::fs::semantic_fs::SemanticFS;
 use std::sync::Arc;
 
 /// F-43: Soft-deleted objects are excluded from search after rebuild.
@@ -18,16 +18,17 @@ fn test_soft_delete_excluded_from_search_after_rebuild() {
     let stub_emb = Arc::new(StubEmbeddingProvider::new()) as Arc<dyn plico::fs::embedding::EmbeddingProvider>;
     let search_idx = Arc::new(InMemoryBackend::new()) as Arc<dyn plico::fs::search::SemanticSearch>;
 
-    let fs = SemanticFS::new(
-        dir.path().to_path_buf(),
-        cas.clone(),
-        stub_emb,
-        search_idx,
-        None,
-        None,
-    ).unwrap();
+    let fs = SemanticFS::new(dir.path().to_path_buf(), cas.clone(), stub_emb, search_idx, None, None).unwrap();
 
-    let cid = fs.create(b"secret content".to_vec(), vec!["secret".to_string()], "test".to_string(), None, plico::cas::ObjectScope::default()).unwrap();
+    let cid = fs
+        .create(
+            b"secret content".to_vec(),
+            vec!["secret".to_string()],
+            "test".to_string(),
+            None,
+            plico::cas::ObjectScope::default(),
+        )
+        .unwrap();
     fs.delete(&cid, "test".to_string()).unwrap();
 
     // Simulate restart with new SemanticFS
@@ -37,7 +38,11 @@ fn test_soft_delete_excluded_from_search_after_rebuild() {
 
     let results = fs2.search("secret", 10);
     let found_deleted = results.iter().any(|r| r.cid == cid);
-    assert!(!found_deleted, "Soft-deleted CID {} should NOT appear after rebuild", cid);
+    assert!(
+        !found_deleted,
+        "Soft-deleted CID {} should NOT appear after rebuild",
+        cid
+    );
 }
 
 /// F-44: SemanticFS.bm25_search API is accessible.
@@ -50,14 +55,7 @@ fn test_bm25_search_exposed_for_hybrid_fallback() {
     let stub_emb = Arc::new(StubEmbeddingProvider::new()) as Arc<dyn plico::fs::embedding::EmbeddingProvider>;
     let search_idx = Arc::new(InMemoryBackend::new()) as Arc<dyn plico::fs::search::SemanticSearch>;
 
-    let fs = SemanticFS::new(
-        dir.path().to_path_buf(),
-        cas,
-        stub_emb,
-        search_idx,
-        None,
-        None,
-    ).unwrap();
+    let fs = SemanticFS::new(dir.path().to_path_buf(), cas, stub_emb, search_idx, None, None).unwrap();
 
     // Verify bm25_search method exists and is callable
     // Returns Vec<(String, f32)> of (cid, score) pairs

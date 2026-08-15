@@ -24,23 +24,31 @@ pub struct ToolRegistry {
 
 impl ToolRegistry {
     pub fn new() -> Self {
-        Self { tools: RwLock::new(HashMap::new()) }
+        Self {
+            tools: RwLock::new(HashMap::new()),
+        }
     }
 
     /// Register a tool descriptor (no handler — execution via builtin match).
     pub fn register(&self, desc: ToolDescriptor) {
-        self.tools.write().unwrap().insert(desc.name.clone(), RegistryEntry {
-            descriptor: desc,
-            handler: None,
-        });
+        self.tools.write().unwrap().insert(
+            desc.name.clone(),
+            RegistryEntry {
+                descriptor: desc,
+                handler: None,
+            },
+        );
     }
 
     /// Register a tool with a dynamic handler.
     pub fn register_with_handler(&self, desc: ToolDescriptor, handler: Arc<dyn ToolHandler>) {
-        self.tools.write().unwrap().insert(desc.name.clone(), RegistryEntry {
-            descriptor: desc,
-            handler: Some(handler),
-        });
+        self.tools.write().unwrap().insert(
+            desc.name.clone(),
+            RegistryEntry {
+                descriptor: desc,
+                handler: Some(handler),
+            },
+        );
     }
 
     /// Look up a tool handler by name.
@@ -86,8 +94,8 @@ impl Default for ToolRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
     use crate::tool::ToolResult;
+    use serde_json::json;
 
     fn make_desc(name: &str) -> ToolDescriptor {
         ToolDescriptor {
@@ -135,9 +143,8 @@ mod tests {
     #[test]
     fn test_register_handler_and_execute() {
         let reg = ToolRegistry::new();
-        let handler: Arc<dyn ToolHandler> = Arc::new(|_params: &serde_json::Value, _agent: &str| {
-            ToolResult::ok(json!({"custom": true}))
-        });
+        let handler: Arc<dyn ToolHandler> =
+            Arc::new(|_params: &serde_json::Value, _agent: &str| ToolResult::ok(json!({"custom": true})));
         reg.register_with_handler(make_desc("custom.tool"), handler);
         let h = reg.get_handler("custom.tool").expect("handler should exist");
         let result = h.execute(&json!({}), "test-agent");
@@ -149,7 +156,10 @@ mod tests {
     fn test_handler_fallback_to_builtin() {
         let reg = ToolRegistry::new();
         reg.register(make_desc("cas.create"));
-        assert!(reg.get_handler("cas.create").is_none(), "descriptor-only should have no handler");
+        assert!(
+            reg.get_handler("cas.create").is_none(),
+            "descriptor-only should have no handler"
+        );
         assert!(reg.get("cas.create").is_some(), "descriptor should still exist");
     }
 
@@ -174,9 +184,8 @@ mod tests {
         reg.register(make_desc("tools.list"));
         assert!(reg.get_handler("tools.list").is_none());
 
-        let handler: Arc<dyn ToolHandler> = Arc::new(|_p: &serde_json::Value, _a: &str| {
-            ToolResult::ok(json!({"overridden": true}))
-        });
+        let handler: Arc<dyn ToolHandler> =
+            Arc::new(|_p: &serde_json::Value, _a: &str| ToolResult::ok(json!({"overridden": true})));
         reg.register_with_handler(make_desc("tools.list"), handler);
         let h = reg.get_handler("tools.list").expect("should have handler now");
         let result = h.execute(&json!({}), "agent");

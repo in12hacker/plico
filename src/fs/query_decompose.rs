@@ -108,11 +108,7 @@ pub fn decompose(query: &str) -> Option<DecomposedQuery> {
 ///
 /// Expected format: one sub-query per line, optionally prefixed with "1. ", "2. ", etc.
 pub fn parse_llm_decomposition(response: &str, original: &str) -> Option<DecomposedQuery> {
-    let lines: Vec<&str> = response
-        .lines()
-        .map(|l| l.trim())
-        .filter(|l| !l.is_empty())
-        .collect();
+    let lines: Vec<&str> = response.lines().map(|l| l.trim()).filter(|l| !l.is_empty()).collect();
 
     if lines.len() < 2 {
         return None; // Need at least 2 sub-queries for decomposition
@@ -125,9 +121,7 @@ pub fn parse_llm_decomposition(response: &str, original: &str) -> Option<Decompo
         .map(|(i, line)| {
             // Strip numbering prefix: "1. ", "2. ", etc.
             let query = if let Some(stripped) = line.strip_prefix(char::is_numeric) {
-                stripped.trim_start_matches(['.', ')', ' '])
-                    .trim()
-                    .to_string()
+                stripped.trim_start_matches(['.', ')', ' ']).trim().to_string()
             } else {
                 line.to_string()
             };
@@ -193,14 +187,63 @@ fn extract_entities(query: &str) -> Vec<String> {
 
     // 2. Capitalized words and "the X" patterns
     let skip_words: &[&str] = &[
-        "what", "why", "how", "when", "where", "which", "who",
-        "did", "does", "do", "is", "are", "was", "were", "be", "been",
-        "the", "a", "an", "and", "or", "but", "in", "on", "at",
-        "to", "for", "of", "with", "from", "by", "between",
-        "this", "that", "these", "those", "it", "its", "they",
-        "cause", "caused", "causing", "lead", "led", "result", "resulted",
-        "happen", "happened", "related", "connected", "relationship",
-        "about", "after", "before", "during", "then", "now",
+        "what",
+        "why",
+        "how",
+        "when",
+        "where",
+        "which",
+        "who",
+        "did",
+        "does",
+        "do",
+        "is",
+        "are",
+        "was",
+        "were",
+        "be",
+        "been",
+        "the",
+        "a",
+        "an",
+        "and",
+        "or",
+        "but",
+        "in",
+        "on",
+        "at",
+        "to",
+        "for",
+        "of",
+        "with",
+        "from",
+        "by",
+        "between",
+        "this",
+        "that",
+        "these",
+        "those",
+        "it",
+        "its",
+        "they",
+        "cause",
+        "caused",
+        "causing",
+        "lead",
+        "led",
+        "result",
+        "resulted",
+        "happen",
+        "happened",
+        "related",
+        "connected",
+        "relationship",
+        "about",
+        "after",
+        "before",
+        "during",
+        "then",
+        "now",
     ];
 
     let words: Vec<&str> = query.split_whitespace().collect();
@@ -217,7 +260,9 @@ fn extract_entities(query: &str) -> Vec<String> {
         let is_skip = skip_words.contains(&clean_lower.as_str());
 
         // Capitalized entity (skip sentence-initial)
-        if !is_skip && i > 0 && clean.chars().next().map(|c| c.is_uppercase()).unwrap_or(false)
+        if !is_skip
+            && i > 0
+            && clean.chars().next().map(|c| c.is_uppercase()).unwrap_or(false)
             && !entities.contains(&clean.to_string())
         {
             entities.push(clean.to_string());
@@ -227,9 +272,7 @@ fn extract_entities(query: &str) -> Vec<String> {
         if clean_lower == "the" && i + 1 < words.len() {
             let next = words[i + 1].trim_matches(|c: char| !c.is_alphanumeric());
             let next_lower = next.to_lowercase();
-            if !skip_words.contains(&next_lower.as_str()) && next.len() >= 3
-                && !entities.contains(&next.to_string())
-            {
+            if !skip_words.contains(&next_lower.as_str()) && next.len() >= 3 && !entities.contains(&next.to_string()) {
                 entities.push(next.to_string());
             }
         }
@@ -240,12 +283,33 @@ fn extract_entities(query: &str) -> Vec<String> {
     // 3. Chinese entities: extract by scanning CJK characters.
     //    CJK text has no spaces — mark skip-words first, then extract remaining 2-char sequences.
     let skip_cjk: &[&str] = &[
-        "为什么", "什么", "怎么", "如何", "哪个", "哪些", "多少",
-        "导致", "因为", "所以", "然后", "接着", "首先", "最后",
-        "关系", "联系", "之间", "可以", "可能", "已经", "正在",
+        "为什么",
+        "什么",
+        "怎么",
+        "如何",
+        "哪个",
+        "哪些",
+        "多少",
+        "导致",
+        "因为",
+        "所以",
+        "然后",
+        "接着",
+        "首先",
+        "最后",
+        "关系",
+        "联系",
+        "之间",
+        "可以",
+        "可能",
+        "已经",
+        "正在",
     ];
     // Also skip single-char particles
-    let skip_cjk_single: &[char] = &['的', '了', '是', '在', '有', '和', '与', '或', '把', '被', '从', '到', '着', '过', '地', '得', '也', '就', '都', '又', '再', '才', '却', '而', '但'];
+    let skip_cjk_single: &[char] = &[
+        '的', '了', '是', '在', '有', '和', '与', '或', '把', '被', '从', '到', '着', '过', '地', '得', '也', '就',
+        '都', '又', '再', '才', '却', '而', '但',
+    ];
     let cjk_chars: Vec<char> = query.chars().filter(|c| *c >= '\u{4e00}' && *c <= '\u{9fff}').collect();
     let mut used = vec![false; cjk_chars.len()];
 
@@ -260,7 +324,9 @@ fn extract_entities(query: &str) -> Vec<String> {
         let skip_chars: Vec<char> = skip.chars().collect();
         let skip_len = skip_chars.len();
         for i in 0..cjk_chars.len().saturating_sub(skip_len - 1) {
-            if used[i..i + skip_len].iter().any(|u| *u) { continue; }
+            if used[i..i + skip_len].iter().any(|u| *u) {
+                continue;
+            }
             let window: String = cjk_chars[i..i + skip_len].iter().collect();
             if window == *skip {
                 used[i..i + skip_len].fill(true);
@@ -306,9 +372,16 @@ fn extract_entities(query: &str) -> Vec<String> {
 /// Causal pattern: "Why did X cause Y?", "What led from X to Y?"
 fn decompose_causal(q: &str, entities: &[String]) -> Option<Vec<SubQuery>> {
     let causal_markers = [
-        "why did", "what caused", "what led", "what resulted",
-        "how did", "what was the reason", "because of",
-        "为什么", "什么原因", "导致",
+        "why did",
+        "what caused",
+        "what led",
+        "what resulted",
+        "how did",
+        "what was the reason",
+        "because of",
+        "为什么",
+        "什么原因",
+        "导致",
     ];
 
     if !causal_markers.iter().any(|m| q.contains(m)) {
@@ -334,9 +407,11 @@ fn decompose_causal(q: &str, entities: &[String]) -> Option<Vec<SubQuery>> {
     }
     // Sub 3: What connects them causally?
     subs.push(SubQuery {
-        query: format!("How did {} cause or lead to {}?",
+        query: format!(
+            "How did {} cause or lead to {}?",
             entities.first().map(|s| s.as_str()).unwrap_or("this"),
-            entities.get(1).map(|s| s.as_str()).unwrap_or("that")),
+            entities.get(1).map(|s| s.as_str()).unwrap_or("that")
+        ),
         hop: subs.len(),
         role: SubQueryRole::CausalExplain,
     });
@@ -347,10 +422,18 @@ fn decompose_causal(q: &str, entities: &[String]) -> Option<Vec<SubQuery>> {
 /// Relationship pattern: "What is the relationship between X and Y?"
 fn decompose_relationship(q: &str, entities: &[String]) -> Option<Vec<SubQuery>> {
     let relation_markers = [
-        "relationship between", "connection between", "link between",
-        "difference between", "similarity between", "related to",
-        "connected to", "associated with",
-        "关系", "联系", "区别", "相似",
+        "relationship between",
+        "connection between",
+        "link between",
+        "difference between",
+        "similarity between",
+        "related to",
+        "connected to",
+        "associated with",
+        "关系",
+        "联系",
+        "区别",
+        "相似",
     ];
 
     if !relation_markers.iter().any(|m| q.contains(m)) {
@@ -377,9 +460,19 @@ fn decompose_relationship(q: &str, entities: &[String]) -> Option<Vec<SubQuery>>
 /// Chain pattern: "What happened after X before Y?" / temporal sequence
 fn decompose_chain(q: &str, entities: &[String]) -> Option<Vec<SubQuery>> {
     let chain_markers = [
-        "and then", "after that", "before that", "first", "then",
-        "next", "finally", "in order", "sequence",
-        "然后", "接着", "首先", "最后",
+        "and then",
+        "after that",
+        "before that",
+        "first",
+        "then",
+        "next",
+        "finally",
+        "in order",
+        "sequence",
+        "然后",
+        "接着",
+        "首先",
+        "最后",
     ];
 
     if !chain_markers.iter().any(|m| q.contains(m)) {
@@ -472,8 +565,16 @@ mod tests {
     #[test]
     fn test_extract_entities_cjk() {
         let entities = extract_entities("为什么部署导致了故障？");
-        assert!(entities.iter().any(|e| e == "部署"), "should find 部署, got {:?}", entities);
-        assert!(entities.iter().any(|e| e == "故障"), "should find 故障, got {:?}", entities);
+        assert!(
+            entities.iter().any(|e| e == "部署"),
+            "should find 部署, got {:?}",
+            entities
+        );
+        assert!(
+            entities.iter().any(|e| e == "故障"),
+            "should find 故障, got {:?}",
+            entities
+        );
     }
 
     #[test]

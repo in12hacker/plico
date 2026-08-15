@@ -50,15 +50,16 @@ Status: active | Fan-in: 2 | Fan-out: 2
 |--------|------|-------------|
 | `EmbeddingProvider` | `embedding/mod.rs` | Trait: text → vector embedding |
 | `OllamaBackend` | `embedding/ollama.rs` | Ollama HTTP embedding backend |
-| `LocalEmbeddingBackend` | `embedding/local.rs` | Python subprocess ONNX backend |
-| `StubEmbeddingProvider` | `embedding/stub.rs` | Zero-vector stub (tag-only search) |
-| `OrtEmbeddingBackend` | `embedding/ort_backend.rs` | ONNX Runtime in-process backend (feature-gated) |
-| `EmbeddingCircuitBreaker` | `embedding/circuit_breaker.rs` | 3-state circuit breaker wrapping any provider |
+| `OpenAIEmbeddingBackend` | `embedding/openai.rs` | Legacy Object vector backend; P3 identity unavailable |
+| `LocalEmbeddingBackend` | `embedding/local.rs` | Compiled-in Python worker; P3 identity unavailable |
+| `StubEmbeddingProvider` | `embedding/stub.rs` | Explicit tag-only/test failure provider |
+| `EmbeddingCircuitBreaker` | `embedding/circuit_breaker.rs` | 3-state breaker without fabricated fallback vectors |
 | `SemanticSearch` | `search/mod.rs` | Trait: vector similarity search |
 | `InMemoryBackend` | `search/memory.rs` | Brute-force cosine similarity |
 | `HnswBackend` | `search/hnsw.rs` | HNSW approximate nearest neighbor |
 | `Bm25Index` | `search/bm25.rs` | BM25 keyword search index |
 | `SearchFilter` | `search/mod.rs` | Tag/type/time filter for search |
+| `DiagnosedSearch` | `search/mod.rs` | Search results plus actual path execution and typed embedding degradation |
 
 ### Knowledge Graph
 
@@ -93,14 +94,17 @@ Status: active | Fan-in: 2 | Fan-out: 2
 
 | File | Lines | Purpose |
 |------|-------|---------|
-| `mod.rs` | ~37 | EmbeddingProvider trait + re-exports |
-| `types.rs` | ~69 | Shared embedding types (Embedding, EmbedError, EmbeddingMeta) |
-| `ollama.rs` | ~278 | OllamaBackend (HTTP API) |
-| `local.rs` | ~230 | LocalEmbeddingBackend (Python ONNX subprocess) |
-| `ort_backend.rs` | ~249 | OrtEmbeddingBackend (ONNX Runtime, feature-gated) |
-| `stub.rs` | ~36 | StubEmbeddingProvider (testing) |
-| `circuit_breaker.rs` | ~248 | EmbeddingCircuitBreaker (3-state failure protection) |
-| `json_rpc.rs` | ~30 | JSON-RPC embedding adapter |
+| `mod.rs` | wrappers + exports | Identity-aware cache wrapper and exports |
+| `types.rs` | contracts | Embedding operations, trusted builder identity, typed failures |
+| `ollama.rs` | provider | Guarded Ollama document builder; only current P3 identity source |
+| `ollama/tests.rs` | protocol tests | Exact evidence, drift, shape and privacy gates |
+| `local.rs` | provider | Local worker RPC boundary; P3 identity unavailable |
+| `local_worker.py` | worker | Compiled-in CPU embedding worker |
+| `openai.rs` | provider | OpenAI-compatible legacy Object embedding |
+| `stub.rs` | provider | Explicit non-production stub |
+| `adaptive.rs` | wrapper | Registered input transforms and Matryoshka normalization |
+| `circuit_breaker.rs` | wrapper | 3-state failure protection without fallback vectors |
+| `json_rpc.rs` | protocol | Local worker JSON-RPC envelopes |
 
 ### `search/` — Vector + Keyword Search (see `search/INDEX.md`)
 
@@ -109,7 +113,7 @@ Status: active | Fan-in: 2 | Fan-out: 2
 | `mod.rs` | ~147 | SemanticSearch trait, SearchFilter, re-exports |
 | `memory.rs` | ~332 | InMemoryBackend (brute-force cosine) |
 | `hnsw.rs` | ~310 | HnswBackend (HNSW ANN via usearch, f16 quantization) |
-| `bm25.rs` | ~83 | BM25 keyword search index |
+| `bm25.rs` | ~220 | BM25 keyword search index |
 
 ### `graph/` — Knowledge Graph (see `graph/INDEX.md`)
 

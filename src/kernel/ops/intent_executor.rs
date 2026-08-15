@@ -4,14 +4,11 @@
 //!
 //! Soul 3.0 Axiom 2: "意图先于操作" — OS executes on behalf of Agent.
 
+use crate::kernel::ops::intent::{IntentOperation, IntentPlan, IntentStep};
+use crate::kernel::AIKernel;
 use std::collections::HashMap;
 use std::sync::Arc;
-use crate::kernel::ops::intent::{
-    IntentPlan, IntentStep, IntentOperation,
-};
-use crate::kernel::AIKernel;
 // Soul v3.0: Skill discovery and self-healing delegated to CognitiveLoop.
-
 
 // ── F-2: Execution Statistics ────────────────────────────────────────────────
 
@@ -154,14 +151,17 @@ impl AutonomousExecutor {
             // Check if dependencies are satisfied
             if !self.can_execute_step(step, &completed_steps) {
                 // Mark as blocked
-                results.insert(step.step_id.clone(), StepResult {
-                    step_id: step.step_id.clone(),
-                    success: false,
-                    output_cids: vec![],
-                    tokens_used: 0,
-                    error: Some("dependency not satisfied".to_string()),
-                    duration_ms: Some(0),
-                });
+                results.insert(
+                    step.step_id.clone(),
+                    StepResult {
+                        step_id: step.step_id.clone(),
+                        success: false,
+                        output_cids: vec![],
+                        tokens_used: 0,
+                        error: Some("dependency not satisfied".to_string()),
+                        duration_ms: Some(0),
+                    },
+                );
                 steps_failed += 1;
                 continue;
             }
@@ -213,13 +213,9 @@ impl AutonomousExecutor {
             };
             if let Some(cognitive_loop) = cognitive_loop_opt {
                 let step_desc = format!("{}:{}", op_type, step.step_id);
-                let _ = cognitive_loop.on_operation_completed(
-                    agent_id,
-                    &step_desc,
-                    result.success,
-                    &[],
-                    &result.output_cids,
-                ).await;
+                let _ = cognitive_loop
+                    .on_operation_completed(agent_id, &step_desc, result.success, &[], &result.output_cids)
+                    .await;
             }
         }
 
@@ -267,12 +263,10 @@ impl AutonomousExecutor {
         let profile = self.kernel.prefetch.profile_store().get_or_create(agent_id);
         if let Some(next_tag) = profile.predict_next(current_tag) {
             // Trigger on_intent_complete which handles the prefetch
-            let _ = self.kernel.prefetch.on_intent_complete(
-                agent_id,
-                current_tag,
-                Some(&next_tag),
-                &[],
-            );
+            let _ = self
+                .kernel
+                .prefetch
+                .on_intent_complete(agent_id, current_tag, Some(&next_tag), &[]);
         }
     }
 
@@ -308,21 +302,11 @@ impl AutonomousExecutor {
     /// Execute a single step.
     async fn execute_step(&self, step: &IntentStep) -> StepResult {
         match &step.operation {
-            IntentOperation::Read { cid } => {
-                self.execute_read(cid, &step.step_id).await
-            }
-            IntentOperation::Search { query, tags } => {
-                self.execute_search(query, tags, &step.step_id).await
-            }
-            IntentOperation::Call { tool, params } => {
-                self.execute_call(tool, params, &step.step_id).await
-            }
-            IntentOperation::Create { content, tags } => {
-                self.execute_create(content, tags, &step.step_id).await
-            }
-            IntentOperation::ReadBatch { cids } => {
-                self.execute_read_batch(cids, &step.step_id).await
-            }
+            IntentOperation::Read { cid } => self.execute_read(cid, &step.step_id).await,
+            IntentOperation::Search { query, tags } => self.execute_search(query, tags, &step.step_id).await,
+            IntentOperation::Call { tool, params } => self.execute_call(tool, params, &step.step_id).await,
+            IntentOperation::Create { content, tags } => self.execute_create(content, tags, &step.step_id).await,
+            IntentOperation::ReadBatch { cids } => self.execute_read_batch(cids, &step.step_id).await,
         }
     }
 
@@ -334,10 +318,7 @@ impl AutonomousExecutor {
         let kernel = self.kernel.clone();
         let cid_for_result = cid.to_string();
 
-        let result = tokio::task::spawn_blocking(move || {
-            kernel.get_object(&cid_owned, "system", "default")
-        })
-        .await;
+        let result = tokio::task::spawn_blocking(move || kernel.get_object(&cid_owned, "system", "default")).await;
 
         match result {
             Ok(Ok(obj)) => StepResult {
@@ -375,14 +356,7 @@ impl AutonomousExecutor {
         let kernel = self.kernel.clone();
 
         let result = tokio::task::spawn_blocking(move || {
-            kernel.semantic_search(
-                &query_owned,
-                "system",
-                "default",
-                10,
-                tags_owned,
-                vec![],
-            )
+            kernel.semantic_search(&query_owned, "system", "default", 10, tags_owned, vec![])
         })
         .await;
 
@@ -651,12 +625,8 @@ mod tests {
                 },
                 100,
             ));
-            let step2b = IntentStep::new(
-                "step-2b".to_string(),
-                IntentOperation::Read { cid: cid.clone() },
-                100,
-            )
-            .with_dependency("step-1b".to_string());
+            let step2b = IntentStep::new("step-2b".to_string(), IntentOperation::Read { cid: cid.clone() }, 100)
+                .with_dependency("step-1b".to_string());
             plan2.add_step(step2b);
 
             let result2 = executor.execute_plan(&plan2, "test-agent").await;
@@ -712,156 +682,152 @@ mod tests {
 
     // ── Node 23: 成 — Learning Loop Extension ────────────────────────────────────
 
-/// Test F-4 (Node 23): After plan execution completes, verify the learning loop
-/// extension is triggered — record_operation_sequences, analyze_failures, and
-/// check_decomposition_opportunity are all called.
-///
-/// We verify via observable state:
-/// 1. record_operation_sequences → skill_discriminator has sequences/candidates
-/// 2. analyze_failures → plan_adaptor recorded the failure
-/// 3. check_decomposition_opportunity → internally calls get_skill_candidates (covered)
-#[tokio::test(flavor = "multi_thread")]
-async fn test_learning_loop_extension_full() {
-    let (kernel_arc, dir) = crate::kernel::tests::make_kernel_arc();
-    // Clone for the first executor
-    let kernel = kernel_arc.clone();
-    let mut executor = AutonomousExecutor::new(kernel);
+    /// Test F-4 (Node 23): After plan execution completes, verify the learning loop
+    /// extension is triggered — record_operation_sequences, analyze_failures, and
+    /// check_decomposition_opportunity are all called.
+    ///
+    /// We verify via observable state:
+    /// 1. record_operation_sequences → skill_discriminator has sequences/candidates
+    /// 2. analyze_failures → plan_adaptor recorded the failure
+    /// 3. check_decomposition_opportunity → internally calls get_skill_candidates (covered)
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_learning_loop_extension_full() {
+        let (kernel_arc, dir) = crate::kernel::tests::make_kernel_arc();
+        // Clone for the first executor
+        let kernel = kernel_arc.clone();
+        let mut executor = AutonomousExecutor::new(kernel);
 
-    // Create a plan with a step that will fail (nonexistent CID)
-    // This ensures analyze_failures is triggered
-    let mut plan = IntentPlan::new("learn:test".to_string());
-    plan.add_step(IntentStep::new(
-        "step-fail".to_string(),
-        IntentOperation::Read {
-            cid: "nonexistent-cid-for-learning-test".to_string(),
-        },
-        100,
-    ));
-    // Also add a successful step so we have mixed results
-    plan.add_step(IntentStep::new(
-        "step-success".to_string(),
-        IntentOperation::Create {
-            content: b"learning-test-content".to_vec(),
-            tags: vec!["test".to_string()],
-        },
-        100,
-    ));
-
-    let result = executor.execute_plan(&plan, "test-agent").await;
-
-    // Verify execution completed (one failed, one succeeded)
-    assert_eq!(result.steps_completed, 1, "one step should succeed");
-    assert_eq!(result.steps_failed, 1, "one step should fail");
-
-    // ── Verify 1: record_operation_sequences was called ──────────────────────
-    // After execution, skill_discriminator should have recorded sequences
-    // which appear as candidates when count >= min_sequence_count (3) AND success_rate >= 0.8
-    // With 2 different sequences, we won't have a candidate yet (need 3 of same)
-    // For stronger verification: execute multiple similar plans to build candidates
-    for i in 0..3 {
-        let mut plan_repeat = IntentPlan::new(format!("learn:test-{}", i));
-        plan_repeat.add_step(IntentStep::new(
-            "repeat-step".to_string(),
-            IntentOperation::Create {
-                content: format!("repeat-content-{}", i).into_bytes(),
-                tags: vec!["repeat".to_string()],
+        // Create a plan with a step that will fail (nonexistent CID)
+        // This ensures analyze_failures is triggered
+        let mut plan = IntentPlan::new("learn:test".to_string());
+        plan.add_step(IntentStep::new(
+            "step-fail".to_string(),
+            IntentOperation::Read {
+                cid: "nonexistent-cid-for-learning-test".to_string(),
             },
             100,
         ));
-        let _ = executor.execute_plan(&plan_repeat, "test-agent-repeat").await;
-    }
-
-    // Soul v3.0: Skill candidates are extracted by CognitiveLoop, not AutonomousExecutor.
-    // The cognitive symbiotic engine handles pattern recognition asynchronously.
-
-    // Leak to avoid tokio blocking shutdown errors
-    std::mem::forget(kernel_arc);
-    std::mem::forget(dir);
-}
-
-/// Verifies that learning loop extension methods are called after execution
-/// using a plan that will definitely produce observable state changes.
-#[tokio::test(flavor = "multi_thread")]
-async fn test_learning_loop_methods_called() {
-    let (kernel, dir) = crate::kernel::tests::make_kernel_arc();
-    let mut executor = AutonomousExecutor::new(kernel.clone());
-
-    // Execute a successful plan to trigger record_operation_sequences
-    let mut plan = IntentPlan::new("success:plan".to_string());
-    plan.add_step(IntentStep::new(
-        "create-step".to_string(),
-        IntentOperation::Create {
-            content: b"test-content".to_vec(),
-            tags: vec!["test".to_string()],
-        },
-        100,
-    ));
-
-    let result = executor.execute_plan(&plan, "agent-success").await;
-
-    // Leak to avoid tokio blocking shutdown errors
-    std::mem::forget(kernel);
-    std::mem::forget(dir);
-
-    assert!(result.success, "plan should execute successfully");
-
-    // Soul v3.0: Operation sequences are recorded by CognitiveLoop's TrajectoryTracker.
-    // AutonomousExecutor no longer maintains skill_discriminator internally.
-
-    // Verify analyze_failures was called:
-    // Execute a failing plan
-    let (kernel2, dir2) = crate::kernel::tests::make_kernel_arc();
-    let mut executor2 = AutonomousExecutor::new(kernel2.clone());
-    let mut fail_plan = IntentPlan::new("fail:plan".to_string());
-    fail_plan.add_step(IntentStep::new(
-        "fail-step".to_string(),
-        IntentOperation::Read {
-            cid: "nonexistent-cid-12345".to_string(),
-        },
-        100,
-    ));
-
-    let fail_result = executor2.execute_plan(&fail_plan, "agent-fail").await;
-    assert!(!fail_result.success, "plan should fail");
-
-    // analyze_failures was called with the failed step result
-    // The plan_adaptor has recorded the failure internally
-
-    // Verify check_decomposition_opportunity was called:
-    // This method calls get_skill_candidates internally
-    // We can verify by executing multiple plans to build up candidates
-    let (kernel3, dir3) = crate::kernel::tests::make_kernel_arc();
-    let mut executor3 = AutonomousExecutor::new(kernel3.clone());
-    for i in 0..5 {
-        let mut p = IntentPlan::new(format!("repeat:{}", i));
-        p.add_step(IntentStep::new(
-            "r".to_string(),
+        // Also add a successful step so we have mixed results
+        plan.add_step(IntentStep::new(
+            "step-success".to_string(),
             IntentOperation::Create {
-                content: format!("c{}", i).into_bytes(),
-                tags: vec!["r".to_string()],
+                content: b"learning-test-content".to_vec(),
+                tags: vec!["test".to_string()],
             },
             100,
         ));
-        let _ = executor3.execute_plan(&p, "agent-repeat").await;
+
+        let result = executor.execute_plan(&plan, "test-agent").await;
+
+        // Verify execution completed (one failed, one succeeded)
+        assert_eq!(result.steps_completed, 1, "one step should succeed");
+        assert_eq!(result.steps_failed, 1, "one step should fail");
+
+        // ── Verify 1: record_operation_sequences was called ──────────────────────
+        // After execution, skill_discriminator should have recorded sequences
+        // which appear as candidates when count >= min_sequence_count (3) AND success_rate >= 0.8
+        // With 2 different sequences, we won't have a candidate yet (need 3 of same)
+        // For stronger verification: execute multiple similar plans to build candidates
+        for i in 0..3 {
+            let mut plan_repeat = IntentPlan::new(format!("learn:test-{}", i));
+            plan_repeat.add_step(IntentStep::new(
+                "repeat-step".to_string(),
+                IntentOperation::Create {
+                    content: format!("repeat-content-{}", i).into_bytes(),
+                    tags: vec!["repeat".to_string()],
+                },
+                100,
+            ));
+            let _ = executor.execute_plan(&plan_repeat, "test-agent-repeat").await;
+        }
+
+        // Soul v3.0: Skill candidates are extracted by CognitiveLoop, not AutonomousExecutor.
+        // The cognitive symbiotic engine handles pattern recognition asynchronously.
+
+        // Leak to avoid tokio blocking shutdown errors
+        std::mem::forget(kernel_arc);
+        std::mem::forget(dir);
     }
 
-    // Soul v3.0: Skill discovery is handled by CognitiveLoop's SkillForge.
-    // The cognitive engine extracts patterns asynchronously from trajectory data.
+    /// Verifies that learning loop extension methods are called after execution
+    /// using a plan that will definitely produce observable state changes.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_learning_loop_methods_called() {
+        let (kernel, dir) = crate::kernel::tests::make_kernel_arc();
+        let mut executor = AutonomousExecutor::new(kernel.clone());
 
-    // Leak kernels to avoid tokio blocking shutdown errors
-    std::mem::forget(kernel2);
-    std::mem::forget(kernel3);
-    std::mem::forget(dir2);
-    std::mem::forget(dir3);
-}
+        // Execute a successful plan to trigger record_operation_sequences
+        let mut plan = IntentPlan::new("success:plan".to_string());
+        plan.add_step(IntentStep::new(
+            "create-step".to_string(),
+            IntentOperation::Create {
+                content: b"test-content".to_vec(),
+                tags: vec!["test".to_string()],
+            },
+            100,
+        ));
+
+        let result = executor.execute_plan(&plan, "agent-success").await;
+
+        // Leak to avoid tokio blocking shutdown errors
+        std::mem::forget(kernel);
+        std::mem::forget(dir);
+
+        assert!(result.success, "plan should execute successfully");
+
+        // Soul v3.0: Operation sequences are recorded by CognitiveLoop's TrajectoryTracker.
+        // AutonomousExecutor no longer maintains skill_discriminator internally.
+
+        // Verify analyze_failures was called:
+        // Execute a failing plan
+        let (kernel2, dir2) = crate::kernel::tests::make_kernel_arc();
+        let mut executor2 = AutonomousExecutor::new(kernel2.clone());
+        let mut fail_plan = IntentPlan::new("fail:plan".to_string());
+        fail_plan.add_step(IntentStep::new(
+            "fail-step".to_string(),
+            IntentOperation::Read {
+                cid: "nonexistent-cid-12345".to_string(),
+            },
+            100,
+        ));
+
+        let fail_result = executor2.execute_plan(&fail_plan, "agent-fail").await;
+        assert!(!fail_result.success, "plan should fail");
+
+        // analyze_failures was called with the failed step result
+        // The plan_adaptor has recorded the failure internally
+
+        // Verify check_decomposition_opportunity was called:
+        // This method calls get_skill_candidates internally
+        // We can verify by executing multiple plans to build up candidates
+        let (kernel3, dir3) = crate::kernel::tests::make_kernel_arc();
+        let mut executor3 = AutonomousExecutor::new(kernel3.clone());
+        for i in 0..5 {
+            let mut p = IntentPlan::new(format!("repeat:{}", i));
+            p.add_step(IntentStep::new(
+                "r".to_string(),
+                IntentOperation::Create {
+                    content: format!("c{}", i).into_bytes(),
+                    tags: vec!["r".to_string()],
+                },
+                100,
+            ));
+            let _ = executor3.execute_plan(&p, "agent-repeat").await;
+        }
+
+        // Soul v3.0: Skill discovery is handled by CognitiveLoop's SkillForge.
+        // The cognitive engine extracts patterns asynchronously from trajectory data.
+
+        // Leak kernels to avoid tokio blocking shutdown errors
+        std::mem::forget(kernel2);
+        std::mem::forget(kernel3);
+        std::mem::forget(dir2);
+        std::mem::forget(dir3);
+    }
 
     #[test]
     fn test_can_execute_step_no_deps() {
-        let step = IntentStep::new(
-            "s1".to_string(),
-            IntentOperation::Read { cid: "c1".to_string() },
-            100,
-        );
+        let step = IntentStep::new("s1".to_string(), IntentOperation::Read { cid: "c1".to_string() }, 100);
         // Can't test the executor directly without kernel, but we can test the logic
         let can_exec = step.dependencies.is_empty();
         assert!(can_exec);
@@ -869,12 +835,8 @@ async fn test_learning_loop_methods_called() {
 
     #[test]
     fn test_can_execute_step_with_deps() {
-        let step = IntentStep::new(
-            "s2".to_string(),
-            IntentOperation::Read { cid: "c2".to_string() },
-            100,
-        )
-        .with_dependency("s1".to_string());
+        let step = IntentStep::new("s2".to_string(), IntentOperation::Read { cid: "c2".to_string() }, 100)
+            .with_dependency("s1".to_string());
 
         let mut completed = std::collections::HashSet::<String>::new();
         completed.insert("s1".to_string());
@@ -885,12 +847,8 @@ async fn test_learning_loop_methods_called() {
 
     #[test]
     fn test_cannot_execute_step_missing_dep() {
-        let step = IntentStep::new(
-            "s2".to_string(),
-            IntentOperation::Read { cid: "c2".to_string() },
-            100,
-        )
-        .with_dependency("s1".to_string());
+        let step = IntentStep::new("s2".to_string(), IntentOperation::Read { cid: "c2".to_string() }, 100)
+            .with_dependency("s1".to_string());
 
         let completed = std::collections::HashSet::<String>::new();
 
@@ -923,7 +881,11 @@ async fn test_learning_loop_methods_called() {
         // Verify profile learned the transition
         let profile = profile_store.get_or_create(agent_id);
         let predicted = profile.predict_next("auth");
-        assert_eq!(predicted, Some("deploy".to_string()), "profile should learn transitions");
+        assert_eq!(
+            predicted,
+            Some("deploy".to_string()),
+            "profile should learn transitions"
+        );
 
         // Now execute a plan — after execution, prefetch should trigger for next intent
         let mut plan = IntentPlan::new("auth:run".to_string());
@@ -986,7 +948,11 @@ async fn test_learning_loop_methods_called() {
         assert!(result.success, "plan should execute");
         // Profile should still show "deploy" → "test" prediction after execution
         let profile2 = kernel.prefetch.profile_store().get_or_create(agent_id);
-        assert_eq!(profile2.predict_next("deploy"), Some("test".to_string()), "prefetch should predict next intent");
+        assert_eq!(
+            profile2.predict_next("deploy"),
+            Some("test".to_string()),
+            "prefetch should predict next intent"
+        );
 
         // Leak to avoid tokio blocking shutdown errors
         std::mem::forget(kernel);
@@ -1021,7 +987,10 @@ async fn test_learning_loop_methods_called() {
 
         // Verify hot_objects were recorded
         let profile = kernel.prefetch.profile_store().get_or_create("test-agent-hot");
-        assert!(!profile.hot_objects.is_empty(), "hot_objects should be updated after execution");
+        assert!(
+            !profile.hot_objects.is_empty(),
+            "hot_objects should be updated after execution"
+        );
         // The CID from Create operation should appear in hot_objects
         let hot_cids: Vec<_> = profile.hot_objects.iter().map(|(cid, _)| cid.clone()).collect();
         assert!(!hot_cids.is_empty(), "should have recorded CIDs to hot_objects");
@@ -1051,7 +1020,11 @@ async fn test_learning_loop_methods_called() {
 
         // Verify the transition is learned
         let profile = profile_store.get_or_create(agent_id);
-        assert_eq!(profile.predict_next("build"), Some("test".to_string()), "should learn build→test");
+        assert_eq!(
+            profile.predict_next("build"),
+            Some("test".to_string()),
+            "should learn build→test"
+        );
 
         // Step 2: Execute a "build" intent plan
         let mut plan = IntentPlan::new("build:compile".to_string());
@@ -1073,7 +1046,11 @@ async fn test_learning_loop_methods_called() {
         // Step 3: Verify profile still has the prediction after execution
         let profile2 = kernel.prefetch.profile_store().get_or_create(agent_id);
         let predicted = profile2.predict_next("build");
-        assert_eq!(predicted, Some("test".to_string()), "profile should persist after execution");
+        assert_eq!(
+            predicted,
+            Some("test".to_string()),
+            "profile should persist after execution"
+        );
 
         // Step 4: Verify hot_objects were updated with the CID from execution
         let hot_cids: Vec<_> = profile2.hot_objects.iter().map(|(c, _)| c.clone()).collect();
@@ -1163,7 +1140,10 @@ async fn test_learning_loop_methods_called() {
 
         let stats = executor.get_stats();
         // After executing a "create" operation, stats should have "create" recorded
-        assert!(stats.get_avg_time("create").is_some(), "should have recorded create operation time");
+        assert!(
+            stats.get_avg_time("create").is_some(),
+            "should have recorded create operation time"
+        );
         let types = stats.operation_types();
         assert!(types.contains(&"create".to_string()));
 
@@ -1179,13 +1159,15 @@ async fn test_learning_loop_methods_called() {
         let kernel_leak = kernel.clone();
 
         // First create an object to get a valid CID
-        let cid = kernel.semantic_create(
-            b"read-me-content".to_vec(),
-            vec!["readable".to_string()],
-            "system",
-            None,
-            crate::cas::ObjectScope::default(),
-        ).expect("create should succeed");
+        let cid = kernel
+            .semantic_create(
+                b"read-me-content".to_vec(),
+                vec!["readable".to_string()],
+                "system",
+                None,
+                crate::cas::ObjectScope::default(),
+            )
+            .expect("create should succeed");
 
         let mut executor = AutonomousExecutor::new(kernel);
 
@@ -1219,13 +1201,15 @@ async fn test_learning_loop_methods_called() {
         let kernel_leak = kernel.clone();
 
         // Create some objects first so search has data
-        kernel.semantic_create(
-            b"searchable content alpha".to_vec(),
-            vec!["search-test".to_string()],
-            "system",
-            None,
-            crate::cas::ObjectScope::default(),
-        ).expect("create should succeed");
+        kernel
+            .semantic_create(
+                b"searchable content alpha".to_vec(),
+                vec!["search-test".to_string()],
+                "system",
+                None,
+                crate::cas::ObjectScope::default(),
+            )
+            .expect("create should succeed");
 
         let mut executor = AutonomousExecutor::new(kernel);
 
@@ -1294,21 +1278,25 @@ async fn test_learning_loop_methods_called() {
         let kernel_leak = kernel.clone();
 
         // Create multiple objects
-        let cid1 = kernel.semantic_create(
-            b"batch-content-1".to_vec(),
-            vec!["batch".to_string()],
-            "system",
-            None,
-            crate::cas::ObjectScope::default(),
-        ).expect("create should succeed");
+        let cid1 = kernel
+            .semantic_create(
+                b"batch-content-1".to_vec(),
+                vec!["batch".to_string()],
+                "system",
+                None,
+                crate::cas::ObjectScope::default(),
+            )
+            .expect("create should succeed");
 
-        let cid2 = kernel.semantic_create(
-            b"batch-content-2".to_vec(),
-            vec!["batch".to_string()],
-            "system",
-            None,
-            crate::cas::ObjectScope::default(),
-        ).expect("create should succeed");
+        let cid2 = kernel
+            .semantic_create(
+                b"batch-content-2".to_vec(),
+                vec!["batch".to_string()],
+                "system",
+                None,
+                crate::cas::ObjectScope::default(),
+            )
+            .expect("create should succeed");
 
         let mut executor = AutonomousExecutor::new(kernel);
 
@@ -1330,7 +1318,10 @@ async fn test_learning_loop_methods_called() {
         assert!(step_result.success);
         assert!(step_result.output_cids.contains(&cid1));
         assert!(step_result.output_cids.contains(&cid2));
-        assert!(step_result.tokens_used > 0, "should report tokens for batch read content");
+        assert!(
+            step_result.tokens_used > 0,
+            "should report tokens for batch read content"
+        );
         assert!(step_result.error.is_none());
 
         std::mem::forget(kernel_leak);
@@ -1343,13 +1334,15 @@ async fn test_learning_loop_methods_called() {
         let kernel_leak = kernel.clone();
 
         // Create one valid object
-        let valid_cid = kernel.semantic_create(
-            b"valid-batch".to_vec(),
-            vec!["batch".to_string()],
-            "system",
-            None,
-            crate::cas::ObjectScope::default(),
-        ).expect("create should succeed");
+        let valid_cid = kernel
+            .semantic_create(
+                b"valid-batch".to_vec(),
+                vec!["batch".to_string()],
+                "system",
+                None,
+                crate::cas::ObjectScope::default(),
+            )
+            .expect("create should succeed");
 
         let mut executor = AutonomousExecutor::new(kernel);
 
@@ -1480,13 +1473,15 @@ async fn test_learning_loop_methods_called() {
         let kernel_leak = kernel.clone();
 
         // Create an object first for read
-        let cid = kernel.semantic_create(
-            b"stats-read-target".to_vec(),
-            vec!["stats".to_string()],
-            "system",
-            None,
-            crate::cas::ObjectScope::default(),
-        ).expect("create should succeed");
+        let cid = kernel
+            .semantic_create(
+                b"stats-read-target".to_vec(),
+                vec!["stats".to_string()],
+                "system",
+                None,
+                crate::cas::ObjectScope::default(),
+            )
+            .expect("create should succeed");
 
         let mut executor = AutonomousExecutor::new(kernel);
 
@@ -1598,11 +1593,7 @@ async fn test_learning_loop_methods_called() {
         let kernel = AIKernel::new(dir.clone()).expect("kernel init");
         let executor = AutonomousExecutor::new(kernel.clone());
 
-        let step = IntentStep::new(
-            "s1".to_string(),
-            IntentOperation::Read { cid: "c1".to_string() },
-            100,
-        );
+        let step = IntentStep::new("s1".to_string(), IntentOperation::Read { cid: "c1".to_string() }, 100);
         let completed = std::collections::HashSet::new();
         assert!(executor.can_execute_step(&step, &completed));
 
@@ -1619,12 +1610,8 @@ async fn test_learning_loop_methods_called() {
         let kernel = AIKernel::new(dir.clone()).expect("kernel init");
         let executor = AutonomousExecutor::new(kernel.clone());
 
-        let step = IntentStep::new(
-            "s2".to_string(),
-            IntentOperation::Read { cid: "c2".to_string() },
-            100,
-        )
-        .with_dependency("s1".to_string());
+        let step = IntentStep::new("s2".to_string(), IntentOperation::Read { cid: "c2".to_string() }, 100)
+            .with_dependency("s1".to_string());
 
         let mut completed = std::collections::HashSet::new();
         completed.insert("s1".to_string());
@@ -1643,12 +1630,8 @@ async fn test_learning_loop_methods_called() {
         let kernel = AIKernel::new(dir.clone()).expect("kernel init");
         let executor = AutonomousExecutor::new(kernel.clone());
 
-        let step = IntentStep::new(
-            "s2".to_string(),
-            IntentOperation::Read { cid: "c2".to_string() },
-            100,
-        )
-        .with_dependency("s1".to_string());
+        let step = IntentStep::new("s2".to_string(), IntentOperation::Read { cid: "c2".to_string() }, 100)
+            .with_dependency("s1".to_string());
 
         let completed = std::collections::HashSet::new();
         assert!(!executor.can_execute_step(&step, &completed));
@@ -1759,9 +1742,7 @@ async fn test_learning_loop_methods_called() {
         let mut plan = IntentPlan::new("batch:empty-cids".to_string());
         plan.add_step(IntentStep::new(
             "batch-step".to_string(),
-            IntentOperation::ReadBatch {
-                cids: vec![],
-            },
+            IntentOperation::ReadBatch { cids: vec![] },
             100,
         ));
 
