@@ -19,12 +19,22 @@ class _StaticLlm:
         return "expected"
 
 
+class _AbstainingLlm:
+    def chat(self, messages, max_tokens=128, **kwargs):
+        return "No information available"
+
+
 class _StaticJudge:
     def evaluate_scored(self, question, expected, predicted, **kwargs):
         return 5, "correct"
 
     def describe(self):
         return "StaticJudge(test-double)"
+
+
+class _FailIfCalledJudge(_StaticJudge):
+    def evaluate_scored(self, question, expected, predicted, **kwargs):
+        raise AssertionError("adversarial unanswerable samples must not call the paid judge")
 
 
 class _SearchClient:
@@ -37,7 +47,14 @@ class _SearchClient:
 
     def object_search(self, query, **kwargs):
         self.searches.append((query, kwargs))
-        return {"hits": self.hits}
+        return {
+            "hits": self.hits,
+            "embedding_query": {"state": "succeeded"},
+            "retrieval": [
+                {"path": "bm25", "candidates": len(self.hits), "accepted": len(self.hits)},
+                {"path": "vector", "candidates": len(self.hits), "accepted": len(self.hits)},
+            ],
+        }
 
 
 def test_locomo_query_is_scoped_and_scores_ground_truth_evidence():
@@ -64,12 +81,42 @@ def test_locomo_query_is_scoped_and_scores_ground_truth_evidence():
 
     assert result[0]["sample_id"] == "locomo:conv-3:qa-4"
     assert result[0]["evidence_recall@10"] == 1.0
+    assert result[0]["verified_vector_execution"] is True
     assert client.searches[0][1]["require_tags"] == [
         f"run:{suite.run_id}",
         "locomo",
         "conv-3",
     ]
     assert "has_context" not in result[0]
+
+
+def test_locomo_adversarial_null_answer_uses_deterministic_abstention_not_judge():
+    client = _SearchClient([{"cid": "evidence-cid", "snippet": "irrelevant context"}])
+    suite = ConversationalQASuite(client=client, seed=7)
+    suite.llm = _AbstainingLlm()
+    suite.judge = _FailIfCalledJudge()
+    suite._locomo_sample = [
+        (
+            3,
+            5,
+            {},
+            {
+                "question": "what was never stated?",
+                "answer": None,
+                "category": 5,
+                "evidence": ["D1:3"],
+            },
+        )
+    ]
+    suite._locomo_evidence_cids = {(3, "D1:3"): "evidence-cid"}
+
+    result = suite._query_locomo()
+
+    assert result[0]["answerability"] == "adversarial_unanswerable"
+    assert result[0]["abstention_correct"] is True
+    assert result[0]["f1"] is None
+    assert result[0]["bleu1"] is None
+    assert result[0]["llm_score"] is None
 
 
 def test_longmemeval_query_is_scoped_to_question_evidence_domain():
@@ -93,6 +140,7 @@ def test_longmemeval_query_is_scoped_to_question_evidence_domain():
 
     assert result[0]["sample_id"] == "longmemeval:question-17"
     assert result[0]["evidence_recall@10"] == 1.0
+    assert result[0]["verified_vector_execution"] is True
     assert client.searches[0][1]["require_tags"] == [
         f"run:{suite.run_id}",
         "longmemeval",
@@ -123,6 +171,8 @@ def test_qa_sample_accounting_is_exact_and_cost_ledger_is_not_empty_placeholder(
             "expected": "expected",
             "predicted": "expected",
             "context": "context",
+            "answerability": "answerable",
+            "abstention_correct": None,
             "f1": 1.0,
             "bleu1": 1.0,
             "llm_score": 5,
@@ -136,6 +186,14 @@ def test_qa_sample_accounting_is_exact_and_cost_ledger_is_not_empty_placeholder(
             },
             "expected_sha256": "a" * 64,
             "predicted_sha256": "b" * 64,
+            "embedding_query_state": "succeeded",
+            "embedding_query_degradation": None,
+            "retrieval_execution": [
+                {"path": "bm25", "candidates": 1, "accepted": 1, "degradation": None},
+                {"path": "vector", "candidates": 1, "accepted": 1, "degradation": None},
+            ],
+            "verified_vector_execution": True,
+            "retrieval_degraded": False,
         }
     ]
 

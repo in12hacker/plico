@@ -26,6 +26,12 @@ from plico_benchmarks.core.llm_journal import (
 )
 from plico_benchmarks.core.metrics import accuracy_pct, bleu1, compute_statistics, token_level_f1
 from plico_benchmarks.core.reporter import Report
+from plico_benchmarks.core.retrieval_execution import (
+    real_embedding_required,
+    validate_embedding_query,
+    validate_retrieval_execution,
+    verified_vector_execution,
+)
 from plico_benchmarks.core.sampling import (
     configured_limit,
     configured_profile,
@@ -46,7 +52,7 @@ Question: {question}
 Rules:
 - Extract relevant information from the context to answer
 - If the context has enough information to make a reasonable inference, give the answer
-- Only say "I don't know" if truly no relevant information exists in the context
+- If truly no relevant information exists, answer exactly "No information available"
 - Be concise — maximum 15 words
 - Do NOT start with "Based on" or "The text says"""
 
@@ -56,6 +62,33 @@ def _reader_answer(raw: str) -> str:
     if not answer:
         raise RuntimeError("reader returned an empty answer")
     return answer
+
+
+def _adversarial_abstention_correct(answer: str) -> bool:
+    normalized = " ".join(re.sub(r"[^a-z0-9]+", " ", answer.lower()).split())
+    return "no information available" in normalized or "not mentioned" in normalized
+
+
+def _search_execution_evidence(response: dict[str, Any]) -> dict[str, Any]:
+    embedding_state, embedding_degradation = validate_embedding_query(
+        response.get("embedding_query")
+    )
+    retrieval_execution = validate_retrieval_execution(response.get("retrieval"))
+    vector_verified = verified_vector_execution(embedding_state, retrieval_execution)
+    degraded = embedding_degradation is not None or any(
+        item["degradation"] is not None for item in retrieval_execution
+    )
+    if real_embedding_required() and not vector_verified:
+        raise RuntimeError(
+            "real-embedding conversational QA query did not prove succeeded vector execution"
+        )
+    return {
+        "embedding_query_state": embedding_state,
+        "embedding_query_degradation": embedding_degradation,
+        "retrieval_execution": retrieval_execution,
+        "verified_vector_execution": vector_verified,
+        "retrieval_degraded": degraded,
+    }
 
 
 class ConversationalQASuite(SuiteBase):
@@ -154,36 +187,58 @@ class ConversationalQASuite(SuiteBase):
 
         per_category = {}
         for cat, items in by_cat.items():
+            answerable_items = [item for item in items if item["answerability"] == "answerable"]
+            adversarial_items = [
+                item for item in items if item["answerability"] == "adversarial_unanswerable"
+            ]
             f1s = [r["f1"] for r in items if r.get("f1") is not None]
             bleus = [r["bleu1"] for r in items if r.get("bleu1") is not None]
-            llms = [r.get("llm_score", 0) for r in items]
+            llms = [r["llm_score"] for r in answerable_items]
             correct = sum(1 for s in llms if s >= ACCURACY_THRESHOLD)
+            abstentions = [bool(r["abstention_correct"]) for r in adversarial_items]
             evidence_recalls = [
                 r["evidence_recall@10"] for r in items if r.get("evidence_recall@10") is not None
             ]
             per_category[cat] = {
                 "count": len(items),
+                "answerable_count": len(answerable_items),
+                "adversarial_unanswerable_count": len(adversarial_items),
                 "f1": sum(f1s) / len(f1s) if f1s else 0.0,
                 "bleu1": sum(bleus) / len(bleus) if bleus else 0.0,
                 "llm_score": sum(llms) / len(llms) if llms else 0.0,
-                "accuracy_pct": round(correct / len(items) * 100, 1) if items else 0.0,
+                "accuracy_pct": round(correct / len(llms) * 100, 1) if llms else 0.0,
+                "adversarial_abstention_accuracy_pct": (
+                    round(sum(abstentions) / len(abstentions) * 100, 1) if abstentions else None
+                ),
                 "evidence_recall@10": (
                     sum(evidence_recalls) / len(evidence_recalls) if evidence_recalls else None
                 ),
             }
 
+        answerable_raw = [item for item in raw if item["answerability"] == "answerable"]
+        adversarial_raw = [
+            item for item in raw if item["answerability"] == "adversarial_unanswerable"
+        ]
         all_f1 = [r["f1"] for r in raw if r.get("f1") is not None]
         all_bleus = [r["bleu1"] for r in raw if r.get("bleu1") is not None]
-        all_llms = [r.get("llm_score", 0) for r in raw]
+        all_llms = [r["llm_score"] for r in answerable_raw]
+        all_abstentions = [bool(r["abstention_correct"]) for r in adversarial_raw]
         all_evidence_recalls = [
             r["evidence_recall@10"] for r in raw if r.get("evidence_recall@10") is not None
         ]
         overall = {
             "count": len(raw),
+            "answerable_count": len(answerable_raw),
+            "adversarial_unanswerable_count": len(adversarial_raw),
             "f1": sum(all_f1) / len(all_f1) if all_f1 else 0.0,
             "bleu1": sum(all_bleus) / len(all_bleus) if all_bleus else 0.0,
             "llm_score": sum(all_llms) / len(all_llms) if all_llms else 0.0,
             "accuracy_pct": accuracy_pct(all_llms),
+            "adversarial_abstention_accuracy_pct": (
+                round(sum(all_abstentions) / len(all_abstentions) * 100, 1)
+                if all_abstentions
+                else None
+            ),
             "evidence_recall@10": (
                 sum(all_evidence_recalls) / len(all_evidence_recalls)
                 if all_evidence_recalls
@@ -195,16 +250,17 @@ class ConversationalQASuite(SuiteBase):
         # RAGAS-style LLM-judge proxy on a deterministic 20-item sample. This
         # is not the official RAGAS package and must not be compared as such.
         proxy_limit = int(self._qa_config["ragas_style_proxy_samples"])
+        proxy_candidates = answerable_raw
         proxy_sample = (
             stable_stratified_sample(
-                raw,
-                limit=min(proxy_limit, len(raw)) if raw else None,
+                proxy_candidates,
+                limit=(min(proxy_limit, len(proxy_candidates)) if proxy_candidates else None),
                 seed=self.seed,
                 namespace="conversational-qa:ragas-style-proxy",
                 sample_id=lambda item: str(item["sample_id"]),
                 stratum=lambda item: str(item["category"]),
             )
-            if raw
+            if proxy_candidates
             else []
         )
         proxy_scores = {
@@ -259,6 +315,8 @@ class ConversationalQASuite(SuiteBase):
                     "capability": "conversational_memory_qa",
                     "domain": "plico_object_projection_plus_reader",
                     "status": item.get("status", "ok"),
+                    "answerability": item["answerability"],
+                    "abstention_correct": item["abstention_correct"],
                     "f1": item["f1"],
                     "bleu1": item["bleu1"],
                     "llm_score": item["llm_score"],
@@ -270,6 +328,11 @@ class ConversationalQASuite(SuiteBase):
                     "token_overlap": item["token_overlap"],
                     "expected_sha256": item["expected_sha256"],
                     "predicted_sha256": item["predicted_sha256"],
+                    "embedding_query_state": item["embedding_query_state"],
+                    "embedding_query_degradation": item["embedding_query_degradation"],
+                    "retrieval_execution": item["retrieval_execution"],
+                    "verified_vector_execution": item["verified_vector_execution"],
+                    "retrieval_degraded": item["retrieval_degraded"],
                     "llm_request_evidence": evidence_by_sample[item["sample_id"]],
                 }
                 for item in raw
@@ -287,15 +350,22 @@ class ConversationalQASuite(SuiteBase):
                 "costs": costs,
             },
             "metric_metadata": {
+                "answerability": {
+                    "answerable": "token_f1_bleu1_and_1_to_5_judge",
+                    "adversarial_unanswerable": (
+                        "deterministic_no_information_available_or_not_mentioned_abstention"
+                    ),
+                    "aggregate_rule": "exclude_unanswerable_from_f1_bleu1_and_judge_accuracy",
+                },
                 "ragas_style_proxy": {
                     "implementation": "custom_single_llm_judge_prompts",
                     "official_ragas": False,
                     "scale": "0.0-1.0",
-                    "samples_requested": min(proxy_limit, len(raw)),
+                    "samples_requested": min(proxy_limit, len(proxy_candidates)),
                     "samples_evaluated": proxy_evaluated,
                     "seed": self.seed,
                     "judge": self.judge.describe(),
-                }
+                },
             },
         }
 
@@ -432,8 +502,12 @@ class ConversationalQASuite(SuiteBase):
         for conv_idx, question_idx, _, q in sample:
             sample_id = f"locomo:conv-{conv_idx}:qa-{question_idx}"
             question = str(q.get("question", ""))
-            answer = str(q.get("answer", "")) if q.get("answer") is not None else ""
             category = self._map_locomo_category(q.get("category", 0))
+            raw_answer = q.get("answer")
+            adversarial_unanswerable = category == "adversarial" and raw_answer is None
+            if raw_answer is None and not adversarial_unanswerable:
+                raise RuntimeError(f"{sample_id} has no answer outside the adversarial stratum")
+            answer = "" if adversarial_unanswerable else str(raw_answer)
 
             resp = self.client.object_search(
                 question,
@@ -441,6 +515,7 @@ class ConversationalQASuite(SuiteBase):
                 require_tags=[f"run:{self.run_id}", "locomo", f"conv-{conv_idx}"],
             )
             hits = resp.get("hits", [])
+            execution_evidence = _search_execution_evidence(resp)
             context = "\n".join(h.get("snippet", "") for h in hits[:10])
             retrieved_cids = [str(hit.get("cid", "")) for hit in hits[:10]]
             expected_cids = self._resolve_evidence_cids(
@@ -472,25 +547,30 @@ class ConversationalQASuite(SuiteBase):
             pred = _reader_answer(raw_pred)
             online_lat = (time.perf_counter() - t_online) * 1000
 
-            judge_request_id = str(uuid.uuid4())
-            judge_result = self.judge.evaluate_scored(
-                question,
-                answer,
-                pred,
-                sample_id=sample_id,
-                request_id=judge_request_id,
-            )
-            score = _judge_score(judge_result)
-            self._record_request_evidence(
-                sample_id,
-                (judge_request_id,),
-                getattr(judge_result, "attempt_evidence", ()),
-                boundary="scored_judge",
-                evidence_required=callable(
-                    getattr(getattr(self.judge, "llm", None), "evidence_since", None)
-                ),
-            )
+            score = None
+            if not adversarial_unanswerable:
+                judge_request_id = str(uuid.uuid4())
+                judge_result = self.judge.evaluate_scored(
+                    question,
+                    answer,
+                    pred,
+                    sample_id=sample_id,
+                    request_id=judge_request_id,
+                )
+                score = _judge_score(judge_result)
+                self._record_request_evidence(
+                    sample_id,
+                    (judge_request_id,),
+                    getattr(judge_result, "attempt_evidence", ()),
+                    boundary="scored_judge",
+                    evidence_required=callable(
+                        getattr(getattr(self.judge, "llm", None), "evidence_since", None)
+                    ),
+                )
             overlap = _token_overlap(pred, answer)
+            abstention_correct = (
+                _adversarial_abstention_correct(pred) if adversarial_unanswerable else None
+            )
             results.append(
                 {
                     "dataset": "locomo",
@@ -500,8 +580,12 @@ class ConversationalQASuite(SuiteBase):
                     "expected": answer,
                     "predicted": pred,
                     "context": context,
-                    "f1": token_level_f1(pred, answer),
-                    "bleu1": bleu1(pred, answer),
+                    "answerability": (
+                        "adversarial_unanswerable" if adversarial_unanswerable else "answerable"
+                    ),
+                    "abstention_correct": abstention_correct,
+                    "f1": None if adversarial_unanswerable else token_level_f1(pred, answer),
+                    "bleu1": None if adversarial_unanswerable else bleu1(pred, answer),
                     "llm_score": score,
                     "evidence_recall@10": evidence_recall,
                     "evidence_expected_count": len(expected_cids),
@@ -510,6 +594,7 @@ class ConversationalQASuite(SuiteBase):
                     "token_overlap": overlap,
                     "expected_sha256": _answer_digest(self.run_id, sample_id, answer),
                     "predicted_sha256": _answer_digest(self.run_id, sample_id, pred),
+                    **execution_evidence,
                 }
             )
         return results
@@ -561,7 +646,9 @@ class ConversationalQASuite(SuiteBase):
             question_id = str(item.get("question_id") or f"sample-{item_idx}")
             sample_id = f"longmemeval:{question_id}"
             question = str(item.get("question", ""))
-            answer = str(item.get("answer", "")) if item.get("answer") is not None else ""
+            if item.get("answer") is None:
+                raise RuntimeError(f"{sample_id} has no answer in the answerable dataset")
+            answer = str(item["answer"])
             category = item.get("question_type", "unknown")
 
             resp = self.client.object_search(
@@ -574,6 +661,7 @@ class ConversationalQASuite(SuiteBase):
                 ],
             )
             hits = resp.get("hits", [])
+            execution_evidence = _search_execution_evidence(resp)
             context = "\n".join(h.get("snippet", "") for h in hits[:10])
             retrieved_cids = [str(hit.get("cid", "")) for hit in hits[:10]]
             expected_cids = self._resolve_evidence_cids(
@@ -629,6 +717,8 @@ class ConversationalQASuite(SuiteBase):
                     "expected": answer,
                     "predicted": pred,
                     "context": context,
+                    "answerability": "answerable",
+                    "abstention_correct": None,
                     "f1": token_level_f1(pred, answer),
                     "bleu1": bleu1(pred, answer),
                     "llm_score": score,
@@ -638,6 +728,7 @@ class ConversationalQASuite(SuiteBase):
                     "token_overlap": overlap,
                     "expected_sha256": _answer_digest(self.run_id, sample_id, answer),
                     "predicted_sha256": _answer_digest(self.run_id, sample_id, pred),
+                    **execution_evidence,
                 }
             )
         return results

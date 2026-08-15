@@ -21,6 +21,11 @@ from plico_benchmarks.core.llm_evidence import (
 )
 from plico_benchmarks.core.llm_journal import read_attempt_journal
 from plico_benchmarks.core.metrics import accuracy_pct, compute_statistics
+from plico_benchmarks.core.retrieval_execution import (
+    validate_embedding_query,
+    validate_retrieval_execution,
+    verified_vector_execution,
+)
 
 RESULT_FILE = "result.json"
 RUN_MANIFEST_FILE = "run_manifest.json"
@@ -197,6 +202,10 @@ def _validate_qa_sample_ledger(
     observed_sequences = []
     observed_request_ids = set()
     for item in ledger:
+        answerability = item.get("answerability")
+        if answerability not in {"answerable", "adversarial_unanswerable"}:
+            raise ValueError("QA answerability evidence is invalid")
+        is_unanswerable = answerability == "adversarial_unanswerable"
         overlap = item.get("token_overlap")
         if not isinstance(overlap, dict):
             raise ValueError("QA token overlap evidence is missing")
@@ -208,10 +217,22 @@ def _validate_qa_sample_ledger(
             for value in (predicted, expected, common)
         ) or common > min(predicted, expected):
             raise ValueError("QA token overlap evidence is invalid")
-        if not math.isclose(item.get("f1"), _f1_from_counts(predicted, expected, common)):
-            raise ValueError("QA F1 does not recompute from retained evidence")
-        if not math.isclose(item.get("bleu1"), _bleu1_from_counts(predicted, expected, common)):
-            raise ValueError("QA BLEU-1 does not recompute from retained evidence")
+        if is_unanswerable:
+            if (
+                expected != 0
+                or item.get("f1") is not None
+                or item.get("bleu1") is not None
+                or item.get("llm_score") is not None
+                or not isinstance(item.get("abstention_correct"), bool)
+            ):
+                raise ValueError("QA adversarial abstention evidence is invalid")
+        else:
+            if item.get("abstention_correct") is not None:
+                raise ValueError("QA answerable sample cannot claim abstention accuracy")
+            if not math.isclose(item.get("f1"), _f1_from_counts(predicted, expected, common)):
+                raise ValueError("QA F1 does not recompute from retained evidence")
+            if not math.isclose(item.get("bleu1"), _bleu1_from_counts(predicted, expected, common)):
+                raise ValueError("QA BLEU-1 does not recompute from retained evidence")
         recall_counts = item.get("evidence_recall_counts")
         if not isinstance(recall_counts, dict):
             raise ValueError("QA evidence recall counts are missing")
@@ -231,8 +252,30 @@ def _validate_qa_sample_ledger(
         if item.get("evidence_recall@10") != recomputed_recall:
             raise ValueError("QA evidence recall does not recompute")
         score = item.get("llm_score")
-        if isinstance(score, bool) or not isinstance(score, int) or score not in range(1, 6):
+        if not is_unanswerable and (
+            isinstance(score, bool) or not isinstance(score, int) or score not in range(1, 6)
+        ):
             raise ValueError("QA judge score is invalid")
+        embedding_state, embedding_degradation = validate_embedding_query(
+            {
+                "state": item.get("embedding_query_state"),
+                **(
+                    {"degradation": item.get("embedding_query_degradation")}
+                    if item.get("embedding_query_degradation") is not None
+                    else {}
+                ),
+            }
+        )
+        retrieval_execution = validate_retrieval_execution(item.get("retrieval_execution"))
+        expected_vector_verified = verified_vector_execution(embedding_state, retrieval_execution)
+        expected_degraded = embedding_degradation is not None or any(
+            execution["degradation"] is not None for execution in retrieval_execution
+        )
+        if (
+            item.get("verified_vector_execution") is not expected_vector_verified
+            or item.get("retrieval_degraded") is not expected_degraded
+        ):
+            raise ValueError("QA retrieval execution summary does not recompute")
         requests = item.get("llm_request_evidence")
         if not isinstance(requests, list) or not requests:
             raise ValueError("QA sample has no paid request references")
@@ -253,6 +296,11 @@ def _validate_qa_sample_ledger(
                 raise ValueError("QA request attempt summary is invalid")
             if observed_request_ids.intersection(request_ids):
                 raise ValueError("QA request identity is rebound across samples")
+            boundary = request.get("boundary")
+            if boundary not in {"reader", "scored_judge", "ragas_style_proxy"} or (
+                is_unanswerable and boundary != "reader"
+            ):
+                raise ValueError("QA request boundary disagrees with answerability")
             observed_request_ids.update(request_ids)
             request_usd = Decimal(0)
             terminal_by_request: dict[str, dict[str, Any]] = {}
@@ -285,6 +333,10 @@ def _validate_qa_sample_ledger(
                 raise ValueError("QA request does not have an exact successful terminal attempt")
             if Decimal(request.get("usd_accounted")) != request_usd:
                 raise ValueError("QA request cost does not match durable attempts")
+        boundaries = {request.get("boundary") for request in requests}
+        expected_boundaries = {"reader"} if is_unanswerable else {"reader", "scored_judge"}
+        if not expected_boundaries.issubset(boundaries):
+            raise ValueError("QA sample is missing its required request boundary")
     if sorted(observed_sequences) != list(range(1, len(attempts) + 1)):
         raise ValueError("QA request references do not cover the journal exactly once")
     _validate_qa_aggregates(metrics, ledger, manifest)
@@ -316,16 +368,28 @@ def _validate_qa_aggregates(
         grouped.setdefault(str(item.get("stratum")), []).append(item)
 
     def aggregate(items: list[dict[str, Any]]) -> dict[str, Any]:
+        answerable = [item for item in items if item["answerability"] == "answerable"]
+        adversarial = [
+            item for item in items if item["answerability"] == "adversarial_unanswerable"
+        ]
         recalls = [
             item["evidence_recall@10"] for item in items if item["evidence_recall@10"] is not None
         ]
-        scores = [item["llm_score"] for item in items]
+        scores = [item["llm_score"] for item in answerable]
+        abstentions = [bool(item["abstention_correct"]) for item in adversarial]
         return {
             "count": len(items),
-            "f1": sum(item["f1"] for item in items) / len(items) if items else 0.0,
-            "bleu1": sum(item["bleu1"] for item in items) / len(items) if items else 0.0,
+            "answerable_count": len(answerable),
+            "adversarial_unanswerable_count": len(adversarial),
+            "f1": (sum(item["f1"] for item in answerable) / len(answerable) if answerable else 0.0),
+            "bleu1": (
+                sum(item["bleu1"] for item in answerable) / len(answerable) if answerable else 0.0
+            ),
             "llm_score": sum(scores) / len(scores) if scores else 0.0,
             "accuracy_pct": accuracy_pct(scores),
+            "adversarial_abstention_accuracy_pct": (
+                round(sum(abstentions) / len(abstentions) * 100, 1) if abstentions else None
+            ),
             "evidence_recall@10": sum(recalls) / len(recalls) if recalls else None,
         }
 
@@ -334,7 +398,8 @@ def _validate_qa_aggregates(
         raise ValueError("QA per-category metrics do not recompute from the ledger")
     expected_overall = aggregate(ledger)
     expected_overall["f1_statistics"] = compute_statistics(
-        [item["f1"] for item in ledger], seed=manifest["sampling"]["seed"]
+        [item["f1"] for item in ledger if item["f1"] is not None],
+        seed=manifest["sampling"]["seed"],
     )
     if metrics.get("overall") != expected_overall:
         raise ValueError("QA overall metrics do not recompute from the ledger")
