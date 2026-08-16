@@ -148,6 +148,25 @@ DeepSeek alias revision 均未完整 attested；two-way bootstrap 区间是 shad
 因果路径评测。同行公开数字若数据集 revision、样本、retriever、reader/judge 或指标定义不同，
 只列背景，不直接相减或宣称领先。
 
+### 下一代 shadow 指标：Verified Experience Gain
+
+LoCoMo/LongMemEval QA 继续作为回归证据，但不再充当产品北极星。下一阶段先用
+`core/experience_gain.py` 冻结 benchmark-only 输入合同：candidate/control 必须绑定同一实验 identity 与
+有序任务集，逐项保存 task receipt 和 action/evidence/policy receipt，并从逐项记录重算 success、input tokens
+与 p95 latency，在预注册且 digest-bound 的显式预算下
+计算：
+
+```text
+VEG = task_success_delta × traceable_action_ratio × permission_compliance_rate
+```
+
+任一任务/运行/策略重绑定、缺失 receipt、越权或不可追溯影响都直接 invalid；预算超限固定 ineligible。
+即使全部 shadow threshold 满足，当前输出也
+固定 `gate_eligible=false`。本阶段是 in-memory contract，没有 commit/deep verifier，返回 mapping 不得
+持久化后冒充 benchmark artifact。它只为后续 MemoryArena、LongMemEval-V2 和 MemoryAgentBench paired
+experiment 提供外层框架，不宣称现有 Plico 已实现 execution-state learning。完整边界见
+[ADR-0006](../docs/adr/0006-verified-experience-runtime.md)。
+
 ## 预处理阶段（AWB-like）
 
 SemanticFS 的 `create → search` 评测必须分离摄取和查询阶段，等待其 Embedding、KG 与 HNSW 派生工作完成。Working Memory 是另一条数据域和索引管线，不能用 SemanticFS 的搜索结果判断其 projection 已 Ready。

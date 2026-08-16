@@ -57,7 +57,7 @@ tools, and legacy semantic handlers are internal surfaces, not remotely advertis
 | `persistence.rs` | ~366 | Persist/restore agents, intents, memories, search index, event log |
 | `event_bus.rs` | ~959 | EventBus — typed pub/sub, JSONL persistence, restore |
 | `ops/` | operation modules | Operation groups, including manifest-backed projection control — see `ops/INDEX.md` |
-| `cognition/` | 12 files | Soul v3.0 cognitive symbiotic engine — see `cognition/INDEX.md` |
+| `cognition/` | 12 files | Soul v3.0 legacy cognitive primitives; not a Soul v3.1 authorization/promotion path — see `cognition/INDEX.md` |
 
 ## Dependencies (Fan-out: 8)
 

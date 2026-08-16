@@ -1,6 +1,6 @@
 # 太初 (Plico) — AI-Native Operating System
 
-面向个人用户数字分身的记忆原生操作系统内核。AI 直接通过语义 API 使用记忆与证据；文档、表格、PPT 和图形界面属于按需生成的人类侧投影，而不是核心数据模型。系统与模型无关。现行规范见 `system-v3.md`（Soul 3.0）、已接受 ADR 与本文件；`docs/genesis-reference.md` 仅为历史快照。
+面向个人用户数字分身的记忆原生操作系统内核。AI 直接通过语义 API 使用记忆与证据；文档、表格、PPT 和图形界面属于按需生成的人类侧投影，而不是核心数据模型。系统与模型无关。现行规范见 `system-v3.md`（Soul 3.1）、已接受 ADR 与本文件；`docs/genesis-reference.md` 仅为历史快照。
 
 ## 目录地图
 
@@ -16,7 +16,7 @@ src/
 │   ├── search/          #   向量 + BM25 搜索（HNSW + 内存后端）
 │   └── graph/           #   Knowledge Graph（PetgraphBackend + redb 4.0）
 ├── kernel/              # AI Kernel — 中央编排器
-│   ├── cognition/       #   Soul v3.0 认知共生引擎（12 文件）
+│   ├── cognition/       #   Soul v3.0 legacy 认知原语；Soul v3.1 授权提升尚未实现
 │   ├── handlers/        #   14 个领域 handler
 │   ├── tools/           #   7 个内置工具 handler
 │   └── ops/             #   操作模块（含有界异步派生索引、只读 readiness）
@@ -50,7 +50,7 @@ benchmarks/              # 自研 benchmark 框架（Python, uv 管理）
 | AI Kernel | `src/kernel/INDEX.md` | AIKernel — 中央编排器 |
 | API 层 | `src/api/INDEX.md` | 权限护栏, 语义 JSON 协议 |
 | Tool 系统 | `src/tool/INDEX.md` | ToolRegistry, "Everything is a Tool" |
-| 认知引擎 | `src/kernel/cognition/INDEX.md` | Soul v3.0 — CognitiveLoop, SkillForge |
+| 认知引擎 | `src/kernel/cognition/INDEX.md` | Soul v3.0 legacy — CognitiveLoop, SkillForge；不得作为 v3.1 授权提升路径 |
 | 二进制 | `src/bin/INDEX.md` | plicod, plico-mcp, aicli |
 | Benchmark | `benchmarks/README.md` | 端到端性能与质量评测 |
 
@@ -80,7 +80,7 @@ benchmarks/              # 自研 benchmark 框架（Python, uv 管理）
 - `AIKernel` 字段为 `pub(crate)` — 仅 crate 内可见
 - CAS 是唯一直接接触宿主文件系统的模块
 - 无 `unsafe` 块（库代码中）除非有 `# Safety` 文档注释
-- **Soul v3.0**：Plico 是**认知共生体** — 优化 Agent 的输入质量，但从不替代 Agent 的决策
+- **Soul v3.1**：Plico 是**认知共生体** — 优化 Agent 的输入质量，但从不替代 Agent 的决策；自动学习默认停在带 provenance 的 proposal，只有可信 Agent/owner 显式接受后才能成为 canonical memory、active skill、权限或行动
 - **个人数字分身**：不扩展企业多租户/组织级 RBAC；`tenant_id` 仅是兼容字段和个人本地命名空间
 - **记忆原生**：Memory/CAS 是主数据，向量/KG/摘要是可重建派生数据，文档/表格/PPT/GUI 是按需投影
 

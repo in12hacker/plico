@@ -2,10 +2,15 @@
 
 - 状态：Accepted（V1-A typed public cutover 已实现；旧内部命令与测试清债继续）
 - 日期：2026-08-13
+- 修订：2026-08-16（明确 Proposed ADR 引用不继承规范效力）
 - 上位决策：[ADR-0001：个人数字分身与记忆原生数据模型](./0001-personal-digital-twin.md)
 - 数据与腐败策略：[ADR-0002：Canonical Memory、按需投影与可逆检索腐败](./0002-canonical-memory-and-reversible-retrieval-decay.md)
 - P3-A 投影控制面：[ADR-0005：Memory Embedding Projection Manifest 单一控制面](./0005-memory-embedding-projection-manifest.md)
 - 实施计划：[个人数字分身公共能力演进计划](../plans/personal-twin-public-capability-evolution.md)
+
+> 规范效力说明：本文对 Draft/Proposed ADR 的引用只用于描述候选方向，不会把其状态提升为
+> Accepted。当前代码事实可以由本 Accepted ADR 约束，但 Proposed ADR 中尚未验收的状态机、
+> 公共能力和完成声明在其自身被 Accepted 前继续保持 internal/unsupported。
 
 ## 决策摘要
 
@@ -179,7 +184,7 @@ Manifest 是已准入派生类型的唯一状态源，最终目标至少记录�
 
 当前 `embedding: Option<Vec<f32>>` 和推导的三态只支持第一阶段 embedding readiness。引入 manifest 时必须一次性重写调用点并删除 canonical entry 内嵌 embedding、`embedding=None` 状态推导和重复状态源。
 
-P3-A 的冻结边界见 ADR-0005：初始唯一准入 kind 是 `memory_embedding`，不迁移 Object HNSW/BM25，
+P3-A 的候选边界记录于 Proposed ADR-0005：初始唯一准入 kind 是 `memory_embedding`，不迁移 Object HNSW/BM25，
 不预留 temperature 字段，也不因 artifact Ready 自动启用 Memory vector recall。V1-B canonical 已无
 inline durable vector，因此一次性切换从 canonical revision 全量 Queued/rebuild，不能把 runtime
 向量冒充 migration artifact。
@@ -438,7 +443,7 @@ AI 需要语义 API，但语义 API 应表达个人记忆任务，而不是暴�
 
 现有 long-term write 在 commit 前同步 embedding，并可能把新写入静默合并到相似 entry。异步 canonical-first 后，写时无法保持完全相同的 semantic dedup 行为。禁止用兼容壳隐藏该差异。
 
-ADR-0005 已冻结裁决：所有 durable 写入始终创建 canonical revision；P3-A 同一切换中重写
+Proposed ADR-0005 记录的候选裁决是：所有 durable 写入始终创建 canonical revision；P3-A 同一切换中重写
 LongTerm 调用点并物理删除同步写时 embedding/dedup。dedup/merge 只有在 P2-B 建成带证据和用户
 确认的 reconciliation proposal 后才能恢复；在此之前明确 unsupported，不保留兼容语义。
 

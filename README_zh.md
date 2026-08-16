@@ -6,7 +6,8 @@
 
 **语言：** [简体中文](README_zh.md) · [English](README.md)
 
-面向**个人数字分身**的 AI 原生内核。对象与记忆是 canonical 主数据；文档、表格、PPT
+面向**个人数字分身**的 AI 原生内核，正向本地优先、证据寻址的**个人经验操作系统**演化。对象与记忆是
+canonical 主数据；文档、表格、PPT
 和图形界面只在人需要时生成，不是核心数据模型。AI 客户端使用类型化
 `plico.personal.v2` 对象/记忆/会话/投影 API，不直接操作路径文件或内核管理接口。推理栈保持
 模型无关。
@@ -42,7 +43,7 @@
 │  ├─ 意图系统（DAG 分解 + 自主执行器）               │
 │  ├─ 上下文预算引擎（L0/L1/L2）                     │
 │  ├─ 内置工具注册表（37 个工具）                     │
-│  ├─ 认知引擎（Soul v3.0）                          │
+│  ├─ 认知引擎（Soul v3.0 legacy 原语）               │
 │  └─ 权限护栏 + 智能体认证（HMAC）                  │
 ├────────────────────────────────────────────────────┤
 │  AI 原生文件系统                                    │
@@ -133,20 +134,36 @@ Plico 使用三层级联（最低 → 最高优先级）：
 3. **环境变量** — `PLICO_HOST`、`PLICO_DAEMON_PORT`、`EMBEDDING_BACKEND` 等
 4. **CLI 标志** — `--host`、`--port`、`--root`（最高优先级）
 
-## 十条公理（灵魂 3.0）
+## 十一条公理（灵魂 3.1）
 
 | # | 公理 | 推论 |
 |---|------|------|
 | 1 | **Token 是最稀缺资源** | 分层返回 L0/L1/L2，追踪消耗，delta 优于 full |
-| 2 | **意图先于操作** | Agent 声明意图，OS 组装上下文并执行 |
-| 3 | **记忆跨越边界** | 四层记忆持久化，checkpoint/restore 跨"死亡" |
-| 4 | **主数据先于投影** | 个人 Memory/CAS 是主数据，人类文件是按需视图 |
-| 5 | **机制，不是策略** | 内核提供原语，不替 Agent 决策 |
-| 6 | **结构先于语言** | JSON 是唯一内核接口，NL 在接口层 |
-| 7 | **主动先于被动** | 意图预取、warm context、目标自生成 |
+| 2 | **认知环境先于认知决策** | Plico 维护上下文质量，Agent 在其中决策 |
+| 3 | **记忆是认知的外骨骼** | 持久记忆扩展 Agent 有限的工作上下文 |
+| 4 | **共享先于重复** | Private/Shared/Group scope 让经选择的知识可复用 |
+| 5 | **认知增强，不是认知替代** | 优化可观测、可覆盖，Agent 保留最终决策 |
+| 6 | **语义先于结构，结构先于语言** | Plico 工作在语义和类型层，不生成最终用户文本 |
+| 7 | **主动优化先于被动响应** | 在上下文成为负担前压缩、预取和整理 |
 | 8 | **因果先于关联** | KG 记录 CausedBy / DependsOn / Produces 因果链 |
-| 9 | **越用越好** | AgentProfile 累积，技能发现，自我修复 |
+| 9 | **越用越好** | AgentProfile 累积，生成有证据的技能候选，显式接受后才生效 |
 | 10 | **会话是一等公民** | 持久化 session start/end 与单调事件水位 |
+| 11 | **候选先于采纳，授权先于进化** | 学习可以主动提出 proposal，但只有可信 Agent/owner 能把它提升为记忆、claim、procedure、skill、权限或行动 |
+
+## 下一代方向：可验证经验，而不是再做一个记忆产品
+
+Plico 不把自己演化成另一个托管事实抽取服务、向量库、时态图服务或 prompt-memory SDK。唯一北极星是
+**Verified Experience Gain**：在同一 Agent、模型、工具、任务集和资源预算下，历史经验必须让未来任务成功率
+产生可测净增益，同时所有受影响行动都保持授权并可追溯到不可变证据。由记忆派生的上下文与执行状态必须能在
+声明的边界内重建；不可逆外部行动需要显式授权、receipt 和补偿语义，禁止盲目重放。
+
+研究分为三条彼此隔离的路线：带证据的 procedure proposal、支持 checkpoint/fork/rollback 与有界确定性状态重建的分支执行状态，
+以及把 scope、证据等级、token/latency/resource budget 与 receipt 纳入契约的 governed memory runtime。
+在可重复实验和 Accepted ADR 之前，它们只保持 research/internal。MemoryArena 是行动成功主门禁；
+LongMemEval-V2 衡量环境经验搜证准确率及延迟前沿；MemoryAgentBench 覆盖 accurate retrieval、
+test-time learning、long-range understanding 与 selective forgetting。LoCoMo 和当前固定50题只保留为回归证据。详见
+[ADR-0006](docs/adr/0006-verified-experience-runtime.md) 与
+[下一代计划](docs/plans/next-era-verified-experience.md)。
 
 ## 代码布局
 
@@ -164,7 +181,7 @@ src/
 │   ├── query_decompose.rs # 查询分解引擎
 │   └── retrieval_router.rs # 意图路由检索
 ├── kernel/              # AIKernel — 编排、工具、Hook、持久化
-│   ├── cognition/       # Soul v3.0 认知引擎（12 个文件）
+│   ├── cognition/       # Soul v3.0 legacy 原语；v3.1 授权提升尚未实现
 │   ├── handlers/        # 14 个领域 handler
 │   ├── tools/           # 7 个内置工具 handler
 │   ├── hook.rs          # Hook 注册表（5 个拦截点）
@@ -184,7 +201,7 @@ src/
 tests/                   # 44 个集成测试文件
 benchmarks/              # 自研 benchmark 框架（Python, uv）
 docs/
-├── genesis-reference.md # 太初完整参考文档
+├── genesis-reference.md # 历史 Genesis 实现快照
 ├── milestones/          # 里程碑文档（含模板）
 ├── plans/               # 进行中的计划
 └── design/              # 架构设计文档
@@ -204,8 +221,8 @@ docs/
 
 ## 设计文档
 
-- `system-v3.md` — 灵魂 3.0：AI 第一人称视角的十条公理
-- `docs/genesis-reference.md` — 太初完整参考文档
+- `system-v3.md` — 灵魂 3.1：AI 第一人称视角的十一条公理
+- `docs/genesis-reference.md` — 历史 Genesis 实现快照（非现行规范）
 - `AGENTS.md` — AI 智能体导航（目录地图 + 快速导航）
 - `CLAUDE.md` — AI 编码助手的项目级规则
 - `benchmarks/README.md` — Benchmark 框架文档

@@ -6,7 +6,8 @@
 
 **Languages / 语言：** [English](README.md) · [简体中文](README_zh.md)
 
-An AI-native kernel for a **personal digital twin**. Canonical objects and memories are the primary
+An AI-native kernel for a **personal digital twin**, evolving toward a local-first,
+evidence-addressed **personal experience operating system**. Canonical objects and memories are the primary
 data; documents, spreadsheets, slides, and graphical interfaces are projections generated when a
 person needs them. AI clients use the typed `plico.personal.v2`
 memory/object/session/projection API rather than path-centric files or internal kernel controls. The
@@ -43,7 +44,7 @@ Personal AI clients / MCP clients
 │  ├─ Intent system (DAG decomposition + executor)   │
 │  ├─ Context budget engine (L0/L1/L2)              │
 │  ├─ Built-in tool registry (37 tools)             │
-│  ├─ Cognitive engine (Soul v3.0)                   │
+│  ├─ Cognitive engine (Soul v3.0 legacy primitives) │
 │  └─ Permission guardrails + agent auth (HMAC)     │
 ├────────────────────────────────────────────────────┤
 │  AI-Native File System                             │
@@ -159,7 +160,7 @@ Plico uses a four-layer cascade (lowest → highest priority):
 3. **Environment variables** — `PLICO_HOST`, `PLICO_DAEMON_PORT`, `EMBEDDING_BACKEND`, etc.
 4. **CLI flags** — `--host`, `--port`, `--root` (highest priority)
 
-## 10 Axioms (Soul 3.0)
+## 11 Axioms (Soul 3.1)
 
 | # | Axiom | Implication |
 |---|-------|-------------|
@@ -171,8 +172,32 @@ Plico uses a four-layer cascade (lowest → highest priority):
 | 6 | **Semantics before structure, structure before language** | Plico works in semantic and typed layers, not final user prose |
 | 7 | **Proactive optimization before passive response** | Compress, preload, and curate context before it becomes a burden |
 | 8 | **Causation before correlation** | KG records CausedBy / DependsOn / Produces chains |
-| 9 | **Better with use** | AgentProfile accumulates, skills discovered |
+| 9 | **Better with use** | AgentProfile accumulates; evidence-backed skill proposals are discovered for explicit acceptance |
 | 10 | **Sessions are first-class** | durable session start/end and monotonic event watermarks |
+| 11 | **Proposal before adoption; authorization before evolution** | Learning may propose, but only a trusted Agent/owner may promote memory, claims, procedures, skills, permissions, or actions |
+
+## Next-era direction: verified experience, not another memory product
+
+Plico will not compete by becoming another hosted fact extractor, vector database, temporal-graph service,
+or prompt-memory SDK. Its north star is **Verified Experience Gain**: under the same Agent, model, tools,
+task set, and resource budget, prior experience must produce a measurable net increase in future task success,
+and every influenced action must remain authorized and traceable to immutable evidence. Memory-derived context
+and execution state must be reconstructable within a declared replay boundary; irreversible external actions
+require explicit authorization, receipts, and compensation semantics rather than blind replay.
+
+The research program has three deliberately separate lanes:
+
+1. evidence-backed procedure proposals compiled from trajectories, tool outcomes, and explicit corrections;
+2. branch-aware durable execution state with checkpoint, fork, rollback, and bounded deterministic state reconstruction;
+3. a governed memory runtime where scope, evidence quality, token/latency/resource budgets, and receipts are
+   part of the retrieval contract.
+
+These remain research/internal until a reproducible experiment and an Accepted ADR exist. MemoryArena is the
+action-success gate; LongMemEval-V2 measures environment-experience evidence accuracy and its latency frontier;
+MemoryAgentBench covers accurate retrieval, test-time learning, long-range understanding, and selective
+forgetting. LoCoMo and the current fixed-50 QA campaign remain regression evidence, not the
+north-star product score. See [ADR-0006](docs/adr/0006-verified-experience-runtime.md) and the
+[next-era plan](docs/plans/next-era-verified-experience.md).
 
 ## Crate Layout
 
@@ -190,7 +215,7 @@ src/
 │   ├── query_decompose.rs # Query decomposition engine
 │   └── retrieval_router.rs # Intent-routed retrieval
 ├── kernel/              # AIKernel — orchestration, tools, hooks, persistence
-│   ├── cognition/       # Soul v3.0 cognitive engine (12 files)
+│   ├── cognition/       # Soul v3.0 legacy primitives; v3.1 promotion is not implemented
 │   ├── handlers/        # 14 domain handler modules
 │   ├── tools/           # 7 built-in tool handlers
 │   ├── hook.rs          # Hook registry (5 interception points)
@@ -230,7 +255,7 @@ See `CLAUDE.md` for detailed development workflow rules.
 
 ## Design Documents
 
-- `system-v3.md` — Soul 3.0: 10 axioms from AI's first-person perspective (Chinese)
+- `system-v3.md` — Soul 3.1: 11 axioms from AI's first-person perspective (Chinese)
 - `docs/genesis-reference.md` — Historical Genesis snapshot (Chinese; non-normative)
 - `AGENTS.md` — AI agent navigation (directory map + quick navigation)
 - `CLAUDE.md` — Project-level rules for AI coding assistants

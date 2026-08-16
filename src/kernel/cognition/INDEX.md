@@ -1,6 +1,10 @@
 # Module: cognition
 
-Soul v3.0 — Cognitive Symbiotic Engine.
+Soul v3.0 legacy Cognitive Symbiotic Engine primitives. The current in-memory
+`SkillRegistry::register` path has no credential-bound acceptance event or durable
+proposal provenance, so it is internal and must not be treated as the Soul v3.1
+authorization/promotion path. Soul v3.1 work remains research-only until an
+Accepted ADR and typed acceptance event exist.
 
 Plico is not a neutral infrastructure; it is the Agent's cognitive symbiont.
 This module actively optimizes the Agent's cognitive environment:

@@ -10,8 +10,8 @@ This file contains foundational mandates for the Plico project. These instructio
 - **Example**: Move `*.log`, `*.sh` (transient), and `*.py` (probes) to `.runtime/`.
 
 ### 2. Architecture & Soul Alignment
-- Follow **Soul 3.0** principles as defined in `system-v3.md`.
-- Adhere to the **9 Architecture Red Lines**.
+- Follow **Soul 3.1** principles and the normative priority defined in `system-v3.md`.
+- Adhere to all **11 Architecture Red Lines**, including proposal-before-adoption and explicit provider boundaries.
 - Prioritize **polymorphic core verbs** (get, list, store, etc.) for API interactions.
 
 ### 3. Engineering Standards

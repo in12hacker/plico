@@ -1,7 +1,7 @@
 # CLAUDE.md — 太初 (Plico) AI-OS
 
-设计文档：`system-v3.md`（Soul 3.0，中文）
-完整参考：`docs/genesis-reference.md`
+现行宪法：`system-v3.md`（Soul 3.1，中文）
+历史参考：`docs/genesis-reference.md`（非现行规范）
 
 ## 架构要点
 
@@ -11,10 +11,10 @@ Application Layer (AI Agent Ecosystem)
 AI-Friendly Interface Layer (Semantic API/CLI, Natural Language Interface)
         ↓
 AI Kernel Layer
-  ├─ Cognitive Loop       — Soul v3.0: 主动上下文优化、技能进化、意图语义网络
+  ├─ Cognitive Loop       — Soul v3.0 legacy 原语；v3.1 授权提升尚未实现
   ├─ Agent Scheduler      — 生命周期管理 (create/pause/resume/destroy)
   ├─ Layered Memory       — Ephemeral → Working → Long-term → Procedural
-  ├─ Model & Tool Runtime — 加载/运行/卸载模型；外部工具作为"技能"
+  ├─ Provider & Tool APIs  — 类型化模型/工具抽象；重量 serving 与协议适配在内核外
   └─ Permission & Safety Guardrails
         ↓
 AI-Native File System
@@ -100,7 +100,7 @@ export LLM_BACKEND=stub
 2. **模块开发** — 按功能模块逐个开发，不可一次性生成全部代码。每个模块必须覆盖测试用例
 3. **质量门控**（每个模块完成后）— 测试通过 + Clippy 无新增警告 + 无 O(n²) 算法
 4. **里程碑验收**（所有模块完成后）— 回归测试 + 覆盖率 ≥ 90% + 性能回归 + 可达性测试
-5. **端到端测试** — 运行 11 个 benchmark suites（覆盖 10 条公理），生成 6 节报告（含竞争对手对比和 SAS）到 `benchmarks/docs/`
+5. **端到端测试** — 按 `benchmarks/README.md` 运行当前已注册 suite；research/shadow 结果不得冒充 release gate
 
 ### 测试覆盖率门控
 
