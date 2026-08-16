@@ -5,15 +5,18 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from plico_benchmarks.core.client import PlicoClient
 from plico_benchmarks.core.harness import BaseSuite, _sanitize_url
-from plico_benchmarks.core.integrity import validate_run_manifest
+from plico_benchmarks.core.integrity import build_run_manifest, validate_run_manifest
 from plico_benchmarks.core.reporter import MultiReporter, Report
 from plico_benchmarks.core.result_artifact import (
     RESULT_FILE,
     RUN_MANIFEST_FILE,
+    commit_result_directory,
     verify_result_directory,
 )
 from plico_benchmarks.suites.performance import PerformanceSuite
@@ -34,6 +37,71 @@ class _NoNetworkSuite(BaseSuite):
 
     def evaluate(self, raw: list[dict[str, Any]]) -> dict[str, Any]:
         return {"overall": {"count": len(raw)}}
+
+
+@pytest.mark.parametrize(
+    ("result_schema", "metadata_version"),
+    [("plico.benchmark-result/v5", 5), ("plico.benchmark-result/v6", 6)],
+)
+def test_resigned_qa_result_cannot_bypass_verifier_by_changing_metadata_suite(
+    tmp_path, result_schema, metadata_version
+):
+    run_id = "11111111-1111-4111-8111-111111111111"
+    manifest = build_run_manifest(
+        run_id=run_id,
+        suite="conversational-qa",
+        requested=0,
+        actual=0,
+        seed=42,
+        input_artifacts=[],
+        raw_results=[],
+        source_watermark="unavailable_public_v2",
+        external_evidence=[],
+        run_class="research",
+    )
+    manifest["schemas"]["result"] = result_schema
+    result = {
+        "metadata": {
+            "suite": "retrieval",
+            "run_id": run_id,
+            "result_schema_version": metadata_version,
+        },
+        "run_manifest": manifest,
+    }
+
+    output = tmp_path / result_schema.rsplit("/", 1)[-1]
+    with pytest.raises(ValueError, match="metadata and manifest suites differ"):
+        commit_result_directory(output, result)
+    assert not output.exists()
+
+
+@pytest.mark.parametrize("environment", [{}, {"PLICO_KG_AUTO_EXTRACT": "true"}])
+def test_v6_qa_result_rejects_missing_or_true_signed_kg_environment(tmp_path, environment):
+    run_id = "22222222-2222-4222-8222-222222222222"
+    manifest = build_run_manifest(
+        run_id=run_id,
+        suite="conversational-qa",
+        requested=0,
+        actual=0,
+        seed=42,
+        input_artifacts=[],
+        raw_results=[],
+        source_watermark="unavailable_public_v2",
+        external_evidence=[],
+        run_class="research",
+    )
+    result = {
+        "metadata": {
+            "suite": "conversational-qa",
+            "run_id": run_id,
+            "result_schema_version": 6,
+        },
+        "config": {"environment": environment},
+        "run_manifest": manifest,
+    }
+
+    with pytest.raises(ValueError, match="PLICO_KG_AUTO_EXTRACT=false"):
+        commit_result_directory(tmp_path / f"kg-{len(environment)}", result)
 
 
 def test_report_retains_reproducibility_configuration(monkeypatch):

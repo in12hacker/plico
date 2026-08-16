@@ -1,5 +1,6 @@
 """Dataset-domain and ground-truth integrity regressions."""
 
+import copy
 import sys
 from pathlib import Path
 
@@ -7,6 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 import pytest
 
+from plico_benchmarks.core.qa_retrieval_policy import QA_RETRIEVAL_POLICY
 from plico_benchmarks.core.result_artifact import validate_qa_retrieval_runtime
 from plico_benchmarks.suites.conversational_qa import (
     ConversationalQASuite,
@@ -53,8 +55,8 @@ class _SearchClient:
             "hits": self.hits,
             "embedding_query": {"state": "succeeded"},
             "retrieval": [
-                {"path": "bm25", "candidates": len(self.hits), "accepted": len(self.hits)},
                 {"path": "vector", "candidates": len(self.hits), "accepted": len(self.hits)},
+                {"path": "bm25", "candidates": len(self.hits), "accepted": len(self.hits)},
             ],
         }
 
@@ -207,6 +209,64 @@ def test_real_vector_artifact_accepts_object_only_openai_identity_without_overcl
     }
     with pytest.raises(ValueError, match="real-vector"):
         validate_qa_retrieval_runtime({"retrieval_runtime": duplicate_with_one_degraded}, ledger)
+
+
+@pytest.mark.parametrize("mutation", ["policy_missing", "policy_true", "kg_path", "path_missing"])
+def test_v6_qa_runtime_rejects_no_kg_policy_or_exact_path_drift(mutation):
+    runtime = {
+        "requirement": "real_non_stub_vector_per_query",
+        "configured_embedding_backend": "openai",
+        "active_embedding_provider": "unavailable",
+        "embedding_provider_state": "unavailable",
+        "provider_identity_scope": "object_execution_only_unattested_provider",
+        "cognitive_pipeline": {"max_in_flight": 3, "queue_capacity": 8192},
+        "retrieval_policy": copy.deepcopy(QA_RETRIEVAL_POLICY),
+        "ingest_watermark": {
+            "accepted": 1,
+            "accepted_delta": 1,
+            "completed": 1,
+            "in_flight": 0,
+        },
+        "ingest_outcomes": {
+            "submitted": 1,
+            "unique_cids": 1,
+            "duplicate_cids": 0,
+            "queued_accepted_attempts": 1,
+            "inline_document_attempts": 0,
+            "document_vector_succeeded_attempts": 1,
+            "document_lexical_degraded_attempts": 0,
+            "task_failed_attempts": 0,
+            "other_succeeded_attempts": 0,
+        },
+    }
+    ledger = [
+        {
+            "embedding_query_state": "succeeded",
+            "verified_vector_execution": True,
+            "retrieval_degraded": False,
+            "retrieval_execution": [
+                {"path": "vector", "candidates": 1, "accepted": 1},
+                {"path": "bm25", "candidates": 1, "accepted": 1},
+            ],
+        }
+    ]
+    if mutation == "policy_missing":
+        del runtime["retrieval_policy"]
+    elif mutation == "policy_true":
+        runtime["retrieval_policy"]["knowledge_graph_auto_extract"] = True
+    elif mutation == "kg_path":
+        ledger[0]["retrieval_execution"].append(
+            {"path": "knowledge_graph_path_discovery", "candidates": 1, "accepted": 1}
+        )
+    else:
+        ledger[0]["retrieval_execution"] = ledger[0]["retrieval_execution"][:1]
+
+    with pytest.raises(ValueError):
+        validate_qa_retrieval_runtime(
+            {"retrieval_runtime": runtime},
+            ledger,
+            result_schema="plico.benchmark-result/v6",
+        )
 
 
 def test_locomo_query_is_scoped_and_scores_ground_truth_evidence():

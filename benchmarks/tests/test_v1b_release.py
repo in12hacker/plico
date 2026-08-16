@@ -193,7 +193,10 @@ def test_release_bundle_binds_result_manifest_dogfood_and_binary(tmp_path, dogfo
     reader = dogfood.real_llm_reader
     binary_sha256 = dogfood.build.plicod_binary.sha256
     result = {
-        "metadata": {"run_id": "00000000-0000-4000-8000-000000000b01"},
+        "metadata": {
+            "suite": "v1b-release",
+            "run_id": "00000000-0000-4000-8000-000000000b01",
+        },
         "evidence_ledger": [{"operation": "memory.create_ack"}],
         "run_manifest": {
             "schema_version": "plico.memory-eval-run/v1",

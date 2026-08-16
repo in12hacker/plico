@@ -168,7 +168,7 @@ def build_run_manifest(
         "protocol": PROTOCOL,
         "schemas": {
             "result": (
-                "plico.benchmark-result/v5"
+                "plico.benchmark-result/v6"
                 if suite == "conversational-qa"
                 else "plico.benchmark-result/v4"
             ),
@@ -235,7 +235,11 @@ def validate_run_manifest(manifest: dict[str, Any]) -> None:
         raise ValueError("run manifest suite/run class combination is invalid")
     result_schema = manifest.get("schemas", {}).get("result")
     supported_result_schemas = (
-        {"plico.benchmark-result/v4", "plico.benchmark-result/v5"}
+        {
+            "plico.benchmark-result/v4",
+            "plico.benchmark-result/v5",
+            "plico.benchmark-result/v6",
+        }
         if suite == "conversational-qa"
         else {"plico.benchmark-result/v4"}
     )

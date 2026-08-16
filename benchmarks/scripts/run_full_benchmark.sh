@@ -16,6 +16,7 @@ PLICOD_PID=""
 ACTIVE_VAULT=""
 export PLICO_COGNITIVE_PIPELINE_MAX_IN_FLIGHT=3
 export PLICO_COGNITIVE_PIPELINE_QUEUE_CAPACITY=8192
+export PLICO_KG_AUTO_EXTRACT=false
 
 usage() {
     echo "Usage: $0 [--dry-run] [--runs 1|5] [--output-parent DIR] [--preprocess-timeout N]"

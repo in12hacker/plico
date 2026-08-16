@@ -25,6 +25,11 @@ from plico_benchmarks.core.llm_journal import (
     read_attempt_journal,
 )
 from plico_benchmarks.core.metrics import accuracy_pct, bleu1, compute_statistics, token_level_f1
+from plico_benchmarks.core.qa_retrieval_policy import (
+    qa_retrieval_policy_artifact,
+    resolve_qa_retrieval_policy,
+    validate_exact_qa_execution,
+)
 from plico_benchmarks.core.reporter import Report
 from plico_benchmarks.core.retrieval_execution import (
     provider_identity_scope,
@@ -101,6 +106,7 @@ def _search_execution_evidence(response: dict[str, Any]) -> dict[str, Any]:
         response.get("embedding_query")
     )
     retrieval_execution = validate_retrieval_execution(response.get("retrieval"))
+    validate_exact_qa_execution(retrieval_execution)
     vector_verified = verified_vector_execution(embedding_state, retrieval_execution)
     degraded = embedding_degradation is not None or any(
         item["degradation"] is not None for item in retrieval_execution
@@ -150,6 +156,7 @@ class ConversationalQASuite(SuiteBase):
             "embedding_provider_state": provider_state,
             "provider_identity_scope": identity_scope,
             "cognitive_pipeline": _cognitive_pipeline_runtime(requirement),
+            "retrieval_policy": resolve_qa_retrieval_policy(),
         }
         self._locomo_dataset = LoCoMoDataset()
         self._longmemeval_dataset = LongMemEvalDataset()
@@ -530,6 +537,8 @@ class ConversationalQASuite(SuiteBase):
         selection = getattr(self, "_selection_artifact", None)
         if selection is not None:
             artifacts.append(selection)
+        policy = getattr(self, "_retrieval_runtime", {}).get("retrieval_policy")
+        artifacts.append(qa_retrieval_policy_artifact(policy))
         return artifacts
 
     def external_evidence(self) -> list[dict[str, Any]]:

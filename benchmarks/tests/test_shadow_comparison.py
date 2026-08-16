@@ -15,6 +15,10 @@ from plico_benchmarks.core.comparison import (
     compare_retrieval_shadow,
 )
 from plico_benchmarks.core.qa_comparison import QaShadowInput, compare_qa_shadow
+from plico_benchmarks.core.qa_retrieval_policy import (
+    QA_RETRIEVAL_POLICY,
+    qa_retrieval_policy_artifact,
+)
 
 
 def _result(run: int) -> dict:
@@ -140,6 +144,10 @@ def _qa_input(run: int) -> QaShadowInput:
             "embedding_query_degradation": None,
             "retrieval_degraded": False,
             "verified_vector_execution": True,
+            "retrieval_execution": [
+                {"path": "vector", "candidates": 1, "accepted": 1},
+                {"path": "bm25", "candidates": 1, "accepted": 1},
+            ],
         },
         {
             "sample_id": selected[1],
@@ -156,6 +164,10 @@ def _qa_input(run: int) -> QaShadowInput:
             "embedding_query_degradation": None,
             "retrieval_degraded": False,
             "verified_vector_execution": True,
+            "retrieval_execution": [
+                {"path": "vector", "candidates": 1, "accepted": 1},
+                {"path": "bm25", "candidates": 1, "accepted": 1},
+            ],
         },
     ]
     result = {
@@ -164,13 +176,14 @@ def _qa_input(run: int) -> QaShadowInput:
             "run_id": f"qa-run-{run}",
             "sampling_profile": "regression",
             "sampling_strategy": "deterministic_sha256_stratified_v1",
+            "environment": {"PLICO_KG_AUTO_EXTRACT": "false"},
         },
         "run_manifest": {
             "protocol": "plico.personal.v2",
             "suite": "conversational-qa",
             "run_class": "research",
             "run_id": f"qa-run-{run}",
-            "schemas": {"result": "plico.benchmark-result/v5"},
+            "schemas": {"result": "plico.benchmark-result/v6"},
             "sampling": {"actual": 2, "scored": 2, "failed": 0, "excluded": 0},
             "artifacts": [
                 {"logical_name": "locomo", "sha256": "a" * 64},
@@ -179,6 +192,7 @@ def _qa_input(run: int) -> QaShadowInput:
                     "role": "conversational_qa_sample_selection",
                     "sha256": "c" * 64,
                 },
+                qa_retrieval_policy_artifact(QA_RETRIEVAL_POLICY),
             ],
             "git_state": {
                 "commit": "d" * 40,
@@ -202,6 +216,7 @@ def _qa_input(run: int) -> QaShadowInput:
                 "provider_identity_scope": "object_execution_only_unattested_provider",
                 "requirement": "real_non_stub_vector_per_query",
                 "cognitive_pipeline": {"max_in_flight": 3, "queue_capacity": 8192},
+                "retrieval_policy": copy.deepcopy(QA_RETRIEVAL_POLICY),
                 "ingest_watermark": {
                     "accepted": 2,
                     "accepted_delta": 2,
@@ -309,4 +324,22 @@ def test_qa_shadow_rejects_changed_or_unverified_campaign_inputs(mutation):
         inputs[4].result["metrics"]["retrieval_runtime"]["ingest_watermark"]["in_flight"] = 1
 
     with pytest.raises(ValueError):
+        compare_qa_shadow(inputs)
+
+
+@pytest.mark.parametrize("old_schema", ["plico.benchmark-result/v4", "plico.benchmark-result/v5"])
+def test_qa_shadow_rejects_mixed_old_result_schema(old_schema):
+    inputs = [_qa_input(index) for index in range(5)]
+    inputs[4].result["run_manifest"]["schemas"]["result"] = old_schema
+
+    with pytest.raises(ValueError, match="result schema v6"):
+        compare_qa_shadow(inputs)
+
+
+def test_qa_shadow_rejects_unbound_policy_artifact_digest():
+    inputs = [_qa_input(index) for index in range(5)]
+    for item in inputs:
+        item.result["run_manifest"]["artifacts"][-1]["sha256"] = "9" * 64
+
+    with pytest.raises(ValueError, match="bind the frozen retrieval policy"):
         compare_qa_shadow(inputs)

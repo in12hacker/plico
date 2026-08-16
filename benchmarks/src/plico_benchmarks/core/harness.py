@@ -207,7 +207,7 @@ class BaseSuite(ABC):
         else:
             report.data.pop("raw_results", None)
         metadata = report.data.setdefault("metadata", {})
-        metadata["result_schema_version"] = 5 if self.name == "conversational-qa" else 4
+        metadata["result_schema_version"] = 6 if self.name == "conversational-qa" else 4
         metadata["run_id"] = self.run_id
         report.data["run_manifest"] = build_run_manifest(
             run_id=self.run_id,

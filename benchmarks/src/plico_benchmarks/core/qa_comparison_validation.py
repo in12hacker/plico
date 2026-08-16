@@ -8,6 +8,10 @@ from pathlib import Path
 from typing import Any
 
 from plico_benchmarks.core.client import PROTOCOL
+from plico_benchmarks.core.qa_retrieval_policy import (
+    QA_RETRIEVAL_POLICY_ROLE,
+    qa_retrieval_policy_artifact,
+)
 
 
 @dataclass(frozen=True)
@@ -72,8 +76,11 @@ def validate_qa_shadow_inputs(inputs: list[QaShadowInput]) -> QaShadowCampaign:
             or manifest.get("run_class") != "research"
         ):
             raise ValueError("QA shadow input protocol/suite/run class mismatch")
+        if manifest.get("schemas", {}).get("result") != "plico.benchmark-result/v6":
+            raise ValueError("QA shadow comparison requires exact no-KG result schema v6")
         _validate_sampling(manifest.get("sampling"))
-        _same(common, "artifacts", _artifact_contract(manifest), "datasets/selection")
+        artifacts = _artifact_contract(manifest)
+        _same(common, "artifacts", artifacts, "datasets/selection")
 
         accounting = result.get("metrics", {}).get("sample_accounting")
         ledger = result.get("metrics", {}).get("capability_ledger")
@@ -106,6 +113,9 @@ def validate_qa_shadow_inputs(inputs: list[QaShadowInput]) -> QaShadowCampaign:
             "object_execution_only_unattested_provider",
         }:
             raise ValueError("QA shadow embedding provider identity scope is unavailable")
+        expected_policy = qa_retrieval_policy_artifact(runtime.get("retrieval_policy"))
+        if artifacts.get(QA_RETRIEVAL_POLICY_ROLE) != expected_policy["sha256"]:
+            raise ValueError("QA shadow input does not bind the frozen retrieval policy")
         _same(common, "embedding_runtime", runtime, "embedding provider/runtime")
 
         git_state = manifest.get("git_state")
@@ -118,6 +128,8 @@ def validate_qa_shadow_inputs(inputs: list[QaShadowInput]) -> QaShadowCampaign:
         config = result.get("config")
         if not isinstance(config, dict):
             raise ValueError("QA shadow input suite configuration is missing")
+        if config.get("environment", {}).get("PLICO_KG_AUTO_EXTRACT") != "false":
+            raise ValueError("QA shadow input does not bind PLICO_KG_AUTO_EXTRACT=false")
         _same(
             common,
             "suite_config",
@@ -129,7 +141,12 @@ def validate_qa_shadow_inputs(inputs: list[QaShadowInput]) -> QaShadowCampaign:
             "unavailable_public_v2",
         }
 
-    required = {"locomo", "longmemeval", "conversational_qa_sample_selection"}
+    required = {
+        "locomo",
+        "longmemeval",
+        "conversational_qa_sample_selection",
+        "conversational_qa_retrieval_policy",
+    }
     if set(common["artifacts"]) != required:
         raise ValueError("QA shadow input artifact roles are incomplete")
     return QaShadowCampaign(

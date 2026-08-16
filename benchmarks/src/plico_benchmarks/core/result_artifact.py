@@ -21,6 +21,12 @@ from plico_benchmarks.core.llm_evidence import (
 )
 from plico_benchmarks.core.llm_journal import read_attempt_journal
 from plico_benchmarks.core.metrics import accuracy_pct, compute_statistics
+from plico_benchmarks.core.qa_retrieval_policy import (
+    QA_RETRIEVAL_POLICY_ROLE,
+    qa_retrieval_policy_artifact,
+    validate_exact_qa_execution,
+    validate_qa_retrieval_policy,
+)
 from plico_benchmarks.core.retrieval_execution import (
     PROVIDER_IDENTITY_SCOPES,
     provider_identity_scope,
@@ -42,6 +48,8 @@ def commit_result_directory(output: Path, result: dict[str, Any]) -> dict[str, A
     validate_run_manifest(manifest)
     if result.get("metadata", {}).get("run_id") != manifest.get("run_id"):
         raise ValueError("benchmark metadata and manifest run IDs differ")
+    if result.get("metadata", {}).get("suite") != manifest.get("suite"):
+        raise ValueError("benchmark metadata and manifest suites differ")
     result_payload = canonical_json(result)
     sidecar = {
         **manifest,
@@ -81,6 +89,8 @@ def verify_result_directory(output: Path) -> dict[str, Any]:
     if not isinstance(embedded, dict) or embedded != detached:
         raise ValueError("benchmark embedded and detached run manifests differ")
     validate_run_manifest(embedded)
+    if result.get("metadata", {}).get("suite") != embedded.get("suite"):
+        raise ValueError("benchmark metadata and manifest suites differ")
     expected = {
         "file_name": RESULT_FILE,
         "bytes": len(result_payload),
@@ -94,6 +104,7 @@ def verify_result_directory(output: Path) -> dict[str, Any]:
     expected_version = {
         "plico.benchmark-result/v4": 4,
         "plico.benchmark-result/v5": 5,
+        "plico.benchmark-result/v6": 6,
     }.get(result_schema)
     metadata_version = result.get("metadata", {}).get("result_schema_version")
     if (embedded.get("suite") == "conversational-qa" and metadata_version != expected_version) or (
@@ -121,6 +132,10 @@ def read_verified_result(output: Path) -> tuple[bytes, bytes, dict[str, Any]]:
 def _validate_suite_evidence(result: dict[str, Any], output: Path) -> None:
     if result.get("metadata", {}).get("suite") != "conversational-qa":
         return
+    if result.get("run_manifest", {}).get("schemas", {}).get("result") == (
+        "plico.benchmark-result/v6"
+    ) and result.get("config", {}).get("environment", {}).get("PLICO_KG_AUTO_EXTRACT") != ("false"):
+        raise ValueError("QA v6 result does not bind PLICO_KG_AUTO_EXTRACT=false")
     metrics = result.get("metrics")
     if not isinstance(metrics, dict):
         raise ValueError("QA result has no typed metrics")
@@ -360,6 +375,16 @@ def _validate_qa_sample_ledger(
         ledger,
         result_schema=manifest.get("schemas", {}).get("result", ""),
     )
+    if manifest.get("schemas", {}).get("result") == "plico.benchmark-result/v6":
+        policy = metrics["retrieval_runtime"]["retrieval_policy"]
+        expected_policy_artifact = qa_retrieval_policy_artifact(policy)
+        matching = [
+            artifact
+            for artifact in manifest.get("artifacts", [])
+            if isinstance(artifact, dict) and artifact.get("role") == QA_RETRIEVAL_POLICY_ROLE
+        ]
+        if matching != [expected_policy_artifact]:
+            raise ValueError("QA manifest does not bind the frozen retrieval policy artifact")
     _validate_qa_aggregates(metrics, ledger, manifest)
 
 
@@ -385,8 +410,9 @@ def validate_qa_retrieval_runtime(
             raise ValueError("QA retrieval runtime evidence is missing")
         watermark_fields = {"accepted", "completed", "in_flight"}
         ingest_outcomes = None
-    elif result_schema == "plico.benchmark-result/v5":
-        if set(runtime) != common_fields | {"ingest_outcomes", "cognitive_pipeline"}:
+    elif result_schema in {"plico.benchmark-result/v5", "plico.benchmark-result/v6"}:
+        v6_fields = {"retrieval_policy"} if result_schema == "plico.benchmark-result/v6" else set()
+        if set(runtime) != common_fields | {"ingest_outcomes", "cognitive_pipeline"} | v6_fields:
             raise ValueError("QA retrieval runtime evidence is missing")
         watermark_fields = {"accepted", "accepted_delta", "completed", "in_flight"}
         ingest_outcomes = runtime["ingest_outcomes"]
@@ -404,7 +430,7 @@ def validate_qa_retrieval_runtime(
         )
         or ingest_watermark["completed"] < ingest_watermark["accepted"]
         or (
-            result_schema == "plico.benchmark-result/v5"
+            result_schema in {"plico.benchmark-result/v5", "plico.benchmark-result/v6"}
             and ingest_watermark["accepted_delta"] > ingest_watermark["accepted"]
         )
         or ingest_watermark["in_flight"] != 0
@@ -458,6 +484,11 @@ def validate_qa_retrieval_runtime(
             or ingest_outcomes["other_succeeded_attempts"] != 0
         ):
             raise ValueError("QA ingest outcome evidence does not conserve the submitted cohort")
+    if result_schema == "plico.benchmark-result/v6":
+        validate_qa_retrieval_policy(runtime["retrieval_policy"])
+        for item in ledger:
+            execution = validate_retrieval_execution(item.get("retrieval_execution"))
+            validate_exact_qa_execution(execution)
     requirement = runtime["requirement"]
     if requirement not in {"typed_execution_observed", "real_non_stub_vector_per_query"}:
         raise ValueError("QA retrieval runtime requirement is unsupported")

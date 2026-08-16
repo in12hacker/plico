@@ -52,6 +52,12 @@ Object 查询 research baseline，但只能在每条查询都证明 vector 执�
 artifact 固定标记为 `object_execution_only_unattested_provider`，不得冒充 Memory projection
 的可发布 provider identity，也不得直接用于跨 run 模型归因。
 
+Conversation QA 的新基线固定关闭 KG 自动抽取（`PLICO_KG_AUTO_EXTRACT=false`），每个样本只
+接受有序且无降级的 `vector → bm25` exact execution ledger。该策略作为内嵌 policy artifact
+绑定到 v6 result/manifest，并由验证器逐样本重算；`knowledge_graph_*`、tag fallback、reranker、
+路径缺失、重复或顺序漂移都会使 run 失效。旧 v4/v5 result 仍可单独回放验证，但不能混入新的
+五轮 no-KG shadow comparison。
+
 ## 本地推理选型（2026-08-15 冻结）
 
 当前机器是 NVIDIA GB10（20-core Arm、128 GB unified memory）。本节固定的是下一阶段的
