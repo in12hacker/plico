@@ -1,15 +1,15 @@
 # v53 验收摘要：Execution Observation Ledger Core
 
-**状态**：Not started / Architecture Review
+**状态**：R0 Freeze Candidate / Implementation not started
 **合同**：[v53-execution-observation-spine.md](./v53-execution-observation-spine.md)
 **产品基线**：`fe4c08260fc3e6dc0e3d37921b863a7ed48a330a`
 
-> 本文件只由 Plico 架构/验收组在候选提交与独立证据完整后填写。
+> 本文件只由 Plico 架构/验收组填写；R0 冻结项可在开发开工前记录，其余项只在候选提交与独立证据完整后填写。
 > 第三方开发组不得修改本文件或预填通过状态、测试数字、benchmark 结论；只能提交独立的候选证据输入。
 
 ## 1. 状态
 
-- Architecture-Frozen：⬜
+- Architecture-Frozen：⬜（仅在外部 R0 packet + 独立 Git 审批提交/tag 离线授权为 GO 后成立）
 - Implementation-Candidate：⬜
 - Evidence-Complete：⬜
 - Final decision：`PENDING`
@@ -18,16 +18,18 @@
 
 | 项目 | 值 |
 |---|---|
-| Accepted narrow ADR | PENDING |
-| Contract digest | PENDING |
-| Architecture-Frozen implementation base | PENDING |
+| Accepted narrow ADR | `docs/adr/0007-execution-observation-ledger-v1.md`；digest 由外部 R0 packet 绑定 |
+| Contract digest | 由外部 R0 packet 绑定 |
+| Architecture-Frozen implementation base | 由外部 R0 packet 的 `implementation_base_sha/tree` 绑定；PENDING |
+| Candidate scope base | 独立审批提交 A；须由离线授权器验证；PENDING |
 | Candidate commit | PENDING |
-| Worktree clean | PENDING |
-| Cargo.lock digest | PENDING |
-| benchmarks/uv.lock digest | PENDING |
-| Evidence bundle digest | PENDING |
-| Evidence collector/verifier version | PENDING |
-| Evidence verifier exit status | PENDING |
+| Worktree clean | collector/packet verifier fail-closed 验证 |
+| Cargo.lock digest | `a6f237ada517e77b3b006e9b5a3ba1e5645c5b8ba992ccc9e9b42e1d07125792`（100,222 bytes） |
+| benchmarks/uv.lock digest | `a2d42a133228ef6e12a5362c2d2f04385e9abf3ef08a8d65da9a7664a62722ec`（423,717 bytes） |
+| R0 handoff packet digest | 外部四文件 packet 的 `COMMITTED` 绑定；不回填以避免 self-reference |
+| Candidate evidence bundle digest | PENDING（schema/collector/verifier 于 R1 前冻结，不属于 R0 packet） |
+| R0 packet collector/verifier version | `plico.v53.r0-spec/v1` / `plico.v53.r0-handoff/v1` |
+| Packet integrity / Git authorization | PENDING / PENDING |
 
 ## 3. 不变量验收
 
@@ -54,7 +56,7 @@
 | cargo test lib/all features | PENDING |
 | cargo test all | PENDING |
 | cargo clippy `-D warnings` | PENDING |
-| coverage ≥ 87% | PENDING |
+| coverage：local floor ≥85%；candidate total ≥85.83%；observation module ≥95% | PENDING |
 | perf regression | PENDING |
 | benchmark ruff/pytest | PENDING |
 | diff/forbidden-path audit | PENDING |
@@ -82,7 +84,7 @@ Verified Experience product gate。
 | 类型 | ID | Owner | Due date | 状态 | 说明/证据 |
 |---|---|---|---|---|---|
 | Architecture Deviation | PENDING | PENDING | PENDING | PENDING | PENDING |
-| CI waiver | PENDING | PENDING | PENDING | PENDING | PENDING |
+| Local gate waiver | PENDING | PENDING | PENDING | PENDING | PENDING |
 | Named P2 debt | PENDING | PENDING | PENDING | PENDING | PENDING |
 
 Reviewer identity、review timestamp 和签字 digest：PENDING。

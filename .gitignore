@@ -1,9 +1,6 @@
 # ── Build ──
 target/
 
-# ── Dependencies ──
-Cargo.lock
-
 # ── Runtime data (plicod runtime, auto-generated) ──
 .runtime/
 .logs/

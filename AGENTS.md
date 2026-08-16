@@ -58,12 +58,13 @@ benchmarks/              # 自研 benchmark 框架（Python, uv 管理）
 
 | 命令 | 用途 |
 |------|------|
-| `cargo build` | 构建所有目标 |
-| `EMBEDDING_BACKEND=stub LLM_BACKEND=stub cargo test --lib` | 运行单元测试（最快） |
-| `EMBEDDING_BACKEND=stub LLM_BACKEND=stub cargo test` | 运行所有测试 |
-| `EMBEDDING_BACKEND=stub LLM_BACKEND=stub cargo llvm-cov --lib` | 覆盖率测量 |
-| `cargo clippy -- -D warnings` | Lint 检查（必须零警告） |
-| `cargo build --release` | Release 构建 |
+| `cargo build --locked` | 按已跟踪的 `Cargo.lock` 构建所有目标 |
+| `EMBEDDING_BACKEND=stub LLM_BACKEND=stub cargo test --locked --lib` | 运行单元测试（最快） |
+| `EMBEDDING_BACKEND=stub LLM_BACKEND=stub cargo test --locked` | 运行所有测试 |
+| `EMBEDDING_BACKEND=stub LLM_BACKEND=stub cargo llvm-cov --locked --lib --all-features --fail-under-lines 85` | 全仓本地覆盖率门；里程碑可另设更高差分门 |
+| `cargo clippy --locked --all-targets --all-features -- -D warnings` | Lint 检查（必须零警告） |
+| `cargo build --locked --release --all-features --bins` | Release 构建全部二进制 |
+| `cd benchmarks && uv sync --locked --offline --extra dev && uv run --offline pytest -q` | Benchmark Python 锁定、本地离线环境与测试 |
 
 ## 代码规范
 
@@ -109,15 +110,19 @@ benchmarks/              # 自研 benchmark 框架（Python, uv 管理）
 - [ ] 通过快速导航表定位目标模块
 - [ ] 打开模块 `INDEX.md`，修改公共 API 前检查 Dependents
 - [ ] 确认签名/错误类型变更的 Modification Risk
-- [ ] 运行 `EMBEDDING_BACKEND=stub LLM_BACKEND=stub cargo test --lib` — 所有测试必须通过
-- [ ] 如果二进制变更：`cargo build --bin [name]` 成功
+- [ ] 运行 `EMBEDDING_BACKEND=stub LLM_BACKEND=stub cargo test --locked --lib` — 所有测试必须通过
+- [ ] 如果二进制变更：`cargo build --locked --bin [name]` 成功
 - [ ] 如果新模块或构建命令变更：更新 AGENTS.md
+
+## 协作与门禁
+
+- GitHub 仅用于 Git 分支、提交、标签、PR 与人工 review；不使用 GitHub Actions、Issues、托管 checks 或 GitHub API 作为构建、测试、审批门禁。
+- 构建、测试、coverage、里程碑 packet/scope 验证全部在本地执行；离线结果不得冒充密码学签名或托管身份认证。
 
 ## 索引排除
 
 ```
 target/          # Cargo 构建输出
-Cargo.lock       # Lock file
 .claude/         # Claude Code 设置
 .cursor/         # Cursor 设置
 .runtime/        # 开发时运行时暂存空间

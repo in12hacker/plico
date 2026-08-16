@@ -18,7 +18,7 @@
 | [v50](v50-memory-rearchitecture.md) | Memory Rearchitecture | 2026-05-14 | ✅ 完成 |
 | [v51](v51-summary.md) | Search Quality & Scope Isolation | 2026-05-17 | ✅ 完成（SAS 15/20，embedding 稳定性已修复） |
 | [v52](v52-trace-observability.md) | Trace Observability + Quality Fixes | 2026-05-18 | ✅ 完成 |
-| [v53](v53-execution-observation-spine.md) | Execution Observation Ledger Core（Phase 1A） | 2026-08-16 | 🟡 Draft / Architecture Review |
+| [v53](v53-execution-observation-spine.md) | Execution Observation Ledger Core（Phase 1A） | 2026-08-16 | R0 freeze candidate / implementation not started |
 
 ## 模板
 
