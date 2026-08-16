@@ -131,21 +131,28 @@ export LLM_BACKEND=stub
 
 ### Local serving decision
 
-The current GB10 baseline keeps llama.cpp as the reproducible local text control, with Qwen2.5-7B Q4_K_M
-as the latency tier and Qwen3.5-27B Q4_K_M as the larger local tier. Ollama remains the operational path for
-the verified Qwen3-Embedding Memory builder. The next performance trials are TensorRT-LLM and then vLLM,
-using the same pinned upstream GPT-OSS-20B checkpoint and tokenizer while sealing each runtime's own format,
-quantization, and artifact digest. TensorRT Edge-LLM follows with a pinned supported Qwen checkpoint because
-its current model matrix and ONNX/engine workflow differ. No framework replaces llama.cpp until it passes the
-same quality, TTFT, throughput, p95, memory, and failure-rate checks. VLMs are reserved for image-bearing suites
-and are not a default text or embedding backend.
+The current GB10 operational embedding reliability baseline is Ollama 0.32.13 with the configured exact tag
+`plico-qwen3-embed:20260815-q8_0`. Five fresh-vault QA runs completed 29,540 vector-derivation tasks
+(29,485 per-run unique-CID observations; 5,897 distinct content CIDs in the fixed repeated corpus) and
+250 exact vector+BM25 queries with zero embedding degradation. Adjacent
+runtime probes observed the same model digest throughout, but the binary digest was not attested inside each
+committed result. This is a non-gating research baseline, not an official dataset score or release gate.
+llama.cpp remains the reproducible local text-generation
+control (Qwen2.5-7B Q4_K_M for latency, Qwen3.5-27B Q4_K_M as the larger tier), but its b8914 embedding path is
+only a microbenchmark/diagnostic control after rare long-load transport and JSON EOF failures.
+
+The next embedding performance trial is TensorRT-LLM's Qwen3 embedding service, followed by a same-checkpoint
+vLLM pooling/embedding comparison. Text generation is evaluated separately with matched upstream checkpoints;
+TensorRT Edge-LLM and VLMs remain reserved for supported edge or image-bearing suites. No runtime replaces the
+relevant baseline until it passes the same quality, identity, throughput, p95, memory, long-load failure-rate,
+and zero-degradation checks.
 
 Measured host snapshots, limitations, source links, and the acceptance matrix are frozen in
-[benchmarks/README.md](benchmarks/README.md#本地推理选型2026-08-15-冻结).
+[benchmarks/README.md](benchmarks/README.md).
 
 ## Configuration
 
-Plico uses a three-layer cascade (lowest → highest priority):
+Plico uses a four-layer cascade (lowest → highest priority):
 
 1. **Built-in defaults** — zero-config works out of the box
 2. **Config file** — `~/.plico/config.json` (or `$PLICO_ROOT/config.json`)
@@ -157,12 +164,12 @@ Plico uses a three-layer cascade (lowest → highest priority):
 | # | Axiom | Implication |
 |---|-------|-------------|
 | 1 | **Token is the scarcest resource** | Layered return L0/L1/L2, track consumption |
-| 2 | **Intent before operation** | Agent declares intent, OS assembles context |
-| 3 | **Memory crosses boundaries** | 4-tier memory, checkpoint/restore across "death" |
-| 4 | **Canonical before projection** | Personal memory/CAS are primary; human files are generated views |
-| 5 | **Mechanism, not policy** | Kernel provides primitives, never decides for agents |
-| 6 | **Structure before language** | JSON is the only kernel interface |
-| 7 | **Proactive before reactive** | Intent prefetch, warm context, goal generation |
+| 2 | **Cognitive environment before cognitive decision** | Plico maintains context quality; the Agent decides within it |
+| 3 | **Memory is a cognitive exoskeleton** | Durable memory expands the Agent's limited working context |
+| 4 | **Sharing before repetition** | Private/Shared/Group scopes make chosen knowledge reusable |
+| 5 | **Cognitive enhancement, not replacement** | Optimization is observable and overridable; the Agent retains decisions |
+| 6 | **Semantics before structure, structure before language** | Plico works in semantic and typed layers, not final user prose |
+| 7 | **Proactive optimization before passive response** | Compress, preload, and curate context before it becomes a burden |
 | 8 | **Causation before correlation** | KG records CausedBy / DependsOn / Produces chains |
 | 9 | **Better with use** | AgentProfile accumulates, skills discovered |
 | 10 | **Sessions are first-class** | durable session start/end and monotonic event watermarks |
@@ -203,7 +210,7 @@ src/
 tests/                   # 44 integration test files
 benchmarks/              # Custom benchmark framework (Python, uv)
 docs/
-├── genesis-reference.md # Complete reference document
+├── genesis-reference.md # Historical Genesis snapshot
 ├── milestones/          # Milestone documents with template
 ├── plans/               # Active plans
 └── design/              # Architecture design documents
@@ -224,7 +231,7 @@ See `CLAUDE.md` for detailed development workflow rules.
 ## Design Documents
 
 - `system-v3.md` — Soul 3.0: 10 axioms from AI's first-person perspective (Chinese)
-- `docs/genesis-reference.md` — Complete Genesis reference (Chinese)
+- `docs/genesis-reference.md` — Historical Genesis snapshot (Chinese; non-normative)
 - `AGENTS.md` — AI agent navigation (directory map + quick navigation)
 - `CLAUDE.md` — Project-level rules for AI coding assistants
 - `benchmarks/README.md` — Benchmark framework documentation

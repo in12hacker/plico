@@ -1,6 +1,6 @@
 # 太初 (Plico) — AI-Native Operating System
 
-面向个人用户数字分身的记忆原生操作系统内核。AI 直接通过语义 API 使用记忆与证据；文档、表格、PPT 和图形界面属于按需生成的人类侧投影，而不是核心数据模型。系统与模型无关。详见 `docs/adr/0001-personal-digital-twin.md`、`system-v3.md`（Soul 3.0）和 `docs/genesis-reference.md`。
+面向个人用户数字分身的记忆原生操作系统内核。AI 直接通过语义 API 使用记忆与证据；文档、表格、PPT 和图形界面属于按需生成的人类侧投影，而不是核心数据模型。系统与模型无关。现行规范见 `system-v3.md`（Soul 3.0）、已接受 ADR 与本文件；`docs/genesis-reference.md` 仅为历史快照。
 
 ## 目录地图
 

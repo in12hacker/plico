@@ -59,7 +59,7 @@ Conversation QA 的新基线固定关闭 KG 自动抽取和 SemanticFS KG 检索
 路径缺失、重复或顺序漂移都会使 run 失效。旧 v4/v5 result 仍可单独回放验证，但不能混入新的
 五轮 no-KG shadow comparison。
 
-## 本地推理选型（2026-08-15 冻结）
+## 本地推理选型（路线冻结于 2026-08-15，QA 证据更新于 2026-08-16）
 
 当前机器是 NVIDIA GB10（20-core Arm、128 GB unified memory）。本节固定的是下一阶段的
 工程路线，不是跨机器通用排名：所有速度数字都是同机、单并发、短 prompt 的 exploratory
@@ -71,38 +71,40 @@ snapshot；只有进入 committed benchmark artifact 的重复运行才能成为
 |------|----------------|----------|----------|
 | 低延迟文本生成 | llama.cpp b8914 / Qwen2.5-7B-Instruct Q4_K_M | 5/5 完成；mean 1.056 s/request；prefill 313.5 tok/s；decode 36.5 tok/s | 默认本地效率档；不冒充 27B 质量 |
 | 较强本地文本生成 | llama.cpp b8914 / Qwen3.5-27B Q4_K_M | 5/5 完成；mean 3.975 s/request；prefill 95.6 tok/s；decode 10.0 tok/s | 本地质量候选；默认关闭 thinking，按任务显式开启 |
-| Object research embedding | llama.cpp b8914 / Qwen3-Embedding-0.6B Q8_0，同一固定 GGUF digest | unique-query p50/p95 8.45/10.55 ms；batch-8 220.8 docs/s；C=4 136.8 req/s | 下一轮 Object QA 默认；provider identity 仍 unattested |
+| Embedding 延迟控制组 | llama.cpp b8914 / Qwen3-Embedding-0.6B Q8_0，同一固定 GGUF digest | 早期 exploratory microbenchmark：unique-query p50/p95 8.45/10.55 ms；batch-8 220.8 docs/s；C=4 136.8 req/s | 未封存的长负载后来出现低频 transport exhaustion 与 2xx JSON EOF；仅保留诊断控制组，不再作为 QA 默认 runtime |
+| QA embedding 稳定基线 | Ollama 0.32.13 / Qwen3-Embedding-0.6B Q8_0，configured tag `plico-qwen3-embed:20260815-q8_0` | COMMITTED：5/5 fresh-vault、29,540/29,540 vector task、0 降级；相邻未封存运行观测：derived-index drain 均值 344.625 s、约 17.143 docs/s、约 5.78 GB VRAM | 当前可靠的 QA operational baseline；模型 digest 被相邻 probe 观察但未在每轮 result 中 attested，吞吐不是 performance gate |
 | Memory projection embedding | Ollama 0.32.13 / Qwen3-Embedding-0.6B Q8_0，固定 tag+digest | Object vector smoke 10/10；owner rebuild 后 Memory projection 10/10 Ready | 当前唯一能发布 P3 immutable builder identity 的实链 |
-| 外部 research reader/judge | DeepSeek V4 Flash | 5 × 50 QA samples / 875 attempts / USD 0.0668515736 | 只作 research evaluator；同 fingerprint、无回退、不冒充本地模型 |
+| 外部 research reader/judge | DeepSeek V4 Flash | 5 × 同一固定 50 QA samples / 875 attempts / USD 0.0145368216 | 只作 research evaluator；同 fingerprint、无回退、不冒充本地模型 |
 
 Qwen3.5 的 thinking 模式在一次 64-token 探测中把输出预算全部用于 reasoning content；关闭
 thinking 后才产生 37-token 正文。因此低延迟路径固定 `thinking=disabled`，reasoning 只能由任务
 显式选择并单独计量。VLM 不进入纯文本 reader、judge 或 embedding 默认路径；只有含图像输入的
 独立 suite 才评估 VLM。
 
-同一 Qwen3 embedding GGUF 在当前服务配置下，llama.cpp 的 unique-query p50 比 Ollama
-快约 15.3 倍，C=4 请求吞吐约 5.25 倍；两端同文本向量 cosine 为 0.999895。该结果足以选择
-Object QA research runtime，但不是纯 kernel 对照：llama.cpp 使用 ctx=8192/parallel=4，Ollama
-runner 使用 ctx=32768/parallel=1。Memory projection 仍使用 Ollama 的固定 tag+digest 身份链。
+同一 Qwen3 embedding GGUF 的早期未封存短请求微基准中，llama.cpp unique-query p50 比 Ollama 快约
+15.3 倍，C=4 请求吞吐约 5.25 倍，两端同文本向量 cosine 为 0.999895；但真实 5,908-object
+exploratory 长负载多次出现低频 `response_json/eof` 或 transport retry 耗尽，无法满足零降级合同。速度快但
+长负载可靠性不合格，因此 llama.cpp 只保留为诊断和微基准控制组。当前 QA 默认使用 Ollama
+ctx=32768/single-slot；COMMITTED 结果只证明 configured tag 一致和零向量失败，模型 binary digest
+未被每轮同轮 snapshot attested。相邻 operator monitoring 观察到固定 digest 与约 17.143 docs/s，
+但它不属于封存 comparison。以上比较仍不是纯 runtime 对照，不能由不同服务配置直接推出框架通用排名。
 
 ### Runtime 迁移顺序
 
-1. **保留 llama.cpp 作为可复现控制组和当前默认本地文本服务。** 官方 CUDA server image
-   同时提供 linux/arm64，并支持 CUDA 12/13；本机现有 GGUF 可直接运行。
-2. **第二步验证 TensorRT-LLM。** 当前官方硬件表已列出 DGX Spark，Spark porting guide
-   要求 TensorRT-LLM 1.2 或更高版本。首轮固定同一 Hugging Face
-   `openai/gpt-oss-20b` checkpoint revision 与 tokenizer，不把现有 GGUF/MXFP4 文件冒充
-   TensorRT-LLM 的原生输入；它只有通过同一 workload 的质量、TTFT、decode throughput、p95
-   和内存门槛后才替换 llama.cpp。
-3. **第三步用 vLLM 做连续批处理/并发吞吐对照。** NVIDIA 的 vLLM 路线已覆盖 DGX Spark；使用
-   与 TensorRT-LLM 相同的上游 GPT-OSS checkpoint revision。由于
-   unified-memory 平台默认接近满额预分配，初始试验固定
-   `--gpu-memory-utilization 0.7`，不得与现有服务抢满内存。
-4. **TensorRT Edge-LLM 后置。** 它需要 ONNX 导出和 TensorRT engine 构建；首轮使用官方支持
-   的固定 Qwen checkpoint，不把未在其当前支持表中的 GPT-OSS 当作可用对照。其工程成本高于
-   TensorRT-LLM/vLLM，因此只在前两条高性能路线完成后推进。
-5. **Ollama 保留为模型导入和当前 Memory identity 运维面，不作为高并发性能胜者的默认假设。**
-   只有相同模型、相同输入、相同量化和相同并发的实测才能比较 runtime。
+1. **Ollama + Qwen3-Embedding 保持当前可靠参考线。** 它已经通过五轮长负载零降级合同；在新
+   runtime 同时通过质量、身份、失败率和资源门槛前不切换生产基准。
+2. **Embedding 性能候选首先验证 TensorRT-LLM。** 官方 embedding 服务支持 OpenAI-compatible
+   `/v1/embeddings`、Qwen3-Embedding 与原生动态批处理。首轮固定同一 upstream checkpoint
+   revision、tokenizer、输入前缀、context 与输出维度，按 `C=1/4/16` 测吞吐、p95、失败率和
+   质量不回退；不能把现有 GGUF digest 冒充 TensorRT engine digest。
+3. **vLLM pooling/embedding 作为第二个同模型对照。** 使用与 TensorRT-LLM 相同的 Qwen3
+   checkpoint 和 workload，统一测 OpenAI embedding API、continuous batching、峰值 unified
+   memory 与长负载零降级。初始 `--gpu-memory-utilization` 不高于 0.7，避免挤占同机服务。
+4. **文本生成单独评测。** llama.cpp 继续作为现有 GGUF 控制组；TensorRT-LLM 和 vLLM 使用同一
+   Hugging Face generation checkpoint/revision 比较 TTFT、prefill/decode tok/s、p95 和质量，
+   不把生成性能结论外推到 embedding。
+5. **TensorRT Edge-LLM 与 VLM 后置。** 纯文本 embedding 不需要 VLM；只有真实图像输入或边缘
+   部署 suite 才承担 ONNX/engine 构建成本，并且只使用官方支持表中的固定模型。
 
 候选框架必须固定同一 upstream checkpoint revision、tokenizer、prompt set、context、max tokens
 和 concurrency `1/4/16`；每个 runtime 分别封存格式、量化参数和 artifact digest。只有实际共享
@@ -111,12 +113,13 @@ prefill/decode tok/s、request p50/p95、失败率、峰值 unified memory，以
 质量不回退。吞吐提升但质量、身份证明或稳定性退化时不切换。
 
 官方依据：[llama.cpp CUDA/arm64 images](https://github.com/ggml-org/llama.cpp/blob/master/docs/docker.md)、
+[TensorRT-LLM embeddings](https://nvidia.github.io/TensorRT-LLM/features/embeddings.html)、
+[TensorRT-LLM serve](https://nvidia.github.io/TensorRT-LLM/commands/trtllm-serve/trtllm-serve.html)、
 [TensorRT-LLM supported hardware](https://nvidia.github.io/TensorRT-LLM/supported-hardware.html)、
-[TensorRT-LLM supported models](https://nvidia.github.io/TensorRT-LLM/models/supported-models.html)、
 [DGX Spark porting guide](https://docs.nvidia.com/dgx/dgx-spark-porting-guide/porting/dependencies.html)、
-[NVIDIA vLLM release notes](https://docs.nvidia.com/deeplearning/frameworks/vllm-release-notes/rel-26-07.html)、
-[TensorRT Edge-LLM supported models](https://nvidia.github.io/TensorRT-Edge-LLM/latest/user_guide/getting_started/supported-models.html)、
-[TensorRT Edge-LLM GB10 installation](https://nvidia.github.io/TensorRT-Edge-LLM/user_guide/getting_started/installation.html)、
+[vLLM pooling/embedding models](https://docs.vllm.ai/en/stable/models/pooling_models/embed/)、
+[NVIDIA DGX Spark vLLM playbook](https://github.com/NVIDIA/dgx-spark-playbooks/blob/main/nvidia/vllm/README.md)、
+[TensorRT Edge-LLM supported models](https://github.com/NVIDIA/TensorRT-Edge-LLM/blob/main/docs/source/user_guide/getting_started/supported-models.md)、
 [Ollama GGUF import](https://docs.ollama.com/import)。
 
 ### 当前 research 基线
@@ -124,21 +127,26 @@ prefill/decode tok/s、request p50/p95、失败率、峰值 unified memory，以
 | 切片 | 结果 | 可解释边界 |
 |------|------|------------|
 | Working Memory lexical exact-contract，fresh vault，100 queries | Recall@5/10 = 0.900；Recall@20 = 0.990；MRR@10/nDCG@10 = 0.900 | 证明字面 token、隔离和去重契约；不是语义记忆召回 |
-| 同一固定 50 样本重复 5 轮（250 sample-observations），DeepSeek reader/judge，Object vector query shadow | evidence recall@10 = 0.816（run std 0.013，run×sample two-way cluster bootstrap shadow CI 0.712–0.904）；F1 = 0.200（run std 0.007，shadow CI 0.125–0.281）；BLEU-1 = 0.146；judge = 4.529/5；对抗弃答 = 84% | 250/250 query 均为 vector succeeded、零查询降级；相邻 daemon 日志回放显示每轮摄取有 8–12 个 embedding 降级，5,897 个唯一 CID 中仅 5,885–5,889 个进入 HNSW，但该日志未被 COMMITTED result/manifest 绑定；不是完整向量语料基线；`source_watermark_verified=false`、`gate_eligible=false`；同 alias+fingerprint 但 revision unattested；总成本 USD 0.06685 |
+| 同一固定 50 样本重复 5 轮（250 sample-observations），Ollama Qwen3-Embedding，DeepSeek reader/judge，no-KG QA shadow | evidence recall@10 = 0.830（run std 0，run×sample two-way cluster bootstrap shadow CI 0.720–0.920）；answerable F1 = 0.228017（run std 0.003735，shadow CI 0.140962–0.321735）；BLEU-1 = 0.182980（run std 0.002388）；judge = 4.524/5；对抗弃答 = 80% | 五轮各 5,908/5,908 vector、累计 250/250 query 精确执行 `vector → bm25`，0 KG/降级/failure；LoCoMo recall/F1 = 0.660/0.375699，LongMemEval = 1.000/0.109872；`source_watermark_verified=false`、`gate_eligible=false`，同 alias+fingerprint 但 revision unattested；总成本 USD 0.0145368216 |
 | real-vector performance，fresh vault，1,810 serial samples | warm object.search p50/p95 = 4.85/7.99 ms；query-unique = 141.11/169.41 ms；250/250 typed vector execution、零降级 | query-unique target hit@10 = 0.920；这是 warmed-index query，不是 cold start |
 | 100-entry Memory projection catch-up | 100/100 Ready；phase 18.97 s；ready-lag p50/p95 = 9.39/18.10 s | post-batch backlog drain observation，不是逐 revision commit-to-ready latency |
 | canonical/lexical operations | memory.create ack p50/p95 = 6.52/13.13 ms；memory.get = 0.10/0.12 ms；memory.recall = 0.28/0.49 ms | recall target hit@10 = 0.910；所有请求串行，经 UDS |
 
-当前最优先方向是：保持 llama.cpp 的低 unique-query embedding latency，针对 LoCoMo 的低
-evidence recall@10（五轮 mean 0.632、run std 0.027）改进多证据检索；LongMemEval 五轮
-evidence recall@10 稳定为 1.000，但 F1 只有 0.115（run std 0.002），应优先修答案等价判断与
-reader 规范化，而不是继续堆召回。对抗弃答 mean 0.840、run std 0.167，仍是高波动硬负例。
-judge mean 4.529/5 与低 F1 冲突，不能单独作为质量 gate。五轮已建立固定样本的 query-path shadow 方差，
-但摄取阶段发生了 lexical degradation；`accepted/completed/in_flight` 只证明任务尝试已排空，不能
-证明每个对象已经向量化。本地 OpenAI-compatible embedding 也只具备 Object execution evidence，
-DeepSeek alias revision 未受证明，因此上述区间不是发布或泛化置信区间，当前固定
-`gate_eligible=false`。同行公开数字若数据集、采样、
-retriever 和指标定义不同，只列背景，不直接相减或宣称领先。
+本次 no-KG QA 证据绑定 clean commit `450602f33547dc7883b9e5db4cde1a63d5093c43`；封存的
+comparison SHA-256 为 `7b268d6c011bcff86dc033811200992eca392fbe42e1ed970cc35353a5c1d9e7`。
+临时运行目录不作为长期引用。
+
+当前最优先的质量方向是针对 LoCoMo recall@10 `0.660` 改进多证据检索；LongMemEval recall@10
+已经稳定为 `1.000`，但 F1 只有 `0.109872`，应优先诊断答案等价、reader 规范化和数据协议，而
+不是继续堆召回。judge mean `4.524/5` 与低 F1 明显冲突，不能单独作为质量 gate。对抗弃答每轮
+只有 5 个样本，五轮均值 `0.800` 也不能外推到完整数据集。
+
+五轮已经证明固定 50 样本、no-KG、exact `vector → bm25` 路径的运行稳定性，但它仍只是同一
+50 样本的重复观测，不是 250 个独立样本。公共数据源 watermark、Ollama 模型二进制同轮快照和
+DeepSeek alias revision 均未完整 attested；two-way bootstrap 区间是 shadow uncertainty，不是发布
+或泛化置信区间，因此固定 `gate_eligible=false`。no-KG 结果是检索消融基线，不能替代 KG-on
+因果路径评测。同行公开数字若数据集 revision、样本、retriever、reader/judge 或指标定义不同，
+只列背景，不直接相减或宣称领先。
 
 ## 预处理阶段（AWB-like）
 
@@ -290,7 +298,8 @@ PREPROCESS_TIMEOUT=1800 ./scripts/run_qa_shadow.sh --runs 5 --output-parent /tmp
 driver 只接受 1 或 5 个 fresh vault，每轮固定 50 个样本、seed 42 和 research 身份。单轮模式
 深验 committed result，不伪造 comparison；五轮模式才生成 shadow 比较。默认每轮 reader/judge 的
 `MAX_USD` 分别压到 USD 0.10/0.15，所以完整 campaign 的静态最坏上限是 USD 1.25，仅占用户
-授权 USD 100 的 1.25%；按上一轮 USD 0.0251223560 实耗线性估算约 USD 0.1256117800。可用
+授权 USD 100 的 1.25%；本次 clean no-KG 五轮实耗为 USD 0.0145368216，这只是一次观测值，
+不是未来价格或 token 使用量的保证。可用
 `PLICO_QA_SHADOW_READER_MAX_USD_PER_RUN`、`PLICO_QA_SHADOW_JUDGE_MAX_USD_PER_RUN` 调低或显式
 调整，但五轮预算总和不得超过 `PLICO_QA_SHADOW_AUTHORIZED_MAX_USD`（默认 100）。
 
