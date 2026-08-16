@@ -34,19 +34,31 @@ public API、自动 skill/claim、产品 gate。纯函数返回值不是可发�
 
 只在 ADR-0006 通过 Phase 0 审核后开始。
 
-最小类型：
+第三方实施合同见 [v53 Execution Observation Ledger Core](../milestones/v53-execution-observation-spine.md)。
+v53 当前仍处于 Architecture Review；独立 durable namespace/writer 必须先由窄化的 Accepted ADR 授权，
+开发组不得把 Proposed ADR 或本计划本身解释为开工许可。v53 只覆盖 Phase 1A 的 ledger core；下列
+credential-bound producer、真实 evidence verifier 与运行时接线属于后续 Phase 1B，不得提前实现。
 
-- `execution_id`、`intent_id`、attempt、credential-bound role；
+### Phase 1A：Ledger core（v53）
+
+- `execution_id`、attempt、closed origin、optional future-bound identity refs；
 - operation、typed outcome/error category；
-- started/finished/elapsed；
+- writer-stamped record time、optional execution elapsed assertion；
 - input/context/output evidence CID；
 - runtime/policy version。
 
-行为：crate-internal、显式策略、默认关闭；不开 public operation。原始输入/输出先进入 CAS，再引用 CID。
-关闭策略时必须零 canonical mutation。
+行为：crate-internal、无 production wiring、不开 public operation。普通 kernel/daemon/config 路径不构造
+writer、不 claim namespace；只有 ledger 测试显式打开。record 只验证 canonical-form CID 引用，不宣称
+evidence 存在、可读或已授权。
 
-门禁：success/failure/timeout/cancel/indeterminate；一 attempt 恰好一个 terminal observation；幂等；
-重启可读；JCS/hash stable；ledger fail 无半提交；权限和日志无正文泄漏。
+门禁：success/failure/timeout/cancel/indeterminate schema；一 attempt 最多一个 terminal；Open 可跨重启保留；
+幂等、JCS/hash stable、ledger fail 无半提交、日志无正文泄漏。Phase 1A 不把 Open 自动解释为业务失败。
+
+### Phase 1B：Trusted producer（后续独立里程碑）
+
+- credential-bound role、真实 intent/origin、commit-time evidence existence/readability/authorization；
+- 单一 admitted execution boundary，durable begin-before-action，typed terminal 与 open-attempt recovery policy；
+- 只有在该边界内，才要求每个已接受的真实 attempt 最终恰好一个 terminal observation。
 
 ## Phase 2：Feedback 与 Procedure Proposal shadow
 
