@@ -37,7 +37,8 @@ public API、自动 skill/claim、产品 gate。纯函数返回值不是可发�
 第三方实施合同见 [v53 Execution Observation Ledger Core](../milestones/v53-execution-observation-spine.md)。
 v53 已由 [Accepted ADR-0007](../adr/0007-execution-observation-ledger-v1.md) 窄化其候选范围；只有 R0 packet
 完整性与独立 Git 审批提交/tag 均经离线验证后才进入 Architecture-Frozen。开发组只能从授权器返回的
-candidate scope base 开始，不能把 Proposed
+candidate scope base 开始；开发组只接收 Git candidate contract，不接收架构组私有 R0 packet，正式 scope 由
+架构组受控 runner 执行。不能把 Proposed
 ADR-0006 或本计划本身解释为扩大开工许可。v53 只覆盖 Phase 1A 的 fixture ledger core；下列
 credential-bound producer、真实 evidence verifier 与运行时接线属于后续 Phase 1B，不得提前实现。
 

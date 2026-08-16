@@ -1,7 +1,7 @@
 # v53 里程碑：Execution Observation Ledger Core（Phase 1A）
 
 **日期**：2026-08-16
-**合同版本**：`plico.milestone.v53/1`
+**合同版本**：`plico.milestone.v53/2`
 **状态**：R0 Freeze Candidate / Implementation not started
 **产品基线**：`fe4c08260fc3e6dc0e3d37921b863a7ed48a330a`
 **Architecture-Frozen identity**：只有在外部 R0 packet 完整性通过、独立 Git 审批提交与派生标签均通过
@@ -34,7 +34,7 @@ Draft / Architecture Review
 - v53 通过不自动把 ADR-0006 改为 Accepted，不增加 public capability。
 - 进入 `Architecture-Frozen` 后，本合同正文不可原地修改；冻结身份/状态由外部 R0 packet 与独立 Git 审批提交/标签共同绑定，
   candidate/evidence/final verdict 再由验收组写入 `v53-summary.md`。任何语义修改必须发布新合同版本
-  （例如 `plico.milestone.v53/2`）并重新冻结 digest/implementation base。
+  （例如后续 `plico.milestone.v53/3`）并重新冻结 digest/implementation base。
 
 ### R0 开工硬前置
 
@@ -74,15 +74,21 @@ GitHub API 授权和任何收费外部 gate。所有构建、测试、coverage�
 R0 packet 的 attestation kind 固定为 `unsigned_repository_control_attestation`，不能称为 cryptographically
 signed。四文件 packet 只证明所审 bytes 的完整性，`authorization` 永远是 `unverified`。架构授权必须另有一个
 直接以 implementation base 为唯一父提交、且只新增固定 canonical approval record 的 Git 提交 A；派生标签
-`v53-r0-<COMMITTED_SHA256>` 必须精确指向 A。离线授权器同时绑定 base/tree、packet、合同、Accepted ADR、scope
-工具、`Cargo.lock`、toolchain、审批时效和人工 reviewer 声明，并把 A 作为第三方 candidate scope base。
+`v53-r0-v2-<COMMITTED_SHA256>` 必须精确指向 A。离线授权器同时绑定 base/tree、packet、合同、Accepted ADR、scope
+工具、`Cargo.lock`、portable logical tool identity、审批时效和人工 reviewer 声明，并把 A 作为第三方 candidate scope base。
 该程序性机制不提供密码学 reviewer 身份或不可抵赖性，也不抵抗仓库管理员改写历史、tag/ref 或 same-UID/host
 失陷；任一 record/ref/tag/digest/time 无法复核时必须 fail closed，不得进入 Architecture-Frozen。
 
 R0 外部 packet 固定只有四个 owner-only regular files：`LOCK`、`handoff.json`、
 `handoff.sha256.json`、`COMMITTED`。`COMMITTED` 最后写入；缺失、额外文件、symlink/special file、权限不私有、
 digest/commit/tree/工具/lock 不匹配全部 fail closed。四文件 packet 单独不授权开工；只有上述 A/tag 离线验证
-为 GO 后，才授权从 A 开始 WP1。它不是 WP6 candidate evidence bundle。
+为 GO 后，才授权从 A 开始 WP1。它不是 WP6 candidate evidence bundle。v2 packet 不序列化用户名、Home、
+仓库位置、tool launcher path 或 realpath；工具只按 role、logical launcher name、version 和可移植的 binary/content
+digest 绑定。任何绝对或用户 Home 路径进入 handoff JSON 都必须 fail closed。
+
+R0 packet 只留在架构组受控 runner，不交付第三方。开发组只接收 Git 仓库、审批提交 A/tag 与
+[WP1 交接页](./v53-developer-handoff.md)，提交 Git candidate；没有 packet 时无法自授权属于预期信任边界，
+不妨碍开发组运行本地 self-evidence。正式授权与 scope 必须由架构组对该 candidate 独立执行。
 
 ---
 
@@ -276,7 +282,7 @@ coverage 或 recovery terminal policy；Open 在重启后保持 Open，绝不由
 | R3 → WP4 | 只有 R3 接纳状态机后，才可增加 fault/recovery 文件与相应用例 |
 | R4 → WP5/WP6 | 只有 R4 接纳 fault/recovery 后，才可执行全回归和 sealed candidate evidence 工作包；INDEX 由架构组在接纳 checkpoint 后更新 |
 
-没有 Accepted R0 ADR 时，上表所有生产路径仍禁止修改。当前 `plico.v53.r0-spec/v1` 和审批提交 A **只授权
+没有 Accepted R0 ADR 时，上表所有生产路径仍禁止修改。当前 `plico.v53.r0-spec/v2` 和审批提交 A **只授权
 WP1**；`verify_scope.py` 必须拒绝 `WP2..WP6`，也必须拒绝 WP1 修改 CAS、store、view、fault、INDEX 或任意未列路径。
 后续工作包必须使用新版本 scope spec 与新的架构审批，不得复用 R0 A/tag 越过 checkpoint。
 
@@ -420,20 +426,30 @@ EMBEDDING_BACKEND=stub LLM_BACKEND=stub cargo test --locked --lib
 implementation-base SHA。当前观测工具链为 Rust/Cargo 1.95.0、cargo-llvm-cov 0.8.6、uv 0.11.14；R0
 必须把最终 exact version 和安装来源写入 handoff packet，版本不符即停止而不是自行升级。
 
-### 8.2 R0 授权的 WP1 最小命令
+### 8.2 开发自测与架构正式 scope
+
+开发组不持有 R0 packet，也不运行正式 scope；其完整启动顺序见
+[v53-developer-handoff.md](./v53-developer-handoff.md)。以下命令只在架构组受控 runner 执行。先创建仓库外私有目录，
+再同步离线 Python 环境，最后运行 packet/approval/scope；这样 Cargo、uv、pytest 和 Python 都不会把产物写入
+candidate checkout：
 
 ```bash
-CARGO_NET_OFFLINE=true
-export CARGO_NET_OFFLINE
-cargo fmt --all -- --check
-cargo check --locked --all-targets --all-features
-EMBEDDING_BACKEND=stub LLM_BACKEND=stub cargo test --locked --lib --all-features
-cargo clippy --locked --all-targets --all-features -- -D warnings
-cd benchmarks && uv run python ../scripts/milestones/v53/verify_scope.py \
-  --handoff-dir <R0_HANDOFF_DIR> --repo .. \
+export CARGO_NET_OFFLINE=true EMBEDDING_BACKEND=stub LLM_BACKEND=stub
+export PYTHONDONTWRITEBYTECODE=1
+export CARGO_TARGET_DIR=<OUTSIDE_REPO>/cargo-target
+export UV_CACHE_DIR=<OUTSIDE_REPO>/uv-cache
+export UV_PROJECT_ENVIRONMENT=<OUTSIDE_REPO>/benchmark-venv
+
+cd benchmarks
+uv sync --locked --offline --extra dev
+cd ..
+python3 -B scripts/milestones/v53/authorize.py \
+  --artifact-dir <R0_HANDOFF_DIR> --repo . \
+  --approval-commit refs/remotes/origin/v53-integration
+python3 -B scripts/milestones/v53/verify_scope.py \
+  --handoff-dir <R0_HANDOFF_DIR> --repo . \
   --approval-commit refs/remotes/origin/v53-integration --candidate HEAD \
   --work-package WP1 --require-clean
-git diff --check
 ```
 
 `<R0_HANDOFF_DIR>` 是外部 R0 handoff packet 路径，不在合同内回填，避免 Git commit self-reference；handoff
@@ -458,10 +474,12 @@ architecture-owned external corpus/runner，开发组不能修改或用自身测
 responses、owner-only mutation inventory 必须相同，且运行中 `/proc` thread/fd 采样和落盘 inventory 都不得
 出现 `execution-observation-fixture-ledger`。任一 checkout 无法构建/执行、输出不是 strict JSON、inventory
 无法读取或比较器缺证据时均非零退出；开发组不能提供自制 lifecycle report 替代该独立重跑。
-scope tool 还会把 absolute Cargo launcher、realpath、launcher/resolved-1.95 binary SHA 与 R0 packet 比对，
-以最小 `PATH` 和清理后的 Cargo/Rust/linker 环境执行并在命令前后复核 digest；这只是程序性工具身份绑定，
+scope tool 会把当前解析的 Cargo/Git logical name、version 和 launcher/resolved binary digest 与 R0 packet 比对，
+但不比较或序列化绝对路径；随后以最小 `PATH` 和清理后的 Cargo/Rust/linker 环境执行并在命令前后复核 digest。
+这只是程序性工具身份绑定，
 不声称抵抗能够在检查与执行之间改写同一文件的 same-UID 或 host compromise。
-当前 R0 本地 runner 通过私有 HOME/CARGO_HOME、offline Cargo、绝对 Git/Cargo/tool realpath 与 digest、命令后
+当前 R0 本地 runner 通过私有 HOME/CARGO_HOME、仓库外 target/cache、offline Cargo、进程内绝对 executable
+解析与 digest（绝对值不写入 packet/result）、命令后
 HEAD/clean/replace-ref 复核提供程序性隔离；它不是 OS 安全边界。能够敌对控制同一 UID/宿主的场景必须在 R1 前
 切换到架构拥有的只读 candidate archive、禁网、独立 UID/namespace runner，否则 fail closed，不得出具验收结论。
 
@@ -480,9 +498,9 @@ cargo test --locked --test mcp_test mcp_catalog_is_the_exact_public_catalog
 
 cd benchmarks
 uv sync --locked --offline --extra dev
-uv run ruff check src tests
-uv run ruff format --check src tests
-uv run pytest -q
+uv run --offline --no-sync ruff check src tests
+uv run --offline --no-sync ruff format --check src tests
+uv run --offline --no-sync pytest -q
 ```
 
 若命令名与当前仓库实际 test target 不匹配，开发组必须报告 Architecture Deviation；不得删除门禁、

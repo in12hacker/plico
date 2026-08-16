@@ -9,8 +9,8 @@
 ## 1. 问题背景
 
 当前 Plico 开发使用多 worktree 并行：
-- `/home/leo/work/Plico` — 主仓库（main 分支）
-- `/home/leo/work/plico-self-management` — worktree（`feat/plico-self-management` 分支）
+- `<main-worktree>` — 主仓库（main 分支）
+- `<worktree-root>/plico-self-management` — worktree（`feat/plico-self-management` 分支）
 
 **核心问题**：多个 worktree 之间如何同步？各自的数据（KG/CAS/Memory）如何管理？
 
@@ -141,11 +141,11 @@ git worktree prune
 
 ```
 # 主仓库（Plico 主目录）— 用于日常开发
-cd /home/leo/work/Plico
+cd <main-worktree>
 git checkout main  # 或任何开发分支
 
 # Worktree（独立目录）— 用于实验性功能
-git worktree add /home/leo/work/plico-self-management feat/plico-self-management
+git worktree add <worktree-root>/plico-self-management feat/plico-self-management
 
 # 每个 worktree 运行独立的 plicod（使用不同 --root）
 cargo run --bin plicod -- --root /tmp/plico-feature-x --port 787x
@@ -243,7 +243,7 @@ curl http://localhost:7879/health
 
 ### 6.2 Dashboard HTML — 待完成
 
-Dashboard 在 `/home/leo/work/Plico/docs/dashboard/index.html`，需要：
+Dashboard 在 `<main-worktree>/docs/dashboard/index.html`，需要：
 1. 将 API URL 从 TCP socket 改为 HTTP `http://127.0.0.1:7879/api/project/status`
 2. 将静态 JSON 结构改为适配 `project_status()` 返回的动态数据
 

@@ -52,9 +52,9 @@
   "contract": {
     "path": "docs/milestones/v53-execution-observation-spine.md",
     "required_state": "R0 Freeze Candidate",
-    "version": "plico.milestone.v53/1"
+    "version": "plico.milestone.v53/2"
   },
-  "contract_version": "plico.milestone.v53/1",
+  "contract_version": "plico.milestone.v53/2",
   "coverage_contract": {
     "baseline_global": {
       "executable_lines": 63776,
@@ -82,6 +82,7 @@
       "Cargo.lock",
       "docs/adr/0007-execution-observation-ledger-v1.md",
       "docs/milestones/INDEX.md",
+      "docs/milestones/v53-developer-handoff.md",
       "docs/milestones/v53-execution-observation-spine.md",
       "docs/milestones/v53-r0-approval.json",
       "docs/milestones/v53-summary.md",
@@ -284,7 +285,7 @@
       "knowledge-graph",
       "semantic-catalog"
     ],
-    "comparison": "python3 scripts/milestones/v53/verify_scope.py --handoff-dir <R0_PACKET> --repo <CHECKOUT> --candidate HEAD --work-package WP6 --require-clean",
+    "comparison": "python3 -B scripts/milestones/v53/verify_scope.py --handoff-dir <R0_PACKET> --repo <CHECKOUT> --candidate HEAD --work-package WP6 --require-clean",
     "fixture": "plico.v53.lifecycle-fixture/v1",
     "normalization": "plico.v53.lifecycle-normalization/v1",
     "operations": [
@@ -469,6 +470,7 @@
     "benchmarks/uv.lock",
     "docs/adr/0007-execution-observation-ledger-v1.md",
     "docs/milestones/INDEX.md",
+    "docs/milestones/v53-developer-handoff.md",
     "docs/milestones/v53-execution-observation-spine.md",
     "docs/milestones/v53-summary.md",
     "docs/plans/next-era-verified-experience.md",
@@ -481,7 +483,7 @@
     "scripts/milestones/v53/verify.py",
     "scripts/milestones/v53/verify_scope.py"
   ],
-  "schema": "plico.v53.r0-spec/v1",
+  "schema": "plico.v53.r0-spec/v2",
   "state_machine": {
     "absent": [
       "append-started->open"
@@ -528,10 +530,10 @@
     "cargo": {"command": ["cargo", "-Vv"], "expected": "cargo 1.95.0 (f2d3ce0bd 2026-03-21)", "required_lines": ["release: 1.95.0", "commit-hash: f2d3ce0bd7f24a49f8f72d9000448f8838c4e850"], "source": "rust-toolchain.toml channel=1.95.0 plus exact release/commit assertion"},
     "cargo_llvm_cov": {"command": ["cargo", "llvm-cov", "--version"], "expected": "cargo-llvm-cov 0.8.6", "required_lines": [], "source": "cargo install --locked cargo-llvm-cov@0.8.6"},
     "clippy": {"command": ["cargo", "clippy", "--version"], "expected": "clippy 0.1.95 (59807616e1 2026-04-14)", "required_lines": [], "source": "rustup component from the asserted rustc commit"},
-    "git": {"command": ["/usr/bin/git", "--version"], "expected": "git version 2.43.0", "required_lines": [], "source": "Ubuntu 24.04 system package"},
-    "pytest": {"command": ["benchmarks/.venv/bin/pytest", "--version"], "expected": "pytest 9.0.3", "required_lines": [], "source": "benchmarks/uv.lock locked dev environment"},
+    "git": {"command": ["git", "--version"], "expected": "git version 2.43.0", "required_lines": [], "source": "Ubuntu 24.04 system package"},
+    "pytest": {"command": ["uv", "run", "--project", "benchmarks", "--offline", "--no-sync", "pytest", "--version"], "expected": "pytest 9.0.3", "required_lines": [], "source": "benchmarks/uv.lock locked external dev environment"},
     "python": {"command": ["python3", "--version"], "expected": "Python 3.12.3", "required_lines": [], "source": "runner system Python"},
-    "ruff": {"command": ["benchmarks/.venv/bin/ruff", "--version"], "expected": "ruff 0.15.12", "required_lines": [], "source": "benchmarks/uv.lock locked dev environment"},
+    "ruff": {"command": ["uv", "run", "--project", "benchmarks", "--offline", "--no-sync", "ruff", "--version"], "expected": "ruff 0.15.12", "required_lines": [], "source": "benchmarks/uv.lock locked external dev environment"},
     "rustc": {"command": ["rustc", "-vV"], "expected": "rustc 1.95.0 (59807616e 2026-04-14)", "required_lines": ["release: 1.95.0", "commit-hash: 59807616e1fa2540724bfbac14d7976d7e4a3860"], "source": "rust-toolchain.toml channel=1.95.0 plus exact release/commit assertion"},
     "rustfmt": {"command": ["rustfmt", "--version"], "expected": "rustfmt 1.9.0-stable (59807616e1 2026-04-14)", "required_lines": [], "source": "rustup component from the asserted rustc commit"},
     "uv": {"command": ["uv", "--version"], "expected": "uv 0.11.14 (aarch64-unknown-linux-gnu)", "required_lines": [], "source": "Astral standalone installer"}
@@ -545,7 +547,7 @@
       "manual_review_required": true,
       "packet_authorization": "unverified",
       "review_method": "manual_review",
-      "tag_prefix": "v53-r0-"
+      "tag_prefix": "v53-r0-v2-"
     },
     "authorized_work_package": "WP1",
     "execution": "local_only",
@@ -563,16 +565,20 @@
       "EMBEDDING_BACKEND=stub LLM_BACKEND=stub cargo llvm-cov --locked --offline --lib --all-features --fail-under-lines 85",
       "cargo build --locked --offline --release --all-features --bins",
       "cd benchmarks && uv sync --locked --offline --extra dev",
-      "cd benchmarks && uv run --offline ruff check src tests",
-      "cd benchmarks && uv run --offline ruff format --check src tests",
-      "cd benchmarks && uv run --offline pytest -q",
-      "python3 scripts/milestones/v53/test_v53_tools.py -v",
-      "python3 scripts/milestones/v53/test_v53_authorize.py -v"
+      "cd benchmarks && uv run --offline --no-sync ruff check src tests",
+      "cd benchmarks && uv run --offline --no-sync ruff format --check src tests",
+      "cd benchmarks && uv run --offline --no-sync pytest -q",
+      "python3 -B scripts/milestones/v53/test_v53_tools.py -v",
+      "python3 -B scripts/milestones/v53/test_v53_authorize.py -v"
     ],
     "required_environment": {
       "CARGO_NET_OFFLINE": "true",
+      "CARGO_TARGET_DIR": "<OUTSIDE_REPO>/cargo-target",
       "EMBEDDING_BACKEND": "stub",
-      "LLM_BACKEND": "stub"
+      "LLM_BACKEND": "stub",
+      "PYTHONDONTWRITEBYTECODE": "1",
+      "UV_CACHE_DIR": "<OUTSIDE_REPO>/uv-cache",
+      "UV_PROJECT_ENVIRONMENT": "<OUTSIDE_REPO>/benchmark-venv"
     }
   },
   "unsupported": [

@@ -15,8 +15,8 @@
       "Bash(ln -sf *)"
     ],
     "additionalDirectories": [
-      "/home/leo/.cargo/bin",
-      "/home/leo/.local/bin"
+      "~/.cargo/bin",
+      "~/.local/bin"
     ]
   },
   "mcpServers": {}

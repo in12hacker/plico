@@ -560,6 +560,7 @@ def _isolated_candidate_environment(base: dict[str, str]):
                 "CARGO_NET_OFFLINE": "true",
                 "CARGO_TARGET_DIR": os.fspath(target),
                 "HOME": os.fspath(home),
+                "PYTHONDONTWRITEBYTECODE": "1",
                 "TMPDIR": os.fspath(temp),
             }
         )
@@ -586,62 +587,21 @@ def _resolve_frozen_cargo(
     cargo_bytes = realpath.read_bytes()
     cargo_digest = verify.sha256_bytes(cargo_bytes)
     sealed_cargo = observed["cargo"]
-    if (
-        os.fspath(cargo_path) != sealed_cargo["launcher_path"]
-        or os.fspath(realpath) != sealed_cargo["launcher_realpath"]
-        or cargo_digest != sealed_cargo["launcher_sha256"]
-    ):
-        raise verify.VerificationError(
-            "cargo launcher path/realpath/digest differs from R0 packet"
-        )
+    if cargo_digest != sealed_cargo["launcher_sha256"]:
+        raise verify.VerificationError("cargo launcher content differs from R0 packet")
     environment = _hardened_tool_environment(cargo_path)
-    checks = {
-        "cargo": [os.fspath(cargo_path), *spec["toolchain"]["cargo"]["command"][1:]],
-        "cargo_llvm_cov": [
-            os.fspath(cargo_path),
-            *spec["toolchain"]["cargo_llvm_cov"]["command"][1:],
-        ],
-        "rustc": [
-            os.fspath(cargo_path.parent / "rustc"),
-            *spec["toolchain"]["rustc"]["command"][1:],
-        ],
-        "git": [
-            spec["toolchain"]["git"]["command"][0],
-            *spec["toolchain"]["git"]["command"][1:],
-        ],
-    }
-    for name, command in checks.items():
-        entry = spec["toolchain"][name]
-        result = subprocess.run(
-            command,
-            env=environment,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            check=False,
-            timeout=30,
+    for name in ("cargo", "cargo_llvm_cov", "rustc", "git"):
+        current = verify._observe_tool(
+            name,
+            spec["toolchain"][name],
+            None,
+            environment=environment,
         )
-        lines = result.stdout.decode("utf-8", errors="replace").strip().splitlines()
-        if (
-            result.returncode != 0
-            or not lines
-            or lines[0] != entry["expected"]
-            or lines[0] != observed[name]["output"]
-        ):
+        if current != observed[name]:
             raise verify.VerificationError(
-                f"frozen toolchain identity mismatch: {name}"
+                f"frozen logical version/content identity mismatch: {name}"
             )
-        if any(required not in lines for required in entry["required_lines"]):
-            raise verify.VerificationError(f"frozen toolchain detail mismatch: {name}")
-        launcher = Path(command[0]).absolute()
-        launcher_realpath = launcher.resolve(strict=True)
-        if (
-            os.fspath(launcher) != observed[name]["launcher_path"]
-            or os.fspath(launcher_realpath) != observed[name]["launcher_realpath"]
-            or verify.sha256_bytes(launcher_realpath.read_bytes())
-            != observed[name]["launcher_sha256"]
-        ):
-            raise verify.VerificationError(f"sealed launcher identity differs: {name}")
-    rustup = cargo_path.parent / "rustup"
+    rustup = verify._tool_launcher("rustup", None)
     resolved = subprocess.run(
         [os.fspath(rustup), "which", "cargo", "--toolchain", "1.95.0"],
         env=environment,
@@ -655,12 +615,7 @@ def _resolve_frozen_cargo(
         raise verify.VerificationError("resolved cargo 1.95.0 lookup failed")
     resolved_realpath = resolved_path.resolve(strict=True)
     sealed_resolved = sealed_cargo["resolved_tool"]
-    if (
-        os.fspath(resolved_path) != sealed_resolved["path"]
-        or os.fspath(resolved_realpath) != sealed_resolved["realpath"]
-        or verify.sha256_bytes(resolved_realpath.read_bytes())
-        != sealed_resolved["sha256"]
-    ):
+    if verify.sha256_bytes(resolved_realpath.read_bytes()) != sealed_resolved["sha256"]:
         raise verify.VerificationError(
             "resolved cargo 1.95.0 identity differs from R0 packet"
         )
@@ -675,15 +630,11 @@ def _resolve_frozen_cargo(
     cov_realpath = cov_path.resolve(strict=True)
     cov_digest = verify.sha256_bytes(cov_realpath.read_bytes())
     sealed_cov = observed["cargo_llvm_cov"]["resolved_tool"]
-    if (
-        os.fspath(cov_path) != sealed_cov["path"]
-        or os.fspath(cov_realpath) != sealed_cov["realpath"]
-        or cov_digest != sealed_cov["sha256"]
-    ):
+    if cov_digest != sealed_cov["sha256"]:
         raise verify.VerificationError(
             "resolved cargo-llvm-cov identity differs from R0 packet"
         )
-    git_path = Path(spec["toolchain"]["git"]["command"][0]).absolute()
+    git_path = verify._tool_launcher(spec["toolchain"]["git"]["command"][0], None)
     git_realpath = git_path.resolve(strict=True)
     git_digest = verify.sha256_bytes(git_realpath.read_bytes())
     return {
@@ -2064,18 +2015,11 @@ def _verify_scope_sanitized(
         "external_architecture_corpus": "required-before-R1-or-later-acceptance",
         "lifecycle_differential": lifecycle_result,
         "toolchain": {
-            "cargo_path": os.fspath(toolchain["cargo_path"]),
-            "cargo_realpath": os.fspath(toolchain["cargo_realpath"]),
             "cargo_sha256": toolchain["cargo_sha256"],
-            "resolved_cargo_path": os.fspath(toolchain["resolved_cargo_path"]),
-            "resolved_cargo_realpath": os.fspath(toolchain["resolved_cargo_realpath"]),
             "resolved_cargo_sha256": toolchain["resolved_cargo_sha256"],
-            "cargo_llvm_cov_path": os.fspath(toolchain["cargo_llvm_cov_path"]),
-            "cargo_llvm_cov_realpath": os.fspath(toolchain["cargo_llvm_cov_realpath"]),
             "cargo_llvm_cov_sha256": toolchain["cargo_llvm_cov_sha256"],
-            "git_path": os.fspath(toolchain["git_path"]),
-            "git_realpath": os.fspath(toolchain["git_realpath"]),
             "git_sha256": toolchain["git_sha256"],
+            "identity": "portable-logical-name-version-content-digest",
         },
         "work_package": work_package,
     }

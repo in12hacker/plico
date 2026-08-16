@@ -9,6 +9,9 @@ bytes, never against mutable worktree bytes.
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
+import csv
 import datetime as dt
 import hashlib
 import json
@@ -18,15 +21,16 @@ import shutil
 import stat
 import subprocess
 import sys
+import tempfile
 from decimal import ROUND_DOWN, Decimal
 from pathlib import Path
 from typing import Any
 
-SPEC_SCHEMA = "plico.v53.r0-spec/v1"
-HANDOFF_SCHEMA = "plico.v53.r0-handoff/v1"
-DIGEST_SCHEMA = "plico.v53.r0-handoff-digest/v1"
-COMMIT_SCHEMA = "plico.v53.r0-handoff-commit/v1"
-LOCK_SCHEMA = "plico.v53.r0-handoff-lock/v1"
+SPEC_SCHEMA = "plico.v53.r0-spec/v2"
+HANDOFF_SCHEMA = "plico.v53.r0-handoff/v2"
+DIGEST_SCHEMA = "plico.v53.r0-handoff-digest/v2"
+COMMIT_SCHEMA = "plico.v53.r0-handoff-commit/v2"
+LOCK_SCHEMA = "plico.v53.r0-handoff-lock/v2"
 PACKET_FILES = ("LOCK", "handoff.json", "handoff.sha256.json", "COMMITTED")
 MAX_SAFE_INTEGER = 9_007_199_254_740_991
 MAX_PACKET_FILE_BYTES = 4 * 1024 * 1024
@@ -453,7 +457,7 @@ def validate_spec(value: Any) -> dict[str, Any]:
     require_exact_keys(spec, SPEC_TOP_KEYS, "spec")
     if spec["schema"] != SPEC_SCHEMA:
         raise VerificationError("unsupported R0 spec schema")
-    if spec["contract_version"] != "plico.milestone.v53/1":
+    if spec["contract_version"] != "plico.milestone.v53/2":
         raise VerificationError("unexpected contract version")
     _require_sha(
         spec["product_baseline_sha"], "spec.product_baseline_sha", GIT_OBJECT_ID
@@ -1209,7 +1213,7 @@ def validate_spec(value: Any) -> dict[str, Any]:
         "manual_review_required": True,
         "packet_authorization": "unverified",
         "review_method": "manual_review",
-        "tag_prefix": "v53-r0-",
+        "tag_prefix": "v53-r0-v2-",
     }:
         raise VerificationError("local Git approval contract differs")
     freshness = require_object(gate["freshness"], "spec.local_gate_contract.freshness")
@@ -1228,13 +1232,25 @@ def validate_spec(value: Any) -> dict[str, Any]:
     )
     require_exact_keys(
         gate_environment,
-        {"CARGO_NET_OFFLINE", "EMBEDDING_BACKEND", "LLM_BACKEND"},
+        {
+            "CARGO_NET_OFFLINE",
+            "CARGO_TARGET_DIR",
+            "EMBEDDING_BACKEND",
+            "LLM_BACKEND",
+            "PYTHONDONTWRITEBYTECODE",
+            "UV_CACHE_DIR",
+            "UV_PROJECT_ENVIRONMENT",
+        },
         "spec.local_gate_contract.required_environment",
     )
     if gate_environment != {
         "CARGO_NET_OFFLINE": "true",
+        "CARGO_TARGET_DIR": "<OUTSIDE_REPO>/cargo-target",
         "EMBEDDING_BACKEND": "stub",
         "LLM_BACKEND": "stub",
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "UV_CACHE_DIR": "<OUTSIDE_REPO>/uv-cache",
+        "UV_PROJECT_ENVIRONMENT": "<OUTSIDE_REPO>/benchmark-venv",
     }:
         raise VerificationError("local gate environment differs")
     required_commands = require_string_list(
@@ -1248,11 +1264,11 @@ def validate_spec(value: Any) -> dict[str, Any]:
         "EMBEDDING_BACKEND=stub LLM_BACKEND=stub cargo llvm-cov --locked --offline --lib --all-features --fail-under-lines 85",
         "cargo build --locked --offline --release --all-features --bins",
         "cd benchmarks && uv sync --locked --offline --extra dev",
-        "cd benchmarks && uv run --offline ruff check src tests",
-        "cd benchmarks && uv run --offline ruff format --check src tests",
-        "cd benchmarks && uv run --offline pytest -q",
-        "python3 scripts/milestones/v53/test_v53_tools.py -v",
-        "python3 scripts/milestones/v53/test_v53_authorize.py -v",
+        "cd benchmarks && uv run --offline --no-sync ruff check src tests",
+        "cd benchmarks && uv run --offline --no-sync ruff format --check src tests",
+        "cd benchmarks && uv run --offline --no-sync pytest -q",
+        "python3 -B scripts/milestones/v53/test_v53_tools.py -v",
+        "python3 -B scripts/milestones/v53/test_v53_authorize.py -v",
     ]
     if required_commands != expected_commands:
         raise VerificationError(
@@ -1538,7 +1554,7 @@ def _tool_launcher(command: str, repo: Path | None) -> Path:
     return Path(located).absolute()
 
 
-def _tool_file_identity(path: Path, location: str) -> dict[str, str]:
+def _tool_file_digest(path: Path, location: str) -> str:
     try:
         realpath = path.resolve(strict=True)
         info = realpath.stat()
@@ -1551,10 +1567,334 @@ def _tool_file_identity(path: Path, location: str) -> dict[str, str]:
         raise VerificationError(
             f"{location} launcher does not resolve to a regular file"
         )
+    return sha256_bytes(data)
+
+
+def _uv_environment_root(repo: Path | None, environment: dict[str, str]) -> Path:
+    configured = environment.get("UV_PROJECT_ENVIRONMENT")
+    if configured:
+        candidate = Path(configured)
+        if not candidate.is_absolute():
+            if repo is None:
+                raise VerificationError(
+                    "relative UV_PROJECT_ENVIRONMENT requires repository context"
+                )
+            candidate = repo / candidate
+    elif repo is not None:
+        candidate = repo / "benchmarks/.venv"
+    else:
+        raise VerificationError("UV_PROJECT_ENVIRONMENT is required")
+    try:
+        resolved = candidate.resolve(strict=True)
+    except OSError as error:
+        raise VerificationError(f"uv environment is unavailable: {error}") from error
+    if not resolved.is_dir():
+        raise VerificationError("uv environment is not a directory")
+    return resolved
+
+
+def _normalized_python_entrypoint(
+    path: Path, environment_root: Path, location: str
+) -> tuple[str, str, int, Path]:
+    try:
+        data = path.read_bytes()
+    except OSError as error:
+        raise VerificationError(f"{location} cannot be read: {error}") from error
+    first_line, separator, body = data.partition(b"\n")
+    if not separator or not first_line.startswith(b"#!"):
+        raise VerificationError(f"{location} has no canonical Python shebang")
+    try:
+        interpreter_text = first_line[2:].decode("utf-8", errors="strict")
+    except UnicodeDecodeError as error:
+        raise VerificationError(f"{location} shebang is not UTF-8") from error
+    if not interpreter_text or any(
+        character.isspace() for character in interpreter_text
+    ):
+        raise VerificationError(f"{location} shebang is not a single interpreter path")
+    interpreter = Path(interpreter_text)
+    expected_bin = environment_root / "bin"
+    if (
+        not interpreter.is_absolute()
+        or interpreter.parent != expected_bin
+        or not interpreter.name.startswith("python")
+    ):
+        raise VerificationError(f"{location} shebang escapes the uv environment")
+    normalized = b"#!<UV_PYTHON>\n" + body
+    return (
+        sha256_bytes(normalized),
+        _tool_file_digest(interpreter, f"{location} interpreter"),
+        len(normalized),
+        interpreter,
+    )
+
+
+def _python_distribution_digest(
+    environment_root: Path,
+    *,
+    distribution: str,
+    version: str,
+    entrypoint: Path,
+) -> str:
+    records = sorted(
+        (environment_root / "lib").glob(
+            f"python*/site-packages/{distribution}-{version}.dist-info/RECORD"
+        )
+    )
+    if len(records) != 1:
+        raise VerificationError(
+            f"expected exactly one installed {distribution} {version} RECORD"
+        )
+    record = records[0]
+    site_packages = record.parent.parent
+    entrypoint_sha, interpreter_sha, _, _ = _normalized_python_entrypoint(
+        entrypoint, environment_root, f"resolved {distribution}"
+    )
+    manifest: list[dict[str, object]] = []
+    try:
+        rows = csv.reader(
+            record.read_text(encoding="utf-8", errors="strict").splitlines()
+        )
+        for index, row in enumerate(rows, start=1):
+            if len(row) != 3:
+                raise VerificationError(
+                    f"{distribution} RECORD row {index} is not three fields"
+                )
+            relative, encoded_digest, encoded_size = row
+            if relative == f"{distribution}-{version}.dist-info/RECORD":
+                if encoded_digest or encoded_size:
+                    raise VerificationError(
+                        f"{distribution} RECORD self-entry must be unhashed"
+                    )
+                continue
+            if relative in {"../../../bin/pytest", "../../../bin/py.test"}:
+                target = environment_root / "bin" / Path(relative).name
+                target_sha, target_interpreter_sha, target_bytes, _ = (
+                    _normalized_python_entrypoint(
+                        target, environment_root, f"resolved {distribution} entrypoint"
+                    )
+                )
+                if target_interpreter_sha != interpreter_sha:
+                    raise VerificationError(
+                        f"{distribution} entrypoints use different interpreters"
+                    )
+                manifest.append(
+                    {
+                        "bytes": target_bytes,
+                        "path": f"bin/{target.name}",
+                        "sha256": target_sha,
+                    }
+                )
+                continue
+            relative_path = Path(relative)
+            if (
+                relative_path.is_absolute()
+                or ".." in relative_path.parts
+                or "\\" in relative
+            ):
+                raise VerificationError(
+                    f"{distribution} RECORD contains a non-portable path"
+                )
+            target = site_packages / relative_path
+            try:
+                info = target.lstat()
+            except OSError as error:
+                raise VerificationError(
+                    f"{distribution} RECORD target cannot be read: {relative}: {error}"
+                ) from error
+            if not stat.S_ISREG(info.st_mode):
+                raise VerificationError(
+                    f"{distribution} RECORD target is not a regular file: {relative}"
+                )
+            try:
+                data = target.read_bytes()
+            except OSError as error:
+                raise VerificationError(
+                    f"{distribution} RECORD target cannot be read: {relative}: {error}"
+                ) from error
+            if not encoded_digest.startswith("sha256=") or not encoded_size.isdigit():
+                raise VerificationError(
+                    f"{distribution} RECORD target lacks sha256/size: {relative}"
+                )
+            try:
+                digest_payload = encoded_digest.removeprefix("sha256=")
+                padded_payload = digest_payload + "=" * (-len(digest_payload) % 4)
+                declared = base64.b64decode(
+                    padded_payload,
+                    altchars=b"-_",
+                    validate=True,
+                )
+            except (binascii.Error, ValueError, TypeError) as error:
+                raise VerificationError(
+                    f"{distribution} RECORD target has invalid sha256: {relative}"
+                ) from error
+            if (
+                base64.urlsafe_b64encode(declared).rstrip(b"=").decode("ascii")
+                != digest_payload
+            ):
+                raise VerificationError(
+                    f"{distribution} RECORD target has noncanonical sha256: {relative}"
+                )
+            declared_hex = declared.hex()
+            actual = sha256_bytes(data)
+            if declared_hex != actual or int(encoded_size) != len(data):
+                raise VerificationError(
+                    f"{distribution} RECORD target identity differs: {relative}"
+                )
+            manifest.append({"bytes": len(data), "path": relative, "sha256": actual})
+    except (OSError, UnicodeDecodeError, csv.Error) as error:
+        raise VerificationError(
+            f"cannot parse {distribution} RECORD: {error}"
+        ) from error
+    identity = {
+        "distribution": distribution,
+        "entrypoint_sha256": entrypoint_sha,
+        "files": manifest,
+        "interpreter_sha256": interpreter_sha,
+        "schema": "plico.python-distribution-identity/v1",
+        "version": version,
+    }
+    return sha256_bytes(canonical_json(identity))
+
+
+def _observe_tool(
+    name: str,
+    entry: dict[str, Any],
+    repo: Path | None,
+    *,
+    environment: dict[str, str],
+) -> dict[str, Any]:
+    """Observe a tool without serializing a host or checkout path."""
+
+    launcher = _tool_launcher(entry["command"][0], repo)
+    resolved_tool: dict[str, str] | None = None
+    if name in {"pytest", "ruff"}:
+        environment_root = _uv_environment_root(repo, environment)
+        tool_name = entry["command"][-2]
+        resolved_executable = environment_root / "bin" / tool_name
+        if name == "pytest":
+            version = entry["expected"].removeprefix("pytest ")
+            resolved_sha = _python_distribution_digest(
+                environment_root,
+                distribution="pytest",
+                version=version,
+                entrypoint=resolved_executable,
+            )
+            _, _, _, interpreter = _normalized_python_entrypoint(
+                resolved_executable, environment_root, "resolved pytest"
+            )
+            metadata_matches = sorted(
+                (environment_root / "lib").glob(
+                    f"python*/site-packages/pytest-{version}.dist-info/METADATA"
+                )
+            )
+            if len(metadata_matches) != 1:
+                raise VerificationError(
+                    f"expected exactly one installed pytest {version} METADATA"
+                )
+            command = [
+                os.fspath(interpreter),
+                "-I",
+                "-B",
+                "-S",
+                "-c",
+                (
+                    "from email.parser import BytesParser;import sys;"
+                    "m=BytesParser().parse(open(sys.argv[1],'rb'),headersonly=True);"
+                    "print(f\"{m['Name']} {m['Version']}\")"
+                ),
+                os.fspath(metadata_matches[0]),
+            ]
+        else:
+            resolved_sha = _tool_file_digest(resolved_executable, "resolved ruff")
+            command = [os.fspath(resolved_executable), "--version"]
+        resolved_tool = {"name": tool_name, "sha256": resolved_sha}
+    else:
+        command = [os.fspath(launcher), *entry["command"][1:]]
+    execution_environment = environment.copy()
+    for variable in (
+        "PYTHONBREAKPOINT",
+        "PYTHONHOME",
+        "PYTHONINSPECT",
+        "PYTHONPATH",
+        "PYTHONSTARTUP",
+        "PYTHONUSERBASE",
+        "PYTHONWARNINGS",
+        "PYTEST_ADDOPTS",
+        "PYTEST_PLUGINS",
+        "VIRTUAL_ENV",
+        "_OLD_VIRTUAL_PATH",
+    ):
+        execution_environment.pop(variable, None)
+    execution_environment.update(
+        {
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "PYTHONNOUSERSITE": "1",
+            "PYTHONSAFEPATH": "1",
+        }
+    )
+    try:
+        result = subprocess.run(
+            command,
+            cwd=repo,
+            env=execution_environment,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            check=False,
+            timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise VerificationError(
+            f"toolchain command failed for {name}: {error}"
+        ) from error
+    text = result.stdout.decode("utf-8", errors="replace").strip().splitlines()
+    normalized_lines = [line.strip() for line in text]
+    first_line = normalized_lines[0] if normalized_lines else ""
+    if result.returncode != 0 or first_line != entry["expected"]:
+        raise VerificationError(
+            f"toolchain mismatch for {name}: expected {entry['expected']!r}, "
+            f"got {first_line!r}"
+        )
+    for required_line in entry["required_lines"]:
+        if required_line not in normalized_lines:
+            raise VerificationError(
+                f"toolchain mismatch for {name}: missing exact line {required_line!r}"
+            )
+
+    if name == "cargo":
+        rustup = _tool_launcher("rustup", repo)
+        try:
+            resolved = subprocess.run(
+                [os.fspath(rustup), "which", "cargo", "--toolchain", "1.95.0"],
+                cwd=repo,
+                env=execution_environment,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                check=False,
+                timeout=30,
+            )
+        except (OSError, subprocess.TimeoutExpired) as error:
+            raise VerificationError(f"resolved cargo lookup failed: {error}") from error
+        resolved_path_text = resolved.stdout.decode("utf-8", errors="replace").strip()
+        if resolved.returncode != 0 or not resolved_path_text:
+            raise VerificationError("resolved cargo 1.95.0 lookup failed")
+        resolved_tool = {
+            "name": "cargo-1.95.0",
+            "sha256": _tool_file_digest(Path(resolved_path_text), "resolved cargo"),
+        }
+    elif name == "cargo_llvm_cov":
+        resolved_tool = {
+            "name": "cargo-llvm-cov",
+            "sha256": _tool_file_digest(
+                _tool_launcher("cargo-llvm-cov", repo),
+                "resolved cargo-llvm-cov",
+            ),
+        }
     return {
-        "path": os.fspath(path),
-        "realpath": os.fspath(realpath),
-        "sha256": sha256_bytes(data),
+        "launcher_name": entry["command"][0],
+        "launcher_sha256": _tool_file_digest(launcher, name),
+        "resolved_tool": resolved_tool,
+        "role": name,
+        "version": first_line,
     }
 
 
@@ -1562,70 +1902,22 @@ def validate_toolchain(
     spec: dict[str, Any], repo: Path | None = None
 ) -> dict[str, Any]:
     observed: dict[str, Any] = {}
-    for name, entry in spec["toolchain"].items():
-        launcher = _tool_launcher(entry["command"][0], repo)
-        command = [os.fspath(launcher), *entry["command"][1:]]
-        try:
-            result = subprocess.run(
-                command,
-                cwd=repo,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                check=False,
-                timeout=30,
+    with tempfile.TemporaryDirectory(prefix="plico-v53-tool-cache-") as cache:
+        environment = os.environ.copy()
+        environment.update(
+            {
+                "CARGO_NET_OFFLINE": "true",
+                "PYTHONDONTWRITEBYTECODE": "1",
+                "UV_CACHE_DIR": cache,
+            }
+        )
+        for name, entry in spec["toolchain"].items():
+            observed[name] = _observe_tool(
+                name,
+                entry,
+                repo,
+                environment=environment,
             )
-        except (OSError, subprocess.TimeoutExpired) as error:
-            raise VerificationError(
-                f"toolchain command failed for {name}: {error}"
-            ) from error
-        text = result.stdout.decode("utf-8", errors="replace").strip().splitlines()
-        normalized_lines = [line.strip() for line in text]
-        first_line = normalized_lines[0] if normalized_lines else ""
-        if result.returncode != 0 or not first_line.startswith(entry["expected"]):
-            raise VerificationError(
-                f"toolchain mismatch for {name}: expected {entry['expected']!r}, got {first_line!r}"
-            )
-        for required_line in entry["required_lines"]:
-            if required_line not in normalized_lines:
-                raise VerificationError(
-                    f"toolchain mismatch for {name}: missing exact line {required_line!r}"
-                )
-        identity = _tool_file_identity(launcher, name)
-        resolved_tool: dict[str, str] | None = None
-        if name == "cargo":
-            rustup = launcher.parent / "rustup"
-            try:
-                resolved = subprocess.run(
-                    [os.fspath(rustup), "which", "cargo", "--toolchain", "1.95.0"],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    check=False,
-                    timeout=30,
-                )
-            except (OSError, subprocess.TimeoutExpired) as error:
-                raise VerificationError(
-                    f"resolved cargo lookup failed: {error}"
-                ) from error
-            resolved_path_text = resolved.stdout.decode(
-                "utf-8", errors="replace"
-            ).strip()
-            if resolved.returncode != 0 or not resolved_path_text:
-                raise VerificationError("resolved cargo 1.95.0 lookup failed")
-            resolved_tool = _tool_file_identity(
-                Path(resolved_path_text), "resolved cargo"
-            )
-        elif name == "cargo_llvm_cov":
-            resolved_tool = _tool_file_identity(
-                _tool_launcher("cargo-llvm-cov", repo),
-                "resolved cargo-llvm-cov",
-            )
-        observed[name] = {
-            "launcher_path": identity["path"],
-            "launcher_realpath": identity["realpath"],
-            "launcher_sha256": identity["sha256"],
-            "output": first_line,
-            "resolved_tool": resolved_tool,
-        }
     return observed
 
 
@@ -1736,8 +2028,38 @@ def _validate_binding(value: Any, index: int) -> dict[str, Any]:
     return binding
 
 
+def _reject_nonportable_handoff_value(value: Any, location: str = "handoff") -> None:
+    """Reject host/user/check-out paths from the serialized packet contract."""
+
+    if isinstance(value, str):
+        windows_home = re.search(r"(?i)(?:^|[\\/])users[\\/]", value)
+        windows_absolute = re.match(r"(?i)^[a-z]:[\\/]", value)
+        unc_absolute = value.startswith(("\\\\", "//"))
+        home_relative = value == "~" or value.startswith(("~/", "~\\"))
+        if (
+            value.startswith("/")
+            or "/home/" in value
+            or "/Users/" in value
+            or windows_home
+            or windows_absolute
+            or unc_absolute
+            or home_relative
+            or value.lower().startswith("file://")
+        ):
+            raise VerificationError(
+                f"non-portable absolute or user-home path is forbidden at {location}"
+            )
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            _reject_nonportable_handoff_value(item, f"{location}[{index}]")
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            _reject_nonportable_handoff_value(item, f"{location}.{key}")
+
+
 def validate_handoff(value: Any, *, now: dt.datetime | None = None) -> dict[str, Any]:
     handoff = require_object(value, "handoff")
+    _reject_nonportable_handoff_value(handoff)
     require_exact_keys(
         handoff,
         {
@@ -1832,47 +2154,52 @@ def validate_handoff(value: Any, *, now: dt.datetime | None = None) -> dict[str,
         require_exact_keys(
             identity,
             {
-                "launcher_path",
-                "launcher_realpath",
+                "launcher_name",
                 "launcher_sha256",
-                "output",
                 "resolved_tool",
+                "role",
+                "version",
             },
             f"handoff.toolchain_observed.{name}",
         )
-        if not require_string(
-            identity["output"], f"handoff.toolchain_observed.{name}.output"
-        ).startswith(spec["toolchain"][name]["expected"]):
-            raise VerificationError(f"sealed toolchain observation mismatch: {name}")
-        for key in ("launcher_path", "launcher_realpath"):
-            path = require_string(
-                identity[key], f"handoff.toolchain_observed.{name}.{key}"
+        if identity["role"] != name:
+            raise VerificationError(f"sealed tool role mismatch: {name}")
+        if identity["launcher_name"] != spec["toolchain"][name]["command"][0]:
+            raise VerificationError(f"sealed tool launcher name mismatch: {name}")
+        if (
+            require_string(
+                identity["version"], f"handoff.toolchain_observed.{name}.version"
             )
-            if not os.path.isabs(path):
-                raise VerificationError(
-                    f"sealed toolchain path is not absolute: {name}.{key}"
-                )
+            != spec["toolchain"][name]["expected"]
+        ):
+            raise VerificationError(f"sealed toolchain observation mismatch: {name}")
         _require_sha(
             identity["launcher_sha256"],
             f"handoff.toolchain_observed.{name}.launcher_sha256",
             HEX_SHA256,
         )
         resolved = identity["resolved_tool"]
-        if name in {"cargo", "cargo_llvm_cov"}:
+        if name in {"cargo", "cargo_llvm_cov", "pytest", "ruff"}:
             resolved_object = require_object(
                 resolved,
                 f"handoff.toolchain_observed.{name}.resolved_tool",
             )
             require_exact_keys(
                 resolved_object,
-                {"path", "realpath", "sha256"},
+                {"name", "sha256"},
                 f"handoff.toolchain_observed.{name}.resolved_tool",
             )
-            for key in ("path", "realpath"):
-                if not os.path.isabs(
-                    require_string(resolved_object[key], f"resolved {name} {key}")
-                ):
-                    raise VerificationError(f"resolved {name} path is not absolute")
+            expected_resolved_name = {
+                "cargo": "cargo-1.95.0",
+                "cargo_llvm_cov": "cargo-llvm-cov",
+                "pytest": "pytest",
+                "ruff": "ruff",
+            }[name]
+            if (
+                require_string(resolved_object["name"], f"resolved {name} name")
+                != expected_resolved_name
+            ):
+                raise VerificationError(f"resolved tool name mismatch: {name}")
             _require_sha(
                 resolved_object["sha256"],
                 f"resolved {name} sha256",

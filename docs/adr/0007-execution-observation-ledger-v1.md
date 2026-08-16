@@ -18,6 +18,10 @@ ADR-0006 仍为 Proposed；本文不会把其 Phase 1B、learning、promotion �
 实现只能在 v53 的 R0 handoff 冻结本文 digest、implementation-base SHA、schema golden vectors、工具链和
 scope gate 后开始。
 
+R0 handoff 使用 `plico.milestone.v53/2`：packet 不携带用户名、Home、checkout 或工具绝对路径；正式
+authorization/scope 仅由架构组受控 runner 执行，第三方只提交 Git candidate。该交接修订不改变本文的
+ledger wire schema、namespace 或产品语义。
+
 ## 1. 决策范围
 
 本 ADR 只授权一个 crate-private、未接生产运行时的 Phase 1A fixture ledger：

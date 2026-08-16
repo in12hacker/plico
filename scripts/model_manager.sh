@@ -11,8 +11,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-LLAMA_BIN="${LLAMA_BIN:-/home/leo/llama.cpp/build/bin/llama-server}"
-MODEL_DIR="${MODEL_DIR:-/home/leo/models}"
+LLAMA_BIN="${LLAMA_BIN:-${HOME}/llama.cpp/build/bin/llama-server}"
+MODEL_DIR="${MODEL_DIR:-${HOME}/models}"
 LOG_DIR="${LOG_DIR:-${HOME}/.plico/logs}"
 
 mkdir -p "$LOG_DIR"

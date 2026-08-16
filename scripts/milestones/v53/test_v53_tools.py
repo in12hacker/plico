@@ -4,9 +4,11 @@
 from __future__ import annotations
 
 import copy
+import csv
 import datetime as dt
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -226,6 +228,250 @@ class V53ToolTests(unittest.TestCase):
                 verify.verify_handoff(packet, repo=repo)["implementation_base_sha"],
                 base,
             )
+
+    def test_packet_has_no_host_user_or_checkout_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repo, spec, base = make_repo(root)
+            packet = make_packet(root, repo, spec, base)
+            handoff_bytes = (packet / "handoff.json").read_bytes()
+            forbidden = (
+                os.fspath(REPO).encode(),
+                os.fspath(Path.home()).encode(),
+                b'"launcher_path"',
+                b'"launcher_realpath"',
+                b'"realpath"',
+            )
+            for value in forbidden:
+                with self.subTest(value=value):
+                    self.assertNotIn(value, handoff_bytes)
+            self.assertNotIn(b"/home/", handoff_bytes)
+            self.assertNotIn(b"/Users/", handoff_bytes)
+
+            reseal(
+                packet,
+                lambda handoff: handoff["toolchain_observed"]["git"].update(
+                    version="/Users/private/tool"
+                ),
+            )
+            with self.assertRaisesRegex(
+                verify.VerificationError, "non-portable absolute or user-home path"
+            ):
+                verify.verify_handoff(packet, repo=repo)
+
+    def test_nonportable_platform_paths_and_version_suffix_fail_closed(self) -> None:
+        attacks = (
+            r"C:\private\repo\tool.exe",
+            r"\\server\private\repo",
+            "~/.private/tool",
+            "file:///private/tool",
+            "git version 2.43.0 private-user-id",
+        )
+        for attack in attacks:
+            with (
+                self.subTest(attack=attack),
+                tempfile.TemporaryDirectory() as temporary,
+            ):
+                root = Path(temporary)
+                repo, spec, base = make_repo(root)
+                packet = make_packet(root, repo, spec, base)
+                reseal(
+                    packet,
+                    lambda handoff: handoff["toolchain_observed"]["git"].update(
+                        version=attack
+                    ),
+                )
+                with self.assertRaises(verify.VerificationError):
+                    verify.verify_handoff(packet, repo=repo)
+
+    def test_uv_wrapped_tool_rejects_fake_executable_and_fake_which(self) -> None:
+        spec = frozen_spec()
+        entry = spec["toolchain"]["pytest"]
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            environment_path = root / "benchmark-environment"
+            binaries = environment_path / "bin"
+            binaries.mkdir(parents=True)
+            (binaries / "python3").symlink_to("/usr/bin/python3")
+            fake_pytest = binaries / "pytest"
+            fake_pytest.write_text(f"#!{binaries / 'python3'}\nprint('pytest 9.0.3')\n")
+            fake_pytest.chmod(0o700)
+            fake_which = binaries / "which"
+            fake_which.write_text(
+                "#!/bin/sh\necho '"
+                + os.fspath(REPO / "benchmarks/.venv/bin/pytest")
+                + "'\n"
+            )
+            fake_which.chmod(0o700)
+            environment = os.environ.copy()
+            environment["UV_PROJECT_ENVIRONMENT"] = os.fspath(environment_path)
+            environment["PATH"] = os.fspath(binaries) + os.pathsep + environment["PATH"]
+            with self.assertRaisesRegex(
+                verify.VerificationError,
+                "expected exactly one installed pytest 9.0.3 RECORD",
+            ):
+                verify._observe_tool("pytest", entry, REPO, environment=environment)
+
+    def test_pytest_distribution_identity_is_path_free_and_tamper_evident(self) -> None:
+        source_environment = verify._uv_environment_root(REPO, os.environ.copy())
+        records = list(
+            (source_environment / "lib").glob(
+                "python*/site-packages/pytest-9.0.3.dist-info/RECORD"
+            )
+        )
+        self.assertEqual(len(records), 1)
+        source_site_packages = records[0].parent.parent
+        source_python = (source_environment / "bin/python3").resolve(strict=True)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            identities = []
+            environments = []
+            for name in ("first-location", "second-location"):
+                environment_path = Path(temporary) / name
+                binaries = environment_path / "bin"
+                site_packages = (
+                    environment_path
+                    / "lib"
+                    / source_site_packages.parent.name
+                    / "site-packages"
+                )
+                binaries.mkdir(parents=True)
+                site_packages.mkdir(parents=True)
+                (binaries / "python3").symlink_to(source_python)
+                for entrypoint_name in ("pytest", "py.test"):
+                    source = source_environment / "bin" / entrypoint_name
+                    _, _, body = source.read_bytes().partition(b"\n")
+                    target = binaries / entrypoint_name
+                    target.write_bytes(
+                        f"#!{binaries / 'python3'}\n".encode("utf-8") + body
+                    )
+                    target.chmod(0o700)
+                for package_name in ("_pytest", "pytest", "pytest-9.0.3.dist-info"):
+                    shutil.copytree(
+                        source_site_packages / package_name,
+                        site_packages / package_name,
+                    )
+                for row in csv.reader(
+                    records[0].read_text(encoding="utf-8").splitlines()
+                ):
+                    relative = Path(row[0])
+                    if ".." in relative.parts:
+                        continue
+                    source = source_site_packages / relative
+                    target = site_packages / relative
+                    if source.is_file() and not target.exists():
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copy2(source, target)
+                identities.append(
+                    verify._python_distribution_digest(
+                        environment_path,
+                        distribution="pytest",
+                        version="9.0.3",
+                        entrypoint=binaries / "pytest",
+                    )
+                )
+                environments.append(environment_path)
+            self.assertEqual(identities[0], identities[1])
+
+            injected_site = (
+                environments[0]
+                / "lib"
+                / source_site_packages.parent.name
+                / "site-packages/sitecustomize.py"
+            )
+            injected_site.write_text("print('pytest 9.0.3')\nraise SystemExit(0)\n")
+            injected_environment = os.environ.copy()
+            injected_environment["UV_PROJECT_ENVIRONMENT"] = os.fspath(environments[0])
+            observed = verify._observe_tool(
+                "pytest",
+                frozen_spec()["toolchain"]["pytest"],
+                REPO,
+                environment=injected_environment,
+            )
+            self.assertEqual(observed["resolved_tool"]["sha256"], identities[0])
+
+            tampered = (
+                environments[1]
+                / "lib"
+                / source_site_packages.parent.name
+                / "site-packages/pytest/__init__.py"
+            )
+            tampered.write_bytes(tampered.read_bytes() + b"\n# tampered\n")
+            with self.assertRaisesRegex(
+                verify.VerificationError, "RECORD target identity differs"
+            ):
+                verify._python_distribution_digest(
+                    environments[1],
+                    distribution="pytest",
+                    version="9.0.3",
+                    entrypoint=environments[1] / "bin/pytest",
+                )
+
+    def test_pytest_observation_ignores_pythonpath_injection(self) -> None:
+        spec = frozen_spec()
+        entry = spec["toolchain"]["pytest"]
+        clean_environment = os.environ.copy()
+        clean = verify._observe_tool(
+            "pytest", entry, REPO, environment=clean_environment
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            fake_package = Path(temporary) / "pytest"
+            fake_package.mkdir()
+            (fake_package / "__init__.py").write_text(
+                "def console_main():\n    print('pytest 9.0.3')\n"
+            )
+            (fake_package / "__main__.py").write_text("print('pytest 9.0.3')\n")
+            attacked_environment = clean_environment.copy()
+            attacked_environment["PYTHONPATH"] = temporary
+            attacked = verify._observe_tool(
+                "pytest", entry, REPO, environment=attacked_environment
+            )
+        self.assertEqual(clean, attacked)
+
+    def test_packet_verifies_and_authorizes_from_relocated_clone(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repo, spec, base = make_repo(root)
+            packet = make_packet(root, repo, spec, base)
+            approval = add_approval(repo, packet)
+            relocated = root / "relocated-clean-clone"
+            subprocess.run(
+                [
+                    "git",
+                    "clone",
+                    "--quiet",
+                    "--no-local",
+                    os.fspath(repo),
+                    os.fspath(relocated),
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=True,
+            )
+            benchmark_environment = os.environ.get(
+                "UV_PROJECT_ENVIRONMENT",
+                os.fspath(REPO / "benchmarks/.venv"),
+            )
+            with mock.patch.dict(
+                os.environ,
+                {"UV_PROJECT_ENVIRONMENT": benchmark_environment},
+                clear=False,
+            ):
+                self.assertEqual(
+                    verify.verify_handoff(
+                        packet,
+                        repo=relocated,
+                        check_toolchain=True,
+                    )["implementation_base_sha"],
+                    base,
+                )
+                result = authorize.authorize(
+                    packet,
+                    relocated,
+                    approval_revision=approval,
+                )
+            self.assertEqual(result["authorization"], "GO")
+            self.assertEqual(result["candidate_scope_base_sha"], approval)
 
     def test_packet_tamper_extra_symlink_and_mode_fail_closed(self) -> None:
         attacks = ("tamper", "extra", "symlink", "mode")

@@ -54,13 +54,14 @@ def make_handoff(repo: Path, base: str) -> tuple[dict[str, object], dict[str, by
         bindings.append({"path": path, "sha256": verify.sha256_bytes(data)})
     git_launcher = Path(shutil.which("git") or "/usr/bin/git")
     git_realpath = git_launcher.resolve(strict=True)
+    git_version = git(repo, "--version")
     handoff = {
         "authorization": {
             "approval_path": authorize.APPROVAL_PATH,
             "state": "unverified",
         },
         "bindings": bindings,
-        "contract_version": "plico.milestone.v53/1",
+        "contract_version": "plico.milestone.v53/2",
         "expires_at_utc": PACKET_EXPIRES_AT,
         "generated_at_utc": PACKET_GENERATED_AT,
         "implementation_base_sha": base,
@@ -71,16 +72,19 @@ def make_handoff(repo: Path, base: str) -> tuple[dict[str, object], dict[str, by
             "contract": {"path": CONTRACT_PATH},
             "toolchain": {
                 "git": {
-                    "command": [os.fspath(git_launcher), "--version"],
-                    "expected": "git version",
+                    "command": ["git", "--version"],
+                    "expected": git_version,
+                    "required_lines": [],
                 }
             },
         },
         "toolchain_observed": {
             "git": {
-                "launcher_path": os.fspath(git_launcher),
-                "launcher_realpath": os.fspath(git_realpath),
+                "launcher_name": "git",
                 "launcher_sha256": verify.sha256_bytes(git_realpath.read_bytes()),
+                "resolved_tool": None,
+                "role": "git",
+                "version": git_version,
             }
         },
     }
@@ -307,7 +311,7 @@ class V53AuthorizationTests(unittest.TestCase):
             with (
                 mock.patch.dict(os.environ, {"PATH": os.fspath(fake_directory)}),
                 self.assertRaisesRegex(
-                    authorize.AuthorizationError, "PATH Git differs"
+                    authorize.AuthorizationError, "identity differs"
                 ),
             ):
                 authorize.validate_approval_commit(
@@ -325,7 +329,7 @@ class V53AuthorizationTests(unittest.TestCase):
             tag_approval(repo, packet_files, approval)
             handoff["toolchain_observed"]["git"]["launcher_sha256"] = "0" * 64
             with self.assertRaisesRegex(
-                authorize.AuthorizationError, "executable digest differs"
+                authorize.AuthorizationError, "identity differs"
             ):
                 authorize.validate_approval_commit(
                     repo,

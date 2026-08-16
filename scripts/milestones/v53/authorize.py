@@ -14,7 +14,6 @@ import argparse
 import datetime as dt
 import os
 import re
-import shutil
 import stat
 import subprocess
 import sys
@@ -24,8 +23,8 @@ from typing import Any
 import verify
 
 
-APPROVAL_SCHEMA = "plico.v53.r0-approval/v1"
-RESULT_SCHEMA = "plico.v53.r0-authorization-result/v1"
+APPROVAL_SCHEMA = "plico.v53.r0-approval/v2"
+RESULT_SCHEMA = "plico.v53.r0-authorization-result/v2"
 APPROVAL_PATH = "docs/milestones/v53-r0-approval.json"
 DEFAULT_APPROVAL_REVISION = "refs/remotes/origin/v53-integration"
 ALLOWED_APPROVAL_REFS = frozenset(
@@ -116,7 +115,7 @@ def packet_digest_bindings(packet_files: dict[str, bytes]) -> dict[str, str]:
 
 
 def approval_tag_name(packet_files: dict[str, bytes]) -> str:
-    return f"v53-r0-{packet_digest_bindings(packet_files)['committed_sha256']}"
+    return f"v53-r0-v2-{packet_digest_bindings(packet_files)['committed_sha256']}"
 
 
 def _binding_sha256(handoff: dict[str, Any], path: str) -> str:
@@ -267,7 +266,7 @@ def validate_approval_record(
 
 
 def bound_git_executable(handoff: dict[str, Any]) -> Path:
-    """Resolve and re-hash the packet-sealed Git before any Git operation."""
+    """Resolve current Git and compare its portable content identity."""
 
     spec = _object(handoff.get("spec"), "handoff.spec")
     toolchain = _object(spec.get("toolchain"), "handoff.spec.toolchain")
@@ -275,47 +274,37 @@ def bound_git_executable(handoff: dict[str, Any]) -> Path:
     command = git_contract.get("command")
     if not isinstance(command, list) or len(command) < 1:
         raise AuthorizationError("sealed Git command is missing")
-    expected_path = Path(_string(command[0], "sealed Git command", 4096))
+    logical_name = _string(command[0], "sealed Git command", 128)
+    if os.sep in logical_name or (os.altsep is not None and os.altsep in logical_name):
+        raise AuthorizationError("sealed Git command must be a logical launcher name")
     observed = _object(
         _object(handoff.get("toolchain_observed"), "handoff.toolchain_observed").get(
             "git"
         ),
         "handoff.toolchain_observed.git",
     )
-    sealed_realpath = Path(
-        _string(observed.get("launcher_realpath"), "sealed Git realpath", 4096)
-    )
     try:
-        expected_realpath = expected_path.resolve(strict=True)
-        realpath = sealed_realpath.resolve(strict=True)
+        launcher = verify._tool_launcher(logical_name, None)
+        realpath = launcher.resolve(strict=True)
         info = realpath.stat()
-        data = realpath.read_bytes()
+        current = verify._observe_tool(
+            "git",
+            git_contract,
+            None,
+            environment=_git_environment(),
+        )
     except OSError as error:
         raise AuthorizationError(
             f"packet-bound Git executable identity cannot be read: {error}"
         ) from error
-    if (
-        not expected_path.is_absolute()
-        or not sealed_realpath.is_absolute()
-        or expected_realpath != realpath
-        or not stat.S_ISREG(info.st_mode)
-        or not os.access(realpath, os.X_OK)
-    ):
+    except verify.VerificationError as error:
         raise AuthorizationError(
-            "packet-bound Git is not the expected executable regular file"
-        )
-    if observed.get("launcher_path") != os.fspath(expected_path):
-        raise AuthorizationError("sealed Git launcher path differs from the contract")
-    digest = _string(observed.get("launcher_sha256"), "sealed Git sha256", 64)
-    if not verify.HEX_SHA256.fullmatch(digest) or verify.sha256_bytes(data) != digest:
-        raise AuthorizationError("packet-bound Git executable digest differs")
-    located = shutil.which("git")
-    try:
-        path_git = Path(located).resolve(strict=True) if located is not None else None
-    except OSError as error:
-        raise AuthorizationError("PATH Git identity cannot be resolved") from error
-    if path_git != realpath:
-        raise AuthorizationError("PATH Git differs from the packet-bound executable")
+            f"packet-bound Git identity differs: {error}"
+        ) from error
+    if not stat.S_ISREG(info.st_mode) or not os.access(realpath, os.X_OK):
+        raise AuthorizationError("current Git is not an executable regular file")
+    if current != observed:
+        raise AuthorizationError("current Git logical version/content identity differs")
     return realpath
 
 

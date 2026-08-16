@@ -2,6 +2,7 @@
 
 **状态**：R0 Freeze Candidate / Implementation not started
 **合同**：[v53-execution-observation-spine.md](./v53-execution-observation-spine.md)
+**开发交接**：[v53-developer-handoff.md](./v53-developer-handoff.md)
 **产品基线**：`fe4c08260fc3e6dc0e3d37921b863a7ed48a330a`
 
 > 本文件只由 Plico 架构/验收组填写；R0 冻结项可在开发开工前记录，其余项只在候选提交与独立证据完整后填写。
@@ -28,7 +29,7 @@
 | benchmarks/uv.lock digest | `a2d42a133228ef6e12a5362c2d2f04385e9abf3ef08a8d65da9a7664a62722ec`（423,717 bytes） |
 | R0 handoff packet digest | 外部四文件 packet 的 `COMMITTED` 绑定；不回填以避免 self-reference |
 | Candidate evidence bundle digest | PENDING（schema/collector/verifier 于 R1 前冻结，不属于 R0 packet） |
-| R0 packet collector/verifier version | `plico.v53.r0-spec/v1` / `plico.v53.r0-handoff/v1` |
+| R0 packet collector/verifier version | `plico.v53.r0-spec/v2` / `plico.v53.r0-handoff/v2`；v1 已撤销、不得复用 |
 | Packet integrity / Git authorization | PENDING / PENDING |
 
 ## 3. 不变量验收
