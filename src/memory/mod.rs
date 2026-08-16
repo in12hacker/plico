@@ -15,6 +15,7 @@
 //! The memory manager keeps L0 runtime-only and commits durable tier changes as revisions.
 
 pub mod causal;
+pub(crate) mod execution_observation;
 pub mod foresight;
 pub mod layered;
 pub mod ledger;
