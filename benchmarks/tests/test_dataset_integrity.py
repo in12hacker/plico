@@ -211,7 +211,18 @@ def test_real_vector_artifact_accepts_object_only_openai_identity_without_overcl
         validate_qa_retrieval_runtime({"retrieval_runtime": duplicate_with_one_degraded}, ledger)
 
 
-@pytest.mark.parametrize("mutation", ["policy_missing", "policy_true", "kg_path", "path_missing"])
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "policy_missing",
+        "policy_auto_true",
+        "policy_retrieval_missing",
+        "policy_retrieval_true",
+        "policy_v1",
+        "kg_path",
+        "path_missing",
+    ],
+)
 def test_v6_qa_runtime_rejects_no_kg_policy_or_exact_path_drift(mutation):
     runtime = {
         "requirement": "real_non_stub_vector_per_query",
@@ -252,8 +263,14 @@ def test_v6_qa_runtime_rejects_no_kg_policy_or_exact_path_drift(mutation):
     ]
     if mutation == "policy_missing":
         del runtime["retrieval_policy"]
-    elif mutation == "policy_true":
+    elif mutation == "policy_auto_true":
         runtime["retrieval_policy"]["knowledge_graph_auto_extract"] = True
+    elif mutation == "policy_retrieval_missing":
+        del runtime["retrieval_policy"]["knowledge_graph_retrieval"]
+    elif mutation == "policy_retrieval_true":
+        runtime["retrieval_policy"]["knowledge_graph_retrieval"] = True
+    elif mutation == "policy_v1":
+        runtime["retrieval_policy"]["schema"] = "plico.benchmark.qa-retrieval-policy/v1"
     elif mutation == "kg_path":
         ledger[0]["retrieval_execution"].append(
             {"path": "knowledge_graph_path_discovery", "candidates": 1, "accepted": 1}

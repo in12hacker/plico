@@ -50,6 +50,7 @@ def commit_result_directory(output: Path, result: dict[str, Any]) -> dict[str, A
         raise ValueError("benchmark metadata and manifest run IDs differ")
     if result.get("metadata", {}).get("suite") != manifest.get("suite"):
         raise ValueError("benchmark metadata and manifest suites differ")
+    _validate_qa_v6_environment(result)
     result_payload = canonical_json(result)
     sidecar = {
         **manifest,
@@ -132,10 +133,7 @@ def read_verified_result(output: Path) -> tuple[bytes, bytes, dict[str, Any]]:
 def _validate_suite_evidence(result: dict[str, Any], output: Path) -> None:
     if result.get("metadata", {}).get("suite") != "conversational-qa":
         return
-    if result.get("run_manifest", {}).get("schemas", {}).get("result") == (
-        "plico.benchmark-result/v6"
-    ) and result.get("config", {}).get("environment", {}).get("PLICO_KG_AUTO_EXTRACT") != ("false"):
-        raise ValueError("QA v6 result does not bind PLICO_KG_AUTO_EXTRACT=false")
+    _validate_qa_v6_environment(result)
     metrics = result.get("metrics")
     if not isinstance(metrics, dict):
         raise ValueError("QA result has no typed metrics")
@@ -199,6 +197,19 @@ def _validate_suite_evidence(result: dict[str, Any], output: Path) -> None:
     if expected_external not in external:
         raise ValueError("QA manifest does not bind the external journal inventory")
     _validate_qa_sample_ledger(metrics, finalized_records, result["run_manifest"])
+
+
+def _validate_qa_v6_environment(result: dict[str, Any]) -> None:
+    if (
+        result.get("metadata", {}).get("suite") != "conversational-qa"
+        or result.get("run_manifest", {}).get("schemas", {}).get("result")
+        != "plico.benchmark-result/v6"
+    ):
+        return
+    environment = result.get("config", {}).get("environment")
+    for variable in ("PLICO_KG_AUTO_EXTRACT", "PLICO_KG_RETRIEVAL"):
+        if not isinstance(environment, dict) or environment.get(variable) != "false":
+            raise ValueError(f"QA v6 result does not bind {variable}=false")
 
 
 def _validate_qa_sample_ledger(

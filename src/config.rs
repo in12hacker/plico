@@ -153,6 +153,10 @@ pub struct TuningConfig {
     #[serde(default)]
     pub kg_auto_extract: bool,
 
+    /// Enable knowledge-graph projection and retrieval inside SemanticFS.
+    #[serde(default = "default_kg_retrieval_enabled")]
+    pub kg_retrieval_enabled: bool,
+
     /// KG extraction batch size (default: 5).
     #[serde(default = "default_kg_batch_size")]
     pub kg_extract_batch_size: usize,
@@ -207,6 +211,10 @@ fn default_kg_batch_size() -> usize {
 }
 fn default_kg_extract_timeout() -> u64 {
     3000
+}
+
+fn default_kg_retrieval_enabled() -> bool {
+    true
 }
 fn default_log_level() -> String {
     "info".into()
@@ -271,6 +279,7 @@ impl Default for TuningConfig {
             rrf_bm25_weight: None,
             rrf_vector_weight: None,
             kg_auto_extract: false,
+            kg_retrieval_enabled: default_kg_retrieval_enabled(),
             kg_extract_batch_size: default_kg_batch_size(),
             kg_extract_timeout_ms: default_kg_extract_timeout(),
             auto_summarize: false,
@@ -374,6 +383,9 @@ impl PlicoConfig {
         if other.tuning.kg_auto_extract {
             self.tuning.kg_auto_extract = true;
         }
+        if other.tuning.kg_retrieval_enabled != default_kg_retrieval_enabled() {
+            self.tuning.kg_retrieval_enabled = other.tuning.kg_retrieval_enabled;
+        }
         if other.tuning.kg_extract_batch_size != default_kg_batch_size() {
             self.tuning.kg_extract_batch_size = other.tuning.kg_extract_batch_size;
         }
@@ -455,6 +467,15 @@ impl PlicoConfig {
         }
         if let Ok(val) = std::env::var("PLICO_KG_AUTO_EXTRACT") {
             self.tuning.kg_auto_extract = matches!(val.as_str(), "1" | "true");
+        }
+        if let Ok(val) = std::env::var("PLICO_KG_RETRIEVAL") {
+            match parse_boolean_override(&val) {
+                Some(enabled) => self.tuning.kg_retrieval_enabled = enabled,
+                None => tracing::warn!(
+                    variable = "PLICO_KG_RETRIEVAL",
+                    "invalid boolean environment override; retaining configured value"
+                ),
+            }
         }
         if let Ok(val) = std::env::var("PLICO_AUTO_SUMMARIZE") {
             self.tuning.auto_summarize = matches!(val.as_str(), "1" | "true");
@@ -546,6 +567,14 @@ impl PlicoConfig {
     }
 }
 
+fn parse_boolean_override(value: &str) -> Option<bool> {
+    match value {
+        "1" | "true" => Some(true),
+        "0" | "false" => Some(false),
+        _ => None,
+    }
+}
+
 pub fn ensure_v1_suffix(url: &str) -> String {
     if url.contains("/v1") {
         url.to_string()
@@ -612,6 +641,7 @@ mod tests {
         assert_eq!(config.inference.llm_backend, "llama");
         assert_eq!(config.tuning.persist_interval_secs, 300);
         assert_eq!(config.tuning.rrf_k, 60);
+        assert!(config.tuning.kg_retrieval_enabled);
         assert_eq!(config.tuning.cognitive_pipeline_max_in_flight, 4);
         assert_eq!(config.tuning.cognitive_pipeline_queue_capacity, 1024);
         assert_eq!(config.tuning.log_level, "info");
@@ -634,6 +664,7 @@ mod tests {
         assert_eq!(config.network.daemon_port, 9999);
         assert_eq!(config.network.host, "127.0.0.1");
         assert_eq!(config.inference.llm_backend, "llama");
+        assert!(config.tuning.kg_retrieval_enabled);
     }
 
     #[test]
@@ -664,6 +695,30 @@ mod tests {
         other.network.daemon_port = 9999;
         config.merge_from(other);
         assert_eq!(config.network.daemon_port, 9999);
+    }
+
+    #[test]
+    fn config_file_can_disable_kg_retrieval() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(
+            directory.path().join("config.json"),
+            r#"{"tuning":{"kg_retrieval_enabled":false}}"#,
+        )
+        .unwrap();
+
+        let config = PlicoConfig::load(Some(directory.path().to_path_buf()));
+
+        assert!(!config.tuning.kg_retrieval_enabled);
+    }
+
+    #[test]
+    fn kg_retrieval_environment_boolean_is_strict() {
+        assert_eq!(parse_boolean_override("false"), Some(false));
+        assert_eq!(parse_boolean_override("0"), Some(false));
+        assert_eq!(parse_boolean_override("true"), Some(true));
+        assert_eq!(parse_boolean_override("1"), Some(true));
+        assert_eq!(parse_boolean_override("False"), None);
+        assert_eq!(parse_boolean_override("typo"), None);
     }
 
     #[test]

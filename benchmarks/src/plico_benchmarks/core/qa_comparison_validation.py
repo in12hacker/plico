@@ -128,8 +128,10 @@ def validate_qa_shadow_inputs(inputs: list[QaShadowInput]) -> QaShadowCampaign:
         config = result.get("config")
         if not isinstance(config, dict):
             raise ValueError("QA shadow input suite configuration is missing")
-        if config.get("environment", {}).get("PLICO_KG_AUTO_EXTRACT") != "false":
-            raise ValueError("QA shadow input does not bind PLICO_KG_AUTO_EXTRACT=false")
+        environment = config.get("environment")
+        for variable in ("PLICO_KG_AUTO_EXTRACT", "PLICO_KG_RETRIEVAL"):
+            if not isinstance(environment, dict) or environment.get(variable) != "false":
+                raise ValueError(f"QA shadow input does not bind {variable}=false")
         _same(
             common,
             "suite_config",

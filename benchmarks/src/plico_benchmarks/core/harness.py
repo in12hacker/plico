@@ -183,6 +183,7 @@ class BaseSuite(ABC):
             "PLICO_RERANKER_MODEL",
             "PLICO_RERANKER_API_BASE",
             "PLICO_KG_AUTO_EXTRACT",
+            "PLICO_KG_RETRIEVAL",
             "PLICO_COGNITIVE_PIPELINE_MAX_IN_FLIGHT",
             "PLICO_COGNITIVE_PIPELINE_QUEUE_CAPACITY",
         )

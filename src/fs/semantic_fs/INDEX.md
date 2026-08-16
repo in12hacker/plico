@@ -35,6 +35,7 @@ Status: active | Fan-in: 2 | Fan-out: 4
 - `SemanticFS::create()`: stores in CAS, indexes tags, embeds for vector search, auto L0 summary; returns CID
 - `SemanticFS::read()`: retrieves objects by CID, tags, semantic query, type, or hybrid
 - `SemanticFS::search()`: hybrid vector + BM25 with RRF score fusion
+- Passing no `KnowledgeGraph` to the constructor disables SemanticFS KG projection and all `knowledge_graph_*` retrieval paths
 - `SemanticFS::delete()`: logical delete only (recycle bin); never physical delete
 - `SemanticFS::restore()`: restores from recycle bin
 - Thread safety: `RwLock` on tag index, recycle bin — safe for concurrent access

@@ -147,7 +147,8 @@ Status: active | Fan-in: 2 | Fan-out: 2
 - `SemanticFS::delete()`: logical delete only (recycle bin); never physical delete
 - `SemanticFS::restore()`: restores from recycle bin to active index
 - Thread safety: all methods use `RwLock` — safe for concurrent access
-- Side effect: `create()` writes to CAS, tag index, vector index, BM25 index, KG, and optionally L0 summary
+- Side effect: `create()` writes to CAS, tag index, vector index, BM25 index, optionally wired KG, and optionally L0 summary
+- Kernel wiring may omit SemanticFS KG projection/retrieval with `PLICO_KG_RETRIEVAL=false`; the explicit Kernel graph remains available
 
 ## Tests
 

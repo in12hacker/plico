@@ -75,8 +75,24 @@ def test_resigned_qa_result_cannot_bypass_verifier_by_changing_metadata_suite(
     assert not output.exists()
 
 
-@pytest.mark.parametrize("environment", [{}, {"PLICO_KG_AUTO_EXTRACT": "true"}])
-def test_v6_qa_result_rejects_missing_or_true_signed_kg_environment(tmp_path, environment):
+@pytest.mark.parametrize(
+    ("environment", "missing_binding"),
+    [
+        ({}, "PLICO_KG_AUTO_EXTRACT"),
+        (
+            {"PLICO_KG_AUTO_EXTRACT": "true", "PLICO_KG_RETRIEVAL": "false"},
+            "PLICO_KG_AUTO_EXTRACT",
+        ),
+        ({"PLICO_KG_AUTO_EXTRACT": "false"}, "PLICO_KG_RETRIEVAL"),
+        (
+            {"PLICO_KG_AUTO_EXTRACT": "false", "PLICO_KG_RETRIEVAL": "true"},
+            "PLICO_KG_RETRIEVAL",
+        ),
+    ],
+)
+def test_v6_qa_result_rejects_missing_or_true_signed_kg_environment(
+    tmp_path, environment, missing_binding
+):
     run_id = "22222222-2222-4222-8222-222222222222"
     manifest = build_run_manifest(
         run_id=run_id,
@@ -100,8 +116,10 @@ def test_v6_qa_result_rejects_missing_or_true_signed_kg_environment(tmp_path, en
         "run_manifest": manifest,
     }
 
-    with pytest.raises(ValueError, match="PLICO_KG_AUTO_EXTRACT=false"):
-        commit_result_directory(tmp_path / f"kg-{len(environment)}", result)
+    output = tmp_path / f"kg-{missing_binding}-{len(environment)}"
+    with pytest.raises(ValueError, match=f"{missing_binding}=false"):
+        commit_result_directory(output, result)
+    assert not output.exists()
 
 
 def test_report_retains_reproducibility_configuration(monkeypatch):

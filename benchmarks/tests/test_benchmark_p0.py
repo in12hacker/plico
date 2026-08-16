@@ -65,6 +65,8 @@ def test_fresh_vault_runner_replaces_removed_run_all_command():
     assert "PLICO_COGNITIVE_PIPELINE_MAX_IN_FLIGHT=3" in script
     assert "PLICO_COGNITIVE_PIPELINE_QUEUE_CAPACITY=8192" in script
     assert "export PLICO_KG_AUTO_EXTRACT=false" in script
+    assert "suite_environment=(PLICO_KG_RETRIEVAL=false)" in script
+    assert "export PLICO_KG_RETRIEVAL=false" not in script
     assert "LLAMA_URL" not in script
     assert "gemma" not in script.casefold()
 
@@ -77,19 +79,33 @@ def test_qa_driver_supports_one_run_smoke_without_faking_five_run_comparison():
     assert 'if [[ "$RUNS" == 5 ]]' in script
     assert "verify_result_directory" in script
     assert "export PLICO_KG_AUTO_EXTRACT=false" in script
+    assert "export PLICO_KG_RETRIEVAL=false" in script
 
 
 def test_qa_no_kg_policy_rejects_missing_or_true_environment(monkeypatch):
     monkeypatch.delenv("PLICO_KG_AUTO_EXTRACT", raising=False)
+    monkeypatch.delenv("PLICO_KG_RETRIEVAL", raising=False)
     with pytest.raises(RuntimeError, match="PLICO_KG_AUTO_EXTRACT=false"):
         resolve_qa_retrieval_policy()
 
     monkeypatch.setenv("PLICO_KG_AUTO_EXTRACT", "true")
+    monkeypatch.setenv("PLICO_KG_RETRIEVAL", "false")
     with pytest.raises(RuntimeError, match="PLICO_KG_AUTO_EXTRACT=false"):
         resolve_qa_retrieval_policy()
 
     monkeypatch.setenv("PLICO_KG_AUTO_EXTRACT", "false")
-    assert resolve_qa_retrieval_policy()["knowledge_graph_auto_extract"] is False
+    monkeypatch.delenv("PLICO_KG_RETRIEVAL")
+    with pytest.raises(RuntimeError, match="PLICO_KG_RETRIEVAL=false"):
+        resolve_qa_retrieval_policy()
+
+    monkeypatch.setenv("PLICO_KG_RETRIEVAL", "true")
+    with pytest.raises(RuntimeError, match="PLICO_KG_RETRIEVAL=false"):
+        resolve_qa_retrieval_policy()
+
+    monkeypatch.setenv("PLICO_KG_RETRIEVAL", "false")
+    policy = resolve_qa_retrieval_policy()
+    assert policy["knowledge_graph_auto_extract"] is False
+    assert policy["knowledge_graph_retrieval"] is False
 
 
 def test_performance_uses_versioned_yaml_config_and_rejects_uniform_override():

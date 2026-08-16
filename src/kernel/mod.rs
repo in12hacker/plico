@@ -190,7 +190,7 @@ impl AIKernel {
             Arc::new(embedding_hswap.clone()) as Arc<dyn EmbeddingProvider>,
             search_index.clone(),
             summarizer.clone(),
-            knowledge_graph.clone(),
+            semantic_fs_knowledge_graph(&config, &knowledge_graph),
             reranker.clone(),
         )?;
         fs.set_chunking_mode(config.tuning.chunking_mode.clone());
@@ -329,7 +329,7 @@ impl AIKernel {
             Arc::new(embedding.clone()) as Arc<dyn EmbeddingProvider>,
             search_index,
             summarizer.clone(),
-            knowledge_graph.clone(),
+            semantic_fs_knowledge_graph(&config, &knowledge_graph),
             reranker.clone(),
             Some(edge_cache.search.clone()),
         )?;
@@ -647,6 +647,17 @@ impl AIKernel {
     }
 }
 
+fn semantic_fs_knowledge_graph(
+    config: &PlicoConfig,
+    knowledge_graph: &Option<Arc<dyn KnowledgeGraph>>,
+) -> Option<Arc<dyn KnowledgeGraph>> {
+    if config.tuning.kg_retrieval_enabled {
+        knowledge_graph.clone()
+    } else {
+        None
+    }
+}
+
 impl crate::kernel::cognition::ToolExecutor for AIKernel {
     fn execute_tool(
         &self,
@@ -671,8 +682,39 @@ mod memory_link;
 mod kernel_mod_tests {
     use super::{create_hnsw_or_tag_only, AIKernel};
     use crate::api::semantic::ApiRequest;
-    use crate::fs::{EmbeddingProvider, OpenAIEmbeddingBackend};
+    use crate::fs::{
+        EmbedError, EmbedResult, EmbeddingBuilderIdentity, EmbeddingIdentityError, EmbeddingProvider,
+        OpenAIEmbeddingBackend, SearchPath,
+    };
     use crate::kernel::tests::make_kernel;
+
+    struct ExactHybridEmbedding;
+
+    impl EmbeddingProvider for ExactHybridEmbedding {
+        fn embed(&self, _text: &str) -> Result<EmbedResult, EmbedError> {
+            Ok(EmbedResult::new(vec![1.0, 0.0], 1))
+        }
+
+        fn embed_batch(&self, texts: &[&str]) -> Result<Vec<EmbedResult>, EmbedError> {
+            Ok(texts.iter().map(|_| EmbedResult::new(vec![1.0, 0.0], 1)).collect())
+        }
+
+        fn dimension(&self) -> usize {
+            2
+        }
+
+        fn builder_identity(&self) -> Result<EmbeddingBuilderIdentity, EmbeddingIdentityError> {
+            Ok(EmbeddingBuilderIdentity::test_deterministic(
+                "exact-hybrid-test",
+                2,
+                "exact-hybrid-test-v1",
+            ))
+        }
+
+        fn model_name(&self) -> String {
+            "exact-hybrid-test".to_string()
+        }
+    }
 
     #[test]
     fn test_kernel_new_creates_valid_kernel() {
@@ -681,6 +723,120 @@ mod kernel_mod_tests {
         let dir = tempfile::tempdir().unwrap();
         let kernel = AIKernel::new(dir.path().to_path_buf()).expect("kernel init");
         assert!(!kernel.root.as_os_str().is_empty());
+    }
+
+    #[test]
+    fn with_providers_disables_only_semantic_fs_kg_retrieval() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(
+            directory.path().join("config.json"),
+            r#"{"tuning":{"kg_retrieval_enabled":false}}"#,
+        )
+        .unwrap();
+        let kernel = AIKernel::with_providers(
+            directory.path().to_path_buf(),
+            std::sync::Arc::new(ExactHybridEmbedding),
+            std::sync::Arc::new(crate::llm::StubProvider::empty()),
+        )
+        .unwrap();
+
+        let cid = kernel
+            .fs
+            .create(
+                b"Alpha depends on Beta".to_vec(),
+                vec![],
+                "test-agent".to_string(),
+                None,
+                crate::cas::ObjectScope::default(),
+            )
+            .unwrap();
+        let graph = kernel
+            .knowledge_graph
+            .as_ref()
+            .expect("explicit Kernel graph must remain available");
+        assert!(!graph.has_node_with_cid(&cid).unwrap());
+
+        let diagnosed = kernel
+            .fs
+            .search_with_diagnostics("why does Beta depend on Alpha", 10, Default::default());
+        assert_eq!(
+            diagnosed
+                .execution
+                .paths
+                .iter()
+                .map(|entry| entry.path)
+                .collect::<Vec<_>>(),
+            vec![SearchPath::Vector, SearchPath::Bm25]
+        );
+    }
+
+    #[test]
+    fn new_disables_semantic_fs_kg_projection_but_retains_explicit_graph() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(
+            directory.path().join("config.json"),
+            r#"{
+                "inference":{"embedding_backend":"stub","llm_backend":"stub"},
+                "tuning":{"kg_retrieval_enabled":false}
+            }"#,
+        )
+        .unwrap();
+        let kernel = AIKernel::new(directory.path().to_path_buf()).unwrap();
+
+        let cid = kernel
+            .fs
+            .create(
+                b"Gamma depends on Delta".to_vec(),
+                vec![],
+                "test-agent".to_string(),
+                None,
+                crate::cas::ObjectScope::default(),
+            )
+            .unwrap();
+        let graph = kernel
+            .knowledge_graph
+            .as_ref()
+            .expect("explicit Kernel graph must remain available");
+        assert!(!graph.has_node_with_cid(&cid).unwrap());
+        let diagnosed = kernel
+            .fs
+            .search_with_diagnostics("why does Delta depend on Gamma", 10, Default::default());
+        assert!(diagnosed.execution.paths.iter().all(|entry| !matches!(
+            entry.path,
+            SearchPath::KnowledgeGraphTemporal
+                | SearchPath::KnowledgeGraphPpr
+                | SearchPath::KnowledgeGraphPathDiscovery
+                | SearchPath::KnowledgeGraphCausal
+        )));
+    }
+
+    #[test]
+    fn default_kernel_wiring_keeps_semantic_fs_kg_projection() {
+        let directory = tempfile::tempdir().unwrap();
+        let kernel = AIKernel::with_providers(
+            directory.path().to_path_buf(),
+            std::sync::Arc::new(ExactHybridEmbedding),
+            std::sync::Arc::new(crate::llm::StubProvider::empty()),
+        )
+        .unwrap();
+
+        let cid = kernel
+            .fs
+            .create(
+                b"default graph projection".to_vec(),
+                vec![],
+                "test-agent".to_string(),
+                None,
+                crate::cas::ObjectScope::default(),
+            )
+            .unwrap();
+
+        assert!(kernel
+            .knowledge_graph
+            .as_ref()
+            .unwrap()
+            .has_node_with_cid(&cid)
+            .unwrap());
     }
 
     #[test]

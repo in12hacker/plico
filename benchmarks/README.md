@@ -52,8 +52,9 @@ Object 查询 research baseline，但只能在每条查询都证明 vector 执�
 artifact 固定标记为 `object_execution_only_unattested_provider`，不得冒充 Memory projection
 的可发布 provider identity，也不得直接用于跨 run 模型归因。
 
-Conversation QA 的新基线固定关闭 KG 自动抽取（`PLICO_KG_AUTO_EXTRACT=false`），每个样本只
-接受有序且无降级的 `vector → bm25` exact execution ledger。该策略作为内嵌 policy artifact
+Conversation QA 的新基线固定关闭 KG 自动抽取和 SemanticFS KG 检索
+（`PLICO_KG_AUTO_EXTRACT=false`、`PLICO_KG_RETRIEVAL=false`），每个样本只接受有序且无降级的
+`vector → bm25` exact execution ledger。该策略作为内嵌 policy artifact
 绑定到 v6 result/manifest，并由验证器逐样本重算；`knowledge_graph_*`、tag fallback、reranker、
 路径缺失、重复或顺序漂移都会使 run 失效。旧 v4/v5 result 仍可单独回放验证，但不能混入新的
 五轮 no-KG shadow comparison。
@@ -335,6 +336,7 @@ run means、between-run std 和 two-way bootstrap 95% CI；artifact 永远是
 | `PLICO_PORT` | plicod 端口 | `7878` |
 | `PLICO_BEARER_TOKEN` | plicod 的 personal-owner bearer；TCP benchmark 必填 | 未设置（fail closed） |
 | `PLICO_KG_AUTO_EXTRACT` | Benchmark 时关闭 KG 提取 | `false` |
+| `PLICO_KG_RETRIEVAL` | Conversation QA 时关闭 SemanticFS KG 投影与检索 | `false` |
 | `PREPROCESS_TIMEOUT` | 索引等待秒数（脚本层） | `300` |
 | `PLICO_SEED` | 抽样与 proxy 评估的随机种子 | `42` |
 | `PLICO_BENCH_RUN_CLASS` | manifest 的运行类别，仅 regression/research | `research` |

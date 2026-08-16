@@ -73,6 +73,7 @@ tools, and legacy semantic handlers are internal surfaces, not remotely advertis
 ## Interface Contract
 
 - `AIKernel::new()`: initializes subsystems; embedding backend from env (`EMBEDDING_BACKEND`, etc.)
+- `PLICO_KG_RETRIEVAL=false` omits KG only from SemanticFS wiring; the Kernel's explicit graph capability and the default `true` behavior remain intact
 - `handle_public_request()`: receives a trusted `PublicRequestContext`; operation input never carries
   role, namespace, tier, scope, or permission grants
 - `PublicAccess::LocalOwner` uses stable internal identity `personal-owner`; authenticated non-owner

@@ -176,7 +176,10 @@ def _qa_input(run: int) -> QaShadowInput:
             "run_id": f"qa-run-{run}",
             "sampling_profile": "regression",
             "sampling_strategy": "deterministic_sha256_stratified_v1",
-            "environment": {"PLICO_KG_AUTO_EXTRACT": "false"},
+            "environment": {
+                "PLICO_KG_AUTO_EXTRACT": "false",
+                "PLICO_KG_RETRIEVAL": "false",
+            },
         },
         "run_manifest": {
             "protocol": "plico.personal.v2",
@@ -342,4 +345,15 @@ def test_qa_shadow_rejects_unbound_policy_artifact_digest():
         item.result["run_manifest"]["artifacts"][-1]["sha256"] = "9" * 64
 
     with pytest.raises(ValueError, match="bind the frozen retrieval policy"):
+        compare_qa_shadow(inputs)
+
+
+def test_qa_shadow_rejects_resigned_legacy_v1_policy_in_v6_campaign():
+    inputs = [_qa_input(index) for index in range(5)]
+    legacy_policy = copy.deepcopy(QA_RETRIEVAL_POLICY)
+    legacy_policy["schema"] = "plico.benchmark.qa-retrieval-policy/v1"
+    del legacy_policy["knowledge_graph_retrieval"]
+    inputs[4].result["metrics"]["retrieval_runtime"]["retrieval_policy"] = legacy_policy
+
+    with pytest.raises(ValueError, match="frozen no-KG contract"):
         compare_qa_shadow(inputs)

@@ -99,6 +99,10 @@ fi
 start_fresh_daemon() {
     local suite=$1
     local ordinal=$2
+    local -a suite_environment=()
+    if [[ "$suite" == "conversational-qa" ]]; then
+        suite_environment=(PLICO_KG_RETRIEVAL=false)
+    fi
     ACTIVE_VAULT="$(mktemp -d "/tmp/plico-benchmark-${suite}-${ordinal}.XXXXXX")"
     chmod 700 "$ACTIVE_VAULT"
     if find "$ACTIVE_VAULT" -mindepth 1 -print -quit | grep -q .; then
@@ -112,6 +116,7 @@ start_fresh_daemon() {
         env -u PLICO_READER_API_KEY -u PLICO_JUDGE_API_KEY \
             -u PLICO_COMPILER_API_KEY -u OPENAI_API_KEY \
             -u DEEPSEEK_API_KEY \
+            "${suite_environment[@]}" \
             "$SEALED_PLICOD" --port 0 --root "$ACTIVE_VAULT" >"$daemon_log" 2>&1 &
         PLICOD_PID=$!
         for _ in $(seq 1 100); do
@@ -150,6 +155,8 @@ run_one() {
             echo "PLICO_BENCH_RUN_ID=$run_id PLICO_LLM_RUN_ID=$run_id PLICO_LLM_ATTEMPT_JOURNAL_DIR=$journal $PYTHON -m plico_benchmarks run $suite --uds <fresh-vault>/plico.sock --output $output"
         fi
     elif [[ "$suite" == "conversational-qa" ]]; then
+        PLICO_KG_AUTO_EXTRACT=false \
+        PLICO_KG_RETRIEVAL=false \
         PLICO_BENCH_RUN_CLASS="$RUN_CLASS" \
             PLICO_BENCH_RUN_ID="$run_id" \
             PLICO_LLM_RUN_ID="$run_id" \

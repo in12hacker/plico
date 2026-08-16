@@ -9,8 +9,9 @@ from typing import Any
 
 QA_RETRIEVAL_POLICY_ROLE = "conversational_qa_retrieval_policy"
 QA_RETRIEVAL_POLICY = {
-    "schema": "plico.benchmark.qa-retrieval-policy/v1",
+    "schema": "plico.benchmark.qa-retrieval-policy/v2",
     "knowledge_graph_auto_extract": False,
+    "knowledge_graph_retrieval": False,
     "required_execution_paths": ["vector", "bm25"],
     "path_match": "exact_ordered",
     "degradation_allowed": False,
@@ -19,11 +20,10 @@ QA_RETRIEVAL_POLICY = {
 
 def resolve_qa_retrieval_policy() -> dict[str, Any]:
     """Require the daemon-affecting environment to match the frozen policy."""
-    configured = os.environ.get("PLICO_KG_AUTO_EXTRACT")
-    if configured is None:
-        raise RuntimeError("QA no-KG baseline requires PLICO_KG_AUTO_EXTRACT=false")
-    if configured.strip().lower() != "false":
-        raise RuntimeError("QA no-KG baseline requires PLICO_KG_AUTO_EXTRACT=false")
+    for variable in ("PLICO_KG_AUTO_EXTRACT", "PLICO_KG_RETRIEVAL"):
+        configured = os.environ.get(variable)
+        if configured is None or configured.strip().lower() != "false":
+            raise RuntimeError(f"QA no-KG baseline requires {variable}=false")
     return _policy_copy()
 
 
@@ -50,7 +50,19 @@ def validate_exact_qa_execution(execution: list[dict[str, Any]]) -> None:
     if [item.get("path") for item in execution] != QA_RETRIEVAL_POLICY[
         "required_execution_paths"
     ] or any(item.get("degradation") is not None for item in execution):
-        raise ValueError("QA retrieval execution is not exact undegraded vector+bm25")
+        content_free = [
+            {
+                "path": item.get("path"),
+                "candidates": item.get("candidates"),
+                "accepted": item.get("accepted"),
+                "degradation": item.get("degradation"),
+            }
+            for item in execution
+        ]
+        raise ValueError(
+            "QA retrieval execution is not exact undegraded vector+bm25: "
+            + json.dumps(content_free, sort_keys=True, separators=(",", ":"))
+        )
 
 
 def _policy_copy() -> dict[str, Any]:
