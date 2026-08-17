@@ -26,23 +26,25 @@ from decimal import ROUND_DOWN, Decimal
 from pathlib import Path
 from typing import Any
 
-SPEC_SCHEMA = "plico.v53.wp2-spec/v1"
-HANDOFF_SCHEMA = "plico.v53.wp2-handoff/v1"
-DIGEST_SCHEMA = "plico.v53.wp2-handoff-digest/v1"
-COMMIT_SCHEMA = "plico.v53.wp2-handoff-commit/v1"
-LOCK_SCHEMA = "plico.v53.wp2-handoff-lock/v1"
+SPEC_SCHEMA = "plico.v53.wp2-r2-spec/v1"
+HANDOFF_SCHEMA = "plico.v53.wp2-r2-handoff/v1"
+DIGEST_SCHEMA = "plico.v53.wp2-r2-handoff-digest/v1"
+COMMIT_SCHEMA = "plico.v53.wp2-r2-handoff-commit/v1"
+LOCK_SCHEMA = "plico.v53.wp2-r2-handoff-lock/v1"
 PACKET_FILES = ("LOCK", "handoff.json", "handoff.sha256.json", "COMMITTED")
 MAX_SAFE_INTEGER = 9_007_199_254_740_991
 MAX_PACKET_FILE_BYTES = 4 * 1024 * 1024
 HEX_SHA256 = re.compile(r"^[0-9a-f]{64}$")
 GIT_OBJECT_ID = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
-PACKET_ID = re.compile(r"^wp2-[0-9a-f]{32}$")
+PACKET_ID = re.compile(r"^wp2-r2-[0-9a-f]{32}$")
 SPEC_PATH = "scripts/milestones/v53/wp2_spec.json"
 REQUIRED_PREDECESSOR_COMMITS = [
     "5584b8e7b48247e503d9054bb3b3227c64c7ad94",
     "2c42b42dac601c9bb6f91ee7db019bf77012a017",
     "9a44c91fec3c870e6a9d8272379da9b748d183bc",
     "98de9bd2fa4eb6c6f2dbbb7171ba762124144104",
+    "189f5cffa969903c0e4ec3259848b1405e924587",
+    "8eb70d7f72a5fbbfd85c308234b561af2e22f676",
 ]
 CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 CANONICAL_UUID = re.compile(
@@ -435,6 +437,7 @@ SPEC_TOP_KEYS = {
     "contract_version",
     "coverage_contract",
     "developer_scope",
+    "developer_self_preflight",
     "error_taxonomy",
     "field_provenance",
     "fixed_lifecycle_recipe",
@@ -465,7 +468,7 @@ def validate_spec(value: Any) -> dict[str, Any]:
     require_exact_keys(spec, SPEC_TOP_KEYS, "spec")
     if spec["schema"] != SPEC_SCHEMA:
         raise VerificationError("unsupported WP2 spec schema")
-    if spec["contract_version"] != "plico.milestone.v53.wp2/1":
+    if spec["contract_version"] != "plico.milestone.v53.wp2-r2/1":
         raise VerificationError("unexpected contract version")
     predecessors = require_string_list(
         spec["predecessor_commits"], "spec.predecessor_commits"
@@ -492,7 +495,7 @@ def validate_spec(value: Any) -> dict[str, Any]:
 
     contract = require_object(spec["contract"], "spec.contract")
     require_exact_keys(contract, {"path", "required_state", "version"}, "spec.contract")
-    if contract["path"] != "docs/milestones/v53-wp2-checkpoint.md":
+    if contract["path"] != "docs/milestones/v53-wp2-r2-checkpoint.md":
         raise VerificationError("contract path is not frozen")
     if contract["version"] != spec["contract_version"]:
         raise VerificationError("nested contract version differs from spec version")
@@ -980,10 +983,14 @@ def validate_spec(value: Any) -> dict[str, Any]:
         "P(G0)/E=accepted-genesis",
         "P(Rn)/P(Rn-1)=accepted-active-with-direct-parent",
         "P(Rn)/P(Rn+1)=accepted-active-with-unpromoted-direct-child",
-        "all-other-states=CorruptStore.invalid_candidate_state",
+        "malformed-slot-pointer=CorruptStore.noncanonical_pointer",
+        "active-chain-alternate-g0=CorruptStore.broken_root_chain",
+        "all-other-valid-pointer-relations=CorruptStore.invalid_candidate_state",
     ]
     if machine["dual_slot"] != expected_dual_slot:
-        raise VerificationError("dual-slot startup state machine differs from ADR-0007")
+        raise VerificationError(
+            "dual-slot startup state machine differs from frozen contract"
+        )
 
     topology = require_object(spec["storage_topology"], "spec.storage_topology")
     require_exact_keys(
@@ -1072,6 +1079,31 @@ def validate_spec(value: Any) -> dict[str, Any]:
         or wp1["allowed_prefixes"] != []
     ):
         raise VerificationError("WP2 exact allowlist differs from the frozen scope")
+    preflight = require_object(
+        spec["developer_self_preflight"], "spec.developer_self_preflight"
+    )
+    require_exact_keys(
+        preflight,
+        {
+            "authorization",
+            "command",
+            "gate_eligible",
+            "schema",
+            "self_evidence_only",
+        },
+        "spec.developer_self_preflight",
+    )
+    if preflight != {
+        "authorization": "unverified",
+        "command": (
+            "python3 -B scripts/milestones/v53/developer_preflight.py "
+            "--repo <CHECKOUT> --base <A3_COMMIT> --candidate HEAD --require-clean"
+        ),
+        "gate_eligible": False,
+        "schema": "plico.v53.wp2-r2-developer-self-preflight/v1",
+        "self_evidence_only": True,
+    }:
+        raise VerificationError("developer self-preflight contract differs")
     forbidden_wp1 = {
         "src/cas/INDEX.md",
         "src/cas/execution_observation_store.rs",
@@ -1250,14 +1282,14 @@ def validate_spec(value: Any) -> dict[str, Any]:
         "spec.local_gate_contract.approval",
     )
     if gate_approval != {
-        "approval_path": "docs/milestones/v53-wp2-approval.json",
+        "approval_path": "docs/milestones/v53-wp2-r2-approval.json",
         "attestation": "unsigned_repository_control",
         "decision": "GO",
         "default_ref": "refs/remotes/origin/v53-integration",
         "manual_review_required": True,
         "packet_authorization": "unverified",
         "review_method": "manual_review",
-        "tag_prefix": "v53-wp2-v1-",
+        "tag_prefix": "v53-wp2-r2-v1-",
     }:
         raise VerificationError("local Git approval contract differs")
     freshness = require_object(gate["freshness"], "spec.local_gate_contract.freshness")
@@ -1565,10 +1597,9 @@ def validate_bound_documents(spec: dict[str, Any], objects: dict[str, bytes]) ->
     for token in (
         spec["contract_version"],
         spec["contract"]["required_state"],
-        spec["predecessor_commits"][0],
-        spec["predecessor_commits"][-1],
-        "Durable Store Substrate",
-        "F06",
+        "f60eec14da37b107a595f9f93e739a6c06bd6672",
+        "Durable Store",
+        "R2-R01",
         "CommitIndeterminate",
     ):
         if token not in contract:
@@ -2420,7 +2451,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"v53 WP2 verification failed: {error}", file=sys.stderr)
         return 1
     print(
-        f"v53 WP2 verified: packet={handoff['packet_id']} "
+        f"v53 WP2-R2 verified: packet={handoff['packet_id']} "
         f"implementation_base={handoff['implementation_base_sha']} "
         "integrity=verified authorization=unverified"
     )

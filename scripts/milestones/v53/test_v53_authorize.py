@@ -20,8 +20,8 @@ NOW = dt.datetime(2026, 8, 17, 12, 0, 0, tzinfo=dt.timezone.utc)
 APPROVED_AT = "2026-08-17T11:00:00Z"
 PACKET_GENERATED_AT = "2026-08-17T10:00:00Z"
 PACKET_EXPIRES_AT = "2026-08-18T12:00:00Z"
-PACKET_ID = "wp2-0123456789abcdef0123456789abcdef"
-CONTRACT_PATH = "docs/milestones/v53-wp2-checkpoint.md"
+PACKET_ID = "wp2-r2-0123456789abcdef0123456789abcdef"
+CONTRACT_PATH = "docs/milestones/v53-wp2-r2-checkpoint.md"
 ADR_PATH = "docs/adr/0008-execution-observation-store-substrate-v1.md"
 
 
@@ -61,7 +61,7 @@ def make_handoff(repo: Path, base: str) -> tuple[dict[str, object], dict[str, by
             "state": "unverified",
         },
         "bindings": bindings,
-        "contract_version": "plico.milestone.v53.wp2/1",
+        "contract_version": "plico.milestone.v53.wp2-r2/1",
         "expires_at_utc": PACKET_EXPIRES_AT,
         "generated_at_utc": PACKET_GENERATED_AT,
         "implementation_base_sha": base,

@@ -44,6 +44,10 @@ ADR-0008 adds a default-off, fixed `execution-observation-fixture-ledger` namesp
 `ExecutionObservationFixtureStorage` may claim it from an existing `Arc<PersonalVaultStorage>`; the generic
 immutable-ledger entrypoint rejects this namespace. The sealed handle exposes bounded object/pointer reads,
 bounded collision writes and dual-slot publish, but no host path, arbitrary namespace or unbounded inventory.
+Collision publication is a single `NOREPLACE` attempt followed, only for an existing winner, by a bounded
+read/compare; it never enters the generic ledger's pre-read or unbounded collision path.
+The sealed handle has no general `flush` capability: immutable publication and active-pointer publication own
+their durability boundaries, so an upper layer cannot create a redundant post-publish uncertainty window.
 Existing topology is validated exactly and is never chmod-repaired or completed. This is an internal WP2
 substrate, not a public API or a live execution-observation writer.
 

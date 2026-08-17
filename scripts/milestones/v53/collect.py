@@ -130,7 +130,7 @@ def collect(
         )
     expires = generated + dt.timedelta(seconds=ttl_seconds)
 
-    packet_id = f"wp2-{secrets.token_hex(16)}"
+    packet_id = f"wp2-r2-{secrets.token_hex(16)}"
     handoff: dict[str, object] = {
         "authorization": {
             "approval_path": spec["local_gate_contract"]["approval"]["approval_path"],
@@ -215,7 +215,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"v53 WP2 collection failed: {error}", file=sys.stderr)
         return 1
     print(
-        f"v53 WP2 collected: packet={handoff['packet_id']} "
+        f"v53 WP2-R2 collected: packet={handoff['packet_id']} "
         f"implementation_base={handoff['implementation_base_sha']} "
         "integrity=verified authorization=unverified"
     )

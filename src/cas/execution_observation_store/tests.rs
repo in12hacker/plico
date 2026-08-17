@@ -64,13 +64,89 @@ fn execution_observation_storage_bounds_collision_and_pre_exchange() {
     assert!(storage.publish_active(b"new").is_err());
     assert_eq!(storage.read_active_bounded(3).unwrap(), Some(b"old".to_vec()));
     assert_eq!(storage.read_candidate_bounded(3).unwrap(), Some(b"new".to_vec()));
-    storage.flush().expect("bounded storage flush");
-
     storage.inject_post_exchange_sync_failure_once();
     assert!(matches!(
         storage.publish_active(b"new"),
         Err(LedgerStorageError::PublishedButUnsynced(_))
     ));
+}
+
+#[test]
+fn execution_observation_collision_retry_never_uses_an_unbounded_read() {
+    let parent = tempfile::tempdir().expect("temporary parent");
+    let vault = Arc::new(PersonalVaultStorage::open(&parent.path().join("vault"), None).expect("vault"));
+    let storage = ExecutionObservationFixtureStorage::open(vault).expect("storage");
+    let hash = "c".repeat(64);
+
+    storage
+        .put_immutable_bounded(&hash, b"four", 4)
+        .expect("initial bounded put");
+    assert_eq!(
+        storage
+            .put_immutable_bounded(&hash, b"two", 3)
+            .expect_err("collision comparison remains bounded")
+            .kind(),
+        std::io::ErrorKind::InvalidData
+    );
+    assert_eq!(storage.get_immutable_bounded(&hash, 4).expect("unchanged"), b"four");
+}
+
+#[test]
+fn execution_observation_collision_is_injected_after_prepare_before_noclobber() {
+    let parent = tempfile::tempdir().expect("temporary parent");
+    let vault = Arc::new(PersonalVaultStorage::open(&parent.path().join("vault"), None).expect("vault"));
+    let storage = ExecutionObservationFixtureStorage::open(vault).expect("storage");
+    let hash = "e".repeat(64);
+
+    storage.inject_bounded_collision_before_noclobber_once(b"oversized");
+    assert_eq!(
+        storage
+            .put_immutable_bounded(&hash, b"x", 1)
+            .expect_err("injected collision must be reread through the bound")
+            .kind(),
+        std::io::ErrorKind::InvalidData
+    );
+    assert_eq!(
+        storage.get_immutable_bounded(&hash, 16).expect("injected winner"),
+        b"oversized"
+    );
+}
+
+#[test]
+fn execution_observation_concurrent_collision_has_one_atomic_winner() {
+    use std::sync::Barrier;
+
+    let parent = tempfile::tempdir().expect("temporary parent");
+    let vault = Arc::new(PersonalVaultStorage::open(&parent.path().join("vault"), None).expect("vault"));
+    let storage = Arc::new(ExecutionObservationFixtureStorage::open(vault).expect("storage"));
+    let barrier = Arc::new(Barrier::new(3));
+    let hash = "d".repeat(64);
+    let mut writers = Vec::new();
+    for bytes in [b"one".as_slice(), b"two".as_slice()] {
+        let storage = Arc::clone(&storage);
+        let barrier = Arc::clone(&barrier);
+        let hash = hash.clone();
+        writers.push(std::thread::spawn(move || {
+            barrier.wait();
+            storage.put_immutable_bounded(&hash, bytes, 3)
+        }));
+    }
+    barrier.wait();
+    let results: Vec<_> = writers
+        .into_iter()
+        .map(|writer| writer.join().expect("writer thread"))
+        .collect();
+    assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+    assert_eq!(
+        results
+            .iter()
+            .filter_map(|result| result.as_ref().err())
+            .filter(|error| error.kind() == std::io::ErrorKind::AlreadyExists)
+            .count(),
+        1
+    );
+    let stored = storage.get_immutable_bounded(&hash, 3).expect("winner bytes");
+    assert!(stored == b"one" || stored == b"two");
 }
 
 #[cfg(unix)]

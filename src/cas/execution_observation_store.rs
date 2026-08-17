@@ -30,23 +30,7 @@ impl ExecutionObservationFixtureStorage {
     }
 
     pub(crate) fn put_immutable_bounded(&self, hash: &str, bytes: &[u8], maximum_bytes: u64) -> std::io::Result<()> {
-        let byte_count = u64::try_from(bytes.len())
-            .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidInput, "object is too large"))?;
-        if byte_count > maximum_bytes {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "object exceeds bounded write limit",
-            ));
-        }
-        match self.inner.get_immutable_bounded(hash, maximum_bytes) {
-            Ok(existing) if existing == bytes => Ok(()),
-            Ok(_) => Err(std::io::Error::new(
-                std::io::ErrorKind::AlreadyExists,
-                "immutable object collision",
-            )),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => self.inner.put_immutable(hash, bytes),
-            Err(error) => Err(error),
-        }
+        self.inner.put_immutable_bounded(hash, bytes, maximum_bytes)
     }
 
     pub(crate) fn get_immutable_bounded(&self, hash: &str, maximum_bytes: u64) -> std::io::Result<Vec<u8>> {
@@ -69,10 +53,6 @@ impl ExecutionObservationFixtureStorage {
         self.inner.publish_active(pointer)
     }
 
-    pub(crate) fn flush(&self) -> std::io::Result<()> {
-        self.inner.flush()
-    }
-
     #[cfg(test)]
     pub(crate) fn inject_pre_exchange_failure_once(&self) {
         self.inner.inject_pre_exchange_failure_once();
@@ -81,6 +61,11 @@ impl ExecutionObservationFixtureStorage {
     #[cfg(test)]
     pub(crate) fn inject_post_exchange_sync_failure_once(&self) {
         self.inner.inject_post_exchange_sync_failure_once();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn inject_bounded_collision_before_noclobber_once(&self, bytes: &[u8]) {
+        self.inner.inject_bounded_collision_before_noclobber_once(bytes);
     }
 }
 

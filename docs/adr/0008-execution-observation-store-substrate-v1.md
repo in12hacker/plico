@@ -1,10 +1,11 @@
 # ADR-0008：Execution Observation Durable Store Substrate v1
 
-- 状态：Accepted（R1→WP2 architecture contract；implementation not started）
+- 状态：Accepted（R1→WP2 architecture contract；C2 R2 NO-GO；WP2-R2 remediation pending）
 - 日期：2026-08-17
 - 上位宪法：[Soul 3.1](../../system-v3.md)
 - 前置合同：[ADR-0007](./0007-execution-observation-ledger-v1.md)
-- 实施检查点：[v53 WP2 Store Checkpoint](../milestones/v53-wp2-checkpoint.md)
+- 实施检查点：原 [v53 WP2 Store Checkpoint](../milestones/v53-wp2-checkpoint.md)；现行
+  [WP2-R2 remediation checkpoint](../milestones/v53-wp2-r2-checkpoint.md)
 
 ## 决策
 
@@ -31,7 +32,6 @@ ExecutionObservationFixtureStorage
   read_candidate_bounded(maximum_bytes)
   list_immutable_hashes_bounded(maximum_entries)
   publish_active(pointer_bytes)
-  flush()
 ```
 
 - namespace 固定为 `ExecutionObservationFixture` / `execution-observation-fixture-ledger`；

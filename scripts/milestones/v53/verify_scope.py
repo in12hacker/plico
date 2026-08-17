@@ -251,7 +251,7 @@ WP2_EXTERNAL_TESTS = r"""
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Barrier};
 
 use crate::cas::execution_observation_store::ExecutionObservationFixtureStorage;
 use crate::cas::PersonalVaultStorage;
@@ -264,9 +264,9 @@ use super::hash::tests::{
     STARTED_SEGMENT_SHA, TERMINAL_ROOT_SHA,
 };
 use super::model::{
-    FixtureActivePointerV1, FixtureCurrentViewV1, FixtureLedgerRootV1,
-    ATTESTATION_STATE, CURRENT_VIEW_SCHEMA, POINTER_SCHEMA, ROOT_SCHEMA,
-    TRUST_CLASS,
+    FixtureActivePointerV1, FixtureCurrentViewV1, FixtureEventSegmentV1,
+    FixtureLedgerRootV1, ATTESTATION_STATE, CURRENT_VIEW_SCHEMA, POINTER_SCHEMA,
+    ROOT_SCHEMA, TRUST_CLASS,
 };
 use super::store::{
     FixtureObservationStoreV1, FixtureStoredEventV1, FixtureStructuralCommitV1,
@@ -319,6 +319,29 @@ fn terminal(chain: &GoldenChain) -> FixtureStructuralCommitV1 {
         segment: chain.terminal_segment.clone(),
         current_view: chain.terminal_view.clone(),
         root: chain.terminal_root.clone(),
+    }
+}
+
+fn alternate_started(chain: &GoldenChain) -> FixtureStructuralCommitV1 {
+    let mut event = chain.started_event.clone();
+    event.recorded_at_ms += 1;
+    let event_sha256 = hash::started_event_sha256(&event).expect("alternate event hash");
+    let mut segment = chain.started_segment.clone();
+    segment.event_sha256 = event_sha256.clone();
+    let segment_sha256 = hash::segment_sha256(&segment).expect("alternate segment hash");
+    let mut current_view = chain.open_view.clone();
+    current_view.attempts[0].started_event_sha256 = event_sha256;
+    let current_view_sha256 =
+        hash::current_view_sha256(&current_view).expect("alternate view hash");
+    let mut root = chain.started_root.clone();
+    root.event_segment_head_sha256 = Some(segment_sha256);
+    root.current_view_sha256 = current_view_sha256;
+    root.committed_at_ms += 1;
+    FixtureStructuralCommitV1 {
+        event: FixtureStoredEventV1::Started(event),
+        segment,
+        current_view,
+        root,
     }
 }
 
@@ -436,6 +459,149 @@ fn architecture_wp2_store_retries_only_recomputed_exact_genesis() {
         parse_canonical(&fs::read(active_path(&vault)).expect("active genesis"))
             .expect("parse active genesis");
     assert_eq!(active.root_sha256, GENESIS_ROOT_SHA);
+}
+
+#[test]
+fn architecture_wp2_store_rejects_alternate_self_consistent_genesis() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let vault = directory.path().join("vault");
+    let owner = Arc::new(PersonalVaultStorage::open(&vault, None).expect("vault"));
+    let storage = ExecutionObservationFixtureStorage::open(owner).expect("sealed storage");
+    let view = FixtureCurrentViewV1 {
+        schema: CURRENT_VIEW_SCHEMA.into(),
+        attestation_state: ATTESTATION_STATE.into(),
+        generation: 0,
+        event_watermark: 0,
+        attempts: Vec::new(),
+    };
+    let mut root = FixtureLedgerRootV1 {
+        schema: ROOT_SCHEMA.into(),
+        trust_class: TRUST_CLASS.into(),
+        generation: 0,
+        previous_root_sha256: None,
+        event_segment_head_sha256: None,
+        event_watermark: 0,
+        current_view_sha256: GENESIS_VIEW_SHA.into(),
+        committed_at_ms: 0,
+    };
+    root.committed_at_ms = 1;
+    let alternate_root_sha = hash::root_sha256(&root).expect("alternate root hash");
+    assert_ne!(alternate_root_sha, GENESIS_ROOT_SHA);
+    storage
+        .put_immutable_bounded(
+            GENESIS_VIEW_SHA,
+            &to_canonical_vec(&view).expect("genesis view"),
+            super::CURRENT_VIEW_MAX_BYTES as u64,
+        )
+        .expect("store genesis view");
+    storage
+        .put_immutable_bounded(
+            &alternate_root_sha,
+            &to_canonical_vec(&root).expect("alternate root"),
+            ROOT_MAX_BYTES as u64,
+        )
+        .expect("store alternate root");
+    let pointer = FixtureActivePointerV1 {
+        schema: POINTER_SCHEMA.into(),
+        root_sha256: alternate_root_sha,
+    };
+    storage
+        .publish_active(&to_canonical_vec(&pointer).expect("alternate pointer"))
+        .expect("publish alternate active");
+    drop(storage);
+    let owner = Arc::new(PersonalVaultStorage::open(&vault, None).expect("reopen vault"));
+    assert!(matches!(
+        FixtureObservationStoreV1::open_fixture(owner),
+        Err(ObservationStoreError::CorruptStore {
+            category: CorruptionCategory::BrokenRootChain,
+        }),
+    ));
+}
+
+#[test]
+fn architecture_wp2_store_serializes_barrier_sibling_commits_without_rollback() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let vault = directory.path().join("vault");
+    let chain = golden_chain();
+    let store = Arc::new(open(&vault));
+    let barrier = Arc::new(Barrier::new(3));
+    let sibling = alternate_started(&chain);
+    let sibling_root_sha = hash::root_sha256(&sibling.root).expect("sibling root hash");
+    let mut writers = Vec::new();
+    for commit in [started(&chain), sibling] {
+        let store = Arc::clone(&store);
+        let barrier = Arc::clone(&barrier);
+        writers.push(std::thread::spawn(move || {
+            barrier.wait();
+            store.commit_structural(commit)
+        }));
+    }
+    barrier.wait();
+    let results: Vec<_> = writers
+        .into_iter()
+        .map(|writer| writer.join().expect("writer thread"))
+        .collect();
+    let winners: Vec<_> = results.iter().filter_map(|result| result.as_ref().ok()).collect();
+    assert_eq!(winners.len(), 1);
+    let winner_root_sha = winners[0].root_sha256.clone();
+    assert!(winner_root_sha == STARTED_ROOT_SHA || winner_root_sha == sibling_root_sha);
+    assert_eq!(
+        store.structural_state().expect("authoritative state").root_sha256,
+        winner_root_sha,
+    );
+    drop(store);
+    assert_eq!(
+        open(&vault).structural_state().expect("reopen active").root_sha256,
+        winner_root_sha,
+    );
+}
+
+#[test]
+fn architecture_wp2_store_validates_persisted_reference_before_dereference() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let vault = directory.path().join("vault");
+    let chain = golden_chain();
+    let store = open(&vault);
+    store.commit_structural(started(&chain)).expect("started");
+    drop(store);
+    let mut segment: FixtureEventSegmentV1 = parse_canonical(
+        &fs::read(object_path(&vault, STARTED_SEGMENT_SHA)).expect("started segment"),
+    )
+    .expect("parse started segment");
+    segment.event_sha256 = "../roots/active".into();
+    let segment_sha = hash::segment_sha256(&segment).expect("raw stored segment hash");
+    fs::write(
+        object_path(&vault, &segment_sha),
+        to_canonical_vec(&segment).expect("invalid-reference segment"),
+    )
+    .expect("store invalid-reference segment");
+    let mut root: FixtureLedgerRootV1 = parse_canonical(
+        &fs::read(object_path(&vault, STARTED_ROOT_SHA)).expect("started root"),
+    )
+    .expect("parse started root");
+    root.event_segment_head_sha256 = Some(segment_sha);
+    let root_sha = hash::root_sha256(&root).expect("raw stored root hash");
+    fs::write(
+        object_path(&vault, &root_sha),
+        to_canonical_vec(&root).expect("invalid-reference root"),
+    )
+    .expect("store invalid-reference root");
+    let pointer = FixtureActivePointerV1 {
+        schema: POINTER_SCHEMA.into(),
+        root_sha256: root_sha,
+    };
+    fs::write(
+        active_path(&vault),
+        to_canonical_vec(&pointer).expect("active pointer"),
+    )
+    .expect("publish invalid-reference fixture");
+    let owner = Arc::new(PersonalVaultStorage::open(&vault, None).expect("reopen vault"));
+    assert!(matches!(
+        FixtureObservationStoreV1::open_fixture(owner),
+        Err(ObservationStoreError::CorruptStore {
+            category: CorruptionCategory::ObjectHashMismatch,
+        }),
+    ));
 }
 
 #[test]
@@ -603,7 +769,7 @@ fn architecture_wp2_store_maps_stored_schema_and_chain_failures_to_corruption() 
 }
 
 #[test]
-fn architecture_wp2_store_rejects_invalid_candidate_without_promotion() {
+fn architecture_wp2_store_rejects_noncanonical_candidate_without_promotion() {
     let directory = tempfile::tempdir().expect("tempdir");
     let vault = directory.path().join("vault");
     drop(open(&vault));
@@ -613,7 +779,7 @@ fn architecture_wp2_store_rejects_invalid_candidate_without_promotion() {
     assert!(matches!(
         FixtureObservationStoreV1::open_fixture(storage),
         Err(ObservationStoreError::CorruptStore {
-            category: CorruptionCategory::InvalidCandidateState,
+            category: CorruptionCategory::NoncanonicalPointer,
         }),
     ));
     assert_eq!(fs::read(active_path(&vault)).expect("active remains"), active);
@@ -649,32 +815,75 @@ fn architecture_wp2_cas_collision_read_is_bounded_and_nonmutating() {
     let owner = Arc::new(PersonalVaultStorage::open(&vault, None).expect("vault"));
     let storage = ExecutionObservationFixtureStorage::open(owner).expect("sealed storage");
     let hash = "a".repeat(64);
-    storage.put_immutable_bounded(&hash, b"x", 1).expect("first put");
-    fs::write(object_path(&vault, &hash), b"xx").expect("oversized collision fixture");
+    storage.inject_bounded_collision_before_noclobber_once(b"xx");
     assert_eq!(
         storage
             .put_immutable_bounded(&hash, b"x", 1)
-            .expect_err("bounded collision read")
+            .expect_err("collision injected after prepare must use bounded reread")
             .kind(),
         std::io::ErrorKind::InvalidData,
     );
     assert_eq!(fs::read(object_path(&vault, &hash)).expect("collision bytes"), b"xx");
 }
+
+#[test]
+fn architecture_wp2_cas_concurrent_collision_has_one_atomic_winner() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let vault = directory.path().join("vault");
+    let owner = Arc::new(PersonalVaultStorage::open(&vault, None).expect("vault"));
+    let storage = Arc::new(
+        ExecutionObservationFixtureStorage::open(owner).expect("sealed storage"),
+    );
+    let barrier = Arc::new(Barrier::new(3));
+    let hash = "d".repeat(64);
+    let mut writers = Vec::new();
+    for bytes in [b"one".as_slice(), b"two".as_slice()] {
+        let storage = Arc::clone(&storage);
+        let barrier = Arc::clone(&barrier);
+        let hash = hash.clone();
+        writers.push(std::thread::spawn(move || {
+            barrier.wait();
+            storage.put_immutable_bounded(&hash, bytes, 3)
+        }));
+    }
+    barrier.wait();
+    let results: Vec<_> = writers
+        .into_iter()
+        .map(|writer| writer.join().expect("writer thread"))
+        .collect();
+    assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+    assert_eq!(
+        results
+            .iter()
+            .filter_map(|result| result.as_ref().err())
+            .filter(|error| error.kind() == std::io::ErrorKind::AlreadyExists)
+            .count(),
+        1,
+    );
+    let stored = storage
+        .get_immutable_bounded(&hash, 3)
+        .expect("winner bytes");
+    assert!(stored == b"one" || stored == b"two");
+}
 """
 WP2_EXTERNAL_TEST_NAMES = {
+    "memory::execution_observation::architecture_wp2_store_tests::architecture_wp2_cas_concurrent_collision_has_one_atomic_winner",
     "memory::execution_observation::architecture_wp2_store_tests::architecture_wp2_cas_collision_read_is_bounded_and_nonmutating",
     "memory::execution_observation::architecture_wp2_store_tests::architecture_wp2_store_maps_stored_semantic_limit_to_corruption",
     "memory::execution_observation::architecture_wp2_store_tests::architecture_wp2_store_maps_stored_schema_and_chain_failures_to_corruption",
     "memory::execution_observation::architecture_wp2_store_tests::architecture_wp2_store_never_promotes_pre_exchange_candidate",
     "memory::execution_observation::architecture_wp2_store_tests::architecture_wp2_store_poison_follows_exchange_uncertainty",
-    "memory::execution_observation::architecture_wp2_store_tests::architecture_wp2_store_rejects_invalid_candidate_without_promotion",
+    "memory::execution_observation::architecture_wp2_store_tests::architecture_wp2_store_rejects_noncanonical_candidate_without_promotion",
     "memory::execution_observation::architecture_wp2_store_tests::architecture_wp2_store_rejects_non_private_topology_without_repair",
     "memory::execution_observation::architecture_wp2_store_tests::architecture_wp2_store_rejects_oversized_event_before_parse",
     "memory::execution_observation::architecture_wp2_store_tests::architecture_wp2_store_rejects_oversized_pointer_before_parse",
     "memory::execution_observation::architecture_wp2_store_tests::architecture_wp2_store_rejects_oversized_root_before_parse",
     "memory::execution_observation::architecture_wp2_store_tests::architecture_wp2_store_rejects_oversized_segment_before_parse",
     "memory::execution_observation::architecture_wp2_store_tests::architecture_wp2_store_rebuilds_structural_head_after_restart",
+    "memory::execution_observation::architecture_wp2_store_tests::architecture_wp2_store_rejects_alternate_self_consistent_genesis",
     "memory::execution_observation::architecture_wp2_store_tests::architecture_wp2_store_retries_only_recomputed_exact_genesis",
+    "memory::execution_observation::architecture_wp2_store_tests::architecture_wp2_store_serializes_barrier_sibling_commits_without_rollback",
+    "memory::execution_observation::architecture_wp2_store_tests::architecture_wp2_store_validates_persisted_reference_before_dereference",
 }
 LISTED_F_TEST = re.compile(
     r"(?m)^(?P<name>\S*execution_observation_f(?P<id>\d{2})_\S*): test$"
@@ -988,13 +1197,15 @@ def _validate_capability_path(
         "execution_observation_store",
         "ExecutionObservationFixtureStorage",
     )
-    frozen_cas_types = (
-        len(path) == 3
-        and path[1] == "cas"
-        and path[2]
-        in {"LedgerStorageError", "LedgerStorageOpenError", "PersonalVaultStorage"}
-    )
-    if root == "crate" and (sealed_cas_capability or frozen_cas_types):
+    personal_vault = path == (
+        "crate",
+        "cas",
+        "PersonalVaultStorage",
+    ) and source_path in {
+        "src/memory/execution_observation/store/mod.rs",
+        "src/memory/execution_observation/store/tests.rs",
+    }
+    if root == "crate" and (sealed_cas_capability or personal_vault):
         return
     if root == "crate":
         raise verify.VerificationError(
@@ -1004,6 +1215,13 @@ def _validate_capability_path(
         raise verify.VerificationError(
             f"unapproved dependency root {root!r}: {source_path}"
         )
+    if path[:3] in {("std", "io", "Error"), ("std", "io", "ErrorKind")}:
+        return
+    if (
+        path == ("std", "path", "Path")
+        and source_path == "src/memory/execution_observation/store/tests.rs"
+    ):
+        return
     if root in {"std", "core"}:
         if len(path) < 2 or path[1] not in PURE_STD_MODULES:
             raise verify.VerificationError(
@@ -1036,9 +1254,39 @@ def _count_token_sequence(tokens: list[str], sequence: list[str]) -> int:
     )
 
 
-def _scan_rust_tokens(path: str, text: str, *, observation: bool) -> list[str]:
-    tokens = _rust_tokens(text)
-    module_depths = _module_depths(path, tokens)
+def _static_issue(
+    check: str, code: str, message: str, *, path: str | None = None
+) -> dict[str, str]:
+    issue = {"check": check, "code": code, "message": message}
+    if path is not None:
+        issue["path"] = path
+    return issue
+
+
+def _raise_first_static_issue(issues: list[dict[str, str]]) -> None:
+    if issues:
+        raise verify.VerificationError(issues[0]["message"])
+
+
+def _collect_rust_token_issues(
+    path: str, text: str, *, observation: bool
+) -> tuple[list[str], list[dict[str, str]]]:
+    """Collect every independently decidable lexical/capability violation.
+
+    Formal scope verification and the packet-free developer preflight both
+    consume this collector.  Malformed token structure is terminal for this
+    one file because later path/visibility conclusions would not be sound.
+    """
+
+    issues: list[dict[str, str]] = []
+    try:
+        tokens = _rust_tokens(text)
+        module_depths = _module_depths(path, tokens)
+    except verify.VerificationError as error:
+        issues.append(
+            _static_issue("scanner", "malformed_rust_tokens", str(error), path=path)
+        )
+        return [], issues
     forbidden_macros = {
         "cfg",
         "env",
@@ -1049,28 +1297,61 @@ def _scan_rust_tokens(path: str, text: str, *, observation: bool) -> list[str]:
         "option_env",
     }
     use_ranges: set[int] = set()
-    imported_bindings: set[str] = set()
+    imported_bindings: set[str] = {
+        tokens[index + 1]
+        for index in range(len(tokens) - 1)
+        if tokens[index] == "mod" and _is_rust_identifier(tokens[index + 1])
+    }
+    imported_bindings.update(
+        tokens[index + 2]
+        for index in range(len(tokens) - 2)
+        if tokens[index : index + 2] == ["macro_rules", "!"]
+        and _is_rust_identifier(tokens[index + 2])
+    )
     if observation:
         for index, token in enumerate(tokens):
             if token != "use":
                 continue
             try:
                 statement_end = tokens.index(";", index + 1)
-            except ValueError as error:
-                raise verify.VerificationError(
-                    f"unterminated Rust use item: {path}"
-                ) from error
+            except ValueError:
+                issues.append(
+                    _static_issue(
+                        "scanner",
+                        "unterminated_use",
+                        f"unterminated Rust use item: {path}",
+                        path=path,
+                    )
+                )
+                continue
             use_ranges.update(range(index, statement_end + 1))
             statement = tokens[index + 1 : statement_end]
             if statement[:2] == ["::", "crate"]:
                 statement = statement[1:]
-            expanded = _expand_use_tree(statement)
-            for imported_path in expanded:
-                _validate_capability_path(
-                    imported_path,
-                    module_depth=module_depths[index],
-                    source_path=path,
+            try:
+                expanded = _expand_use_tree(statement)
+            except verify.VerificationError as error:
+                issues.append(
+                    _static_issue("scanner", "invalid_use", str(error), path=path)
                 )
+                continue
+            for imported_path in expanded:
+                if imported_path[0] not in imported_bindings:
+                    try:
+                        _validate_capability_path(
+                            imported_path,
+                            module_depth=module_depths[index],
+                            source_path=path,
+                        )
+                    except verify.VerificationError as error:
+                        issues.append(
+                            _static_issue(
+                                "scanner",
+                                "forbidden_capability",
+                                str(error),
+                                path=path,
+                            )
+                        )
                 binding = imported_path[-1]
                 if binding not in {"*", "self", "super"}:
                     imported_bindings.add(binding)
@@ -1080,11 +1361,24 @@ def _scan_rust_tokens(path: str, text: str, *, observation: bool) -> list[str]:
             and index + 1 < len(tokens)
             and tokens[index + 1] == "!"
         ):
-            raise verify.VerificationError(
-                f"macro/environment side door is forbidden: {path}"
+            issues.append(
+                _static_issue(
+                    "scanner",
+                    "macro_environment_side_door",
+                    f"macro/environment side door is forbidden: {path}",
+                    path=path,
+                )
             )
         if token == "#" and index + 1 < len(tokens) and tokens[index + 1] == "[":
-            end = _matching_token(tokens, index + 1, "[", "]")
+            try:
+                end = _matching_token(tokens, index + 1, "[", "]")
+            except verify.VerificationError as error:
+                issues.append(
+                    _static_issue(
+                        "scanner", "malformed_attribute", str(error), path=path
+                    )
+                )
+                continue
             attribute = tokens[index + 2 : end]
             if attribute and attribute[0] in {
                 "cfg",
@@ -1101,8 +1395,13 @@ def _scan_rust_tokens(path: str, text: str, *, observation: bool) -> list[str]:
                         ]
                     )
                 if attribute not in allowed_attributes:
-                    raise verify.VerificationError(
-                        f"conditional/path/macro attribute is forbidden: {path}"
+                    issues.append(
+                        _static_issue(
+                            "scanner",
+                            "forbidden_attribute",
+                            f"conditional/path/macro attribute is forbidden: {path}",
+                            path=path,
+                        )
                     )
         if not observation:
             continue
@@ -1113,34 +1412,75 @@ def _scan_rust_tokens(path: str, text: str, *, observation: bool) -> list[str]:
             and index + 1 < len(tokens)
             and tokens[index + 1] == "crate"
         ):
-            raise verify.VerificationError(
-                f"extern crate is forbidden in observation source: {path}"
+            issues.append(
+                _static_issue(
+                    "scanner",
+                    "extern_crate",
+                    f"extern crate is forbidden in observation source: {path}",
+                    path=path,
+                )
             )
         if token == "unsafe":
-            raise verify.VerificationError(f"unsafe code is forbidden: {path}")
+            issues.append(
+                _static_issue(
+                    "scanner",
+                    "unsafe_code",
+                    f"unsafe code is forbidden: {path}",
+                    path=path,
+                )
+            )
         if token in RUST_INTEGER_PATH_ROOTS and tokens[index + 1 : index + 3] == [
             "::",
             "MAX",
         ]:
-            raise verify.VerificationError(
-                f"unbounded {token}::MAX capability is forbidden: {path}"
+            issues.append(
+                _static_issue(
+                    "scanner",
+                    "unbounded_integer_max",
+                    f"unbounded {token}::MAX capability is forbidden: {path}",
+                    path=path,
+                )
             )
         if token == "pub":
             if index + 1 >= len(tokens) or tokens[index + 1] != "(":
-                raise verify.VerificationError(
-                    f"plain public export is forbidden in observation module: {path}"
+                issues.append(
+                    _static_issue(
+                        "scanner",
+                        "plain_public_export",
+                        f"plain public export is forbidden in observation module: {path}",
+                        path=path,
+                    )
                 )
-            end = _matching_token(tokens, index + 1, "(", ")")
+                continue
+            try:
+                end = _matching_token(tokens, index + 1, "(", ")")
+            except verify.VerificationError as error:
+                issues.append(
+                    _static_issue(
+                        "scanner", "malformed_visibility", str(error), path=path
+                    )
+                )
+                continue
             visibility = tokens[index + 2 : end]
             if visibility not in (["crate"], ["super"]):
-                raise verify.VerificationError(
-                    f"only pub(crate)/pub(super) visibility is allowed: {path}"
+                issues.append(
+                    _static_issue(
+                        "scanner",
+                        "forbidden_visibility",
+                        f"only pub(crate)/pub(super) visibility is allowed: {path}",
+                        path=path,
+                    )
                 )
             if path.startswith(
                 "src/memory/execution_observation/store/"
             ) and visibility != ["super"]:
-                raise verify.VerificationError(
-                    f"WP2 store visibility must remain pub(super): {path}"
+                issues.append(
+                    _static_issue(
+                        "scanner",
+                        "store_visibility_escape",
+                        f"WP2 store visibility must remain pub(super): {path}",
+                        path=path,
+                    )
                 )
         if not _is_rust_identifier(token) or index + 1 >= len(tokens):
             continue
@@ -1160,11 +1500,23 @@ def _scan_rust_tokens(path: str, text: str, *, observation: bool) -> list[str]:
         root = qualified[0]
         if root in imported_bindings or root in RUST_PRIMITIVE_PATH_ROOTS:
             continue
-        _validate_capability_path(
-            qualified,
-            module_depth=module_depths[index],
-            source_path=path,
-        )
+        try:
+            _validate_capability_path(
+                qualified,
+                module_depth=module_depths[index],
+                source_path=path,
+            )
+        except verify.VerificationError as error:
+            issues.append(
+                _static_issue("scanner", "forbidden_capability", str(error), path=path)
+            )
+
+    return tokens, issues
+
+
+def _scan_rust_tokens(path: str, text: str, *, observation: bool) -> list[str]:
+    tokens, issues = _collect_rust_token_issues(path, text, observation=observation)
+    _raise_first_static_issue(issues)
 
     return tokens
 
@@ -1196,27 +1548,48 @@ def _verify_wp1_memory_module_anchor(repo: Path, base: str, candidate: str) -> N
         )
 
 
-def _verify_wp2_module_anchor(repo: Path, base: str, candidate: str) -> None:
-    """Permit only the checkpoint-frozen private observation-store activation."""
+def _collect_wp2_module_anchor_issues(
+    repo: Path, base: str, candidate: str
+) -> list[dict[str, str]]:
+    """Collect violations of the one-line private store activation."""
 
+    issues: list[dict[str, str]] = []
     memory_path = "src/memory/execution_observation/mod.rs"
     _, _, memory_base = verify.git_object(repo, base, memory_path)
     _, _, memory_candidate = verify.git_object(repo, candidate, memory_path)
     anchor_after = b"pub(crate) mod model;\n"
     store_anchor = b"mod store;\n"
     if memory_base.count(anchor_after) != 1 or store_anchor in memory_base:
-        raise verify.VerificationError(
-            "WP2 observation base cannot accept the frozen private store anchor"
+        issues.append(
+            _static_issue(
+                "anchor",
+                "base_anchor_ineligible",
+                "WP2 observation base cannot accept the frozen private store anchor",
+                path=memory_path,
+            )
         )
+        return issues
     memory_expected = memory_base.replace(
         anchor_after,
         anchor_after + store_anchor,
         1,
     )
     if memory_candidate != memory_expected:
-        raise verify.VerificationError(
-            "WP2 observation mod.rs differs from the exact private store anchor"
+        issues.append(
+            _static_issue(
+                "anchor",
+                "anchor_diff_mismatch",
+                "WP2 observation mod.rs differs from the exact private store anchor",
+                path=memory_path,
+            )
         )
+    return issues
+
+
+def _verify_wp2_module_anchor(repo: Path, base: str, candidate: str) -> None:
+    """Permit only the checkpoint-frozen private observation-store activation."""
+
+    _raise_first_static_issue(_collect_wp2_module_anchor_issues(repo, base, candidate))
 
 
 @contextmanager
@@ -1909,26 +2282,50 @@ def _candidate_files(repo: Path, candidate: str) -> dict[str, bytes]:
     return result
 
 
-def _scan_observation_source(
+def _collect_observation_source_issues(
     path: str,
     data: bytes,
     *,
     maximum_bytes: int,
     maximum_lines_exclusive: int,
-) -> None:
+) -> list[dict[str, str]]:
+    issues: list[dict[str, str]] = []
     if len(data) > maximum_bytes:
-        raise verify.VerificationError(f"observation source exceeds byte limit: {path}")
+        issues.append(
+            _static_issue(
+                "scanner",
+                "source_byte_limit",
+                f"observation source exceeds byte limit: {path}",
+                path=path,
+            )
+        )
     try:
         text = data.decode("utf-8", errors="strict")
-    except UnicodeDecodeError as error:
-        raise verify.VerificationError(
-            f"observation Rust source is not UTF-8: {path}"
-        ) from error
-    if len(text.splitlines()) >= maximum_lines_exclusive:
-        raise verify.VerificationError(
-            f"observation source must remain below 300 lines: {path}"
+    except UnicodeDecodeError:
+        issues.append(
+            _static_issue(
+                "scanner",
+                "source_not_utf8",
+                f"observation Rust source is not UTF-8: {path}",
+                path=path,
+            )
         )
-    _scan_rust_tokens(path, text, observation=True)
+        return issues
+    if len(text.splitlines()) >= maximum_lines_exclusive:
+        issues.append(
+            _static_issue(
+                "scanner",
+                "source_line_limit",
+                f"observation source must remain below 300 lines: {path}",
+                path=path,
+            )
+        )
+    token_stream, token_issues = _collect_rust_token_issues(
+        path, text, observation=True
+    )
+    issues.extend(token_issues)
+    if not token_stream:
+        return issues
     if path.startswith("src/memory/execution_observation/store/"):
         deferred = {
             "append_started",
@@ -1944,10 +2341,14 @@ def _scan_observation_source(
         tokens = set(_rust_tokens(text))
         used = deferred & tokens
         if used:
-            raise verify.VerificationError(
-                f"WP3 facade/receipt symbol is forbidden in WP2: {path}"
+            issues.append(
+                _static_issue(
+                    "scanner",
+                    "deferred_wp3_symbol",
+                    f"WP3 facade/receipt symbol is forbidden in WP2: {path}",
+                    path=path,
+                )
             )
-        token_stream = _rust_tokens(text)
         if path != "src/memory/execution_observation/store/tests.rs":
             forbidden_output_macros = {
                 "dbg",
@@ -1961,8 +2362,13 @@ def _scan_observation_source(
             }
             for index, token in enumerate(token_stream[:-1]):
                 if token in forbidden_output_macros and token_stream[index + 1] == "!":
-                    raise verify.VerificationError(
-                        f"production output/panic macro is forbidden in WP2: {path}"
+                    issues.append(
+                        _static_issue(
+                            "scanner",
+                            "production_output_macro",
+                            f"production output/panic macro is forbidden in WP2: {path}",
+                            path=path,
+                        )
                     )
         for index, token in enumerate(token_stream):
             if token != "PersonalVaultStorage":
@@ -1974,25 +2380,89 @@ def _scan_observation_source(
                 token_stream[cursor : cursor + 3] == ["::", "open", "("]
                 and path != "src/memory/execution_observation/store/tests.rs"
             ):
-                raise verify.VerificationError(
-                    f"WP2 production store may not open a second vault: {path}"
+                issues.append(
+                    _static_issue(
+                        "scanner",
+                        "second_vault_open",
+                        f"WP2 production store may not open a second vault: {path}",
+                        path=path,
+                    )
                 )
+        if path == "src/memory/execution_observation/store/publisher.rs":
+            flush_calls = _count_token_sequence(
+                token_stream, ["storage", ".", "flush", "("]
+            )
+            for _ in range(flush_calls):
+                issues.append(
+                    _static_issue(
+                        "scanner",
+                        "redundant_post_publish_flush",
+                        "WP2 publisher may not call storage.flush(); the sealed CAS publish is already the durability boundary",
+                        path=path,
+                    )
+                )
+    return issues
 
 
-def _verify_wp2_store_surface(candidate_files: dict[str, bytes]) -> None:
-    """Enforce the ADR-0008 seam as a closed crate-private declaration set."""
-
-    production_sources = "\n".join(
-        data.decode("utf-8", errors="strict")
-        for path, data in sorted(candidate_files.items())
-        if path.startswith("src/memory/execution_observation/store/")
-        and path != "src/memory/execution_observation/store/tests.rs"
+def _scan_observation_source(
+    path: str,
+    data: bytes,
+    *,
+    maximum_bytes: int,
+    maximum_lines_exclusive: int,
+) -> None:
+    _raise_first_static_issue(
+        _collect_observation_source_issues(
+            path,
+            data,
+            maximum_bytes=maximum_bytes,
+            maximum_lines_exclusive=maximum_lines_exclusive,
+        )
     )
-    sources = "\n".join(
-        data.decode("utf-8", errors="strict")
-        for path, data in sorted(candidate_files.items())
-        if path.startswith("src/memory/execution_observation/store/")
-    )
+
+
+def _collect_wp2_store_surface_issues(
+    candidate_files: dict[str, bytes],
+) -> list[dict[str, str]]:
+    """Collect the exact ADR-0008 seam exported by store/mod.rs."""
+
+    issues: list[dict[str, str]] = []
+    module_path = "src/memory/execution_observation/store/mod.rs"
+    module_bytes = candidate_files.get(module_path)
+    if module_bytes is None:
+        return [
+            _static_issue(
+                "surface",
+                "missing_store_module",
+                "WP2 store module is absent",
+                path=module_path,
+            )
+        ]
+    try:
+        module_source = module_bytes.decode("utf-8", errors="strict")
+    except UnicodeDecodeError:
+        return [
+            _static_issue(
+                "surface",
+                "store_module_not_utf8",
+                "WP2 store module is not UTF-8",
+                path=module_path,
+            )
+        ]
+
+    production_parts: list[str] = []
+    for path, data in sorted(candidate_files.items()):
+        if not path.startswith("src/memory/execution_observation/store/") or path == (
+            "src/memory/execution_observation/store/tests.rs"
+        ):
+            continue
+        try:
+            production_parts.append(data.decode("utf-8", errors="strict"))
+        except UnicodeDecodeError:
+            # The per-file scanner owns this violation; surface conclusions
+            # continue over every decodable committed source.
+            continue
+    production_sources = "\n".join(production_parts)
     expected_types = {
         "FixtureObservationStoreV1",
         "FixtureStoredEventV1",
@@ -2018,30 +2488,51 @@ def _verify_wp2_store_surface(candidate_files: dict[str, bytes]) -> None:
     types = set(
         re.findall(
             r"pub\s*\(\s*super\s*\)\s*(?:enum|struct)\s+([A-Za-z_][A-Za-z0-9_]*)",
-            sources,
+            module_source,
         )
     )
     methods = set(
         re.findall(
             r"pub\s*\(\s*super\s*\)\s*fn\s+([A-Za-z_][A-Za-z0-9_]*)",
-            sources,
+            module_source,
         )
     )
     fields = set(
         re.findall(
             r"pub\s*\(\s*super\s*\)\s*([a-z_][A-Za-z0-9_]*)\s*:",
-            sources,
+            module_source,
         )
     )
-    surface_tokens = _rust_tokens(sources)
-    production_tokens = _rust_tokens(production_sources)
+    try:
+        surface_tokens = _rust_tokens(module_source)
+        production_tokens = _rust_tokens(production_sources)
+    except verify.VerificationError as error:
+        issues.append(
+            _static_issue(
+                "surface",
+                "surface_tokens_malformed",
+                f"WP2 surface cannot be tokenized: {error}",
+                path=module_path,
+            )
+        )
+        return issues
     if production_tokens.count("PersonalVaultStorage") != 2:
-        raise verify.VerificationError(
-            "PersonalVaultStorage may appear only in the frozen import and Arc parameter"
+        issues.append(
+            _static_issue(
+                "surface",
+                "personal_vault_cardinality",
+                "PersonalVaultStorage may appear only in the frozen import and Arc parameter",
+                path=module_path,
+            )
         )
     if production_tokens.count("vault") != 2:
-        raise verify.VerificationError(
-            "open_fixture vault may only be declared and consumed by the sealed CAS opener"
+        issues.append(
+            _static_issue(
+                "surface",
+                "vault_consumption_cardinality",
+                "open_fixture vault may only be declared and consumed by the sealed CAS opener",
+                path=module_path,
+            )
         )
     signature = ["vault", ":", "Arc", "<", "PersonalVaultStorage", ">"]
     delegation = [
@@ -2056,8 +2547,13 @@ def _verify_wp2_store_surface(candidate_files: dict[str, bytes]) -> None:
         _count_token_sequence(production_tokens, signature) != 1
         or _count_token_sequence(production_tokens, delegation) != 1
     ):
-        raise verify.VerificationError(
-            "open_fixture must consume its vault exactly once through the sealed CAS opener"
+        issues.append(
+            _static_issue(
+                "surface",
+                "sealed_opener_delegation",
+                "open_fixture must consume its vault exactly once through the sealed CAS opener",
+                path=module_path,
+            )
         )
     enum_starts = [
         index
@@ -2065,27 +2561,49 @@ def _verify_wp2_store_surface(candidate_files: dict[str, bytes]) -> None:
         if surface_tokens[index : index + 2] == ["enum", "FixtureStoredEventV1"]
     ]
     if len(enum_starts) != 1 or surface_tokens[enum_starts[0] + 2] != "{":
-        raise verify.VerificationError(
-            "FixtureStoredEventV1 declaration differs from ADR-0008"
+        issues.append(
+            _static_issue(
+                "surface",
+                "stored_event_declaration",
+                "FixtureStoredEventV1 declaration differs from ADR-0008",
+                path=module_path,
+            )
         )
-    enum_end = _matching_token(surface_tokens, enum_starts[0] + 2, "{", "}")
-    enum_body = surface_tokens[enum_starts[0] + 3 : enum_end]
-    if enum_body and enum_body[-1] == ",":
-        enum_body = enum_body[:-1]
-    if enum_body != [
-        "Started",
-        "(",
-        "StoredStartedEventV1",
-        ")",
-        ",",
-        "Terminal",
-        "(",
-        "StoredTerminalEventV1",
-        ")",
-    ]:
-        raise verify.VerificationError(
-            "FixtureStoredEventV1 variants differ from ADR-0008"
-        )
+    else:
+        try:
+            enum_end = _matching_token(surface_tokens, enum_starts[0] + 2, "{", "}")
+        except verify.VerificationError as error:
+            issues.append(
+                _static_issue(
+                    "surface",
+                    "stored_event_group_malformed",
+                    f"FixtureStoredEventV1 token group is malformed: {error}",
+                    path=module_path,
+                )
+            )
+            return issues
+        enum_body = surface_tokens[enum_starts[0] + 3 : enum_end]
+        if enum_body and enum_body[-1] == ",":
+            enum_body = enum_body[:-1]
+        if enum_body != [
+            "Started",
+            "(",
+            "StoredStartedEventV1",
+            ")",
+            ",",
+            "Terminal",
+            "(",
+            "StoredTerminalEventV1",
+            ")",
+        ]:
+            issues.append(
+                _static_issue(
+                    "surface",
+                    "stored_event_variants",
+                    "FixtureStoredEventV1 variants differ from ADR-0008",
+                    path=module_path,
+                )
+            )
     cfg_test_prefix = [
         "#",
         "[",
@@ -2114,18 +2632,230 @@ def _verify_wp2_store_surface(candidate_files: dict[str, bytes]) -> None:
             or surface_tokens[occurrences[0] - len(cfg_test_prefix) : occurrences[0]]
             != cfg_test_prefix
         ):
-            raise verify.VerificationError(
-                f"WP2 fault seam must remain cfg(test): {method}"
+            issues.append(
+                _static_issue(
+                    "surface",
+                    "fault_seam_cfg_test",
+                    f"WP2 fault seam must remain cfg(test): {method}",
+                    path=module_path,
+                )
             )
     if (
         types != expected_types
         or methods != expected_methods
         or fields != expected_fields
-        or len(re.findall(r"pub\s*\(\s*super\s*\)", sources)) != 16
+        or len(re.findall(r"pub\s*\(\s*super\s*\)", module_source)) != 16
     ):
-        raise verify.VerificationError(
-            "WP2 store crate-private surface differs from the frozen ADR-0008 seam"
+        issues.append(
+            _static_issue(
+                "surface",
+                "store_seam_mismatch",
+                "WP2 store crate-private surface differs from the frozen ADR-0008 seam",
+                path=module_path,
+            )
         )
+
+    reexports = re.findall(
+        r"pub\s*\(\s*super\s*\)\s*use\s+([A-Za-z_][A-Za-z0-9_]*)",
+        module_source,
+    )
+    for name in reexports:
+        issues.append(
+            _static_issue(
+                "surface",
+                "store_module_reexport",
+                f"WP2 store/mod.rs may not add pub(super) re-export: {name}",
+                path=module_path,
+            )
+        )
+
+    return issues
+
+
+def _verify_wp2_store_surface(candidate_files: dict[str, bytes]) -> None:
+    """Enforce only the ADR-0008 seam exposed by store/mod.rs."""
+
+    _raise_first_static_issue(_collect_wp2_store_surface_issues(candidate_files))
+
+
+def collect_wp2_static_evidence(
+    repo: Path,
+    base: str,
+    candidate: str,
+    scope: dict[str, object],
+) -> dict[str, object]:
+    """Collect the complete packet-independent WP2 static evidence set.
+
+    This function reads committed Git objects only.  It intentionally performs
+    no authorization, packet, toolchain, build, test, or coverage work.
+    """
+
+    issues: list[dict[str, str]] = []
+    raw = verify.run_git(
+        repo,
+        ["diff", "--name-status", "-z", "--no-renames", base, candidate, "--"],
+    )
+    changes = _parse_name_status(raw)
+    work_package_scope = scope["work_packages"]["WP2"]
+    expected_status = {
+        path: ("M" if path == "src/memory/execution_observation/mod.rs" else "A")
+        for path in work_package_scope["allowed_exact"]
+    }
+    observed = {path: status for status, path in changes}
+    if not changes:
+        issues.append(
+            _static_issue(
+                "exact_diff", "empty_diff", "candidate has no implementation diff"
+            )
+        )
+    architecture_owned = set(scope["architecture_owned"])
+    for status, path in changes:
+        if status not in {"A", "M"}:
+            issues.append(
+                _static_issue(
+                    "exact_diff",
+                    "forbidden_change_kind",
+                    f"delete/type/merge change is forbidden: {status} {path}",
+                    path=path,
+                )
+            )
+            continue
+        if path in architecture_owned:
+            issues.append(
+                _static_issue(
+                    "exact_diff",
+                    "architecture_owned_change",
+                    f"architecture-owned file changed: {path}",
+                    path=path,
+                )
+            )
+        if path in scope["forbidden_exact"] or any(
+            path.startswith(prefix) for prefix in scope["forbidden_prefixes"]
+        ):
+            issues.append(
+                _static_issue(
+                    "exact_diff",
+                    "forbidden_path_change",
+                    f"forbidden path changed: {path}",
+                    path=path,
+                )
+            )
+        if not _is_allowed(path, work_package_scope):
+            issues.append(
+                _static_issue(
+                    "exact_diff",
+                    "outside_allowlist",
+                    f"path is outside the frozen WP2 developer allowlist: {path}",
+                    path=path,
+                )
+            )
+        expected = expected_status.get(path)
+        if expected is not None and status != expected:
+            issues.append(
+                _static_issue(
+                    "exact_diff",
+                    "unexpected_change_kind",
+                    f"WP2 exact diff requires {expected} for {path}, observed {status}",
+                    path=path,
+                )
+            )
+        mode, _, data = verify.git_object(repo, candidate, path)
+        if mode != "100644":
+            issues.append(
+                _static_issue(
+                    "exact_diff",
+                    "developer_file_mode",
+                    f"developer file mode must remain 100644: {path}",
+                    path=path,
+                )
+            )
+        if path.endswith(".rs") and not path.startswith(
+            "src/memory/execution_observation/store/"
+        ):
+            try:
+                rust_text = data.decode("utf-8", errors="strict")
+            except UnicodeDecodeError:
+                issues.append(
+                    _static_issue(
+                        "exact_diff",
+                        "changed_rust_not_utf8",
+                        f"changed Rust source is not UTF-8: {path}",
+                        path=path,
+                    )
+                )
+            else:
+                _, rust_issues = _collect_rust_token_issues(
+                    path, rust_text, observation=False
+                )
+                issues.extend(rust_issues)
+    for path, status in sorted(expected_status.items()):
+        if path not in observed:
+            issues.append(
+                _static_issue(
+                    "exact_diff",
+                    "missing_exact_change",
+                    f"WP2 exact diff is missing required {status} path: {path}",
+                    path=path,
+                )
+            )
+
+    anchor_issues = _collect_wp2_module_anchor_issues(repo, base, candidate)
+    issues.extend(anchor_issues)
+    candidate_files = _candidate_files(repo, candidate)
+    scanner_files: list[dict[str, object]] = []
+    observation_sources = {
+        path: data
+        for path, data in candidate_files.items()
+        if path.startswith("src/memory/execution_observation/store/")
+    }
+    if not observation_sources:
+        issues.append(
+            _static_issue(
+                "scanner",
+                "missing_observation_source",
+                "candidate has no observation module Rust source",
+            )
+        )
+    for path, data in sorted(observation_sources.items()):
+        file_issues = _collect_observation_source_issues(
+            path,
+            data,
+            maximum_bytes=scope["observation_file_max_bytes"],
+            maximum_lines_exclusive=scope["observation_file_max_lines_exclusive"],
+        )
+        issues.extend(file_issues)
+        scanner_files.append(
+            {
+                "issue_count": len(file_issues),
+                "path": path,
+                "status": "PASS" if not file_issues else "FAIL",
+            }
+        )
+    surface_issues = _collect_wp2_store_surface_issues(candidate_files)
+    issues.extend(surface_issues)
+    counts = {
+        check: sum(issue["check"] == check for issue in issues)
+        for check in ("exact_diff", "anchor", "scanner", "surface")
+    }
+    return {
+        "base": base,
+        "candidate": candidate,
+        "changed_paths": [{"path": path, "status": status} for status, path in changes],
+        "checks": {
+            "anchor": {"issue_count": counts["anchor"]},
+            "exact_diff": {
+                "allowed_exact": list(work_package_scope["allowed_exact"]),
+                "issue_count": counts["exact_diff"],
+            },
+            "exact_surface": {"issue_count": counts["surface"]},
+            "scanner": {
+                "files": scanner_files,
+                "issue_count": counts["scanner"],
+            },
+        },
+        "issue_count": len(issues),
+        "issues": issues,
+    }
 
 
 def _read_lcov(path: Path, repo: Path) -> dict[str, dict[int, int]]:
@@ -2847,24 +3577,6 @@ def _run_wp2_archive_gate(
         candidate_files = _verified_candidate_files_from_checkout(
             candidate_checkout, object_files
         )
-        observation_sources = {
-            path: data
-            for path, data in candidate_files.items()
-            if path.startswith("src/memory/execution_observation/store/")
-        }
-        if not observation_sources:
-            raise verify.VerificationError(
-                "candidate has no observation module Rust source"
-            )
-        for path, data in observation_sources.items():
-            _scan_observation_source(
-                path,
-                data,
-                maximum_bytes=scope["observation_file_max_bytes"],
-                maximum_lines_exclusive=scope["observation_file_max_lines_exclusive"],
-            )
-        _verify_wp2_store_surface(candidate_files)
-
         declarations: dict[str, int] = {f"F{index:02d}": 0 for index in range(1, 17)}
         total_tests = 0
         for path, data in candidate_files.items():
@@ -3200,13 +3912,6 @@ def _verify_scope_sanitized(
         raise verify.VerificationError("unexpected merge-base output")
     _check_repo_checkout(repo, candidate, require_clean)
 
-    raw = verify.run_git(
-        repo,
-        ["diff", "--name-status", "-z", "--no-renames", base, candidate, "--"],
-    )
-    changes = _parse_name_status(raw)
-    if not changes:
-        raise verify.VerificationError("candidate has no implementation diff")
     scope = handoff["spec"]["developer_scope"]
     if scope["active_work_package"] != work_package:
         raise verify.VerificationError(
@@ -3217,37 +3922,8 @@ def _verify_scope_sanitized(
         raise verify.VerificationError(
             "requested work package has no packet-frozen developer allowlist"
         )
-    architecture_owned = set(scope["architecture_owned"])
-    for status, path in changes:
-        if status not in {"A", "M"}:
-            raise verify.VerificationError(
-                f"delete/type/merge change is forbidden: {status} {path}"
-            )
-        if path in architecture_owned:
-            raise verify.VerificationError(f"architecture-owned file changed: {path}")
-        if path in scope["forbidden_exact"] or any(
-            path.startswith(prefix) for prefix in scope["forbidden_prefixes"]
-        ):
-            raise verify.VerificationError(f"forbidden path changed: {path}")
-        if not _is_allowed(path, work_package_scope):
-            raise verify.VerificationError(
-                f"path is outside the frozen {work_package} developer allowlist: {path}"
-            )
-        mode, _, data = verify.git_object(repo, candidate, path)
-        if mode != "100644":
-            raise verify.VerificationError(
-                f"developer file mode must remain 100644: {path}"
-            )
-        if path.endswith(".rs"):
-            try:
-                rust_text = data.decode("utf-8", errors="strict")
-            except UnicodeDecodeError as error:
-                raise verify.VerificationError(
-                    f"changed Rust source is not UTF-8: {path}"
-                ) from error
-            _scan_rust_tokens(path, rust_text, observation=False)
-
-    _verify_wp2_module_anchor(repo, base, candidate)
+    static_evidence = collect_wp2_static_evidence(repo, base, candidate, scope)
+    _raise_first_static_issue(static_evidence["issues"])
 
     candidate_files, candidate_self_evidence, external_evidence = _run_wp2_archive_gate(
         repo,
@@ -3292,7 +3968,7 @@ def _verify_scope_sanitized(
         "authorization_source": authorization["authorization_source"],
         "base": base,
         "candidate": candidate,
-        "changed_paths": len(changes),
+        "changed_paths": len(static_evidence["changed_paths"]),
         "coverage": coverage_result,
         "candidate_self_evidence_f_tests": candidate_self_evidence,
         "external_architecture_corpus": external_evidence,

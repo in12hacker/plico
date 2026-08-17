@@ -1,5 +1,11 @@
 # v53 第三方开发交接：WP2 Durable Store Substrate
 
+> **R2 审查通知（2026-08-17）**：基于本页原 A2 提交的 C2 `f60eec1` 已被独立对抗审查判定为
+> **NO-GO**。立即停止在旧 A2/C2 上继续开发或进入 WP3；等待架构组按
+> [WP2-R2 checkpoint](./v53-wp2-r2-checkpoint.md) 发布新的 architecture freeze、approval SHA 与 exact scope。
+> 新的开工步骤只见 [WP2-R2 developer handoff](./v53-wp2-r2-developer-handoff.md)。
+> [WP3 blueprint](./v53-wp3-blueprint.md) 是 Draft/Blocked，不构成开工授权。
+
 本页是 `plico.milestone.v53.wp2/1` 的开发组唯一入口。它只授权
 [ADR-0008](../adr/0008-execution-observation-store-substrate-v1.md) 与
 [WP2 checkpoint](./v53-wp2-checkpoint.md) 的 durable substrate，不授权 WP3 facade/replay。

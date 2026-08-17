@@ -64,6 +64,8 @@ pub(crate) struct ImmutableLedgerStorage {
     fail_pre_exchange_once: std::sync::atomic::AtomicBool,
     #[cfg(test)]
     fail_post_exchange_sync_once: std::sync::atomic::AtomicBool,
+    #[cfg(test)]
+    bounded_collision_before_noclobber_once: std::sync::Mutex<Option<Vec<u8>>>,
 }
 
 /// Borrowed, read-only view of an existing projection tree. It cannot escape
@@ -446,6 +448,8 @@ pub(super) fn open_immutable_ledger_directory(
         fail_pre_exchange_once: std::sync::atomic::AtomicBool::new(false),
         #[cfg(test)]
         fail_post_exchange_sync_once: std::sync::atomic::AtomicBool::new(false),
+        #[cfg(test)]
+        bounded_collision_before_noclobber_once: std::sync::Mutex::new(None),
     })
 }
 
@@ -460,6 +464,35 @@ pub(super) fn open_existing_immutable_ledger(
 impl ImmutableLedgerStorage {
     pub(crate) fn put_immutable(&self, hash: &str, bytes: &[u8]) -> std::io::Result<()> {
         put_immutable_at(&self.objects_directory, hash, bytes)
+    }
+
+    /// Atomically installs one size-bounded immutable object.  A concurrent
+    /// winner is compared through the same bound; this method never falls
+    /// back to the legacy unbounded collision path.
+    pub(super) fn put_immutable_bounded(&self, hash: &str, bytes: &[u8], maximum_bytes: u64) -> std::io::Result<()> {
+        #[cfg(test)]
+        if let Some(collision_bytes) = self
+            .bounded_collision_before_noclobber_once
+            .lock()
+            .map_err(|_| std::io::Error::other("bounded collision injector is poisoned"))?
+            .take()
+        {
+            let (target, temporary) = prepare_immutable_bounded(&self.objects_directory, hash, bytes, maximum_bytes)?;
+            let mut collision = create_private_file(&target)?;
+            collision.write_all(&collision_bytes)?;
+            collision.sync_all()?;
+            sync_directory(&self.objects_directory)?;
+            return persist_immutable_bounded(&self.objects_directory, &target, temporary, bytes, maximum_bytes);
+        }
+        put_immutable_bounded_at(&self.objects_directory, hash, bytes, maximum_bytes)
+    }
+
+    #[cfg(test)]
+    pub(super) fn inject_bounded_collision_before_noclobber_once(&self, bytes: &[u8]) {
+        *self
+            .bounded_collision_before_noclobber_once
+            .lock()
+            .expect("bounded collision injector lock") = Some(bytes.to_vec());
     }
 
     pub(crate) fn get_immutable(&self, hash: &str) -> std::io::Result<Vec<u8>> {
@@ -1057,6 +1090,75 @@ pub(super) fn put_immutable_at(directory: &Path, hash: &str, bytes: &[u8]) -> st
     temporary.persist_noclobber(target).map_err(|error| error.error)?;
     set_file_mode(&directory.join(hash))?;
     sync_directory(directory)
+}
+
+/// Bounded, no-clobber immutable publication for sealed capabilities.
+///
+/// Unlike [`put_immutable_at`], this deliberately does not pre-read the
+/// destination.  The filesystem chooses the winner atomically; if another
+/// writer won, only a bounded read may establish an identical retry.
+pub(super) fn put_immutable_bounded_at(
+    directory: &Path,
+    hash: &str,
+    bytes: &[u8],
+    maximum_bytes: u64,
+) -> std::io::Result<()> {
+    let (target, temporary) = prepare_immutable_bounded(directory, hash, bytes, maximum_bytes)?;
+    persist_immutable_bounded(directory, &target, temporary, bytes, maximum_bytes)
+}
+
+fn prepare_immutable_bounded(
+    directory: &Path,
+    hash: &str,
+    bytes: &[u8],
+    maximum_bytes: u64,
+) -> std::io::Result<(PathBuf, NamedTempFile)> {
+    validate_hash(hash)?;
+    let byte_count = u64::try_from(bytes.len())
+        .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidInput, "object is too large"))?;
+    if byte_count > maximum_bytes {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "object exceeds bounded write limit",
+        ));
+    }
+
+    let target = directory.join(hash);
+    let mut temporary = NamedTempFile::new_in(directory)?;
+    temporary.write_all(bytes)?;
+    temporary.as_file().sync_all()?;
+    Ok((target, temporary))
+}
+
+fn persist_immutable_bounded(
+    directory: &Path,
+    target: &Path,
+    temporary: NamedTempFile,
+    bytes: &[u8],
+    maximum_bytes: u64,
+) -> std::io::Result<()> {
+    match temporary.persist_noclobber(target) {
+        Ok(_) => {
+            set_file_mode(target)?;
+            sync_directory(directory)
+        }
+        Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => {
+            let existing = read_private_file_bounded(target, maximum_bytes)?;
+            if existing == bytes {
+                // A previous writer may have installed these bytes but failed
+                // while syncing the directory.  A byte-identical retry must
+                // re-establish that durability boundary before reporting
+                // success.
+                sync_directory(directory)
+            } else {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::AlreadyExists,
+                    "immutable object collision",
+                ))
+            }
+        }
+        Err(error) => Err(error.error),
+    }
 }
 
 pub(super) fn get_immutable_at(directory: &Path, hash: &str) -> std::io::Result<Vec<u8>> {

@@ -1,9 +1,12 @@
 # v53 验收摘要：Execution Observation Ledger Core
 
-**状态**：R1 Model/Hash accepted / WP2 architecture freeze in progress / R2 not started
+**状态**：R1 Model/Hash accepted / C2 `f60eec1` R2 NO-GO / WP2.1 remediation required / WP3 blocked
 **合同**：[v53-execution-observation-spine.md](./v53-execution-observation-spine.md)
 **WP1 历史交接**：[v53-developer-handoff.md](./v53-developer-handoff.md)
 **WP2 当前交接**：[v53-wp2-developer-handoff.md](./v53-wp2-developer-handoff.md)
+**WP2-R2 纠偏**：[v53-wp2-r2-checkpoint.md](./v53-wp2-r2-checkpoint.md)
+**WP2-R2 开发交接**：[v53-wp2-r2-developer-handoff.md](./v53-wp2-r2-developer-handoff.md)
+**WP3 蓝图**：[v53-wp3-blueprint.md](./v53-wp3-blueprint.md)（Draft / blocked on R2）
 **产品基线**：`fe4c08260fc3e6dc0e3d37921b863a7ed48a330a`
 
 > 本文件只由 Plico 架构/验收组填写；R0 冻结项可在开发开工前记录，其余项只在候选提交与独立证据完整后填写。
@@ -13,9 +16,10 @@
 
 - Architecture-Frozen：✅（R0 v2 packet + approval `eb23261084b2b7a38a40540ecfffd3cb327c54fa`）
 - Implementation-Candidate：✅（R1 candidate `5584b8e7b48247e503d9054bb3b3227c64c7ad94`）
-- WP2-Architecture-Frozen：⬜（由 WP2 packet + approval-only A2/tag 动态确定）
+- WP2-Architecture-Frozen：✅（B2 `189f5cf` + A2 `8eb70d7`；只授权原 WP2 candidate scope）
+- WP2-Candidate：❌ C2 `f60eec1` 对抗审查 NO-GO；不得作为 WP3 base
 - Evidence-Complete：⬜
-- Final decision：`PENDING`
+- R2 decision：`NO-GO / REMEDIATION REQUIRED`
 
 ## 2. 冻结身份
 
@@ -33,7 +37,8 @@
 | R1 independent corpus | verifier `9a44c91fec3c870e6a9d8272379da9b748d183bc`；source SHA-256 `7a7dde3e55044fb8566cffb659e3c3d8c8c68950a50172075dac802031629eca`；WP6 sealed bundle 仍 PENDING |
 | R0 packet collector/verifier version | `plico.v53.r0-spec/v2` / `plico.v53.r0-handoff/v2`；v1 已撤销、不得复用 |
 | WP2 checkpoint contract | `plico.milestone.v53.wp2/1`；ADR-0008；旧 R0 packet/A1 不授权 WP2 |
-| R0 packet integrity / Git authorization | verified / GO（程序性、unsigned；限制仍按合同）；WP2 packet/authorization PENDING |
+| WP2 architecture base | B2 `189f5cf` / A2 `8eb70d7` / C2 `f60eec1`（R2 NO-GO） |
+| R0/WP2 authorization | 两者均只代表对应 scope 的程序性 Git 授权；不把 C2 自测升级为 R2 GO |
 
 ## 3. 不变量验收
 
@@ -71,8 +76,8 @@
 |---|---|---|---|
 | R0 Constitution/ADR | Plico architecture + independent QA/red-team | GO | packet v2 + approval/tag 离线验证 |
 | R1 Model/Hash | Plico architecture + data-integrity/red-team review | GO | candidate `5584b8e`; 33/33 targeted; repaired scope PASS |
-| R2 Store Substrate | PENDING | PENDING | fixed namespace、bounded CAS capability、structural commit、F06；不含 facade/receipt |
-| R3 View/Identity boundary | PENDING | PENDING | |
+| R2 Store Substrate | Architecture + storage/security red-team | NO-GO | C2 `f60eec1`；七项根因见 [WP2-R2 checkpoint](./v53-wp2-r2-checkpoint.md) |
+| R3 View/Identity boundary | BLOCKED | NOT STARTED | [WP3 blueprint](./v53-wp3-blueprint.md) 仅为 Draft，不是冻结/授权 |
 | R4 Fault/Admitted boundary | PENDING | PENDING | |
 | R5 Adversarial QA | PENDING | PENDING | |
 | R6 Final alignment | PENDING | PENDING | |

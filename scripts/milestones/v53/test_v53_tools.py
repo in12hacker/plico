@@ -8,6 +8,7 @@ import csv
 import datetime as dt
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -17,6 +18,7 @@ from pathlib import Path
 from unittest import mock
 
 import authorize
+import developer_preflight
 import verify
 import verify_scope
 
@@ -103,7 +105,7 @@ def make_packet(root: Path, repo: Path, spec: dict[str, object], base: str) -> P
                 "sha256": verify.sha256_bytes(data),
             }
         )
-    packet_id = "wp2-0123456789abcdef0123456789abcdef"
+    packet_id = "wp2-r2-0123456789abcdef0123456789abcdef"
     generated = dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
     expires = generated + dt.timedelta(hours=1)
     handoff = {
@@ -239,6 +241,24 @@ class V53ToolTests(unittest.TestCase):
         spec["predecessor_commits"][0] = "0" * 40
         with self.assertRaisesRegex(verify.VerificationError, "predecessor"):
             verify.validate_spec(spec)
+
+        old_wp2 = verify.strict_json_loads(
+            subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    os.fspath(REPO),
+                    "show",
+                    "8eb70d7f72a5fbbfd85c308234b561af2e22f676:"
+                    "scripts/milestones/v53/wp2_spec.json",
+                ],
+                check=True,
+                stdout=subprocess.PIPE,
+            ).stdout,
+            "old_wp2_spec",
+        )
+        with self.assertRaisesRegex(verify.VerificationError, "schema|key mismatch"):
+            verify.validate_spec(old_wp2)
 
     def test_valid_packet_and_git_bindings(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -757,11 +777,11 @@ class V53ToolTests(unittest.TestCase):
         )
 
     def test_wp2_store_scanner_allows_sealed_cas_but_rejects_second_open(self) -> None:
-        path = "src/memory/execution_observation/store/loader.rs"
+        path = "src/memory/execution_observation/store/mod.rs"
         verify_scope._scan_observation_source(
             path,
             b"use std::sync::Arc;\n"
-            b"use super::super::model::FixtureLedgerRootV1;\n"
+            b"use super::model::FixtureLedgerRootV1;\n"
             b"use crate::cas::execution_observation_store::ExecutionObservationFixtureStorage;\n"
             b"use crate::cas::PersonalVaultStorage;\n"
             b"fn open(v: Arc<PersonalVaultStorage>) { let _ = ExecutionObservationFixtureStorage::open(v); }\n",
@@ -784,6 +804,7 @@ class V53ToolTests(unittest.TestCase):
                 maximum_bytes=65_536,
                 maximum_lines_exclusive=300,
             )
+        path = "src/memory/execution_observation/store/loader.rs"
         with self.assertRaisesRegex(verify.VerificationError, "usize::MAX"):
             verify_scope._scan_observation_source(
                 path,
@@ -841,6 +862,62 @@ class V53ToolTests(unittest.TestCase):
         self.assertIn(
             "use crate::cas::execution_observation_store::ExecutionObservationFixtureStorage;",
             verify_scope.WP2_EXTERNAL_TESTS,
+        )
+
+    def test_wp2_static_scanner_aggregates_shared_rules(self) -> None:
+        path = "src/memory/execution_observation/store/mod.rs"
+        source = b"""
+use std::io;
+use crate::cas::ledger_store::{LedgerStorageOpenError, PersonalVaultStorage};
+macro_rules! first { () => {} }
+macro_rules! second { () => {} }
+#[cfg(any(test, debug_assertions))]
+fn narration() { println!("leak"); }
+"""
+        issues = verify_scope._collect_observation_source_issues(
+            path,
+            source,
+            maximum_bytes=65_536,
+            maximum_lines_exclusive=300,
+        )
+        codes = [issue["code"] for issue in issues]
+        self.assertEqual(codes.count("macro_environment_side_door"), 2)
+        self.assertIn("forbidden_attribute", codes)
+        self.assertIn("production_output_macro", codes)
+        self.assertGreaterEqual(codes.count("forbidden_capability"), 2)
+        with self.assertRaisesRegex(
+            verify.VerificationError, re.escape(issues[0]["message"])
+        ):
+            verify_scope._scan_observation_source(
+                path,
+                source,
+                maximum_bytes=65_536,
+                maximum_lines_exclusive=300,
+            )
+
+        precise_io = b"use std::io::{Error, ErrorKind};\nfn f(_: Error) { let _ = ErrorKind::InvalidData; }\n"
+        verify_scope._scan_observation_source(
+            "src/memory/execution_observation/store/loader.rs",
+            precise_io,
+            maximum_bytes=65_536,
+            maximum_lines_exclusive=300,
+        )
+        with self.assertRaisesRegex(verify.VerificationError, "non-pure std"):
+            verify_scope._scan_observation_source(
+                "src/memory/execution_observation/store/loader.rs",
+                b"use std::io;\n",
+                maximum_bytes=65_536,
+                maximum_lines_exclusive=300,
+            )
+        flush_issues = verify_scope._collect_observation_source_issues(
+            "src/memory/execution_observation/store/publisher.rs",
+            b"fn publish(storage: &Storage) { storage.flush(); }\n",
+            maximum_bytes=65_536,
+            maximum_lines_exclusive=300,
+        )
+        self.assertIn(
+            "redundant_post_publish_flush",
+            {issue["code"] for issue in flush_issues},
         )
 
     def test_wp2_surface_freezes_enum_and_test_only_fault_seams(self) -> None:
@@ -910,6 +987,115 @@ impl FixtureObservationStoreV1 {
             verify_scope._verify_wp2_store_surface(
                 {"src/memory/execution_observation/store/mod.rs": vault_escape}
             )
+
+        reexport = valid + b"pub(super) use backdoor;\n"
+        reexport_issues = verify_scope._collect_wp2_store_surface_issues(
+            {"src/memory/execution_observation/store/mod.rs": reexport}
+        )
+        self.assertIn(
+            "store_module_reexport", {issue["code"] for issue in reexport_issues}
+        )
+        verify_scope._scan_observation_source(
+            "src/memory/execution_observation/store/loader.rs",
+            b"pub(super) fn internal_helper() {}\n",
+            maximum_bytes=65_536,
+            maximum_lines_exclusive=300,
+        )
+        for escaped in (b"pub(crate) fn escaped() {}\n", b"pub fn escaped() {}\n"):
+            with self.assertRaises(verify.VerificationError):
+                verify_scope._scan_observation_source(
+                    "src/memory/execution_observation/store/loader.rs",
+                    escaped,
+                    maximum_bytes=65_536,
+                    maximum_lines_exclusive=300,
+                )
+
+    def test_wp2_r2_preflight_is_non_authorizing_and_oracle_matches_spec(self) -> None:
+        spec = frozen_spec()
+        self.assertEqual(
+            spec["accepted_adr"]["required_status"],
+            "- 状态：Accepted（R1→WP2 architecture contract；C2 R2 NO-GO；"
+            "WP2-R2 remediation pending）",
+        )
+        preflight = spec["developer_self_preflight"]
+        self.assertTrue(preflight["self_evidence_only"])
+        self.assertEqual(preflight["authorization"], "unverified")
+        self.assertFalse(preflight["gate_eligible"])
+        self.assertEqual(preflight["schema"], developer_preflight.SCHEMA)
+        self.assertIn(
+            "docs/milestones/v53-wp2-approval.json",
+            spec["required_bindings"],
+        )
+        self.assertIn(
+            "docs/milestones/v53-wp2-r2-approval.json",
+            spec["developer_scope"]["architecture_owned"],
+        )
+        self.assertNotIn(
+            "docs/milestones/v53-wp2-r2-approval.json",
+            spec["required_bindings"],
+        )
+        self.assertIn(
+            "malformed-slot-pointer=CorruptStore.noncanonical_pointer",
+            spec["state_machine"]["dual_slot"],
+        )
+        self.assertIn(
+            "all-other-valid-pointer-relations=CorruptStore.invalid_candidate_state",
+            spec["state_machine"]["dual_slot"],
+        )
+        self.assertIn(
+            "active-chain-alternate-g0=CorruptStore.broken_root_chain",
+            spec["state_machine"]["dual_slot"],
+        )
+        adr = (REPO / "docs/adr/0007-execution-observation-ledger-v1.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("noncanonical_pointer", adr)
+        self.assertIn("invalid_candidate_state", adr)
+        self.assertIn(
+            "memory::execution_observation::architecture_wp2_store_tests::architecture_wp2_store_rejects_noncanonical_candidate_without_promotion",
+            verify_scope.WP2_EXTERNAL_TEST_NAMES,
+        )
+        self.assertIn(
+            "category: CorruptionCategory::NoncanonicalPointer",
+            verify_scope.WP2_EXTERNAL_TESTS,
+        )
+        self.assertEqual(len(verify_scope.WP2_EXTERNAL_TEST_NAMES), 17)
+        declared_wp2 = {
+            "memory::execution_observation::architecture_wp2_store_tests::" + name
+            for name in re.findall(
+                r"(?m)^fn\s+(architecture_wp2_[A-Za-z0-9_]+)\s*\(",
+                verify_scope.WP2_EXTERNAL_TESTS,
+            )
+        }
+        self.assertEqual(declared_wp2, verify_scope.WP2_EXTERNAL_TEST_NAMES)
+        for frozen_name in (
+            "architecture_wp2_store_rejects_alternate_self_consistent_genesis",
+            "architecture_wp2_store_serializes_barrier_sibling_commits_without_rollback",
+            "architecture_wp2_store_validates_persisted_reference_before_dereference",
+            "architecture_wp2_cas_concurrent_collision_has_one_atomic_winner",
+        ):
+            self.assertTrue(
+                any(
+                    name.endswith(frozen_name)
+                    for name in verify_scope.WP2_EXTERNAL_TEST_NAMES
+                )
+            )
+        with tempfile.TemporaryDirectory() as temporary:
+            repo, _, base = make_repo(Path(temporary))
+            result = developer_preflight.run_preflight(
+                repo,
+                base_revision=base,
+                candidate_revision=base,
+                require_clean=True,
+            )
+        self.assertTrue(result["self_evidence_only"])
+        self.assertEqual(result["authorization"], "unverified")
+        self.assertFalse(result["gate_eligible"])
+        self.assertEqual(result["status"], "FAIL")
+        self.assertIn(
+            "empty_diff",
+            {issue["code"] for issue in result["static_evidence"]["issues"]},
+        )
 
     def test_wp1_memory_anchor_rejects_live_hook_and_public_reexport(self) -> None:
         candidates = {

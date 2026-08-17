@@ -2,7 +2,8 @@
 
 **日期**：2026-08-17
 **合同版本**：`plico.milestone.v53.wp2/1`
-**状态**：Architecture Freeze Candidate / WP2 implementation not started
+**状态**：Historical B2/A2 freeze / C2 R2 NO-GO / superseded for new work by
+[WP2-R2 checkpoint](./v53-wp2-r2-checkpoint.md)
 **前置接纳**：R1 candidate `5584b8e7b48247e503d9054bb3b3227c64c7ad94`
 **架构接纳记录**：`98de9bd2fa4eb6c6f2dbbb7171ba762124144104`
 **实施方**：第三方开发组

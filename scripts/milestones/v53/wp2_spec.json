@@ -10,7 +10,7 @@
       "CommitIndeterminate",
       "F06"
     ],
-    "required_status": "- 状态：Accepted（R1→WP2 architecture contract；implementation not started）"
+    "required_status": "- 状态：Accepted（R1→WP2 architecture contract；C2 R2 NO-GO；WP2-R2 remediation pending）"
   },
   "collection_semantics": {
     "context_evidence_cids": "ordered-list/reject-duplicates/preserve-order",
@@ -50,11 +50,11 @@
     ]
   },
   "contract": {
-    "path": "docs/milestones/v53-wp2-checkpoint.md",
+    "path": "docs/milestones/v53-wp2-r2-checkpoint.md",
     "required_state": "Architecture Freeze Candidate / WP2 implementation not started",
-    "version": "plico.milestone.v53.wp2/1"
+    "version": "plico.milestone.v53.wp2-r2/1"
   },
-  "contract_version": "plico.milestone.v53.wp2/1",
+  "contract_version": "plico.milestone.v53.wp2-r2/1",
   "coverage_contract": {
     "baseline_global": {
       "executable_lines": 63776,
@@ -90,10 +90,14 @@
       "docs/milestones/v53-wp2-approval.json",
       "docs/milestones/v53-wp2-checkpoint.md",
       "docs/milestones/v53-wp2-developer-handoff.md",
+      "docs/milestones/v53-wp2-r2-approval.json",
+      "docs/milestones/v53-wp2-r2-checkpoint.md",
+      "docs/milestones/v53-wp2-r2-developer-handoff.md",
       "docs/plans/next-era-verified-experience.md",
       "rust-toolchain.toml",
       "scripts/milestones/v53/authorize.py",
       "scripts/milestones/v53/collect.py",
+      "scripts/milestones/v53/developer_preflight.py",
       "scripts/milestones/v53/r0_spec.json",
       "scripts/milestones/v53/test_v53_authorize.py",
       "scripts/milestones/v53/test_v53_tools.py",
@@ -161,6 +165,13 @@
         "allowed_prefixes": []
       }
     }
+  },
+  "developer_self_preflight": {
+    "authorization": "unverified",
+    "command": "python3 -B scripts/milestones/v53/developer_preflight.py --repo <CHECKOUT> --base <A3_COMMIT> --candidate HEAD --require-clean",
+    "gate_eligible": false,
+    "schema": "plico.v53.wp2-r2-developer-self-preflight/v1",
+    "self_evidence_only": true
   },
   "error_taxonomy": {
     "corrupt_store": [
@@ -508,12 +519,16 @@
     "docs/milestones/v53-execution-observation-spine.md",
     "docs/milestones/v53-r0-approval.json",
     "docs/milestones/v53-summary.md",
+    "docs/milestones/v53-wp2-approval.json",
     "docs/milestones/v53-wp2-checkpoint.md",
     "docs/milestones/v53-wp2-developer-handoff.md",
+    "docs/milestones/v53-wp2-r2-checkpoint.md",
+    "docs/milestones/v53-wp2-r2-developer-handoff.md",
     "docs/plans/next-era-verified-experience.md",
     "rust-toolchain.toml",
     "scripts/milestones/v53/authorize.py",
     "scripts/milestones/v53/collect.py",
+    "scripts/milestones/v53/developer_preflight.py",
     "scripts/milestones/v53/r0_spec.json",
     "scripts/milestones/v53/test_v53_authorize.py",
     "scripts/milestones/v53/test_v53_tools.py",
@@ -526,7 +541,7 @@
     "src/cas/ledger_store.rs",
     "src/cas/mod.rs"
   ],
-  "schema": "plico.v53.wp2-spec/v1",
+  "schema": "plico.v53.wp2-r2-spec/v1",
   "state_machine": {
     "absent": [
       "append-started->open"
@@ -548,7 +563,9 @@
       "P(G0)/E=accepted-genesis",
       "P(Rn)/P(Rn-1)=accepted-active-with-direct-parent",
       "P(Rn)/P(Rn+1)=accepted-active-with-unpromoted-direct-child",
-      "all-other-states=CorruptStore.invalid_candidate_state"
+      "malformed-slot-pointer=CorruptStore.noncanonical_pointer",
+      "active-chain-alternate-g0=CorruptStore.broken_root_chain",
+      "all-other-valid-pointer-relations=CorruptStore.invalid_candidate_state"
     ]
   },
   "test_contract": {
@@ -747,14 +764,14 @@
   },
   "local_gate_contract": {
     "approval": {
-      "approval_path": "docs/milestones/v53-wp2-approval.json",
+      "approval_path": "docs/milestones/v53-wp2-r2-approval.json",
       "attestation": "unsigned_repository_control",
       "decision": "GO",
       "default_ref": "refs/remotes/origin/v53-integration",
       "manual_review_required": true,
       "packet_authorization": "unverified",
       "review_method": "manual_review",
-      "tag_prefix": "v53-wp2-v1-"
+      "tag_prefix": "v53-wp2-r2-v1-"
     },
     "authorized_work_package": "WP2",
     "execution": "local_only",
@@ -805,6 +822,8 @@
     "5584b8e7b48247e503d9054bb3b3227c64c7ad94",
     "2c42b42dac601c9bb6f91ee7db019bf77012a017",
     "9a44c91fec3c870e6a9d8272379da9b748d183bc",
-    "98de9bd2fa4eb6c6f2dbbb7171ba762124144104"
+    "98de9bd2fa4eb6c6f2dbbb7171ba762124144104",
+    "189f5cffa969903c0e4ec3259848b1405e924587",
+    "8eb70d7f72a5fbbfd85c308234b561af2e22f676"
   ]
 }
