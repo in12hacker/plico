@@ -33,6 +33,16 @@ fn jcs_error() -> ObservationStoreError {
     }
 }
 
+/// Canonical size cap: oversize objects are rejected by measuring the JCS
+/// encoding itself (ADR-0007 §5 — must fail before any immutable write).
+pub(crate) fn check_object_bytes<T: Serialize>(value: &T, maximum_bytes: usize) -> Result<(), ObservationStoreError> {
+    if to_canonical_vec(value)?.len() > maximum_bytes {
+        Err(ObservationStoreError::limit(super::error::LimitCategory::ObjectBytes))
+    } else {
+        Ok(())
+    }
+}
+
 // serde's internally-tagged enums do not enforce `deny_unknown_fields`, so the
 // two tagged enums get hand-rolled strict deserializers here: a flat
 // `deny_unknown_fields` wire struct plus explicit field-combination checks.
@@ -175,5 +185,110 @@ mod tests {
         let missing_elapsed = terminal_text.replacen("\"execution_elapsed_ms\":null,", "", 1);
         assert!(parse_canonical::<AppendTerminalRequestV1>(missing_elapsed.as_bytes()).is_err());
         flow("data.canonical nullable execution_elapsed_ms missing -> reject");
+    }
+
+    #[test]
+    fn execution_observation_f13_field_level_typed_rejects() {
+        use super::super::error::InvalidRequestCategory::{
+            DuplicateCid, InvalidAttestation, InvalidCid, InvalidDigest, UnsafeInteger, UnsupportedSchema,
+        };
+        use super::super::hash::tests::{golden_started_request, golden_terminal_request, hex64};
+        use super::super::model::{STARTED_EVENT_SCHEMA, STARTED_REQUEST_SCHEMA};
+        use super::super::tests::{err, golden_chain};
+        use super::super::validation::{
+            validate_monotonic_record, validate_started_request, validate_terminal_request, JSON_SAFE_INTEGER_MAX,
+        };
+
+        let mut request = golden_started_request();
+        validate_started_request(&request).expect("golden request is valid");
+        request.input_evidence_cids = vec![hex64('0'), hex64('0')];
+        assert_eq!(validate_started_request(&request), Err(err(DuplicateCid)));
+        request.input_evidence_cids = vec!["A".repeat(64)];
+        assert_eq!(validate_started_request(&request), Err(err(InvalidCid)));
+
+        request = golden_started_request();
+        request.schema = format!("{STARTED_REQUEST_SCHEMA}-v2");
+        assert_eq!(validate_started_request(&request), Err(err(UnsupportedSchema)));
+        request = golden_started_request();
+        request.operation_contract_sha256 = format!("{}\u{1}", "a".repeat(63));
+        assert_eq!(validate_started_request(&request), Err(err(InvalidDigest)));
+        request.attestation_state = "trusted".to_string();
+        assert_eq!(validate_started_request(&request), Err(err(InvalidAttestation)));
+
+        let mut terminal = golden_terminal_request();
+        terminal.execution_elapsed_ms = Some(JSON_SAFE_INTEGER_MAX);
+        validate_terminal_request(&terminal).expect("2^53-1 is json-safe");
+        terminal.execution_elapsed_ms = Some(JSON_SAFE_INTEGER_MAX + 1);
+        assert_eq!(validate_terminal_request(&terminal), Err(err(UnsafeInteger)));
+
+        let mut event = golden_chain().started_event;
+        event.schema = format!("{STARTED_EVENT_SCHEMA}-v2");
+        assert_eq!(
+            event.validate(),
+            Err(ObservationStoreError::corrupt(
+                super::super::error::CorruptionCategory::UnsupportedStoredSchema
+            ))
+        );
+
+        assert_eq!(validate_monotonic_record(100, 99), Err(err(UnsafeInteger)));
+        validate_monotonic_record(99, 100).unwrap();
+        validate_monotonic_record(100, 100).unwrap();
+    }
+
+    #[test]
+    fn execution_observation_counterexample_modified_started_with_stale_hash() {
+        use super::super::error::TransitionConflictCategory;
+        use super::super::hash;
+        use super::super::hash::tests::{flow, golden_started_request, hex64};
+        use super::super::tests::attempt_view;
+        use super::super::validation::validate_started_request;
+        use super::super::validation::validate_started_transition;
+
+        // The view binds the original Started; a caller that modified the body
+        // must not pass as an idempotent retry, whatever digest it claims.
+        let view = attempt_view(false);
+        let mut modified = golden_started_request();
+        modified.input_evidence_cids = vec![hex64('7')];
+        validate_started_request(&modified).expect("modified request itself is valid");
+        let modified_hash = hash::started_request_sha256(&modified).unwrap();
+        assert_ne!(modified_hash, view.started_request_sha256);
+        assert_eq!(
+            validate_started_transition(&modified, Some(&view)),
+            Err(ObservationStoreError::conflict(
+                TransitionConflictCategory::StartedAlreadyBound
+            ))
+        );
+        flow("counterexample modified-started + stale view hash -> started_already_bound (hash recomputed from body)");
+    }
+
+    #[test]
+    fn execution_observation_counterexample_modified_terminal_with_stale_hash() {
+        use super::super::error::TransitionConflictCategory;
+        use super::super::hash::tests::{flow, golden_started_request, golden_terminal_request};
+        use super::super::ids::TerminalOutcomeV1;
+        use super::super::tests::attempt_view;
+        use super::super::validation::validate_terminal_request;
+        use super::super::validation::validate_terminal_transition;
+
+        let view = attempt_view(true);
+        let started = golden_started_request();
+        let mut modified = golden_terminal_request();
+        modified.outcome = TerminalOutcomeV1::Success;
+        validate_terminal_request(&modified).expect("modified request itself is valid");
+        assert_eq!(
+            validate_terminal_transition(&modified, Some(&view), Some(&started)),
+            Err(ObservationStoreError::conflict(
+                TransitionConflictCategory::TerminalAlreadyBound
+            ))
+        );
+        // rebind fields are checked before idempotency even on a bound view
+        modified.policy_sha256 = "d".repeat(64);
+        assert_eq!(
+            validate_terminal_transition(&modified, Some(&view), Some(&started)),
+            Err(ObservationStoreError::conflict(
+                TransitionConflictCategory::TerminalPolicyRebind
+            ))
+        );
+        flow("counterexample modified-terminal + stale view hash -> already_bound / policy_rebind before idempotency");
     }
 }

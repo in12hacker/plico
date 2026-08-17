@@ -6,6 +6,8 @@
 
 use std::fmt;
 
+use super::ids::FailureCategoryV1;
+
 /// Typed store error. The I/O fault variants (`StorageUnavailable`,
 /// `NamespaceAlreadyClaimed`, `CommitIndeterminate`, `Poisoned`) are frozen here as
 /// part of the v1 contract; the pure WP1 core only ever produces the four
@@ -192,6 +194,24 @@ impl fmt::Display for CorruptionCategory {
     }
 }
 
+/// Closed failure-category wire set (ADR-0007 §4): unknown strings are typed
+/// rejects; there is no `unknown` or free-text category.
+pub(crate) fn validate_failure_category(value: &str) -> Result<FailureCategoryV1, ObservationStoreError> {
+    match value {
+        "invalid_input" => Ok(FailureCategoryV1::InvalidInput),
+        "policy_denied" => Ok(FailureCategoryV1::PolicyDenied),
+        "dependency_unavailable" => Ok(FailureCategoryV1::DependencyUnavailable),
+        "executor_rejected" => Ok(FailureCategoryV1::ExecutorRejected),
+        "executor_failed" => Ok(FailureCategoryV1::ExecutorFailed),
+        "executor_panicked" => Ok(FailureCategoryV1::ExecutorPanicked),
+        "tool_failed" => Ok(FailureCategoryV1::ToolFailed),
+        "internal" => Ok(FailureCategoryV1::Internal),
+        _ => Err(ObservationStoreError::invalid(
+            InvalidRequestCategory::InvalidFailureCategory,
+        )),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -233,7 +253,6 @@ mod tests {
     #[test]
     fn execution_observation_error_failure_category_closed_set() {
         use super::super::hash::tests::flow;
-        use super::super::validation::validate_failure_category;
 
         for wire in [
             "invalid_input",

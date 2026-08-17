@@ -1,10 +1,10 @@
-//! WP1 self-tests: F-matrix F10/F13 strict rejects, typed rejections, limits, pure transitions.
+//! WP1 self-tests: F-matrix F10/F13 strict rejects, pure transitions, and key
+//! counterexamples (field-level F13 and stale-hash counterexamples live in
+//! `canonical.rs`; limits/boundaries in `validation.rs`; golden digests in
+//! `hash.rs`).
 
 use super::canonical::{parse_canonical, to_canonical_vec};
-use super::error::InvalidRequestCategory::{
-    DuplicateCid, InvalidAttestation, InvalidCid, InvalidDigest, JcsCanonicalizationFailed, UnsafeInteger,
-    UnsupportedSchema,
-};
+use super::error::InvalidRequestCategory::{DuplicateCid, InvalidCid, JcsCanonicalizationFailed};
 use super::error::{ObservationStoreError, TransitionConflictCategory};
 use super::hash;
 use super::hash::tests::{
@@ -12,16 +12,11 @@ use super::hash::tests::{
     ORIGIN_REQUEST_ID, STARTED_EVENT_SHA, STARTED_RECORDED_AT_MS, STARTED_REQUEST_SHA, STARTED_ROOT_SHA,
     STARTED_SEGMENT_SHA, TERMINAL_EVENT_SHA, TERMINAL_RECORDED_AT_MS, TERMINAL_REQUEST_SHA, TERMINAL_SEGMENT_SHA,
 };
-use super::ids::{EventKind, FixtureOriginV1, TerminalOutcomeV1};
+use super::ids::{EventKind, ExecutionAttemptKeyV1, FixtureOriginV1, TerminalOutcomeV1};
 use super::model::*;
 use super::validation::*;
 
-fn unique_cids(from: u64, count: usize) -> Vec<String> {
-    (from..from + count as u64)
-        .map(|value| format!("{value:064x}"))
-        .collect()
-}
-fn attempt_view(terminal: bool) -> FixtureAttemptViewV1 {
+pub(crate) fn attempt_view(terminal: bool) -> FixtureAttemptViewV1 {
     FixtureAttemptViewV1 {
         key: golden_key(),
         attestation_state: ATTESTATION_STATE.into(),
@@ -130,10 +125,10 @@ pub(crate) fn golden_chain() -> GoldenChain {
     }
 }
 
-fn err(category: super::error::InvalidRequestCategory) -> ObservationStoreError {
+pub(crate) fn err(category: super::error::InvalidRequestCategory) -> ObservationStoreError {
     ObservationStoreError::invalid(category)
 }
-fn conflict(category: TransitionConflictCategory) -> ObservationStoreError {
+pub(crate) fn conflict(category: TransitionConflictCategory) -> ObservationStoreError {
     ObservationStoreError::conflict(category)
 }
 
@@ -185,43 +180,6 @@ fn execution_observation_f13_wire_level_strict_rejects() {
 }
 
 #[test]
-fn execution_observation_f13_field_level_typed_rejects() {
-    let mut request = golden_started_request();
-    request.schema = format!("{STARTED_REQUEST_SCHEMA}-v2");
-    assert_eq!(validate_started_request(&request), Err(err(UnsupportedSchema)));
-    flow("logic.f13 future-schema -> invalid_request/unsupported_schema");
-
-    request = golden_started_request();
-    request.operation_contract_sha256 = format!("{}\u{1}", "a".repeat(63));
-    assert_eq!(validate_started_request(&request), Err(err(InvalidDigest)));
-    flow("logic.f13 digest-control-char -> invalid_request/invalid_digest");
-    request.attestation_state = "trusted".to_string();
-    assert_eq!(validate_started_request(&request), Err(err(InvalidAttestation)));
-    flow("logic.f13 wrong-attestation -> invalid_request/invalid_attestation");
-
-    let mut terminal = golden_terminal_request();
-    terminal.execution_elapsed_ms = Some(JSON_SAFE_INTEGER_MAX);
-    validate_terminal_request(&terminal).expect("2^53-1 is json-safe");
-    terminal.execution_elapsed_ms = Some(JSON_SAFE_INTEGER_MAX + 1);
-    assert_eq!(validate_terminal_request(&terminal), Err(err(UnsafeInteger)));
-    flow("logic.f13 elapsed=2^53 -> invalid_request/unsafe_integer (boundary 2^53-1 ok)");
-
-    let mut event = golden_chain().started_event;
-    event.schema = format!("{STARTED_EVENT_SCHEMA}-v2");
-    assert_eq!(
-        event.validate(),
-        Err(ObservationStoreError::corrupt(
-            super::error::CorruptionCategory::UnsupportedStoredSchema
-        ))
-    );
-
-    assert_eq!(validate_monotonic_record(100, 99), Err(err(UnsafeInteger)));
-    flow("logic.f13 time-reversal 100->99 -> invalid_request/unsafe_integer");
-    validate_monotonic_record(99, 100).unwrap();
-    validate_monotonic_record(100, 100).unwrap();
-}
-
-#[test]
 fn execution_observation_transition_state_machine() {
     let chain = golden_chain();
     let open_view = &chain.open_view.attempts[0];
@@ -229,56 +187,93 @@ fn execution_observation_transition_state_machine() {
     let started = golden_started_request();
     let terminal = golden_terminal_request();
 
-    validate_started_transition(STARTED_REQUEST_SHA, None).expect("absent accepts started");
-    validate_started_transition(STARTED_REQUEST_SHA, Some(open_view)).expect("same started is idempotent");
-    validate_started_transition(STARTED_REQUEST_SHA, Some(terminal_view)).expect("same started is idempotent");
+    validate_started_transition(&started, None).expect("absent accepts started");
+    validate_started_transition(&started, Some(open_view)).expect("same started is idempotent");
+    validate_started_transition(&started, Some(terminal_view)).expect("same started is idempotent");
     flow("logic.transition absent+started -> ok; open+same-started -> ok-idempotent; terminal+same -> ok-idempotent");
 
     let mut rebound = started.clone();
     rebound.input_evidence_cids = vec![hex64('7')];
-    let rebound_sha = hash::started_request_sha256(&rebound).unwrap();
     assert_eq!(
-        validate_started_transition(&rebound_sha, Some(open_view)),
+        validate_started_transition(&rebound, Some(open_view)),
         Err(conflict(TransitionConflictCategory::StartedAlreadyBound))
     );
     let mut origin_rebound = started.clone();
     let origin_id = uuid(ORIGIN_REQUEST_ID);
     origin_rebound.fixture_origin = FixtureOriginV1::IntentDispatch { intent_id: origin_id };
-    let origin_sha = hash::started_request_sha256(&origin_rebound).unwrap();
     assert_eq!(
-        validate_started_transition(&origin_sha, Some(terminal_view)),
+        validate_started_transition(&origin_rebound, Some(terminal_view)),
         Err(conflict(TransitionConflictCategory::StartedAlreadyBound))
     );
-    flow("logic.transition open/terminal + different-started (evidence|origin rebind) -> transition_conflict/started_already_bound");
+    flow("logic.transition open/terminal + different-started (evidence|origin rebind) -> started_already_bound");
 
     assert_eq!(
-        validate_terminal_transition(&terminal, TERMINAL_REQUEST_SHA, None, None),
+        validate_terminal_transition(&terminal, None, None),
         Err(conflict(TransitionConflictCategory::TerminalWithoutStarted))
     );
-    validate_terminal_transition(&terminal, TERMINAL_REQUEST_SHA, Some(open_view), Some(&started))
+    validate_terminal_transition(&terminal, Some(open_view), Some(&started))
         .expect("open accepts first terminal with matching policy/runtime");
-    validate_terminal_transition(&terminal, TERMINAL_REQUEST_SHA, Some(terminal_view), Some(&started))
-        .expect("same terminal is idempotent");
+    validate_terminal_transition(&terminal, Some(terminal_view), Some(&started)).expect("same terminal is idempotent");
     flow("logic.transition absent+terminal -> terminal_without_started; open+first-terminal -> ok; terminal+same -> ok-idempotent");
 
     let mut policy_rebind = terminal.clone();
     policy_rebind.policy_sha256 = hex64('d');
     assert_eq!(
-        validate_terminal_transition(&policy_rebind, TERMINAL_REQUEST_SHA, Some(open_view), Some(&started)),
+        validate_terminal_transition(&policy_rebind, Some(open_view), Some(&started)),
         Err(conflict(TransitionConflictCategory::TerminalPolicyRebind))
     );
     let mut runtime_rebind = terminal.clone();
     runtime_rebind.runtime_sha256 = hex64('e');
     assert_eq!(
-        validate_terminal_transition(&runtime_rebind, TERMINAL_REQUEST_SHA, Some(open_view), Some(&started)),
+        validate_terminal_transition(&runtime_rebind, Some(open_view), Some(&started)),
         Err(conflict(TransitionConflictCategory::TerminalRuntimeRebind))
     );
     let mut second_terminal = terminal.clone();
     second_terminal.outcome = TerminalOutcomeV1::Success;
-    let second_sha = hash::terminal_request_sha256(&second_terminal).unwrap();
     assert_eq!(
-        validate_terminal_transition(&second_terminal, &second_sha, Some(terminal_view), Some(&started)),
+        validate_terminal_transition(&second_terminal, Some(terminal_view), Some(&started)),
         Err(conflict(TransitionConflictCategory::TerminalAlreadyBound))
     );
     flow("logic.transition open+policy/runtime-mismatch -> rebind conflicts; terminal+different-terminal -> terminal_already_bound");
+}
+
+#[test]
+fn execution_observation_counterexample_terminal_cross_attempt_key() {
+    use std::num::NonZeroU32;
+
+    use super::error::CorruptionCategory;
+
+    let view = attempt_view(false);
+    let started = golden_started_request();
+    let mut terminal = golden_terminal_request();
+    terminal.key = ExecutionAttemptKeyV1 {
+        execution_id: uuid("123e4567-e89b-42d3-a456-426614174099"),
+        attempt: NonZeroU32::new(2).expect("nonzero"),
+    };
+    validate_terminal_request(&terminal).expect("request itself is valid");
+    assert_eq!(
+        validate_terminal_transition(&terminal, Some(&view), Some(&started)),
+        Err(ObservationStoreError::corrupt(CorruptionCategory::InvalidTransition))
+    );
+    flow("counterexample terminal cross-attempt key -> corrupt_store/invalid_transition");
+}
+
+#[test]
+fn execution_observation_counterexample_started_retry_unrelated_view() {
+    use std::num::NonZeroU32;
+
+    use super::error::CorruptionCategory;
+
+    let view = attempt_view(false);
+    let mut started = golden_started_request();
+    started.key = ExecutionAttemptKeyV1 {
+        execution_id: uuid("123e4567-e89b-42d3-a456-426614174099"),
+        attempt: NonZeroU32::new(7).expect("nonzero"),
+    };
+    validate_started_request(&started).expect("request itself is valid");
+    assert_eq!(
+        validate_started_transition(&started, Some(&view)),
+        Err(ObservationStoreError::corrupt(CorruptionCategory::InvalidTransition))
+    );
+    flow("counterexample started retry vs unrelated view -> corrupt_store/invalid_transition");
 }

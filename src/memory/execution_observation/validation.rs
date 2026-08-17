@@ -6,8 +6,11 @@
 //! error categories are deterministic. Stored-object self-verification lives on
 //! the model types in `model.rs`.
 
-use super::error::{InvalidRequestCategory, LimitCategory, ObservationStoreError, TransitionConflictCategory};
-use super::ids::{CanonicalUuid, ExecutionAttemptKeyV1, FailureCategoryV1};
+use super::error::{
+    CorruptionCategory, InvalidRequestCategory, LimitCategory, ObservationStoreError, TransitionConflictCategory,
+};
+use super::hash;
+use super::ids::{CanonicalUuid, ExecutionAttemptKeyV1};
 use super::model::*;
 
 pub(crate) const EVIDENCE_ITEMS_PER_LIST_MAX: usize = 256;
@@ -18,6 +21,14 @@ pub(crate) const JSON_SAFE_INTEGER_MAX: u64 = 9_007_199_254_740_991;
 
 fn invalid(category: InvalidRequestCategory) -> ObservationStoreError {
     ObservationStoreError::invalid(category)
+}
+
+fn conflict(category: TransitionConflictCategory) -> ObservationStoreError {
+    ObservationStoreError::conflict(category)
+}
+
+fn corrupt(category: CorruptionCategory) -> ObservationStoreError {
+    ObservationStoreError::corrupt(category)
 }
 
 pub(crate) fn is_lowercase_hex64(value: &str) -> bool {
@@ -43,15 +54,12 @@ pub(crate) fn check_json_safe(value: u64) -> Result<(), ObservationStoreError> {
     }
 }
 
-/// Writer stamps: sequence starts at 1 and both sequence and record time stay
-/// JSON-safe (ADR-0007 §5/§6).
+/// Writer stamps: sequence starts at 1; both stamps stay JSON-safe (§5/§6).
 pub(crate) fn check_writer_stamps(sequence: u64, recorded_at_ms: u64) -> Result<(), ObservationStoreError> {
     check_json_safe(sequence)?;
     check_json_safe(recorded_at_ms)?;
     if sequence == 0 {
-        Err(ObservationStoreError::corrupt(
-            super::error::CorruptionCategory::SequenceGap,
-        ))
+        Err(corrupt(CorruptionCategory::SequenceGap))
     } else {
         Ok(())
     }
@@ -67,20 +75,6 @@ pub(crate) fn check_non_nil(uuid: &CanonicalUuid) -> Result<(), ObservationStore
 
 pub(crate) fn check_key(key: &ExecutionAttemptKeyV1) -> Result<(), ObservationStoreError> {
     check_non_nil(&key.execution_id)
-}
-
-pub(crate) fn validate_failure_category(value: &str) -> Result<FailureCategoryV1, ObservationStoreError> {
-    match value {
-        "invalid_input" => Ok(FailureCategoryV1::InvalidInput),
-        "policy_denied" => Ok(FailureCategoryV1::PolicyDenied),
-        "dependency_unavailable" => Ok(FailureCategoryV1::DependencyUnavailable),
-        "executor_rejected" => Ok(FailureCategoryV1::ExecutorRejected),
-        "executor_failed" => Ok(FailureCategoryV1::ExecutorFailed),
-        "executor_panicked" => Ok(FailureCategoryV1::ExecutorPanicked),
-        "tool_failed" => Ok(FailureCategoryV1::ToolFailed),
-        "internal" => Ok(FailureCategoryV1::Internal),
-        _ => Err(invalid(InvalidRequestCategory::InvalidFailureCategory)),
-    }
 }
 
 fn check_cid(value: &str) -> Result<(), ObservationStoreError> {
@@ -174,59 +168,67 @@ pub(crate) fn validate_attempt_evidence_total(
     }
 }
 
-/// Absent → Ok; same canonical request digest → Ok (idempotent retry); any other
-/// Started for the same key → `started_already_bound` (ADR-0007 §3).
+/// Takes the request BODY: validates and re-canonicalizes internally, never
+/// trusts a caller-provided digest. Absent → Ok; same canonical digest → Ok
+/// (idempotent retry); any other Started for this key → `started_already_bound`;
+/// a view for a different key is an invalid transition (ADR-0007 §3).
 pub(crate) fn validate_started_transition(
-    request_sha256: &str,
+    request: &AppendStartedRequestV1,
     existing: Option<&FixtureAttemptViewV1>,
 ) -> Result<(), ObservationStoreError> {
-    match existing {
-        None => Ok(()),
-        Some(view) if view.started_request_sha256 == request_sha256 => Ok(()),
-        Some(_) => Err(ObservationStoreError::conflict(
-            TransitionConflictCategory::StartedAlreadyBound,
-        )),
+    validate_started_request(request)?;
+    let Some(view) = existing else {
+        return Ok(());
+    };
+    view.validate()?;
+    if view.key != request.key {
+        return Err(corrupt(CorruptionCategory::InvalidTransition));
+    }
+    if view.started_request_sha256 == hash::started_request_sha256(request)? {
+        Ok(())
+    } else {
+        Err(conflict(TransitionConflictCategory::StartedAlreadyBound))
     }
 }
 
-/// Terminal-without-Started, double Terminal, and policy/runtime rebind are typed
-/// conflicts. `bound_started` must be present whenever `existing` is.
+/// Takes the request BODY (validated and re-canonicalized internally). Enforces
+/// `request.key == existing.key == bound_started.key` and that the bound
+/// Started is exactly the one this view was built from. Both the first-Terminal
+/// and the idempotent-Terminal path re-check key, policy, runtime, the request
+/// digest, and the three-list evidence total (ADR-0007 §3/§4/§5).
 pub(crate) fn validate_terminal_transition(
     request: &AppendTerminalRequestV1,
-    request_sha256: &str,
     existing: Option<&FixtureAttemptViewV1>,
     bound_started: Option<&AppendStartedRequestV1>,
 ) -> Result<(), ObservationStoreError> {
+    validate_terminal_request(request)?;
     let Some(view) = existing else {
-        return Err(ObservationStoreError::conflict(
-            TransitionConflictCategory::TerminalWithoutStarted,
-        ));
+        return Err(conflict(TransitionConflictCategory::TerminalWithoutStarted));
     };
-    if let Some(bound_terminal) = &view.terminal_request_sha256 {
-        return if bound_terminal == request_sha256 {
-            Ok(())
-        } else {
-            Err(ObservationStoreError::conflict(
-                TransitionConflictCategory::TerminalAlreadyBound,
-            ))
-        };
-    }
     let Some(started) = bound_started else {
-        return Err(ObservationStoreError::corrupt(
-            super::error::CorruptionCategory::InvalidTransition,
-        ));
+        return Err(corrupt(CorruptionCategory::InvalidTransition));
     };
+    view.validate()?;
+    validate_started_request(started)?;
+    if view.key != request.key || started.key != request.key {
+        return Err(corrupt(CorruptionCategory::InvalidTransition));
+    }
+    if view.started_request_sha256 != hash::started_request_sha256(started)? {
+        return Err(corrupt(CorruptionCategory::ObjectHashMismatch));
+    }
     if request.policy_sha256 != started.policy_sha256 {
-        return Err(ObservationStoreError::conflict(
-            TransitionConflictCategory::TerminalPolicyRebind,
-        ));
+        return Err(conflict(TransitionConflictCategory::TerminalPolicyRebind));
     }
     if request.runtime_sha256 != started.runtime_sha256 {
-        return Err(ObservationStoreError::conflict(
-            TransitionConflictCategory::TerminalRuntimeRebind,
-        ));
+        return Err(conflict(TransitionConflictCategory::TerminalRuntimeRebind));
     }
-    Ok(())
+    validate_attempt_evidence_total(started, request)?;
+    let request_sha256 = hash::terminal_request_sha256(request)?;
+    match view.terminal_request_sha256.as_deref() {
+        None => Ok(()),
+        Some(bound) if bound == request_sha256 => Ok(()),
+        Some(_) => Err(conflict(TransitionConflictCategory::TerminalAlreadyBound)),
+    }
 }
 
 /// Writer time is non-decreasing: `max(system_now_ms, previous_recorded_at_ms)`
@@ -254,7 +256,7 @@ mod tests {
     }
 
     #[test]
-    fn execution_observation_evidence_list_and_total_limits() {
+    fn execution_observation_counterexample_evidence_total_overflow_256_256_1() {
         let mut request = golden_started_request();
         request.input_evidence_cids = unique_cids(1, EVIDENCE_ITEMS_PER_LIST_MAX);
         request.context_evidence_cids = unique_cids(257, EVIDENCE_ITEMS_PER_LIST_MAX);
@@ -287,10 +289,7 @@ mod tests {
         event.validate().expect("recorded time at 2^53-1");
         flow("logic.boundaries elapsed_ms=0 recorded_at_ms=2^53-1 -> ok");
         event.sequence = 0;
-        assert_eq!(
-            event.validate(),
-            Err(ObservationStoreError::corrupt(CorruptionCategory::SequenceGap))
-        );
+        assert_eq!(event.validate(), Err(corrupt(CorruptionCategory::SequenceGap)));
         flow("logic.boundaries sequence=0 -> corrupt_store/sequence_gap");
         event.sequence = JSON_SAFE_INTEGER_MAX + 1;
         assert_eq!(event.validate(), Err(invalid(InvalidRequestCategory::UnsafeInteger)));
