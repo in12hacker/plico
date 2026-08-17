@@ -54,10 +54,12 @@ pub(crate) fn check_json_safe(value: u64) -> Result<(), ObservationStoreError> {
     }
 }
 
-/// Writer stamps: sequence starts at 1; both stamps stay JSON-safe (§5/§6).
+/// Writer stamps: sequence starts at 1, both stamps stay JSON-safe, and the
+/// event ordinal stays within the 20,000-event ledger cap (§5/§6).
 pub(crate) fn check_writer_stamps(sequence: u64, recorded_at_ms: u64) -> Result<(), ObservationStoreError> {
     check_json_safe(sequence)?;
     check_json_safe(recorded_at_ms)?;
+    super::validate_event_count(sequence)?;
     if sequence == 0 {
         Err(corrupt(CorruptionCategory::SequenceGap))
     } else {
@@ -231,8 +233,7 @@ pub(crate) fn validate_terminal_transition(
     }
 }
 
-/// Writer time is non-decreasing: `max(system_now_ms, previous_recorded_at_ms)`
-/// (ADR-0007 §6). A reversal is a typed reject, never an auto-rewrite.
+/// Writer time is non-decreasing (§6); a reversal is a typed reject.
 pub(crate) fn validate_monotonic_record(previous_ms: u64, next_ms: u64) -> Result<(), ObservationStoreError> {
     check_json_safe(previous_ms)?;
     check_json_safe(next_ms)?;

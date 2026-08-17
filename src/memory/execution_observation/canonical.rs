@@ -1,11 +1,8 @@
-//! RFC 8785/JCS canonicalization boundary (ADR-0007 §8).
-//!
-//! Bytes are produced by `serde_json_canonicalizer` and parsed strictly: a value
-//! loads only from its exact JCS encoding; key order, whitespace, unknown fields,
-//! missing fields, and misplaced nulls are typed rejects, never panics.
+//! RFC 8785/JCS canonicalization boundary (ADR-0007 §8): bytes load only from
+//! their exact JCS encoding; non-canonical bytes, unknown fields, and misplaced
+//! nulls are typed rejects, never panics.
 
-use serde::de::DeserializeOwned;
-use serde::Serialize;
+use serde::{de::DeserializeOwned, Serialize};
 
 use super::error::{InvalidRequestCategory, ObservationStoreError};
 
@@ -16,9 +13,19 @@ pub(crate) fn to_canonical_vec<T: Serialize>(value: &T) -> Result<Vec<u8>, Obser
 }
 
 pub(crate) fn parse_canonical<T: DeserializeOwned + Serialize>(bytes: &[u8]) -> Result<T, ObservationStoreError> {
+    // Step 1: prove the bytes are exact JCS BEFORE any typed semantic parse,
+    // so non-canonical input (whitespace, key order, escapes, duplicate keys)
+    // reports jcs first and never surfaces a semantic category. The Value is a
+    // transient probe only — never stored in or returned from a model type.
+    let probe: serde_json::Value = serde_json::from_slice(bytes).map_err(|_| jcs_error())?;
+    if to_canonical_vec(&probe)? != bytes {
+        return Err(jcs_error());
+    }
+    // Step 2: typed semantic deserialize on proven-canonical bytes.
     let value: T = serde_json::from_slice(bytes).map_err(|error| classify_wire_error(&error))?;
-    let canonical = to_canonical_vec(&value)?;
-    if canonical.as_slice() == bytes {
+    // Step 3: typed encoding must equal the input — this rejects a missing
+    // nullable field (serde fills None; the typed encoding re-emits the null).
+    if to_canonical_vec(&value)? == bytes {
         Ok(value)
     } else {
         Err(jcs_error())
@@ -30,11 +37,9 @@ fn jcs_error() -> ObservationStoreError {
         category: InvalidRequestCategory::JcsCanonicalizationFailed,
     }
 }
-
-/// Semantic wire classification (§4/§11): hand-rolled deserializers report the
-/// frozen error Display as the serde message; matching is EXACT against
-/// `<display> at line L column C`, so serde's input-echoing messages (unknown
-/// field/variant, invalid type) can never forge a typed category.
+/// Wire classification (§4/§11): hand-rolled deserializers report the frozen
+/// error Display as the serde message; matching is EXACT against
+/// `<display> at line L column C` so echoed input cannot forge a category.
 fn classify_wire_error(error: &serde_json::Error) -> ObservationStoreError {
     let expected_tail = format!(" at line {} column {}", error.line(), error.column());
     for category in [
@@ -180,13 +185,12 @@ mod tests {
         let parsed: AppendStartedRequestV1 = parse_canonical(started_text.as_bytes()).expect("explicit nulls parse");
         assert!(parsed.fixture_role_ref.is_none() && parsed.fixture_session_ref.is_none());
         flow(format!(
-            "data.canonical started bytes={} explicit-nulls -> ok, None kept",
+            "data.canonical started bytes={} explicit-nulls ok",
             started_text.len()
         ));
-
         let missing_role = started_text.replacen("\"fixture_role_ref\":null,", "", 1);
         assert!(parse_canonical::<AppendStartedRequestV1>(missing_role.as_bytes()).is_err());
-        flow("data.canonical nullable fixture_role_ref missing -> reject (missing != null)");
+        flow("data.canonical nullable missing -> reject");
         let null_policy = started_text.replacen(
             &format!("\"policy_sha256\":\"{}\"", hex64('b')),
             "\"policy_sha256\":null",
@@ -226,7 +230,6 @@ mod tests {
         use super::super::error::InvalidRequestCategory;
         use super::super::hash::tests::{flow, golden_terminal_request};
         use super::super::model::AppendTerminalRequestV1;
-
         let text = String::from_utf8(to_canonical_vec(&golden_terminal_request()).unwrap()).unwrap();
         let unknown_category = text.replacen("\"category\":\"tool_failed\"", "\"category\":\"unknown_cat\"", 1);
         assert_eq!(
@@ -270,8 +273,7 @@ mod tests {
         use super::super::hash::tests::{flow, golden_started_request, golden_terminal_request};
         use super::super::ids::TerminalOutcomeV1;
         use super::super::tests::attempt_view;
-        use super::super::validation::validate_terminal_request;
-        use super::super::validation::validate_terminal_transition;
+        use super::super::validation::{validate_terminal_request, validate_terminal_transition};
 
         let view = attempt_view(true);
         let started = golden_started_request();

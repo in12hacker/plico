@@ -84,7 +84,7 @@ impl StoredStartedEventV1 {
         if computed != self.request_sha256 {
             return Err(ObservationStoreError::corrupt(CorruptionCategory::ObjectHashMismatch));
         }
-        check_json_safe(self.root_generation)?;
+        validate_event_count(self.root_generation)?;
         check_writer_stamps(self.sequence, self.recorded_at_ms)
     }
 }
@@ -112,7 +112,7 @@ impl StoredTerminalEventV1 {
         if computed != self.request_sha256 {
             return Err(ObservationStoreError::corrupt(CorruptionCategory::ObjectHashMismatch));
         }
-        check_json_safe(self.root_generation)?;
+        validate_event_count(self.root_generation)?;
         check_writer_stamps(self.sequence, self.recorded_at_ms)
     }
 }
@@ -199,12 +199,11 @@ impl FixtureCurrentViewV1 {
         }
         check_object_bytes(self, CURRENT_VIEW_MAX_BYTES)?;
         validate_attempt_count(self.attempts.len())?;
-        validate_event_count(self.event_watermark)?;
         if self.attestation_state != ATTESTATION_STATE {
             return Err(bad_attestation());
         }
-        check_json_safe(self.generation)?;
-        check_json_safe(self.event_watermark)?;
+        validate_event_count(self.generation)?;
+        validate_event_count(self.event_watermark)?;
         for attempt in &self.attempts {
             attempt.validate()?;
         }
@@ -238,9 +237,8 @@ impl FixtureLedgerRootV1 {
             return Err(unsupported_schema());
         }
         check_object_bytes(self, ROOT_MAX_BYTES)?;
+        validate_event_count(self.generation)?;
         validate_event_count(self.event_watermark)?;
-        check_json_safe(self.generation)?;
-        check_json_safe(self.event_watermark)?;
         check_json_safe(self.committed_at_ms)?;
         if let Some(previous) = &self.previous_root_sha256 {
             check_digest(previous)?;

@@ -50,29 +50,8 @@ pub(crate) fn validate_event_count(count: u64) -> Result<(), ObservationStoreErr
     }
 }
 
-#[cfg(test)]
-mod limits_tests {
-    use super::*;
-
-    #[test]
-    fn execution_observation_limits_attempt_and_event_counts() {
-        validate_attempt_count(ATTEMPTS_MAX).expect("boundary attempts");
-        validate_event_count(EVENTS_MAX).expect("boundary events");
-        assert_eq!(
-            validate_attempt_count(ATTEMPTS_MAX + 1),
-            Err(ObservationStoreError::limit(LimitCategory::Attempt))
-        );
-        assert_eq!(
-            validate_event_count(EVENTS_MAX + 1),
-            Err(ObservationStoreError::limit(LimitCategory::Event))
-        );
-    }
-}
-
-/// Adversarial counterexamples from the independent WP1.1 review: each case
-/// kills a specific implementation mutant (three-way key operands, the
-/// view↔started digest binding, the transition-internal evidence total, the
-/// attempt component of the key, and malformed bodies fed to transitions).
+/// Adversarial counterexamples; each kills a specific implementation mutant
+/// (key operands, digest bindings, evidence totals, caps, malformed bodies).
 #[cfg(test)]
 mod counterexample_tests {
     use std::num::NonZeroU32;
@@ -81,13 +60,10 @@ mod counterexample_tests {
         CorruptionCategory, InvalidRequestCategory, LimitCategory, ObservationStoreError, TransitionConflictCategory,
     };
     use super::hash;
-    use super::hash::tests::{flow, golden_started_request, golden_terminal_request, hex64, uuid, GENESIS_VIEW_SHA};
+    use super::hash::tests::{flow, golden_started_request, golden_terminal_request, hex64, uuid, STARTED_EVENT_SHA};
     use super::ids::ExecutionAttemptKeyV1;
-    use super::model::{
-        FixtureCurrentViewV1, FixtureLedgerRootV1, ATTESTATION_STATE, CURRENT_VIEW_SCHEMA, ROOT_SCHEMA,
-        STARTED_REQUEST_SCHEMA, TRUST_CLASS,
-    };
-    use super::tests::attempt_view;
+    use super::model::{FixtureCurrentViewV1, ATTESTATION_STATE, CURRENT_VIEW_SCHEMA, STARTED_REQUEST_SCHEMA};
+    use super::tests::{attempt_view, golden_chain};
     use super::validation::{validate_started_transition, validate_terminal_transition, EVIDENCE_ITEMS_PER_LIST_MAX};
     use super::{ATTEMPTS_MAX, EVENTS_MAX};
 
@@ -96,7 +72,6 @@ mod counterexample_tests {
             .map(|value| format!("{value:064x}"))
             .collect()
     }
-
     fn other_execution_key(attempt: u32) -> ExecutionAttemptKeyV1 {
         ExecutionAttemptKeyV1 {
             execution_id: uuid("123e4567-e89b-42d3-a456-426614174099"),
@@ -122,12 +97,10 @@ mod counterexample_tests {
             validate_terminal_transition(&request, Some(&other_view), Some(&golden_started_request())),
             Err(ObservationStoreError::corrupt(CorruptionCategory::InvalidTransition))
         );
-
         assert_eq!(
             validate_terminal_transition(&request, Some(&view), None),
             Err(ObservationStoreError::corrupt(CorruptionCategory::InvalidTransition))
         );
-
         let mut runtime_rebound = golden_terminal_request();
         runtime_rebound.runtime_sha256 = hex64('e');
         assert_eq!(
@@ -189,41 +162,69 @@ mod counterexample_tests {
     }
 
     #[test]
-    fn execution_observation_counterexample_attempt_count_limits() {
-        let boundary = sized_view(ATTEMPTS_MAX);
-        boundary.validate().expect("10,000 attempts accepted");
-        let oversized = sized_view(ATTEMPTS_MAX + 1);
+    fn execution_observation_counterexample_capacity_and_ordinal_caps() {
+        let event_limit = || ObservationStoreError::limit(LimitCategory::Event);
+        // attempts: 10,000 accepted, 10,001 rejected (byte cap does not bind)
+        sized_view(ATTEMPTS_MAX).validate().expect("10,000 attempts accepted");
         assert_eq!(
-            oversized.validate(),
+            sized_view(ATTEMPTS_MAX + 1).validate(),
             Err(ObservationStoreError::limit(LimitCategory::Attempt))
         );
-        flow("counterexample current-view attempts: 10,000 accepted, 10,001 -> limit/attempt_limit");
-    }
-
-    #[test]
-    fn execution_observation_counterexample_event_watermark_limit() {
+        // watermark and generation: 20,001 rejected on view and root
         let mut view = sized_view(1);
         view.event_watermark = EVENTS_MAX + 1;
-        assert_eq!(view.validate(), Err(ObservationStoreError::limit(LimitCategory::Event)));
-        let root = FixtureLedgerRootV1 {
-            schema: ROOT_SCHEMA.into(),
-            trust_class: TRUST_CLASS.into(),
-            generation: 1,
-            previous_root_sha256: None,
-            event_segment_head_sha256: None,
-            event_watermark: EVENTS_MAX + 1,
-            current_view_sha256: GENESIS_VIEW_SHA.into(),
-            committed_at_ms: 0,
-        };
+        assert_eq!(view.validate(), Err(event_limit()));
+        view.event_watermark = EVENTS_MAX;
+        view.generation = EVENTS_MAX + 1;
+        assert_eq!(view.validate(), Err(event_limit()));
+        view.generation = EVENTS_MAX;
+        view.validate().expect("view 20,000/20,000 accepted");
+        let chain = golden_chain();
+        let mut root = chain.terminal_root;
+        let expected_root_view = root.current_view_sha256.clone();
+        root.event_watermark = EVENTS_MAX + 1;
+        assert_eq!(root.validate(&expected_root_view), Err(event_limit()));
+        root.event_watermark = EVENTS_MAX;
+        root.generation = EVENTS_MAX + 1;
+        assert_eq!(root.validate(&expected_root_view), Err(event_limit()));
+        root.generation = EVENTS_MAX;
+        root.validate(&expected_root_view).expect("root 20,000/20,000 accepted");
+        // stored events: sequence and root_generation each capped at 20,000
+        let mut started_event = chain.started_event;
+        started_event.sequence = EVENTS_MAX + 1;
+        assert_eq!(started_event.validate(), Err(event_limit()));
+        started_event.sequence = EVENTS_MAX;
+        started_event.root_generation = EVENTS_MAX + 1;
+        assert_eq!(started_event.validate(), Err(event_limit()));
+        started_event.root_generation = EVENTS_MAX;
+        started_event.validate().expect("started event 20,000/20,000 accepted");
+        let mut terminal_event = chain.terminal_event;
+        terminal_event.sequence = EVENTS_MAX + 1;
+        assert_eq!(terminal_event.validate(), Err(event_limit()));
+        terminal_event.sequence = EVENTS_MAX;
+        terminal_event.root_generation = EVENTS_MAX + 1;
+        assert_eq!(terminal_event.validate(), Err(event_limit()));
+        terminal_event.root_generation = EVENTS_MAX;
+        terminal_event
+            .validate()
+            .expect("terminal event 20,000/20,000 accepted");
+        // segment: first and last sequence capped; last != first is corrupt
+        let mut segment = chain.started_segment;
+        segment.first_sequence = EVENTS_MAX + 1;
+        segment.last_sequence = EVENTS_MAX + 1;
+        assert_eq!(segment.validate(STARTED_EVENT_SHA), Err(event_limit()));
+        segment.first_sequence = EVENTS_MAX;
+        segment.last_sequence = EVENTS_MAX;
+        segment.validate(STARTED_EVENT_SHA).expect("segment 20,000 accepted");
+        segment.last_sequence = EVENTS_MAX + 1;
         assert_eq!(
-            root.validate(GENESIS_VIEW_SHA),
-            Err(ObservationStoreError::limit(LimitCategory::Event))
+            segment.validate(STARTED_EVENT_SHA),
+            Err(ObservationStoreError::corrupt(CorruptionCategory::InvalidTransition))
         );
-        flow("counterexample event watermark 20,001 -> limit/event_limit on both view and root");
+        flow("counterexample caps: attempts 10k/10k+1; ordinal+generation+watermark 20,001 -> event_limit; 20,000 accepted");
     }
 
-    /// A fully valid, ascending view with `count` distinct attempts (~3.6 MiB
-    /// at the cap, well under the 8 MiB byte limit — the count cap must bind).
+    /// Valid ascending view with `count` attempts (~3.6 MiB at the cap).
     fn sized_view(count: usize) -> FixtureCurrentViewV1 {
         let attempts = (1..=count)
             .map(|index| {
@@ -242,8 +243,7 @@ mod counterexample_tests {
     }
 }
 
-/// Field-level typed rejects (F-matrix F13): malformed bodies must produce the
-/// frozen categories, never a panic or a generic error.
+/// Field-level typed rejects (F13): frozen categories, never a panic.
 #[cfg(test)]
 mod field_reject_tests {
     use super::error::InvalidRequestCategory::{
@@ -274,7 +274,6 @@ mod field_reject_tests {
         assert_eq!(validate_started_request(&request), Err(err(InvalidDigest)));
         request.attestation_state = "trusted".to_string();
         assert_eq!(validate_started_request(&request), Err(err(InvalidAttestation)));
-
         let mut terminal = golden_terminal_request();
         terminal.execution_elapsed_ms = Some(JSON_SAFE_INTEGER_MAX);
         validate_terminal_request(&terminal).expect("2^53-1 is json-safe");
@@ -289,7 +288,6 @@ mod field_reject_tests {
                 super::error::CorruptionCategory::UnsupportedStoredSchema
             ))
         );
-
         assert_eq!(validate_monotonic_record(100, 99), Err(err(UnsafeInteger)));
         validate_monotonic_record(99, 100).unwrap();
         validate_monotonic_record(100, 100).unwrap();

@@ -1,7 +1,5 @@
-//! WP1 self-tests: F-matrix F10/F13 strict rejects, pure transitions, and key
-//! counterexamples (field-level F13 and stale-hash counterexamples live in
-//! `canonical.rs`; limits/boundaries in `validation.rs`; golden digests in
-//! `hash.rs`).
+//! WP1 self-tests: F10/F13 rejects, transitions, key counterexamples (field
+//! rejects live in mod.rs; stale-hash in canonical.rs; golden in hash.rs).
 
 use super::canonical::{parse_canonical, to_canonical_vec};
 use super::error::InvalidRequestCategory::{DuplicateCid, InvalidCid, JcsCanonicalizationFailed};
@@ -159,17 +157,16 @@ fn execution_observation_f10_malformed_and_inline_cid_rejected() {
     validate_started_request(&request).expect("same cid across lists is allowed");
     flow("logic.f10 same-cid-across-lists -> ok");
 }
-
 #[test]
 fn execution_observation_f13_wire_level_strict_rejects() {
     let canonical = to_canonical_vec(&golden_started_request()).unwrap();
     let declaration_order = serde_json::to_vec(&golden_started_request()).unwrap();
-    assert_ne!(declaration_order, canonical);
     assert_eq!(
         parse_canonical::<AppendStartedRequestV1>(&declaration_order),
         Err(err(JcsCanonicalizationFailed))
     );
     let text = std::str::from_utf8(&canonical).expect("ascii");
+
     let unknown_field = format!("{{\"zz\":0,{}", &text[1..]);
     assert!(parse_canonical::<AppendStartedRequestV1>(unknown_field.as_bytes()).is_err());
     // serde echoes unknown field names in its error Display; a marker-shaped
@@ -181,11 +178,29 @@ fn execution_observation_f13_wire_level_strict_rejects() {
     );
     let whitespace = format!(" {text}");
     assert!(parse_canonical::<AppendStartedRequestV1>(whitespace.as_bytes()).is_err());
+    // combined attacks (parser-order P1): non-canonical bytes report jcs first
+    // even when the payload also carries a semantic violation.
+    let zero_ws = format!(" {}", text.replacen("\"attempt\":1", "\"attempt\":0", 1));
+    assert_eq!(
+        parse_canonical::<AppendStartedRequestV1>(zero_ws.as_bytes()),
+        Err(err(JcsCanonicalizationFailed))
+    );
+    let terminal_text = String::from_utf8(to_canonical_vec(&golden_terminal_request()).unwrap()).unwrap();
+    let unknown = terminal_text.replacen("\"category\":\"tool_failed\"", "\"category\":\"unknown_cat\"", 1);
+    // true swap of the first two keys (a duplicated-key shape would fail the
+    // typed parse on BOTH old and new parsers and discriminate nothing)
+    let head = "{\"attestation_state\":\"unverified_fixture\",\"execution_elapsed_ms\":null,";
+    assert!(unknown.starts_with(head));
+    let tail = &unknown[head.len()..];
+    let reordered = format!("{{\"execution_elapsed_ms\":null,\"attestation_state\":\"unverified_fixture\",{tail}");
+    assert_eq!(
+        parse_canonical::<AppendTerminalRequestV1>(reordered.as_bytes()),
+        Err(err(JcsCanonicalizationFailed))
+    );
     let escaped_unicode = text.replacen("\"policy_sha256\":\"bbbb", "\"policy_sha256\":\"\\u0062bbb", 1);
     assert!(parse_canonical::<AppendStartedRequestV1>(escaped_unicode.as_bytes()).is_err());
-    flow("logic.f13 wire rejects declaration-order|unknown-field|marker-hijack|whitespace|escaped-unicode -> jcs");
+    flow("logic.f13 wire rejects order|unknown-field|marker-hijack|whitespace|ws+zero|reorder+unknown|escape -> jcs");
 }
-
 #[test]
 fn execution_observation_transition_state_machine() {
     let chain = golden_chain();
@@ -213,7 +228,6 @@ fn execution_observation_transition_state_machine() {
         Err(conflict(TransitionConflictCategory::StartedAlreadyBound))
     );
     flow("logic.transition open/terminal + different-started (evidence|origin rebind) -> started_already_bound");
-
     assert_eq!(
         validate_terminal_transition(&terminal, None, None),
         Err(conflict(TransitionConflictCategory::TerminalWithoutStarted))
@@ -222,7 +236,6 @@ fn execution_observation_transition_state_machine() {
         .expect("open accepts first terminal with matching policy/runtime");
     validate_terminal_transition(&terminal, Some(terminal_view), Some(&started)).expect("same terminal is idempotent");
     flow("logic.transition absent+terminal -> terminal_without_started; open+first-terminal -> ok; terminal+same -> ok-idempotent");
-
     let mut policy_rebind = terminal.clone();
     policy_rebind.policy_sha256 = hex64('d');
     assert_eq!(
