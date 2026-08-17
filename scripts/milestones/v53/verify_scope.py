@@ -3875,7 +3875,21 @@ def _run_lifecycle_checkout(
             ],
         ),
     ]
-    return {"responses": responses, "mutation_inventory": _vault_inventory(vault)}
+    return {
+        "semantic_responses": [item["response"] for item in responses],
+        "mutation_inventory": _vault_inventory(vault),
+        "resource_observations": {
+            "maximum_threads": max(item["maximum_threads"] for item in responses),
+            "maximum_handles": max(item["maximum_handles"] for item in responses),
+            "observation_resource_absent": all(
+                item["observation_resource_absent"] for item in responses
+            ),
+        },
+    }
+
+
+def _lifecycle_effect(result: dict[str, object]) -> tuple[object, object]:
+    return result["semantic_responses"], result["mutation_inventory"]
 
 
 def _run_lifecycle_differential(
@@ -3892,7 +3906,7 @@ def _run_lifecycle_differential(
         candidate_result = _run_lifecycle_checkout(
             candidate_checkout, target, toolchain
         )
-        if base_result != candidate_result:
+        if _lifecycle_effect(base_result) != _lifecycle_effect(candidate_result):
             raise verify.VerificationError(
                 "base/candidate lifecycle semantic fixture or mutation inventory differs"
             )
@@ -3903,6 +3917,10 @@ def _run_lifecycle_differential(
             "semantic_fixtures_equal": True,
             "mutation_inventories_equal": True,
             "observation_namespace_thread_handle_absent": True,
+            "resource_observations": {
+                "base": base_result["resource_observations"],
+                "candidate": candidate_result["resource_observations"],
+            },
         }
 
 

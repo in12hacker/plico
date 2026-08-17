@@ -208,3 +208,6 @@ R2.1 只修复解析域，不改变 store 合同：packet、approval、ledger �
 parser；lifecycle runtime response 使用独立 bounded parser，允许有限 JSON number，继续拒绝 NaN、Infinity、重复键、
 非 UTF-8、畸形与超限输入。任何 verifier byte 变化必须重新生成 B4→A4→tag；同一 store diff 从 A4 重放并完整重跑
 R2，不得以人工 waiver 将旧 scope 结果升级为 GO。
+
+lifecycle 等价只比较规范化 API 语义与 vault mutation inventory。线程/句柄最大值受调度影响，只能作为每臂独立的
+诊断观测；每次运行仍必须证明 observation namespace/thread/handle 不存在，但不得要求两个瞬时计数逐字相等。
