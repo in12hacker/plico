@@ -1,8 +1,8 @@
 # v53 WP3 Blueprint：Validated Attempt Facade & Deterministic State Reconstruction
 
 **日期**：2026-08-17
-**状态**：Draft / BLOCKED on R2 / not architecture-frozen
-**前置条件**：WP2.1 C2.1 通过独立 R2 对抗验收并产生 acceptance commit
+**状态**：R2 accepted；WP3A read-only slice 由 ADR-0009 授权；WP3B 仍为 Draft
+**前置条件**：R2 acceptance `16e610629d3741f8e7cedf1b471e974c81960cb6`
 **规范依据**：[ADR-0007](../adr/0007-execution-observation-ledger-v1.md)、
 [ADR-0008](../adr/0008-execution-observation-store-substrate-v1.md) 与
 [WP2-R2 checkpoint](./v53-wp2-r2-checkpoint.md)
