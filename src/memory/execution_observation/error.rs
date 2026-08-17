@@ -212,6 +212,17 @@ pub(crate) fn validate_failure_category(value: &str) -> Result<FailureCategoryV1
     }
 }
 
+/// Hand-rolled strict wire form so an unknown category string surfaces the
+/// frozen `invalid_failure_category` instead of a generic parse error. The
+/// error's stable Display doubles as the classification marker that
+/// `canonical::parse_canonical` recognizes on the wire boundary.
+impl<'de> serde::Deserialize<'de> for FailureCategoryV1 {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let wire = <&str>::deserialize(deserializer)?;
+        validate_failure_category(wire).map_err(serde::de::Error::custom)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

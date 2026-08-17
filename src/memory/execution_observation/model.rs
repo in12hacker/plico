@@ -1,8 +1,6 @@
 //! Fixed wire schemas for the execution-observation fixture ledger (ADR-0007 §4/§6/§7/§10).
 //!
-//! Every type is `deny_unknown_fields`; nullable fields encode `None` as
-//! explicit JSON `null` while a *missing* field is a deserialization error.
-//! Schema and attestation strings are checked against the frozen literals.
+//! Every type is `deny_unknown_fields`; `None` is explicit JSON `null`, missing is an error.
 
 use serde::{Deserialize, Serialize};
 
@@ -11,12 +9,14 @@ use super::error::{CorruptionCategory, InvalidRequestCategory, ObservationStoreE
 use super::hash;
 use super::ids::{CanonicalUuid, EventKind, ExecutionAttemptKeyV1, FixtureOriginV1, TerminalOutcomeV1};
 use super::validation::{check_digest, check_json_safe, check_key, check_writer_stamps};
-use super::{CURRENT_VIEW_MAX_BYTES, POINTER_MAX_BYTES, ROOT_MAX_BYTES, SEGMENT_MAX_BYTES};
+use super::{
+    validate_attempt_count, validate_event_count, CURRENT_VIEW_MAX_BYTES, POINTER_MAX_BYTES, ROOT_MAX_BYTES,
+    SEGMENT_MAX_BYTES,
+};
 
 fn unsupported_schema() -> ObservationStoreError {
     ObservationStoreError::corrupt(CorruptionCategory::UnsupportedStoredSchema)
 }
-
 fn bad_attestation() -> ObservationStoreError {
     ObservationStoreError::invalid(InvalidRequestCategory::InvalidAttestation)
 }
@@ -129,8 +129,7 @@ pub(crate) struct FixtureEventSegmentV1 {
 }
 
 impl FixtureEventSegmentV1 {
-    /// One event per segment: `last == first`, binds the event digest (§7);
-    /// canonical bytes capped at 64 KiB (§5).
+    /// One event per segment: `last == first`, digest-bound, ≤64 KiB (§5/§7).
     pub(crate) fn validate(&self, expected_event_sha256: &str) -> Result<(), ObservationStoreError> {
         if self.schema != SEGMENT_SCHEMA {
             return Err(unsupported_schema());
@@ -193,13 +192,14 @@ pub(crate) struct FixtureCurrentViewV1 {
 }
 
 impl FixtureCurrentViewV1 {
-    /// Attempts ascend by execution UUID bytes then attempt (§7); canonical
-    /// bytes capped at 8 MiB (§5).
+    /// Ascending attempts (§7); caps: 8 MiB, ≤10,000 attempts, ≤20,000 events.
     pub(crate) fn validate(&self) -> Result<(), ObservationStoreError> {
         if self.schema != CURRENT_VIEW_SCHEMA {
             return Err(unsupported_schema());
         }
         check_object_bytes(self, CURRENT_VIEW_MAX_BYTES)?;
+        validate_attempt_count(self.attempts.len())?;
+        validate_event_count(self.event_watermark)?;
         if self.attestation_state != ATTESTATION_STATE {
             return Err(bad_attestation());
         }
@@ -232,12 +232,13 @@ pub(crate) struct FixtureLedgerRootV1 {
 }
 
 impl FixtureLedgerRootV1 {
-    /// Root binds the current view digest it commits (§7); 64 KiB cap (§5).
+    /// Root binds the current view digest (§7); 64 KiB + watermark ≤20,000 (§5).
     pub(crate) fn validate(&self, expected_current_view_sha256: &str) -> Result<(), ObservationStoreError> {
         if self.schema != ROOT_SCHEMA || self.trust_class != TRUST_CLASS {
             return Err(unsupported_schema());
         }
         check_object_bytes(self, ROOT_MAX_BYTES)?;
+        validate_event_count(self.event_watermark)?;
         check_json_safe(self.generation)?;
         check_json_safe(self.event_watermark)?;
         check_json_safe(self.committed_at_ms)?;
@@ -263,8 +264,7 @@ pub(crate) struct FixtureActivePointerV1 {
 }
 
 impl FixtureActivePointerV1 {
-    /// Pointer carries only the schema literal and the active root digest;
-    /// canonical bytes capped at 4 KiB (§5).
+    /// Pointer carries only the schema literal and the root digest; ≤4 KiB.
     pub(crate) fn validate(&self, expected_root_sha256: &str) -> Result<(), ObservationStoreError> {
         if self.schema != POINTER_SCHEMA {
             return Err(unsupported_schema());

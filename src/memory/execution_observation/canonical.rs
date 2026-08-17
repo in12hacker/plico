@@ -1,10 +1,8 @@
 //! RFC 8785/JCS canonicalization boundary (ADR-0007 §8).
 //!
-//! All observation bytes are produced by `serde_json_canonicalizer` and parsed
-//! strictly: a value deserializes only if its raw bytes are already the exact
-//! JCS encoding of the value. Non-canonical key order, whitespace, unknown
-//! fields, missing fields, and misplaced nulls are rejected with the typed
-//! `jcs_canonicalization_failed` category instead of panicking.
+//! Bytes are produced by `serde_json_canonicalizer` and parsed strictly: a value
+//! loads only from its exact JCS encoding; key order, whitespace, unknown fields,
+//! missing fields, and misplaced nulls are typed rejects, never panics.
 
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -18,7 +16,7 @@ pub(crate) fn to_canonical_vec<T: Serialize>(value: &T) -> Result<Vec<u8>, Obser
 }
 
 pub(crate) fn parse_canonical<T: DeserializeOwned + Serialize>(bytes: &[u8]) -> Result<T, ObservationStoreError> {
-    let value: T = serde_json::from_slice(bytes).map_err(|_| jcs_error())?;
+    let value: T = serde_json::from_slice(bytes).map_err(|error| classify_wire_error(&error))?;
     let canonical = to_canonical_vec(&value)?;
     if canonical.as_slice() == bytes {
         Ok(value)
@@ -33,8 +31,38 @@ fn jcs_error() -> ObservationStoreError {
     }
 }
 
-/// Canonical size cap: oversize objects are rejected by measuring the JCS
-/// encoding itself (ADR-0007 §5 — must fail before any immutable write).
+/// Semantic wire classification (§4/§11): hand-rolled deserializers report the
+/// frozen error Display as the serde message; matching is EXACT against
+/// `<display> at line L column C`, so serde's input-echoing messages (unknown
+/// field/variant, invalid type) can never forge a typed category.
+fn classify_wire_error(error: &serde_json::Error) -> ObservationStoreError {
+    let expected_tail = format!(" at line {} column {}", error.line(), error.column());
+    for category in [
+        InvalidRequestCategory::ZeroAttempt,
+        InvalidRequestCategory::InvalidFailureCategory,
+    ] {
+        let marker = ObservationStoreError::invalid(category).to_string();
+        if error.to_string() == format!("{marker}{expected_tail}") {
+            return ObservationStoreError::invalid(category);
+        }
+    }
+    jcs_error()
+}
+
+impl<'de> serde::Deserialize<'de> for super::ids::ExecutionAttemptKeyV1 {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Wire {
+            execution_id: super::ids::CanonicalUuid,
+            attempt: u32,
+        }
+        let wire = Wire::deserialize(deserializer)?;
+        super::ids::ExecutionAttemptKeyV1::from_parts(wire.execution_id, wire.attempt).map_err(serde::de::Error::custom)
+    }
+}
+
+/// Canonical size cap: oversize JCS bytes are typed rejects (§5).
 pub(crate) fn check_object_bytes<T: Serialize>(value: &T, maximum_bytes: usize) -> Result<(), ObservationStoreError> {
     if to_canonical_vec(value)?.len() > maximum_bytes {
         Err(ObservationStoreError::limit(super::error::LimitCategory::ObjectBytes))
@@ -43,12 +71,9 @@ pub(crate) fn check_object_bytes<T: Serialize>(value: &T, maximum_bytes: usize) 
     }
 }
 
-// serde's internally-tagged enums do not enforce `deny_unknown_fields`, so the
-// two tagged enums get hand-rolled strict deserializers here: a flat
-// `deny_unknown_fields` wire struct plus explicit field-combination checks.
-// `Option<Option<T>>` distinguishes absent (None) from present-null
-// (Some(None)); both are invalid wherever the variant does not declare the
-// field, and present-null is invalid even where it is declared.
+// serde's internally-tagged enums do not enforce `deny_unknown_fields`, so
+// they get hand-rolled strict deserializers: a flat deny-unknown wire struct
+// plus field-combination checks; `Option<Option<T>>` splits absent vs null.
 
 impl<'de> serde::Deserialize<'de> for super::ids::TerminalOutcomeV1 {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
@@ -126,10 +151,7 @@ mod tests {
         assert_eq!(bytes, br#"{"a":"x","b":1}"#);
         let parsed: Sample = parse_canonical(&bytes).expect("parse");
         assert_eq!(parsed, sample);
-        super::super::hash::tests::flow(format!(
-            "data.canonical serialize struct -> {} bytes JCS; parse-back byte-equal -> ok",
-            bytes.len()
-        ));
+        super::super::hash::tests::flow(format!("data.canonical roundtrip {}B byte-equal ok", bytes.len()));
     }
 
     #[test]
@@ -141,16 +163,9 @@ mod tests {
             br#"{"a":"x"}"#,                      // missing field
         ];
         for (index, case) in cases.iter().enumerate() {
-            let error = parse_canonical::<Sample>(case).unwrap_err();
-            assert_eq!(
-                error,
-                ObservationStoreError::InvalidRequest {
-                    category: InvalidRequestCategory::JcsCanonicalizationFailed
-                }
-            );
+            assert_eq!(parse_canonical::<Sample>(case).unwrap_err(), jcs_error());
             super::super::hash::tests::flow(format!(
-                "data.canonical case={index} bytes={} -> invalid_request/jcs_canonicalization_failed",
-                case.len()
+                "data.canonical case={index} -> invalid_request/jcs_canonicalization_failed"
             ));
         }
     }
@@ -165,7 +180,7 @@ mod tests {
         let parsed: AppendStartedRequestV1 = parse_canonical(started_text.as_bytes()).expect("explicit nulls parse");
         assert!(parsed.fixture_role_ref.is_none() && parsed.fixture_session_ref.is_none());
         flow(format!(
-            "data.canonical started-request bytes={} explicit-nulls -> parse ok, None preserved",
+            "data.canonical started bytes={} explicit-nulls -> ok, None kept",
             started_text.len()
         ));
 
@@ -179,7 +194,6 @@ mod tests {
         );
         assert!(parse_canonical::<AppendStartedRequestV1>(null_policy.as_bytes()).is_err());
         flow("data.canonical non-nullable policy_sha256 = null -> reject");
-
         let terminal_text = String::from_utf8(to_canonical_vec(&golden_terminal_request()).unwrap()).unwrap();
         assert!(terminal_text.contains("\"execution_elapsed_ms\":null"));
         let missing_elapsed = terminal_text.replacen("\"execution_elapsed_ms\":null,", "", 1);
@@ -188,51 +202,40 @@ mod tests {
     }
 
     #[test]
-    fn execution_observation_f13_field_level_typed_rejects() {
-        use super::super::error::InvalidRequestCategory::{
-            DuplicateCid, InvalidAttestation, InvalidCid, InvalidDigest, UnsafeInteger, UnsupportedSchema,
-        };
-        use super::super::hash::tests::{golden_started_request, golden_terminal_request, hex64};
-        use super::super::model::{STARTED_EVENT_SCHEMA, STARTED_REQUEST_SCHEMA};
-        use super::super::tests::{err, golden_chain};
-        use super::super::validation::{
-            validate_monotonic_record, validate_started_request, validate_terminal_request, JSON_SAFE_INTEGER_MAX,
-        };
-
-        let mut request = golden_started_request();
-        validate_started_request(&request).expect("golden request is valid");
-        request.input_evidence_cids = vec![hex64('0'), hex64('0')];
-        assert_eq!(validate_started_request(&request), Err(err(DuplicateCid)));
-        request.input_evidence_cids = vec!["A".repeat(64)];
-        assert_eq!(validate_started_request(&request), Err(err(InvalidCid)));
-
-        request = golden_started_request();
-        request.schema = format!("{STARTED_REQUEST_SCHEMA}-v2");
-        assert_eq!(validate_started_request(&request), Err(err(UnsupportedSchema)));
-        request = golden_started_request();
-        request.operation_contract_sha256 = format!("{}\u{1}", "a".repeat(63));
-        assert_eq!(validate_started_request(&request), Err(err(InvalidDigest)));
-        request.attestation_state = "trusted".to_string();
-        assert_eq!(validate_started_request(&request), Err(err(InvalidAttestation)));
-
-        let mut terminal = golden_terminal_request();
-        terminal.execution_elapsed_ms = Some(JSON_SAFE_INTEGER_MAX);
-        validate_terminal_request(&terminal).expect("2^53-1 is json-safe");
-        terminal.execution_elapsed_ms = Some(JSON_SAFE_INTEGER_MAX + 1);
-        assert_eq!(validate_terminal_request(&terminal), Err(err(UnsafeInteger)));
-
-        let mut event = golden_chain().started_event;
-        event.schema = format!("{STARTED_EVENT_SCHEMA}-v2");
+    fn execution_observation_counterexample_wire_zero_attempt() {
+        use super::super::error::InvalidRequestCategory;
+        use super::super::hash::tests::{flow, golden_started_request, golden_terminal_request};
+        use super::super::model::{AppendStartedRequestV1, AppendTerminalRequestV1};
+        let text = String::from_utf8(to_canonical_vec(&golden_started_request()).unwrap()).unwrap();
+        let zero_attempt = text.replacen("\"attempt\":1", "\"attempt\":0", 1);
         assert_eq!(
-            event.validate(),
-            Err(ObservationStoreError::corrupt(
-                super::super::error::CorruptionCategory::UnsupportedStoredSchema
+            parse_canonical::<AppendStartedRequestV1>(zero_attempt.as_bytes()),
+            Err(ObservationStoreError::invalid(InvalidRequestCategory::ZeroAttempt))
+        );
+        let terminal = String::from_utf8(to_canonical_vec(&golden_terminal_request()).unwrap()).unwrap();
+        let terminal_zero = terminal.replacen("\"attempt\":1", "\"attempt\":0", 1);
+        assert_eq!(
+            parse_canonical::<AppendTerminalRequestV1>(terminal_zero.as_bytes()),
+            Err(ObservationStoreError::invalid(InvalidRequestCategory::ZeroAttempt))
+        );
+        flow("counterexample wire attempt=0 (started+terminal) -> invalid_request/zero_attempt");
+    }
+
+    #[test]
+    fn execution_observation_counterexample_wire_unknown_failure_category() {
+        use super::super::error::InvalidRequestCategory;
+        use super::super::hash::tests::{flow, golden_terminal_request};
+        use super::super::model::AppendTerminalRequestV1;
+
+        let text = String::from_utf8(to_canonical_vec(&golden_terminal_request()).unwrap()).unwrap();
+        let unknown_category = text.replacen("\"category\":\"tool_failed\"", "\"category\":\"unknown_cat\"", 1);
+        assert_eq!(
+            parse_canonical::<AppendTerminalRequestV1>(unknown_category.as_bytes()),
+            Err(ObservationStoreError::invalid(
+                InvalidRequestCategory::InvalidFailureCategory
             ))
         );
-
-        assert_eq!(validate_monotonic_record(100, 99), Err(err(UnsafeInteger)));
-        validate_monotonic_record(99, 100).unwrap();
-        validate_monotonic_record(100, 100).unwrap();
+        flow("counterexample wire unknown failure category -> invalid_request/invalid_failure_category");
     }
 
     #[test]

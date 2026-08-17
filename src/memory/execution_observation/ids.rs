@@ -81,8 +81,9 @@ impl<'de> Deserialize<'de> for CanonicalUuid {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+// Deserialize is hand-rolled in `canonical.rs` so attempt=0 is a typed reject
+// (the deny-unknown-fields wire form lives on that hand-rolled path).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 pub(crate) struct ExecutionAttemptKeyV1 {
     pub(crate) execution_id: CanonicalUuid,
     pub(crate) attempt: NonZeroU32,
@@ -131,7 +132,8 @@ pub(crate) enum TerminalOutcomeV1 {
     Indeterminate,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+// Deserialize is hand-rolled in `error.rs` (typed unknown-category marker).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum FailureCategoryV1 {
     InvalidInput,

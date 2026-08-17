@@ -172,11 +172,18 @@ fn execution_observation_f13_wire_level_strict_rejects() {
     let text = std::str::from_utf8(&canonical).expect("ascii");
     let unknown_field = format!("{{\"zz\":0,{}", &text[1..]);
     assert!(parse_canonical::<AppendStartedRequestV1>(unknown_field.as_bytes()).is_err());
+    // serde echoes unknown field names in its error Display; a marker-shaped
+    // field name must stay jcs, never forge a typed category (red-team P1).
+    let hijacked = format!("{{\"invalid_request/zero_attempt\":0,{}", &text[1..]);
+    assert_eq!(
+        parse_canonical::<AppendStartedRequestV1>(hijacked.as_bytes()),
+        Err(err(JcsCanonicalizationFailed))
+    );
     let whitespace = format!(" {text}");
     assert!(parse_canonical::<AppendStartedRequestV1>(whitespace.as_bytes()).is_err());
     let escaped_unicode = text.replacen("\"policy_sha256\":\"bbbb", "\"policy_sha256\":\"\\u0062bbb", 1);
     assert!(parse_canonical::<AppendStartedRequestV1>(escaped_unicode.as_bytes()).is_err());
-    flow("logic.f13 wire rejects declaration-order|unknown-field|whitespace|escaped-unicode -> jcs_canonicalization_failed");
+    flow("logic.f13 wire rejects declaration-order|unknown-field|marker-hijack|whitespace|escaped-unicode -> jcs");
 }
 
 #[test]
