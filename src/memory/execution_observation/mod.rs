@@ -15,6 +15,8 @@ pub(crate) mod ids;
 pub(crate) mod model;
 pub(crate) mod validation;
 
+mod store;
+
 #[cfg(test)]
 mod tests;
 
