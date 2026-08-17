@@ -3658,6 +3658,39 @@ def _normalize_semantic(value: object, key: str = "") -> object:
     return value
 
 
+def _runtime_json_loads(data: bytes, location: str) -> object:
+    """Parse bounded runtime JSON without weakening canonical artifact rules."""
+
+    if len(data) > MAX_CANDIDATE_OUTPUT_BYTES:
+        raise verify.VerificationError(f"{location} exceeds the runtime response limit")
+
+    def reject_constant(value: str) -> None:
+        raise verify.VerificationError(
+            f"non-finite JSON number is forbidden at {location}: {value}"
+        )
+
+    def reject_duplicates(pairs: list[tuple[str, object]]) -> dict[str, object]:
+        result: dict[str, object] = {}
+        for name, value in pairs:
+            if name in result:
+                raise verify.VerificationError(
+                    f"duplicate JSON key is forbidden at {location}: {name}"
+                )
+            result[name] = value
+        return result
+
+    try:
+        return json.loads(
+            data.decode("utf-8", errors="strict"),
+            object_pairs_hook=reject_duplicates,
+            parse_constant=reject_constant,
+        )
+    except verify.VerificationError:
+        raise
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise verify.VerificationError(f"invalid runtime JSON at {location}") from error
+
+
 def _run_lifecycle_cli(binary: Path, vault: Path, operation: list[str]) -> object:
     if not Path("/proc/self/task").is_dir() or not Path("/proc/self/fd").is_dir():
         raise verify.VerificationError(
@@ -3722,7 +3755,7 @@ def _run_lifecycle_cli(binary: Path, vault: Path, operation: list[str]) -> objec
         )
     return {
         "response": _normalize_semantic(
-            verify.strict_json_loads(stdout, "lifecycle CLI response")
+            _runtime_json_loads(stdout, "lifecycle CLI response")
         ),
         "maximum_threads": maximum_threads,
         "maximum_handles": maximum_handles,

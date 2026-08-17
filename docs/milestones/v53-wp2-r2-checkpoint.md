@@ -197,3 +197,14 @@ implementation diff。R2 acceptance 前，[WP3 blueprint](./v53-wp3-blueprint.md
 出现以下任一情况立即停止并回到架构组：扩大 public/crate-wide raw writer、引入任意 path/namespace 或第二把
 vault lock、修改 WP1 wire/hash、自动 promote candidate、增加 newest-root/recovery policy、接入 kernel/scheduler、
 引入新依赖，或需要用 waiver 跳过上述七项任一根因不变量。
+
+## 7. R2.1 runtime JSON 解析域纠偏
+
+C2.3 `e953855c73e7d39dd44ddcd7b9ae26205364de40` 已通过 shared preflight，并完成 external corpus 后在
+lifecycle differential 读取正常搜索响应时被架构工具阻断：`hits[].score` 是合法有限 JSON number，但旧工具误用
+packet/ledger canonical parser，因而连冻结基线响应也拒绝。
+
+R2.1 只修复解析域，不改变 store 合同：packet、approval、ledger 与 manifest 继续使用禁止浮点的 strict canonical
+parser；lifecycle runtime response 使用独立 bounded parser，允许有限 JSON number，继续拒绝 NaN、Infinity、重复键、
+非 UTF-8、畸形与超限输入。任何 verifier byte 变化必须重新生成 B4→A4→tag；同一 store diff 从 A4 重放并完整重跑
+R2，不得以人工 waiver 将旧 scope 结果升级为 GO。

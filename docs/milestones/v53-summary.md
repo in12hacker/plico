@@ -1,6 +1,6 @@
 # v53 验收摘要：Execution Observation Ledger Core
 
-**状态**：R1 Model/Hash accepted / C2 `f60eec1` R2 NO-GO / WP2.1 remediation required / WP3 blocked
+**状态**：R1 accepted / C2.3 store remediation ready / R2.1 gate-domain correction pending / WP3 blocked
 **合同**：[v53-execution-observation-spine.md](./v53-execution-observation-spine.md)
 **WP1 历史交接**：[v53-developer-handoff.md](./v53-developer-handoff.md)
 **WP2 当前交接**：[v53-wp2-developer-handoff.md](./v53-wp2-developer-handoff.md)
@@ -17,9 +17,9 @@
 - Architecture-Frozen：✅（R0 v2 packet + approval `eb23261084b2b7a38a40540ecfffd3cb327c54fa`）
 - Implementation-Candidate：✅（R1 candidate `5584b8e7b48247e503d9054bb3b3227c64c7ad94`）
 - WP2-Architecture-Frozen：✅（B2 `189f5cf` + A2 `8eb70d7`；只授权原 WP2 candidate scope）
-- WP2-Candidate：❌ C2 `f60eec1` 对抗审查 NO-GO；不得作为 WP3 base
+- WP2-Candidate：🟨 C2.3 `e953855` shared preflight 与 external corpus 已通过；等待 R2.1 lifecycle gate 重放
 - Evidence-Complete：⬜
-- R2 decision：`NO-GO / REMEDIATION REQUIRED`
+- R2 decision：`PENDING R2.1 FORMAL REPLAY`
 
 ## 2. 冻结身份
 

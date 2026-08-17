@@ -231,6 +231,17 @@ def approval_result(packet: Path, approval: str) -> dict[str, object]:
 
 
 class V53ToolTests(unittest.TestCase):
+    def test_runtime_json_parser_is_domain_separated_from_artifact_json(self) -> None:
+        runtime = b'{"data":{"result":{"hits":[{"score":0.125}]}}}'
+        parsed = verify_scope._runtime_json_loads(runtime, "runtime")
+        self.assertEqual(parsed["data"]["result"]["hits"][0]["score"], 0.125)
+        with self.assertRaises(verify.VerificationError):
+            verify.strict_json_loads(runtime, "artifact")
+        for invalid in [b'{"score":NaN}', b'{"score":Infinity}', b'{"a":1,"a":2}']:
+            with self.subTest(invalid=invalid):
+                with self.assertRaises(verify.VerificationError):
+                    verify_scope._runtime_json_loads(invalid, "runtime")
+
     def test_wp2_profile_rejects_r0_and_predecessor_rewrites(self) -> None:
         old_spec_path = HERE / "r0_spec.json"
         old_spec = verify.strict_json_loads(old_spec_path.read_bytes(), "r0_spec")
