@@ -1,17 +1,17 @@
 # v53 验收摘要：Execution Observation Ledger Core
 
-**状态**：R0 Freeze Candidate / Implementation not started
+**状态**：R1 Model/Hash accepted / R2 not started
 **合同**：[v53-execution-observation-spine.md](./v53-execution-observation-spine.md)
 **开发交接**：[v53-developer-handoff.md](./v53-developer-handoff.md)
-**产品基线**：`fe4c08260fc3e6dc0e3d37921b863a7ed48a330a`
+**产品基线**：`a86ad4c450762138eea13bc1a39f045a45b67b24`
 
 > 本文件只由 Plico 架构/验收组填写；R0 冻结项可在开发开工前记录，其余项只在候选提交与独立证据完整后填写。
 > 第三方开发组不得修改本文件或预填通过状态、测试数字、benchmark 结论；只能提交独立的候选证据输入。
 
 ## 1. 状态
 
-- Architecture-Frozen：⬜（仅在外部 R0 packet + 独立 Git 审批提交/tag 离线授权为 GO 后成立）
-- Implementation-Candidate：⬜
+- Architecture-Frozen：✅（R0 v2 packet + approval `eb23261084b2b7a38a40540ecfffd3cb327c54fa`）
+- Implementation-Candidate：✅（R1 candidate `5584b8e7b48247e503d9054bb3b3227c64c7ad94`）
 - Evidence-Complete：⬜
 - Final decision：`PENDING`
 
@@ -21,16 +21,16 @@
 |---|---|
 | Accepted narrow ADR | `docs/adr/0007-execution-observation-ledger-v1.md`；digest 由外部 R0 packet 绑定 |
 | Contract digest | 由外部 R0 packet 绑定 |
-| Architecture-Frozen implementation base | 由外部 R0 packet 的 `implementation_base_sha/tree` 绑定；PENDING |
-| Candidate scope base | 独立审批提交 A；须由离线授权器验证；PENDING |
-| Candidate commit | PENDING |
-| Worktree clean | collector/packet verifier fail-closed 验证 |
+| Architecture-Frozen implementation base | `a86ad4c450762138eea13bc1a39f045a45b67b24` / tree `0485d6819fe2d9d34a7591cda984186a6354e950` |
+| Candidate scope base | `eb23261084b2b7a38a40540ecfffd3cb327c54fa`；离线授权器 `GO` |
+| Candidate commit | `5584b8e7b48247e503d9054bb3b3227c64c7ad94` / tree `f5e798e4b0cff2a9511e29c7a791477f873b8c30` |
+| Worktree clean | 独立 Git-object materialization + clean checkout 验证；共享工作树 `.zcode/` 不计入 candidate |
 | Cargo.lock digest | `a6f237ada517e77b3b006e9b5a3ba1e5645c5b8ba992ccc9e9b42e1d07125792`（100,222 bytes） |
 | benchmarks/uv.lock digest | `a2d42a133228ef6e12a5362c2d2f04385e9abf3ef08a8d65da9a7664a62722ec`（423,717 bytes） |
-| R0 handoff packet digest | 外部四文件 packet 的 `COMMITTED` 绑定；不回填以避免 self-reference |
-| Candidate evidence bundle digest | PENDING（schema/collector/verifier 于 R1 前冻结，不属于 R0 packet） |
+| R0 handoff packet digest | `5f5ff083dc07a744c48d5df8e6be3d6937cec4ffebe6d458b24299ecd81bb1de`（COMMITTED） |
+| R1 independent corpus | verifier `9a44c91fec3c870e6a9d8272379da9b748d183bc`；source SHA-256 `7a7dde3e55044fb8566cffb659e3c3d8c8c68950a50172075dac802031629eca`；WP6 sealed bundle 仍 PENDING |
 | R0 packet collector/verifier version | `plico.v53.r0-spec/v2` / `plico.v53.r0-handoff/v2`；v1 已撤销、不得复用 |
-| Packet integrity / Git authorization | PENDING / PENDING |
+| Packet integrity / Git authorization | verified / GO（程序性、unsigned；限制仍按合同） |
 
 ## 3. 不变量验收
 
@@ -38,12 +38,12 @@
 |---|---|---|
 | production zero wiring / no observation-added mutation | PENDING | PENDING |
 | canonical-form CID refs / fixed unverified fixture / no false authorization claim | PENDING | PENDING |
-| Started/Terminal state machine | PENDING | PENDING |
-| idempotent retry / terminal conflict | PENDING | PENDING |
+| Started/Terminal state machine | R1 PASS | candidate tests + independent counterexample replay |
+| idempotent retry / terminal conflict | R1 PASS | body-derived request hash、三方 key、policy/runtime binding |
 | Open/Terminal restart equality | PENDING | PENDING |
 | writer poison / post-publish uncertainty | PENDING | PENDING |
 | concurrent single terminal | PENDING | PENDING |
-| JCS/domain hash/future schema | PENDING | PENDING |
+| JCS/domain hash/future schema | R1 PASS | 7 domains、golden chain/pointers、JCS-first combined attacks |
 | privacy/log scan | PENDING | PENDING |
 | exact-14/catalog golden/deterministic response semantics unchanged | PENDING | PENDING |
 | Memory/projection/KG/skill/retrieval unchanged | PENDING | PENDING |
@@ -52,22 +52,22 @@
 
 | 门禁 | 结果 |
 |---|---|
-| cargo fmt | PENDING |
-| cargo check all targets/features | PENDING |
-| cargo test lib/all features | PENDING |
+| cargo fmt | R1 PASS |
+| cargo check all targets/features | R1 PASS |
+| cargo test lib/all features | R1 targeted PASS；全库 sandbox 基线有既有 loopback/deadline failures，不归因 candidate |
 | cargo test all | PENDING |
-| cargo clippy `-D warnings` | PENDING |
+| cargo clippy `-D warnings` | R1 PASS |
 | coverage：local floor ≥85%；candidate total ≥85.83%；observation module ≥95% | PENDING |
 | perf regression | PENDING |
 | benchmark ruff/pytest | PENDING |
-| diff/forbidden-path audit | PENDING |
+| diff/forbidden-path audit | R1 PASS：9 exact paths；scope base→candidate clean materialization |
 
 ## 5. Review
 
 | Checkpoint | Reviewer | Verdict | Notes |
 |---|---|---|---|
-| R0 Constitution/ADR | PENDING | PENDING | |
-| R1 Model/Hash | PENDING | PENDING | |
+| R0 Constitution/ADR | Plico architecture + independent QA/red-team | GO | packet v2 + approval/tag 离线验证 |
+| R1 Model/Hash | Plico architecture + data-integrity/red-team review | GO | candidate `5584b8e`; 33/33 targeted; repaired scope PASS |
 | R2 Store Core | PENDING | PENDING | |
 | R3 View/Identity boundary | PENDING | PENDING | |
 | R4 Fault/Admitted boundary | PENDING | PENDING | |
@@ -84,8 +84,15 @@ Verified Experience product gate。
 
 | 类型 | ID | Owner | Due date | 状态 | 说明/证据 |
 |---|---|---|---|---|---|
-| Architecture Deviation | PENDING | PENDING | PENDING | PENDING | PENDING |
-| Local gate waiver | PENDING | PENDING | PENDING | PENDING | PENDING |
-| Named P2 debt | PENDING | PENDING | PENDING | PENDING | PENDING |
+| Architecture Deviation | V53-R1-D01 | Architecture | before WP2 approval | CLOSED | R0 scanner把 nested use tree/合法相对路径当 root；`2c42b42` 改为 use-tree 展开、词法 module depth 与正向 capability policy；`9a44c91` 加入独立只读 overlay corpus；同 candidate scope PASS |
+| Local gate waiver | V53-R1-W01 | Architecture | R1 only | CLOSED | 全库 sandbox 的 loopback bind/deadline 失败由 candidate 前基线复现；R1 使用 clean targeted/check/clippy + 独立 diff，不把环境失败涂绿 |
+| Named P2 debt | V53-WP2-D01 | WP2 | R2 | OPEN | 所有 stored-read caller/limit 错误在 loader 边界统一映射稳定 `CorruptStore` category |
+| Named P2 debt | V53-WP2-D02 | WP2 | R2 | OPEN | raw bytes 在反序列化前按 object kind bounded read；廉价 count gate 先于分配/写入 |
+| Named P2 debt | V53-WP2-D03 | WP2 | R2/R3 | OPEN | replay 验证 sequence/generation/watermark 连续性及 event→segment→view→root 全绑定 |
+| Named P2 debt | V53-WP2-D04 | WP2 | R2 | OPEN | receipt 仅从已验证链派生并增加 exact validator；不得信任 cache/caller |
+| Named P2 debt | V53-WP2-D05 | Architecture + WP2 | before WP2 implementation | OPEN | 新 checkpoint scope 先拆分已达 297–299 行的 model/test/helper，再允许 store 文件；禁止继续向 WP1 文件堆叠 |
 
-Reviewer identity、review timestamp 和签字 digest：PENDING。
+R1 reviewer record：Plico architecture group + independent contract/evidence/red-team reviewers，2026-08-17。
+架构修复 verifier commits 为 `2c42b42dac601c9bb6f91ee7db019bf77012a017`、
+`9a44c91fec3c870e6a9d8272379da9b748d183bc`；它们必须被下一份 checkpoint
+packet/spec 绑定后才能授权 WP2，旧 R0 packet 不得被解释为已授权后续工作包。
