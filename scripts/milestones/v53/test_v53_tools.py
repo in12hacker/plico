@@ -649,8 +649,8 @@ class V53ToolTests(unittest.TestCase):
             b"use crate::{memory::LayeredMemory};\n",
             b"use crate as root;\nfn probe() { let _ = root::memory::x; }\n",
             b"extern crate self as escaped;\n",
-            b"use super::ledger;\n",
-            b"use super::layered;\n",
+            b"use super::super::ledger;\n",
+            b"use super::super::layered;\n",
             b"pub(in crate::memory) fn probe() {}\n",
             b"fn probe() { crate /* nested /* x */ */ ::scheduler::run(); }\n",
             b"fn probe(v: crate /* x */ :: cas :: PersonalVaultStorage) {}\n",
@@ -680,6 +680,51 @@ class V53ToolTests(unittest.TestCase):
                         maximum_bytes=65_536,
                         maximum_lines_exclusive=300,
                     )
+
+    def test_rust_scanner_resolves_local_modules_and_nested_use_trees(self) -> None:
+        valid_sources = {
+            "src/memory/execution_observation/canonical.rs": (
+                b"use serde::{de::{DeserializeOwned, Error}, Serialize};\n"
+                b"use super::error::ObservationStoreError;\n"
+                b"fn probe<T: serde::de::Error>() {}\n"
+            ),
+            "src/memory/execution_observation/model.rs": (
+                b"use super::{validate_event_count, ROOT_MAX_BYTES};\n"
+                b"use super::validation::{check_digest, check_key};\n"
+                b"fn probe() { super::validate_event_count(1).unwrap(); }\n"
+            ),
+            "src/memory/execution_observation/hash.rs": (
+                b"#[cfg(test)]\nmod tests {\n"
+                b"use super::super::model::FixtureLedgerRootV1;\n"
+                b"use super::*;\n}\n"
+            ),
+        }
+        for path, source in valid_sources.items():
+            with self.subTest(path=path):
+                verify_scope._scan_observation_source(
+                    path,
+                    source,
+                    maximum_bytes=65_536,
+                    maximum_lines_exclusive=300,
+                )
+
+        escapes = {
+            "src/memory/execution_observation/mod.rs": b"use super::ledger;\n",
+            "src/memory/execution_observation/canonical.rs": (
+                b"use super::{super::{ledger}};\n"
+            ),
+            "src/memory/execution_observation/model.rs": (
+                b"mod nested { use super::super::super::scheduler; }\n"
+            ),
+        }
+        for path, source in escapes.items():
+            with self.subTest(path=path), self.assertRaises(verify.VerificationError):
+                verify_scope._scan_observation_source(
+                    path,
+                    source,
+                    maximum_bytes=65_536,
+                    maximum_lines_exclusive=300,
+                )
 
     def test_rust_scanner_ignores_literals_but_not_side_doors(self) -> None:
         verify_scope._scan_observation_source(
@@ -893,6 +938,38 @@ class V53ToolTests(unittest.TestCase):
         ):
             self.assertNotIn(key, environment)
         self.assertEqual(environment["PATH"], "/trusted/toolchain/bin:/usr/bin:/bin")
+
+    def test_candidate_environment_is_private_offline_and_reuses_installed_rustup(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            cargo_home = root / "cargo-home"
+            rustup_home = root / "rustup-home"
+            cargo_home.mkdir()
+            rustup_home.mkdir()
+            with (
+                mock.patch.dict(
+                    os.environ,
+                    {
+                        "CARGO_HOME": os.fspath(cargo_home),
+                        "RUSTUP_HOME": os.fspath(rustup_home),
+                    },
+                    clear=False,
+                ),
+                verify_scope._isolated_candidate_environment({"PATH": os.defpath}) as (
+                    environment,
+                    execution_root,
+                ),
+            ):
+                self.assertEqual(
+                    environment["RUSTUP_HOME"], os.fspath(rustup_home.resolve())
+                )
+                self.assertEqual(environment["CARGO_NET_OFFLINE"], "true")
+                self.assertNotEqual(environment["HOME"], os.fspath(Path.home()))
+                self.assertTrue(
+                    Path(environment["CARGO_TARGET_DIR"]).is_relative_to(execution_root)
+                )
 
     def test_git_replace_refs_are_rejected_before_scope_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

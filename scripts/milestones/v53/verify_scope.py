@@ -27,40 +27,8 @@ import authorize
 TEST_DECLARATION = re.compile(
     r"(?m)^\s*(?:async\s+)?fn\s+(execution_observation_f(\d{2})_[A-Za-z0-9_]+)\s*\("
 )
-PLAIN_PUBLIC = re.compile(
-    r"(?m)^\s*pub\s+(?:async\s+)?(?:const|enum|fn|mod|static|struct|trait|type|union|use)\b"
-)
-PUBLIC_IN = re.compile(r"(?m)^\s*pub\s*\(\s*in\b")
-CRATE_IMPORT_BYPASS = re.compile(
-    r"(?m)^\s*(?:pub\([^)]*\)\s+)?use\s+crate\s*(?:;|as\b|::\s*\{)"
-)
-SIDE_DOOR = re.compile(
-    r"(?m)(?:macro_rules!|#\s*\[\s*macro_export\s*\]|cfg!\s*\(\s*feature|"
-    r"#\s*\[\s*cfg\s*\(\s*feature|include!\s*\(|env!\s*\()"
-)
-OBSERVATION_DENY_PATTERNS = {
-    "unsafe code": re.compile(r"\bunsafe\b"),
-    "direct filesystem I/O": re.compile(
-        r"(?:\bstd::fs\b|\btokio::fs\b|\bOpenOptions\b|\bPathBuf\b|\bFile::)"
-    ),
-    "canonical Memory ledger/model": re.compile(
-        r"(?:crate::memory::(?:ledger|model|current_view|projection)|"
-        r"\bLayeredMemory\b|\bMemoryEntry\b|\bMemoryId\b|\bRevisionId\b)"
-    ),
-    "runtime or public layer": re.compile(
-        r"crate::(?:kernel|scheduler|intent|tool|api|client|mcp|bin)(?:::|\b)"
-    ),
-    "derived index or model provider": re.compile(
-        r"crate::(?:fs|llm)(?:::|\b)|\bSemanticFS\b|\bEventBus\b|"
-        r"TrajectoryTracker|ExperienceMiner|SkillForge|AgentKeyStore"
-    ),
-    "configuration side door": re.compile(r"(?:std::env|crate::config|option_env!)"),
-    "benchmark dependency": re.compile(r"(?:crate::benchmarks|benchmarks::)"),
-}
-ALLOWED_IMPORT_ROOTS = {
+PURE_EXTERNAL_ROOTS = {
     "core",
-    "crate",
-    "self",
     "serde",
     "serde_json",
     "serde_json_canonicalizer",
@@ -69,12 +37,50 @@ ALLOWED_IMPORT_ROOTS = {
     "thiserror",
     "uuid",
 }
-USE_ROOT = re.compile(
-    r"(?m)^\s*(?:pub\([^)]*\)\s+)?use\s+(?:::)?([A-Za-z_][A-Za-z0-9_]*)"
-)
-CRATE_MODULE = re.compile(r"\bcrate::([A-Za-z_][A-Za-z0-9_]*)")
-CAS_DIRECT = re.compile(r"\bcrate::cas::([A-Za-z_][A-Za-z0-9_]*)")
-CAS_GROUP = re.compile(r"(?s)\buse\s+crate::cas::\{([^}]{}]*)\}\s*;")
+PURE_STD_MODULES = {
+    "borrow",
+    "cmp",
+    "collections",
+    "convert",
+    "fmt",
+    "hash",
+    "marker",
+    "mem",
+    "num",
+    "ops",
+    "option",
+    "result",
+    "slice",
+    "str",
+}
+OBSERVATION_MODULES = {
+    "canonical",
+    "error",
+    "hash",
+    "ids",
+    "model",
+    "tests",
+    "validation",
+}
+RUST_PRIMITIVE_PATH_ROOTS = {
+    "bool",
+    "char",
+    "f32",
+    "f64",
+    "i8",
+    "i16",
+    "i32",
+    "i64",
+    "i128",
+    "isize",
+    "str",
+    "u8",
+    "u16",
+    "u32",
+    "u64",
+    "u128",
+    "usize",
+}
 LISTED_F_TEST = re.compile(
     r"(?m)^(?P<name>\S*execution_observation_f(?P<id>\d{2})_\S*): test$"
 )
@@ -229,8 +235,181 @@ def _matching_token(tokens: list[str], start: int, opening: str, closing: str) -
     raise verify.VerificationError(f"unterminated Rust token group: {opening}")
 
 
+def _is_rust_identifier(token: str) -> bool:
+    return re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", token) is not None
+
+
+def _module_depths(path: str, tokens: list[str]) -> list[int]:
+    """Return each token's lexical module depth below execution_observation.
+
+    A sibling file such as `canonical.rs` starts one module below the boundary;
+    `mod.rs` starts at the boundary. Inline `mod name { ... }` blocks add one.
+    This lets relative paths be checked by where they resolve instead of by the
+    spelling `super`, which is safe in a child but an escape at the boundary.
+    """
+
+    base_depth = 0 if path.endswith("/mod.rs") else 1
+    module_braces = {
+        index + 2
+        for index in range(len(tokens) - 2)
+        if tokens[index] == "mod"
+        and _is_rust_identifier(tokens[index + 1])
+        and tokens[index + 2] == "{"
+    }
+    depths: list[int] = []
+    brace_stack: list[bool] = []
+    depth = base_depth
+    for index, token in enumerate(tokens):
+        if token == "}":
+            if not brace_stack:
+                raise verify.VerificationError(f"unbalanced Rust braces: {path}")
+            if brace_stack.pop():
+                depth -= 1
+        depths.append(depth)
+        if token == "{":
+            is_module = index in module_braces
+            brace_stack.append(is_module)
+            if is_module:
+                depth += 1
+    if brace_stack:
+        raise verify.VerificationError(f"unbalanced Rust braces: {path}")
+    return depths
+
+
+def _split_use_branches(tokens: list[str]) -> list[list[str]]:
+    branches: list[list[str]] = []
+    start = 0
+    depth = 0
+    for index, token in enumerate(tokens):
+        if token == "{":
+            depth += 1
+        elif token == "}":
+            depth -= 1
+            if depth < 0:
+                raise verify.VerificationError("unbalanced Rust use tree")
+        elif token == "," and depth == 0:
+            if tokens[start:index]:
+                branches.append(tokens[start:index])
+            start = index + 1
+    if depth:
+        raise verify.VerificationError("unbalanced Rust use tree")
+    if tokens[start:]:
+        branches.append(tokens[start:])
+    return branches
+
+
+def _flat_use_path(tokens: list[str]) -> tuple[str, ...]:
+    if not tokens:
+        raise verify.VerificationError("empty Rust use path")
+    segments: list[str] = []
+    expect_segment = True
+    for token in tokens:
+        if expect_segment:
+            if token == "*" or _is_rust_identifier(token):
+                segments.append(token)
+                expect_segment = False
+            else:
+                raise verify.VerificationError("unparseable Rust use path")
+        elif token == "::":
+            expect_segment = True
+        else:
+            raise verify.VerificationError("unparseable Rust use path")
+    if expect_segment or "*" in segments[:-1]:
+        raise verify.VerificationError("unparseable Rust use path")
+    return tuple(segments)
+
+
+def _expand_use_tree(
+    tokens: list[str], prefix: tuple[str, ...] = ()
+) -> list[tuple[str, ...]]:
+    """Expand a Rust use tree into fully inherited paths.
+
+    For example `serde::{de::DeserializeOwned, Serialize}` becomes
+    `serde::de::DeserializeOwned` and `serde::Serialize`. Alias syntax is
+    rejected before expansion so every introduced name retains provenance.
+    """
+
+    if "as" in tokens:
+        raise verify.VerificationError("aliased Rust use item is forbidden")
+    depth = 0
+    group_start: int | None = None
+    for index, token in enumerate(tokens):
+        if token == "{":
+            if depth == 0:
+                group_start = index
+                break
+            depth += 1
+        elif token == "}":
+            depth -= 1
+    if group_start is None:
+        return [prefix + _flat_use_path(tokens)]
+    group_end = _matching_token(tokens, group_start, "{", "}")
+    if group_end != len(tokens) - 1:
+        raise verify.VerificationError("tokens after Rust use group are forbidden")
+    head = tokens[:group_start]
+    if head and head[-1] == "::":
+        head = head[:-1]
+    inherited = prefix + (_flat_use_path(head) if head else ())
+    branches = _split_use_branches(tokens[group_start + 1 : group_end])
+    if not branches:
+        raise verify.VerificationError("empty Rust use group")
+    expanded: list[tuple[str, ...]] = []
+    for branch in branches:
+        expanded.extend(_expand_use_tree(branch, inherited))
+    return expanded
+
+
+def _validate_capability_path(
+    path: tuple[str, ...], *, module_depth: int, source_path: str
+) -> None:
+    if not path:
+        raise verify.VerificationError(f"empty Rust path: {source_path}")
+    super_count = 0
+    while super_count < len(path) and path[super_count] == "super":
+        super_count += 1
+    if super_count:
+        if super_count > module_depth:
+            raise verify.VerificationError(
+                f"relative path escapes execution_observation: {source_path}"
+            )
+        return
+    root = path[0]
+    if root == "self" or root in OBSERVATION_MODULES:
+        return
+    if root == "crate":
+        raise verify.VerificationError(
+            f"crate dependency escapes the WP1 pure-type boundary: {source_path}"
+        )
+    if root not in PURE_EXTERNAL_ROOTS:
+        raise verify.VerificationError(
+            f"unapproved dependency root {root!r}: {source_path}"
+        )
+    if root in {"std", "core"}:
+        if len(path) < 2 or path[1] not in PURE_STD_MODULES:
+            raise verify.VerificationError(
+                f"non-pure {root} capability is forbidden: {source_path}"
+            )
+    if "*" in path:
+        raise verify.VerificationError(
+            f"external glob import is forbidden: {source_path}"
+        )
+
+
+def _qualified_path(tokens: list[str], start: int) -> tuple[str, ...]:
+    segments = [tokens[start]]
+    cursor = start + 1
+    while cursor + 1 < len(tokens) and tokens[cursor] == "::":
+        segment = tokens[cursor + 1]
+        if not (_is_rust_identifier(segment) or segment == "*"):
+            break
+        segments.append(segment)
+        cursor += 2
+    return tuple(segments)
+
+
 def _scan_rust_tokens(path: str, text: str, *, observation: bool) -> list[str]:
     tokens = _rust_tokens(text)
+    module_depths = _module_depths(path, tokens)
     forbidden_macros = {
         "cfg",
         "env",
@@ -240,31 +419,32 @@ def _scan_rust_tokens(path: str, text: str, *, observation: bool) -> list[str]:
         "macro_rules",
         "option_env",
     }
-    forbidden_names = {
-        "AgentKeyStore",
-        "EventBus",
-        "ExperienceMiner",
-        "File",
-        "LayeredMemory",
-        "MemoryEntry",
-        "MemoryId",
-        "OpenOptions",
-        "PathBuf",
-        "RevisionId",
-        "SemanticFS",
-        "SkillForge",
-        "TrajectoryTracker",
-    }
-    forbidden_std_modules = {"env", "fs", "io", "net", "os", "process", "thread"}
-    allowed_path_roots = ALLOWED_IMPORT_ROOTS | {
-        "canonical",
-        "error",
-        "hash",
-        "ids",
-        "model",
-        "tests",
-        "validation",
-    }
+    use_ranges: set[int] = set()
+    imported_bindings: set[str] = set()
+    if observation:
+        for index, token in enumerate(tokens):
+            if token != "use":
+                continue
+            try:
+                statement_end = tokens.index(";", index + 1)
+            except ValueError as error:
+                raise verify.VerificationError(
+                    f"unterminated Rust use item: {path}"
+                ) from error
+            use_ranges.update(range(index, statement_end + 1))
+            statement = tokens[index + 1 : statement_end]
+            if statement[:2] == ["::", "crate"]:
+                statement = statement[1:]
+            expanded = _expand_use_tree(statement)
+            for imported_path in expanded:
+                _validate_capability_path(
+                    imported_path,
+                    module_depth=module_depths[index],
+                    source_path=path,
+                )
+                binding = imported_path[-1]
+                if binding not in {"*", "self", "super"}:
+                    imported_bindings.add(binding)
     for index, token in enumerate(tokens):
         if (
             token in forbidden_macros
@@ -289,21 +469,8 @@ def _scan_rust_tokens(path: str, text: str, *, observation: bool) -> list[str]:
                     )
         if not observation:
             continue
-        if (
-            re.fullmatch(r"[a-z_][A-Za-z0-9_]*", token)
-            and index + 1 < len(tokens)
-            and tokens[index + 1] == "::"
-            and (
-                index == 0
-                or tokens[index - 1] != "::"
-                or index == 1
-                or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", tokens[index - 2])
-            )
-            and token not in allowed_path_roots
-        ):
-            raise verify.VerificationError(
-                f"unapproved fully-qualified path root {token!r}: {path}"
-            )
+        if index in use_ranges:
+            continue
         if (
             token == "extern"
             and index + 1 < len(tokens)
@@ -314,10 +481,6 @@ def _scan_rust_tokens(path: str, text: str, *, observation: bool) -> list[str]:
             )
         if token == "unsafe":
             raise verify.VerificationError(f"unsafe code is forbidden: {path}")
-        if token in forbidden_names:
-            raise verify.VerificationError(
-                f"forbidden dependency name {token!r}: {path}"
-            )
         if token == "pub":
             if index + 1 >= len(tokens) or tokens[index + 1] != "(":
                 raise verify.VerificationError(
@@ -328,62 +491,29 @@ def _scan_rust_tokens(path: str, text: str, *, observation: bool) -> list[str]:
                 raise verify.VerificationError(
                     f"only pub(crate)/pub(super) visibility is allowed: {path}"
                 )
-        if token == "super" and tokens[index : index + 2] == ["super", "::"]:
-            raise verify.VerificationError(
-                f"super paths are forbidden by the WP1 module boundary: {path}"
-            )
-        if token in {"crate", "std", "tokio"} and index + 2 < len(tokens):
-            if tokens[index + 1] != "::":
+        if not _is_rust_identifier(token) or index + 1 >= len(tokens):
+            continue
+        if tokens[index + 1] != "::":
+            continue
+        if index + 2 >= len(tokens) or not (
+            _is_rust_identifier(tokens[index + 2]) or tokens[index + 2] == "*"
+        ):
+            # Turbofish (`function::<T>`) is not a module/capability path.
+            continue
+        if index > 0 and tokens[index - 1] == "::":
+            if index > 1 and _is_rust_identifier(tokens[index - 2]):
                 continue
-            module = tokens[index + 2]
-            if token == "crate":
-                raise verify.VerificationError(
-                    f"crate dependencies are forbidden by the WP1 pure-type boundary: {path}"
-                )
-            if token == "tokio" or (token == "std" and module in forbidden_std_modules):
-                raise verify.VerificationError(f"runtime/I/O path is forbidden: {path}")
-        if token == "use":
-            try:
-                statement_end = tokens.index(";", index + 1)
-            except ValueError as error:
-                raise verify.VerificationError(
-                    f"unterminated Rust use item: {path}"
-                ) from error
-            statement = tokens[index + 1 : statement_end]
-            if "as" in statement:
-                raise verify.VerificationError(
-                    f"aliased Rust use item is forbidden: {path}"
-                )
-            cursor = index + 1
-            if cursor < len(tokens) and tokens[cursor] == "::":
-                cursor += 1
-            if cursor >= len(tokens) or not re.fullmatch(
-                r"[A-Za-z_][A-Za-z0-9_]*", tokens[cursor]
-            ):
-                raise verify.VerificationError(f"unparseable Rust use item: {path}")
-            root = tokens[cursor]
-            if root not in ALLOWED_IMPORT_ROOTS:
-                raise verify.VerificationError(
-                    f"unapproved import root {root!r} in observation module: {path}"
-                )
-            if root in {"crate", "self"}:
-                if cursor + 1 >= len(tokens) or tokens[cursor + 1] != "::":
-                    raise verify.VerificationError(
-                        f"bare local-root import is forbidden: {path}"
-                    )
-                if cursor + 2 >= len(tokens) or tokens[cursor + 2] in {"{"}:
-                    raise verify.VerificationError(
-                        f"local-root group import is forbidden: {path}"
-                    )
-            if root == "std":
-                if cursor + 2 < len(tokens) and tokens[cursor + 2] == "{":
-                    raise verify.VerificationError(
-                        f"std root-group import is forbidden: {path}"
-                    )
-                if forbidden_std_modules.intersection(statement):
-                    raise verify.VerificationError(
-                        f"std I/O/runtime import is forbidden: {path}"
-                    )
+        if not (token[0].islower() or token in {"self", "super", "crate"}):
+            continue
+        qualified = _qualified_path(tokens, index)
+        root = qualified[0]
+        if root in imported_bindings or root in RUST_PRIMITIVE_PATH_ROOTS:
+            continue
+        _validate_capability_path(
+            qualified,
+            module_depth=module_depths[index],
+            source_path=path,
+        )
 
     return tokens
 
@@ -536,7 +666,13 @@ def _hardened_tool_environment(cargo_path: Path) -> dict[str, str]:
 
 @contextmanager
 def _isolated_candidate_environment(base: dict[str, str]):
-    """Use an alias-free Cargo home and private build/temp directories."""
+    """Use an alias-free Cargo home and private build/temp directories.
+
+    `HOME` is intentionally replaced, but rustup's installed, packet-observed
+    toolchain remains a read-only runtime input. Pin its existing home
+    explicitly so rustup never interprets the private HOME as a request to
+    install a missing toolchain (which would violate the offline gate).
+    """
 
     with tempfile.TemporaryDirectory(prefix="plico-v53-execution-") as temporary:
         root = Path(temporary)
@@ -549,6 +685,11 @@ def _isolated_candidate_environment(base: dict[str, str]):
         original_cargo_home = Path(
             os.environ.get("CARGO_HOME", os.fspath(Path.home() / ".cargo"))
         )
+        original_rustup_home = Path(
+            os.environ.get("RUSTUP_HOME", os.fspath(Path.home() / ".rustup"))
+        ).resolve(strict=True)
+        if not original_rustup_home.is_dir():
+            raise verify.VerificationError("installed rustup home is unavailable")
         for cache_name in ("git", "registry"):
             cache = original_cargo_home / cache_name
             if cache.is_dir():
@@ -561,6 +702,7 @@ def _isolated_candidate_environment(base: dict[str, str]):
                 "CARGO_TARGET_DIR": os.fspath(target),
                 "HOME": os.fspath(home),
                 "PYTHONDONTWRITEBYTECODE": "1",
+                "RUSTUP_HOME": os.fspath(original_rustup_home),
                 "TMPDIR": os.fspath(temp),
             }
         )
