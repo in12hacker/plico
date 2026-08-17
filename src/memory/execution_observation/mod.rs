@@ -13,6 +13,7 @@ pub(crate) mod error;
 pub(crate) mod hash;
 pub(crate) mod ids;
 pub(crate) mod model;
+pub(crate) mod reader;
 mod store;
 pub(crate) mod validation;
 
