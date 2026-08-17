@@ -81,6 +81,152 @@ RUST_PRIMITIVE_PATH_ROOTS = {
     "u128",
     "usize",
 }
+WP1_EXTERNAL_TESTS = r"""
+use std::num::NonZeroU32;
+
+use super::canonical::parse_canonical;
+use super::error::{
+    CorruptionCategory, InvalidRequestCategory, LimitCategory,
+    ObservationStoreError, TransitionConflictCategory,
+};
+use super::hash;
+use super::model::{
+    AppendStartedRequestV1, AppendTerminalRequestV1, FixtureAttemptViewV1,
+    StoredStartedEventV1, STARTED_EVENT_SCHEMA,
+};
+use super::validation::{validate_started_transition, validate_terminal_transition};
+use super::{validate_attempt_count, validate_event_count};
+
+const STARTED: &[u8] = br#"{"attestation_state":"unverified_fixture","context_evidence_cids":["2222222222222222222222222222222222222222222222222222222222222222"],"fixture_origin":{"request_id":"123e4567-e89b-42d3-a456-426614174001","type":"public_request"},"fixture_role_ref":null,"fixture_session_ref":null,"input_evidence_cids":["0000000000000000000000000000000000000000000000000000000000000000","1111111111111111111111111111111111111111111111111111111111111111"],"key":{"attempt":1,"execution_id":"123e4567-e89b-42d3-a456-426614174000"},"operation_contract_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","policy_sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","runtime_sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","schema":"plico.execution-observation.fixture-start-request/v1"}"#;
+const TERMINAL: &[u8] = br#"{"attestation_state":"unverified_fixture","execution_elapsed_ms":null,"key":{"attempt":1,"execution_id":"123e4567-e89b-42d3-a456-426614174000"},"outcome":{"category":"tool_failed","type":"failure"},"output_evidence_cids":["3333333333333333333333333333333333333333333333333333333333333333"],"policy_sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","runtime_sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","schema":"plico.execution-observation.fixture-terminal-request/v1"}"#;
+const STARTED_SHA: &str = "160804b6003538aba7cf858993b2f3efdf830493875a9c03e5277db0225975ac";
+const TERMINAL_SHA: &str = "f8dd59a4bdaeabe52b27b79f0f4c749e344f7483ec66588ef6f9efe55f9d5bf2";
+
+fn started() -> AppendStartedRequestV1 {
+    parse_canonical(STARTED).expect("architecture-owned started vector")
+}
+
+fn terminal() -> AppendTerminalRequestV1 {
+    parse_canonical(TERMINAL).expect("architecture-owned terminal vector")
+}
+
+fn open_view(request: &AppendStartedRequestV1) -> FixtureAttemptViewV1 {
+    FixtureAttemptViewV1 {
+        key: request.key.clone(),
+        attestation_state: "unverified_fixture".into(),
+        started_request_sha256: hash::started_request_sha256(request).expect("hash"),
+        started_event_sha256: "11".repeat(32),
+        terminal_request_sha256: None,
+        terminal_event_sha256: None,
+    }
+}
+
+#[test]
+fn architecture_wp1_contract_golden_hashes_are_external() {
+    assert_eq!(hash::started_request_sha256(&started()).unwrap(), STARTED_SHA);
+    assert_eq!(hash::terminal_request_sha256(&terminal()).unwrap(), TERMINAL_SHA);
+}
+
+#[test]
+fn architecture_wp1_contract_jcs_precedes_semantics() {
+    let noncanonical = [b" ".as_slice(), STARTED].concat();
+    assert_eq!(
+        parse_canonical::<AppendStartedRequestV1>(&noncanonical),
+        Err(ObservationStoreError::invalid(
+            InvalidRequestCategory::JcsCanonicalizationFailed,
+        )),
+    );
+    let zero = String::from_utf8(STARTED.to_vec()).unwrap().replace(
+        "\"attempt\":1",
+        "\"attempt\":0",
+    );
+    assert_eq!(
+        parse_canonical::<AppendStartedRequestV1>(zero.as_bytes()),
+        Err(ObservationStoreError::invalid(InvalidRequestCategory::ZeroAttempt)),
+    );
+    let unknown = String::from_utf8(TERMINAL.to_vec()).unwrap().replace(
+        "tool_failed",
+        "not_known__",
+    );
+    assert_eq!(
+        parse_canonical::<AppendTerminalRequestV1>(unknown.as_bytes()),
+        Err(ObservationStoreError::invalid(
+            InvalidRequestCategory::InvalidFailureCategory,
+        )),
+    );
+}
+
+#[test]
+fn architecture_wp1_contract_retry_identity_is_body_derived() {
+    let original = started();
+    let view = open_view(&original);
+    let mut modified = original.clone();
+    modified.context_evidence_cids.push("44".repeat(32));
+    assert_eq!(
+        validate_started_transition(&modified, Some(&view)),
+        Err(ObservationStoreError::conflict(
+            TransitionConflictCategory::StartedAlreadyBound,
+        )),
+    );
+}
+
+#[test]
+fn architecture_wp1_contract_terminal_binds_key_policy_and_total() {
+    let original = started();
+    let view = open_view(&original);
+    let mut wrong_key = terminal();
+    wrong_key.key.attempt = NonZeroU32::new(2).unwrap();
+    assert_eq!(
+        validate_terminal_transition(&wrong_key, Some(&view), Some(&original)),
+        Err(ObservationStoreError::corrupt(
+            CorruptionCategory::InvalidTransition,
+        )),
+    );
+
+    let mut full = original.clone();
+    full.input_evidence_cids = (0..256).map(|value| format!("{value:064x}")).collect();
+    full.context_evidence_cids = (256..512).map(|value| format!("{value:064x}")).collect();
+    let full_view = open_view(&full);
+    assert_eq!(
+        validate_terminal_transition(&terminal(), Some(&full_view), Some(&full)),
+        Err(ObservationStoreError::limit(LimitCategory::EvidenceTotal)),
+    );
+}
+
+#[test]
+fn architecture_wp1_contract_caps_cover_stored_ordinals() {
+    assert!(validate_attempt_count(10_000).is_ok());
+    assert_eq!(
+        validate_attempt_count(10_001),
+        Err(ObservationStoreError::limit(LimitCategory::Attempt)),
+    );
+    assert!(validate_event_count(20_000).is_ok());
+    assert_eq!(
+        validate_event_count(20_001),
+        Err(ObservationStoreError::limit(LimitCategory::Event)),
+    );
+    let request = started();
+    let stored = StoredStartedEventV1 {
+        schema: STARTED_EVENT_SCHEMA.into(),
+        request_sha256: hash::started_request_sha256(&request).unwrap(),
+        request,
+        sequence: 20_001,
+        root_generation: 20_001,
+        recorded_at_ms: 1,
+    };
+    assert_eq!(
+        stored.validate(),
+        Err(ObservationStoreError::limit(LimitCategory::Event)),
+    );
+}
+"""
+WP1_EXTERNAL_TEST_NAMES = {
+    "memory::execution_observation::architecture_contract_tests::architecture_wp1_contract_caps_cover_stored_ordinals",
+    "memory::execution_observation::architecture_contract_tests::architecture_wp1_contract_golden_hashes_are_external",
+    "memory::execution_observation::architecture_contract_tests::architecture_wp1_contract_jcs_precedes_semantics",
+    "memory::execution_observation::architecture_contract_tests::architecture_wp1_contract_retry_identity_is_body_derived",
+    "memory::execution_observation::architecture_contract_tests::architecture_wp1_contract_terminal_binds_key_policy_and_total",
+}
 LISTED_F_TEST = re.compile(
     r"(?m)^(?P<name>\S*execution_observation_f(?P<id>\d{2})_\S*): test$"
 )
@@ -1577,6 +1723,113 @@ def _run_required_f_tests(
         return executed
 
 
+def _run_wp1_external_corpus(
+    source_repo: Path,
+    candidate: str,
+    candidate_checkout: Path,
+    candidate_manifest: dict[str, tuple[str, str]],
+    toolchain: dict[str, object],
+) -> dict[str, object]:
+    """Compile architecture-owned contract tests over immutable candidate bytes."""
+
+    module = candidate_checkout / "src/memory/execution_observation/mod.rs"
+    corpus = (
+        candidate_checkout
+        / "src/memory/execution_observation/architecture_contract_tests.rs"
+    )
+    module_bytes = module.read_bytes()
+    anchor = b"\n#[cfg(test)]\nmod architecture_contract_tests;\n"
+    if b"architecture_contract_tests" in module_bytes or corpus.exists():
+        raise verify.VerificationError(
+            "candidate predeclares the architecture-owned WP1 corpus"
+        )
+    module.chmod(0o600)
+    module.write_bytes(module_bytes + anchor)
+    module.chmod(0o400)
+    corpus.write_text(WP1_EXTERNAL_TESTS, encoding="utf-8")
+    corpus.chmod(0o400)
+
+    overlay_manifest = candidate_manifest.copy()
+    module_name = "src/memory/execution_observation/mod.rs"
+    corpus_name = "src/memory/execution_observation/architecture_contract_tests.rs"
+    overlay_manifest[module_name] = (
+        "100644",
+        verify.sha256_bytes(module.read_bytes()),
+    )
+    overlay_manifest[corpus_name] = (
+        "100644",
+        verify.sha256_bytes(corpus.read_bytes()),
+    )
+    _verify_materialized_tree(candidate_checkout, overlay_manifest)
+    _assert_execution_seal(source_repo, candidate, toolchain)
+
+    with _isolated_candidate_environment(toolchain["environment"]) as (
+        environment,
+        _,
+    ):
+        list_command = [
+            os.fspath(toolchain["cargo_path"]),
+            "test",
+            "--locked",
+            "--all-features",
+            "architecture_wp1_contract_",
+            "--",
+            "--list",
+        ]
+        listed_result = _run_bounded_process(
+            list_command,
+            cwd=candidate_checkout,
+            environment=environment,
+            timeout=1200,
+        )
+        listed_output = listed_result.stdout.decode("utf-8", errors="replace")
+        if listed_result.returncode != 0:
+            detail = listed_output.strip().splitlines()
+            raise verify.VerificationError(
+                "architecture WP1 corpus list failed: "
+                f"{detail[-1] if detail else 'no output'}"
+            )
+        listed = {
+            line.removesuffix(": test")
+            for line in listed_output.splitlines()
+            if line.endswith(": test") and "architecture_wp1_contract_" in line
+        }
+        if listed != WP1_EXTERNAL_TEST_NAMES:
+            raise verify.VerificationError(
+                "architecture WP1 corpus inventory differs from the frozen oracle"
+            )
+        for name in sorted(WP1_EXTERNAL_TEST_NAMES):
+            exact = _run_bounded_process(
+                [
+                    os.fspath(toolchain["cargo_path"]),
+                    "test",
+                    "--locked",
+                    "--all-features",
+                    name,
+                    "--",
+                    "--exact",
+                    "--nocapture",
+                ],
+                cwd=candidate_checkout,
+                environment=environment,
+                timeout=1200,
+            )
+            output = exact.stdout.decode("utf-8", errors="replace")
+            if exact.returncode != 0:
+                detail = output.strip().splitlines()
+                raise verify.VerificationError(
+                    "architecture WP1 corpus test failed: "
+                    f"{detail[-1] if detail else name}"
+                )
+            _parse_exact_f_test_execution(output, name)
+            _assert_execution_seal(source_repo, candidate, toolchain)
+            _verify_materialized_tree(candidate_checkout, overlay_manifest)
+    return {
+        "source_sha256": verify.sha256_bytes(WP1_EXTERNAL_TESTS.encode("utf-8")),
+        "tests": sorted(WP1_EXTERNAL_TEST_NAMES),
+    }
+
+
 def _extract_git_archive(
     repo: Path, commit: str, destination: Path
 ) -> dict[str, tuple[str, str]]:
@@ -1706,7 +1959,7 @@ def _run_wp1_archive_gate(
     scope: dict[str, object],
     test_contract: dict[str, object],
     toolchain: dict[str, object],
-) -> tuple[dict[str, bytes], dict[str, list[str]]]:
+) -> tuple[dict[str, bytes], dict[str, list[str]], dict[str, object]]:
     """Scan/build/test exact object materializations, never the developer worktree."""
 
     with tempfile.TemporaryDirectory(prefix="plico-v53-scope-objects-") as temporary:
@@ -1714,12 +1967,17 @@ def _run_wp1_archive_gate(
         root.chmod(0o700)
         base_checkout = root / "base"
         candidate_checkout = root / "candidate"
+        external_checkout = root / "external-corpus"
         base_manifest = _extract_git_archive(source_repo, base, base_checkout)
         candidate_manifest = _extract_git_archive(
             source_repo, candidate, candidate_checkout
         )
+        external_manifest = _extract_git_archive(
+            source_repo, candidate, external_checkout
+        )
         _verify_materialized_tree(base_checkout, base_manifest)
         _verify_materialized_tree(candidate_checkout, candidate_manifest)
+        _verify_materialized_tree(external_checkout, external_manifest)
 
         object_files = _candidate_files(source_repo, candidate)
         candidate_files = _verified_candidate_files_from_checkout(
@@ -1781,7 +2039,14 @@ def _run_wp1_archive_gate(
             toolchain,
         )
         _verify_materialized_tree(candidate_checkout, candidate_manifest)
-        return candidate_files, candidate_self_evidence
+        external_evidence = _run_wp1_external_corpus(
+            source_repo,
+            candidate,
+            external_checkout,
+            external_manifest,
+            toolchain,
+        )
+        return candidate_files, candidate_self_evidence, external_evidence
 
 
 def _normalize_semantic(value: object, key: str = "") -> object:
@@ -2108,7 +2373,7 @@ def _verify_scope_sanitized(
 
     _verify_wp1_memory_module_anchor(repo, base, candidate)
 
-    candidate_files, candidate_self_evidence = _run_wp1_archive_gate(
+    candidate_files, candidate_self_evidence, external_evidence = _run_wp1_archive_gate(
         repo,
         base,
         candidate,
@@ -2154,7 +2419,7 @@ def _verify_scope_sanitized(
         "changed_paths": len(changes),
         "coverage": coverage_result,
         "candidate_self_evidence_f_tests": candidate_self_evidence,
-        "external_architecture_corpus": "required-before-R1-or-later-acceptance",
+        "external_architecture_corpus": external_evidence,
         "lifecycle_differential": lifecycle_result,
         "toolchain": {
             "cargo_sha256": toolchain["cargo_sha256"],
