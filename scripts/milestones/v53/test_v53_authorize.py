@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Adversarial local-Git tests for the v53 R0 authorization boundary."""
+"""Adversarial local-Git tests for the v53 WP2 authorization boundary."""
 
 from __future__ import annotations
 
@@ -20,9 +20,9 @@ NOW = dt.datetime(2026, 8, 17, 12, 0, 0, tzinfo=dt.timezone.utc)
 APPROVED_AT = "2026-08-17T11:00:00Z"
 PACKET_GENERATED_AT = "2026-08-17T10:00:00Z"
 PACKET_EXPIRES_AT = "2026-08-18T12:00:00Z"
-PACKET_ID = "r0-0123456789abcdef0123456789abcdef"
-CONTRACT_PATH = "docs/milestones/v53-execution-observation-spine.md"
-ADR_PATH = "docs/adr/0007-execution-observation-ledger-v1.md"
+PACKET_ID = "wp2-0123456789abcdef0123456789abcdef"
+CONTRACT_PATH = "docs/milestones/v53-wp2-checkpoint.md"
+ADR_PATH = "docs/adr/0008-execution-observation-store-substrate-v1.md"
 
 
 def git(repo: Path, *args: str, commit_time: str | None = None) -> str:
@@ -61,7 +61,7 @@ def make_handoff(repo: Path, base: str) -> tuple[dict[str, object], dict[str, by
             "state": "unverified",
         },
         "bindings": bindings,
-        "contract_version": "plico.milestone.v53/2",
+        "contract_version": "plico.milestone.v53.wp2/1",
         "expires_at_utc": PACKET_EXPIRES_AT,
         "generated_at_utc": PACKET_GENERATED_AT,
         "implementation_base_sha": base,
@@ -129,7 +129,7 @@ def create_approval_commit(
     if extra_diff:
         write(repo, "unexpected.txt", b"not allowed\n")
     git(repo, "add", "--all")
-    git(repo, "commit", "-qm", "v53 R0 manual approval", commit_time=APPROVED_AT)
+    git(repo, "commit", "-qm", "v53 WP2 manual approval", commit_time=APPROVED_AT)
     return git(repo, "rev-parse", "HEAD")
 
 
@@ -281,6 +281,30 @@ class V53AuthorizationTests(unittest.TestCase):
                         approval_revision=approval,
                         now=NOW,
                     )
+
+    def test_annotated_tag_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repo, handoff, packet_files, _ = fixture_repo(Path(temporary))
+            approval = create_approval_commit(repo, handoff, packet_files)
+            git(
+                repo,
+                "tag",
+                "-a",
+                authorize.approval_tag_name(packet_files),
+                "-m",
+                "not a lightweight approval",
+                approval,
+            )
+            with self.assertRaisesRegex(
+                authorize.AuthorizationError, "must be lightweight"
+            ):
+                authorize.validate_approval_commit(
+                    repo,
+                    handoff,
+                    packet_files,
+                    approval_revision=approval,
+                    now=NOW,
+                )
 
     def test_fake_ref_is_rejected_before_git_resolution(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

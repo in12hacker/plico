@@ -1,9 +1,10 @@
 # v53 验收摘要：Execution Observation Ledger Core
 
-**状态**：R1 Model/Hash accepted / R2 not started
+**状态**：R1 Model/Hash accepted / WP2 architecture freeze in progress / R2 not started
 **合同**：[v53-execution-observation-spine.md](./v53-execution-observation-spine.md)
-**开发交接**：[v53-developer-handoff.md](./v53-developer-handoff.md)
-**产品基线**：`a86ad4c450762138eea13bc1a39f045a45b67b24`
+**WP1 历史交接**：[v53-developer-handoff.md](./v53-developer-handoff.md)
+**WP2 当前交接**：[v53-wp2-developer-handoff.md](./v53-wp2-developer-handoff.md)
+**产品基线**：`fe4c08260fc3e6dc0e3d37921b863a7ed48a330a`
 
 > 本文件只由 Plico 架构/验收组填写；R0 冻结项可在开发开工前记录，其余项只在候选提交与独立证据完整后填写。
 > 第三方开发组不得修改本文件或预填通过状态、测试数字、benchmark 结论；只能提交独立的候选证据输入。
@@ -12,6 +13,7 @@
 
 - Architecture-Frozen：✅（R0 v2 packet + approval `eb23261084b2b7a38a40540ecfffd3cb327c54fa`）
 - Implementation-Candidate：✅（R1 candidate `5584b8e7b48247e503d9054bb3b3227c64c7ad94`）
+- WP2-Architecture-Frozen：⬜（由 WP2 packet + approval-only A2/tag 动态确定）
 - Evidence-Complete：⬜
 - Final decision：`PENDING`
 
@@ -30,7 +32,8 @@
 | R0 handoff packet digest | `5f5ff083dc07a744c48d5df8e6be3d6937cec4ffebe6d458b24299ecd81bb1de`（COMMITTED） |
 | R1 independent corpus | verifier `9a44c91fec3c870e6a9d8272379da9b748d183bc`；source SHA-256 `7a7dde3e55044fb8566cffb659e3c3d8c8c68950a50172075dac802031629eca`；WP6 sealed bundle 仍 PENDING |
 | R0 packet collector/verifier version | `plico.v53.r0-spec/v2` / `plico.v53.r0-handoff/v2`；v1 已撤销、不得复用 |
-| Packet integrity / Git authorization | verified / GO（程序性、unsigned；限制仍按合同） |
+| WP2 checkpoint contract | `plico.milestone.v53.wp2/1`；ADR-0008；旧 R0 packet/A1 不授权 WP2 |
+| R0 packet integrity / Git authorization | verified / GO（程序性、unsigned；限制仍按合同）；WP2 packet/authorization PENDING |
 
 ## 3. 不变量验收
 
@@ -68,7 +71,7 @@
 |---|---|---|---|
 | R0 Constitution/ADR | Plico architecture + independent QA/red-team | GO | packet v2 + approval/tag 离线验证 |
 | R1 Model/Hash | Plico architecture + data-integrity/red-team review | GO | candidate `5584b8e`; 33/33 targeted; repaired scope PASS |
-| R2 Store Core | PENDING | PENDING | |
+| R2 Store Substrate | PENDING | PENDING | fixed namespace、bounded CAS capability、structural commit、F06；不含 facade/receipt |
 | R3 View/Identity boundary | PENDING | PENDING | |
 | R4 Fault/Admitted boundary | PENDING | PENDING | |
 | R5 Adversarial QA | PENDING | PENDING | |
@@ -86,11 +89,11 @@ Verified Experience product gate。
 |---|---|---|---|---|---|
 | Architecture Deviation | V53-R1-D01 | Architecture | before WP2 approval | CLOSED | R0 scanner把 nested use tree/合法相对路径当 root；`2c42b42` 改为 use-tree 展开、词法 module depth 与正向 capability policy；`9a44c91` 加入独立只读 overlay corpus；同 candidate scope PASS |
 | Local gate waiver | V53-R1-W01 | Architecture | R1 only | CLOSED | 全库 sandbox 的 loopback bind/deadline 失败由 candidate 前基线复现；R1 使用 clean targeted/check/clippy + 独立 diff，不把环境失败涂绿 |
-| Named P2 debt | V53-WP2-D01 | WP2 | R2 | OPEN | 所有 stored-read caller/limit 错误在 loader 边界统一映射稳定 `CorruptStore` category |
-| Named P2 debt | V53-WP2-D02 | WP2 | R2 | OPEN | raw bytes 在反序列化前按 object kind bounded read；廉价 count gate 先于分配/写入 |
-| Named P2 debt | V53-WP2-D03 | WP2 | R2/R3 | OPEN | replay 验证 sequence/generation/watermark 连续性及 event→segment→view→root 全绑定 |
-| Named P2 debt | V53-WP2-D04 | WP2 | R2 | OPEN | receipt 仅从已验证链派生并增加 exact validator；不得信任 cache/caller |
-| Named P2 debt | V53-WP2-D05 | Architecture + WP2 | before WP2 implementation | OPEN | 新 checkpoint scope 先拆分已达 297–299 行的 model/test/helper，再允许 store 文件；禁止继续向 WP1 文件堆叠 |
+| Named debt | V53-WP2-D01 | WP2 | R2 | OPEN / hard gate | stored-read caller/transition/limit 错误在 loader 边界统一映射稳定 `CorruptStore`；resource cap 为 `stored_resource_limit` |
+| Named debt | V53-WP2-D02 | WP2 | R2 | OPEN / hard gate | raw bytes 在反序列化前按 object kind bounded read；stored event cap 135168；廉价 count gate 先于分配/写入 |
+| Named debt | V53-WP2-D03 | WP2 + WP3 | R2/R3 | SPLIT | R2 验证 structural sequence/generation/watermark 与直接引用；全量 event→attempt view replay 由 WP3 完成 |
+| Named debt | V53-WP2-D04 | WP3 | R3 | DEFERRED BY ADR-0008 | receipt 只在 WP3 从全量已验证链派生；WP2 明确不返回 receipt |
+| Architecture maintenance | V53-WP2-D05 | Architecture | before WP2 approval | CLOSED | WP1 model/tests/helper 已按 request/event/ledger 与测试职责做纯 layout 拆分；WP1 33/33 unchanged + architecture CAS 6/6（combined filter 39/39），check/clippy/fmt 通过；developer WP2 不得修改这些 bytes |
 
 R1 reviewer record：Plico architecture group + independent contract/evidence/red-team reviewers，2026-08-17。
 架构修复 verifier commits 为 `2c42b42dac601c9bb6f91ee7db019bf77012a017`、

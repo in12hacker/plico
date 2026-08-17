@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Focused adversarial tests for the architecture-owned v53 R0 tools."""
+"""Focused adversarial tests for the architecture-owned v53 WP2 tools."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -21,7 +22,7 @@ import verify_scope
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[2]
-SPEC_PATH = HERE / "r0_spec.json"
+SPEC_PATH = HERE / "wp2_spec.json"
 _TOOLCHAIN_OBSERVED = None
 
 
@@ -42,7 +43,7 @@ def git(repo: Path, *args: str, commit_time: str | None = None) -> str:
 
 def frozen_spec() -> dict[str, object]:
     return verify.validate_spec(
-        verify.strict_json_loads(SPEC_PATH.read_bytes(), "r0_spec.json")
+        verify.strict_json_loads(SPEC_PATH.read_bytes(), "wp2_spec.json")
     )
 
 
@@ -57,6 +58,18 @@ def make_repo(root: Path) -> tuple[Path, dict[str, object], str]:
     repo = root / "repo"
     repo.mkdir()
     spec = frozen_spec()
+    git(repo, "init", "-q")
+    git(repo, "config", "user.name", "v53-test")
+    git(repo, "config", "user.email", "v53-test@example.invalid")
+    git(
+        repo,
+        "fetch",
+        "-q",
+        "--no-tags",
+        os.fspath(REPO),
+        verify.REQUIRED_PREDECESSOR_COMMITS[-1],
+    )
+    git(repo, "checkout", "-q", "--detach", "FETCH_HEAD")
     for relative in spec["required_bindings"]:
         target = repo / relative
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -72,9 +85,6 @@ def make_repo(root: Path) -> tuple[Path, dict[str, object], str]:
     if not memory_module.exists():
         memory_module.parent.mkdir(parents=True, exist_ok=True)
         memory_module.write_bytes((REPO / "src/memory/mod.rs").read_bytes())
-    git(repo, "init", "-q")
-    git(repo, "config", "user.name", "v53-test")
-    git(repo, "config", "user.email", "v53-test@example.invalid")
     git(repo, "add", "--all")
     git(repo, "commit", "-qm", "frozen base")
     return repo, spec, git(repo, "rev-parse", "HEAD")
@@ -93,7 +103,7 @@ def make_packet(root: Path, repo: Path, spec: dict[str, object], base: str) -> P
                 "sha256": verify.sha256_bytes(data),
             }
         )
-    packet_id = "r0-0123456789abcdef0123456789abcdef"
+    packet_id = "wp2-0123456789abcdef0123456789abcdef"
     generated = dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
     expires = generated + dt.timedelta(hours=1)
     handoff = {
@@ -197,7 +207,7 @@ def add_approval(repo: Path, packet: Path) -> str:
     approval_path.parent.mkdir(parents=True, exist_ok=True)
     approval_path.write_bytes(verify.canonical_json(record))
     git(repo, "add", "--all")
-    git(repo, "commit", "-qm", "v53 R0 approval", commit_time=approved_text)
+    git(repo, "commit", "-qm", "v53 WP2 approval", commit_time=approved_text)
     approval = git(repo, "rev-parse", "HEAD")
     git(repo, "tag", authorize.approval_tag_name(packet_files), approval)
     git(repo, "update-ref", authorize.DEFAULT_APPROVAL_REVISION, approval)
@@ -219,6 +229,17 @@ def approval_result(packet: Path, approval: str) -> dict[str, object]:
 
 
 class V53ToolTests(unittest.TestCase):
+    def test_wp2_profile_rejects_r0_and_predecessor_rewrites(self) -> None:
+        old_spec_path = HERE / "r0_spec.json"
+        old_spec = verify.strict_json_loads(old_spec_path.read_bytes(), "r0_spec")
+        with self.assertRaisesRegex(verify.VerificationError, "spec key mismatch"):
+            verify.validate_spec(old_spec)
+
+        spec = copy.deepcopy(frozen_spec())
+        spec["predecessor_commits"][0] = "0" * 40
+        with self.assertRaisesRegex(verify.VerificationError, "predecessor"):
+            verify.validate_spec(spec)
+
     def test_valid_packet_and_git_bindings(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -576,7 +597,7 @@ class V53ToolTests(unittest.TestCase):
                         handle.write(b"architecture-change\n")
                 else:
                     source = repo / "src/memory/execution_observation/mod.rs"
-                    source.parent.mkdir(parents=True)
+                    source.parent.mkdir(parents=True, exist_ok=True)
                     source.write_text(
                         "#[test]\nfn execution_observation_f10_only() {}\n",
                         encoding="utf-8",
@@ -595,20 +616,20 @@ class V53ToolTests(unittest.TestCase):
                         repo,
                         approval_revision=approval,
                         candidate_revision="HEAD",
-                        work_package="WP1",
+                        work_package="WP2",
                         require_clean=True,
                     )
 
-    def test_r0_rejects_later_work_packages_and_wp1_cas_escape(self) -> None:
+    def test_wp2_rejects_other_work_packages_and_frozen_cas_escape(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             repo, spec, base = make_repo(root)
             packet = make_packet(root, repo, spec, base)
-            for work_package in ("WP2", "WP6"):
+            for work_package in ("WP1", "WP3"):
                 with (
                     self.subTest(work_package=work_package),
                     self.assertRaisesRegex(
-                        verify.VerificationError, "only permits WP1"
+                        verify.VerificationError, "only permits WP2"
                     ),
                 ):
                     verify_scope.verify_scope(
@@ -621,26 +642,27 @@ class V53ToolTests(unittest.TestCase):
                     )
 
             approval = add_approval(repo, packet)
-            with (repo / "src/memory/mod.rs").open("ab") as handle:
-                handle.write(b"pub(crate) mod execution_observation;\n")
             cas_escape = repo / "src/cas/ledger_store.rs"
             cas_escape.parent.mkdir(parents=True, exist_ok=True)
-            cas_escape.write_bytes(b"// WP1 CAS escape\n")
+            cas_escape.write_bytes(b"// WP2 frozen CAS escape\n")
             git(repo, "add", "--all")
-            git(repo, "commit", "-qm", "forbidden WP1 CAS change")
+            git(repo, "commit", "-qm", "forbidden WP2 CAS change")
             with (
                 mock.patch(
                     "verify_scope.authorize.authorize",
                     return_value=approval_result(packet, approval),
                 ),
-                self.assertRaisesRegex(verify.VerificationError, "forbidden path"),
+                self.assertRaisesRegex(
+                    verify.VerificationError,
+                    "architecture-owned file changed|forbidden path",
+                ),
             ):
                 verify_scope.verify_scope(
                     packet,
                     repo,
                     approval_revision=approval,
                     candidate_revision="HEAD",
-                    work_package="WP1",
+                    work_package="WP2",
                     require_clean=True,
                 )
 
@@ -653,7 +675,7 @@ class V53ToolTests(unittest.TestCase):
             b"use super::super::layered;\n",
             b"pub(in crate::memory) fn probe() {}\n",
             b"fn probe() { crate /* nested /* x */ */ ::scheduler::run(); }\n",
-            b"fn probe(v: crate /* x */ :: cas :: PersonalVaultStorage) {}\n",
+            b"fn probe(v: crate /* x */ :: cas :: ImmutableLedgerStorage) {}\n",
             b'fn probe() { std /* x */ :: fs::read("x"); }\n',
             b'fn probe() { tokio /* x */ :: fs::read("x"); }\n',
             b"use std::{env, net, os, process, thread};\n",
@@ -734,6 +756,161 @@ class V53ToolTests(unittest.TestCase):
             maximum_lines_exclusive=300,
         )
 
+    def test_wp2_store_scanner_allows_sealed_cas_but_rejects_second_open(self) -> None:
+        path = "src/memory/execution_observation/store/loader.rs"
+        verify_scope._scan_observation_source(
+            path,
+            b"use std::sync::Arc;\n"
+            b"use super::super::model::FixtureLedgerRootV1;\n"
+            b"use crate::cas::execution_observation_store::ExecutionObservationFixtureStorage;\n"
+            b"use crate::cas::PersonalVaultStorage;\n"
+            b"fn open(v: Arc<PersonalVaultStorage>) { let _ = ExecutionObservationFixtureStorage::open(v); }\n",
+            maximum_bytes=65_536,
+            maximum_lines_exclusive=300,
+        )
+        with self.assertRaisesRegex(verify.VerificationError, "second vault"):
+            verify_scope._scan_observation_source(
+                path,
+                b"use crate::cas::PersonalVaultStorage;\n"
+                b"fn bad(path: &Path) { let _ = PersonalVaultStorage::open(path, None); }\n",
+                maximum_bytes=65_536,
+                maximum_lines_exclusive=300,
+            )
+        with self.assertRaisesRegex(verify.VerificationError, "second vault"):
+            verify_scope._scan_observation_source(
+                path,
+                b"use crate::cas::PersonalVaultStorage;\n"
+                b"fn bad(path: &Path) { let _ = <PersonalVaultStorage>::open(path, None); }\n",
+                maximum_bytes=65_536,
+                maximum_lines_exclusive=300,
+            )
+        with self.assertRaisesRegex(verify.VerificationError, "usize::MAX"):
+            verify_scope._scan_observation_source(
+                path,
+                b"fn bad(storage: &Store) { let _ = storage.list_immutable_hashes_bounded(usize::MAX); }\n",
+                maximum_bytes=65_536,
+                maximum_lines_exclusive=300,
+            )
+        with self.assertRaisesRegex(verify.VerificationError, "u64::MAX"):
+            verify_scope._scan_observation_source(
+                path,
+                b"fn bad(storage: &Store) { let _ = storage.read_active_bounded(u64::MAX); }\n",
+                maximum_bytes=65_536,
+                maximum_lines_exclusive=300,
+            )
+        with self.assertRaisesRegex(verify.VerificationError, r"pub\(super\)"):
+            verify_scope._scan_observation_source(
+                path,
+                b"pub(crate) fn raw_write(_bytes: &[u8]) {}\n",
+                maximum_bytes=65_536,
+                maximum_lines_exclusive=300,
+            )
+        with self.assertRaisesRegex(verify.VerificationError, "WP3 facade"):
+            verify_scope._scan_observation_source(
+                path,
+                b"use super::super::model::FixtureAttemptViewV1;\n",
+                maximum_bytes=65_536,
+                maximum_lines_exclusive=300,
+            )
+        with self.assertRaisesRegex(verify.VerificationError, "output/panic"):
+            verify_scope._scan_observation_source(
+                path,
+                b'fn leak(raw: &[u8]) { println!("{raw:?}"); }\n',
+                maximum_bytes=65_536,
+                maximum_lines_exclusive=300,
+            )
+        verify_scope._scan_observation_source(
+            "src/memory/execution_observation/store/mod.rs",
+            b"use super::model::FixtureLedgerRootV1;\n",
+            maximum_bytes=65_536,
+            maximum_lines_exclusive=300,
+        )
+        with self.assertRaisesRegex(
+            verify.VerificationError, "escapes execution_observation"
+        ):
+            verify_scope._scan_observation_source(
+                "src/memory/execution_observation/store/mod.rs",
+                b"use super::super::ledger::CanonicalLedger;\n",
+                maximum_bytes=65_536,
+                maximum_lines_exclusive=300,
+            )
+        self.assertNotIn(
+            "use crate::cas::{ExecutionObservationFixtureStorage",
+            verify_scope.WP2_EXTERNAL_TESTS,
+        )
+        self.assertIn(
+            "use crate::cas::execution_observation_store::ExecutionObservationFixtureStorage;",
+            verify_scope.WP2_EXTERNAL_TESTS,
+        )
+
+    def test_wp2_surface_freezes_enum_and_test_only_fault_seams(self) -> None:
+        valid = b"""
+use std::sync::Arc;
+use crate::cas::execution_observation_store::ExecutionObservationFixtureStorage;
+use crate::cas::PersonalVaultStorage;
+pub(super) enum FixtureStoredEventV1 {
+    Started(StoredStartedEventV1),
+    Terminal(StoredTerminalEventV1),
+}
+pub(super) struct FixtureStructuralCommitV1 {
+    pub(super) event: FixtureStoredEventV1,
+    pub(super) segment: FixtureEventSegmentV1,
+    pub(super) current_view: FixtureCurrentViewV1,
+    pub(super) root: FixtureLedgerRootV1,
+}
+pub(super) struct FixtureStructuralStateV1 {
+    pub(super) root_sha256: String,
+    pub(super) generation: u64,
+    pub(super) event_watermark: u64,
+}
+pub(super) struct FixtureObservationStoreV1;
+impl FixtureObservationStoreV1 {
+    pub(super) fn open_fixture(vault: Arc<PersonalVaultStorage>) {
+        let _ = ExecutionObservationFixtureStorage::open(vault);
+    }
+    pub(super) fn structural_state() {}
+    pub(super) fn commit_structural() {}
+    #[cfg(test)]
+    pub(super) fn inject_pre_exchange_failure_once() {}
+    #[cfg(test)]
+    pub(super) fn inject_post_exchange_sync_failure_once() {}
+}
+"""
+        candidate = {"src/memory/execution_observation/store/mod.rs": valid}
+        verify_scope._verify_wp2_store_surface(candidate)
+
+        extra_variant = valid.replace(
+            b"    Terminal(StoredTerminalEventV1),\n",
+            b"    Terminal(StoredTerminalEventV1),\n    Backdoor(Vec<u8>),\n",
+        )
+        with self.assertRaisesRegex(verify.VerificationError, "variants"):
+            verify_scope._verify_wp2_store_surface(
+                {"src/memory/execution_observation/store/mod.rs": extra_variant}
+            )
+
+        production_fault = valid.replace(
+            b"    #[cfg(test)]\n    pub(super) fn inject_pre_exchange_failure_once() {}\n",
+            b"    pub(super) fn inject_pre_exchange_failure_once() {}\n",
+        )
+        with self.assertRaisesRegex(verify.VerificationError, r"cfg\(test\)"):
+            verify_scope._verify_wp2_store_surface(
+                {"src/memory/execution_observation/store/mod.rs": production_fault}
+            )
+
+        vault_escape = valid.replace(
+            b"        let _ = ExecutionObservationFixtureStorage::open(vault);\n",
+            (
+                b"        let path = vault.object_cas_root();\n"
+                b"        let opener = PersonalVaultStorage::open;\n"
+                b"        let _ = opener(&path, None);\n"
+                b"        let _ = ExecutionObservationFixtureStorage::open(vault);\n"
+            ),
+        )
+        with self.assertRaisesRegex(verify.VerificationError, "PersonalVaultStorage"):
+            verify_scope._verify_wp2_store_surface(
+                {"src/memory/execution_observation/store/mod.rs": vault_escape}
+            )
+
     def test_wp1_memory_anchor_rejects_live_hook_and_public_reexport(self) -> None:
         candidates = {
             "live-hook": (
@@ -767,6 +944,35 @@ class V53ToolTests(unittest.TestCase):
                 candidate = git(repo, "rev-parse", "HEAD")
                 with self.assertRaises(verify.VerificationError):
                     verify_scope._verify_wp1_memory_module_anchor(repo, base, candidate)
+
+    def test_wp2_store_anchor_is_one_exact_private_declaration(self) -> None:
+        candidates = {
+            "valid": b"pub(crate) mod model;\nmod store;\n",
+            "public": b"pub(crate) mod model;\npub(crate) mod store;\n",
+            "extra": b"pub(crate) mod model;\nmod store;\nfn wire_live() {}\n",
+        }
+        for name, candidate_bytes in candidates.items():
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as temporary:
+                repo = Path(temporary) / "repo"
+                repo.mkdir()
+                module = repo / "src/memory/execution_observation/mod.rs"
+                module.parent.mkdir(parents=True)
+                module.write_bytes(b"pub(crate) mod model;\n")
+                git(repo, "init", "-q")
+                git(repo, "config", "user.name", "v53-test")
+                git(repo, "config", "user.email", "v53-test@example.invalid")
+                git(repo, "add", "--all")
+                git(repo, "commit", "-qm", "base")
+                base = git(repo, "rev-parse", "HEAD")
+                module.write_bytes(candidate_bytes)
+                git(repo, "add", "--all")
+                git(repo, "commit", "-qm", "candidate")
+                candidate = git(repo, "rev-parse", "HEAD")
+                if name == "valid":
+                    verify_scope._verify_wp2_module_anchor(repo, base, candidate)
+                else:
+                    with self.assertRaises(verify.VerificationError):
+                        verify_scope._verify_wp2_module_anchor(repo, base, candidate)
 
     def test_golden_and_toolchain_spec_mutations_are_rejected(self) -> None:
         for attack in ("golden", "toolchain"):
@@ -978,7 +1184,7 @@ class V53ToolTests(unittest.TestCase):
             packet = make_packet(root, repo, spec, base)
             approval = add_approval(repo, packet)
             source = repo / "src/memory/execution_observation/mod.rs"
-            source.parent.mkdir(parents=True)
+            source.parent.mkdir(parents=True, exist_ok=True)
             source.write_text(
                 "#[test]\nfn execution_observation_f10_real() {}\n"
                 "#[test]\nfn execution_observation_f13_real() {}\n",
@@ -1000,7 +1206,7 @@ class V53ToolTests(unittest.TestCase):
                     repo,
                     approval_revision=approval,
                     candidate_revision=candidate,
-                    work_package="WP1",
+                    work_package="WP2",
                     require_clean=True,
                 )
 
@@ -1180,6 +1386,47 @@ class V53ToolTests(unittest.TestCase):
                         verify_scope._verify_coverage(
                             lcov, repo, candidate, source, contract
                         )
+
+    def test_candidate_output_cap_does_not_limit_build_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            artifact_bytes = verify_scope.MAX_CANDIDATE_OUTPUT_BYTES + 1
+            result = verify_scope._run_bounded_process(
+                [
+                    sys.executable,
+                    "-I",
+                    "-c",
+                    (
+                        "from pathlib import Path; "
+                        f"Path('artifact.bin').write_bytes(b'x' * {artifact_bytes}); "
+                        "print('ok')"
+                    ),
+                ],
+                cwd=root,
+                environment=os.environ.copy(),
+                timeout=30,
+            )
+            self.assertEqual(result.returncode, 0)
+            self.assertEqual(result.stdout, b"ok\n")
+            self.assertEqual((root / "artifact.bin").stat().st_size, artifact_bytes)
+
+    def test_candidate_stdout_over_cap_is_killed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            output_bytes = verify_scope.MAX_CANDIDATE_OUTPUT_BYTES + 1
+            with self.assertRaisesRegex(
+                verify.VerificationError, "command output exceeded"
+            ):
+                verify_scope._run_bounded_process(
+                    [
+                        sys.executable,
+                        "-I",
+                        "-c",
+                        f"import os; os.write(1, b'x' * {output_bytes})",
+                    ],
+                    cwd=Path(temporary),
+                    environment=os.environ.copy(),
+                    timeout=30,
+                )
 
 
 if __name__ == "__main__":

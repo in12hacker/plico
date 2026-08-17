@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Authorize a verified v53 R0 packet using only local Git objects.
+"""Authorize a verified v53 WP2 packet using only local Git objects.
 
 The packet proves integrity but carries no authority.  Authorization is a
 separate, single-parent Git commit which only adds one canonical approval
@@ -23,9 +23,9 @@ from typing import Any
 import verify
 
 
-APPROVAL_SCHEMA = "plico.v53.r0-approval/v2"
-RESULT_SCHEMA = "plico.v53.r0-authorization-result/v2"
-APPROVAL_PATH = "docs/milestones/v53-r0-approval.json"
+APPROVAL_SCHEMA = "plico.v53.wp2-approval/v1"
+RESULT_SCHEMA = "plico.v53.wp2-authorization-result/v1"
+APPROVAL_PATH = "docs/milestones/v53-wp2-approval.json"
 DEFAULT_APPROVAL_REVISION = "refs/remotes/origin/v53-integration"
 ALLOWED_APPROVAL_REFS = frozenset(
     {
@@ -33,7 +33,7 @@ ALLOWED_APPROVAL_REFS = frozenset(
         "refs/heads/v53-integration",
     }
 )
-SPEC_PATH = "scripts/milestones/v53/r0_spec.json"
+SPEC_PATH = "scripts/milestones/v53/wp2_spec.json"
 MAX_APPROVAL_BYTES = 64 * 1024
 MAX_GIT_METADATA_BYTES = 4 * 1024 * 1024
 MAX_GIT_OUTPUT_BYTES = 1024 * 1024
@@ -115,7 +115,7 @@ def packet_digest_bindings(packet_files: dict[str, bytes]) -> dict[str, str]:
 
 
 def approval_tag_name(packet_files: dict[str, bytes]) -> str:
-    return f"v53-r0-v2-{packet_digest_bindings(packet_files)['committed_sha256']}"
+    return f"v53-wp2-v1-{packet_digest_bindings(packet_files)['committed_sha256']}"
 
 
 def _binding_sha256(handoff: dict[str, Any], path: str) -> str:
@@ -783,9 +783,16 @@ def validate_approval_commit(
     )
 
     tag = approval_tag_name(packet_files)
+    tag_type = run_git(
+        repo,
+        ["cat-file", "-t", f"refs/tags/{tag}"],
+        git_executable=git_executable,
+    )
+    if tag_type.decode("ascii", errors="strict").strip() != "commit":
+        raise AuthorizationError("derived approval tag must be lightweight")
     tagged = run_git(
         repo,
-        ["rev-parse", "--verify", f"refs/tags/{tag}^{{commit}}"],
+        ["rev-parse", "--verify", f"refs/tags/{tag}"],
         git_executable=git_executable,
     )
     if tagged.decode("ascii", errors="strict").strip() != approval:
@@ -881,7 +888,7 @@ def main(argv: list[str] | None = None) -> int:
             approval_revision=args.approval_commit,
         )
     except AuthorizationError as error:
-        print(f"v53 R0 authorization=NO_GO: {error}", file=sys.stderr)
+        print(f"v53 WP2 authorization=NO_GO: {error}", file=sys.stderr)
         return 1
     sys.stdout.buffer.write(verify.canonical_json(result))
     return 0

@@ -29,7 +29,7 @@ pub(super) struct PersonalVaultLease {
 /// Sole owner of the personal vault's process-lifetime exclusive lock.
 #[derive(Debug)]
 pub(crate) struct PersonalVaultStorage {
-    lease: Arc<PersonalVaultLease>,
+    pub(super) lease: Arc<PersonalVaultLease>,
     created_this_open: bool,
 }
 
@@ -37,6 +37,7 @@ pub(crate) struct PersonalVaultStorage {
 /// accepted at subsystem boundaries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum ImmutableLedgerNamespace {
+    ExecutionObservationFixture,
     Memory,
     ProjectionManifest,
 }
@@ -44,6 +45,7 @@ pub(crate) enum ImmutableLedgerNamespace {
 impl ImmutableLedgerNamespace {
     fn directory_name(self) -> &'static str {
         match self {
+            Self::ExecutionObservationFixture => "execution-observation-fixture-ledger",
             Self::Memory => "memory-ledger",
             Self::ProjectionManifest => "projection-store/manifest",
         }
@@ -58,6 +60,8 @@ pub(crate) struct ImmutableLedgerStorage {
     roots_directory: PathBuf,
     active_path: PathBuf,
     candidate_path: PathBuf,
+    #[cfg(test)]
+    fail_pre_exchange_once: std::sync::atomic::AtomicBool,
     #[cfg(test)]
     fail_post_exchange_sync_once: std::sync::atomic::AtomicBool,
 }
@@ -174,17 +178,17 @@ impl PersonalVaultStorage {
         &self,
         namespace: ImmutableLedgerNamespace,
     ) -> Result<ImmutableLedgerStorage, LedgerStorageOpenError> {
-        if namespace == ImmutableLedgerNamespace::ProjectionManifest {
+        if namespace != ImmutableLedgerNamespace::Memory {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
-                "projection writer requires the combined storage boundary",
+                "namespace requires its sealed storage boundary",
             )
             .into());
         }
         self.claim_immutable_ledger(namespace)
     }
 
-    fn claim_immutable_ledger(
+    pub(super) fn claim_immutable_ledger(
         &self,
         namespace: ImmutableLedgerNamespace,
     ) -> Result<ImmutableLedgerStorage, LedgerStorageOpenError> {
@@ -439,6 +443,8 @@ pub(super) fn open_immutable_ledger_directory(
         active_path,
         candidate_path,
         #[cfg(test)]
+        fail_pre_exchange_once: std::sync::atomic::AtomicBool::new(false),
+        #[cfg(test)]
         fail_post_exchange_sync_once: std::sync::atomic::AtomicBool::new(false),
     })
 }
@@ -475,11 +481,16 @@ impl ImmutableLedgerStorage {
         Ok((!bytes.is_empty()).then_some(bytes))
     }
 
+    pub(crate) fn read_candidate_bounded(&self, maximum_bytes: u64) -> std::io::Result<Option<Vec<u8>>> {
+        let bytes = read_private_file_bounded(&self.candidate_path, maximum_bytes)?;
+        Ok((!bytes.is_empty()).then_some(bytes))
+    }
+
     pub(crate) fn list_immutable_hashes(&self) -> std::io::Result<Vec<String>> {
         self.list_immutable_hashes_bounded(usize::MAX)
     }
 
-    pub(super) fn list_immutable_hashes_bounded(&self, maximum_entries: usize) -> std::io::Result<Vec<String>> {
+    pub(crate) fn list_immutable_hashes_bounded(&self, maximum_entries: usize) -> std::io::Result<Vec<String>> {
         let mut hashes = Vec::new();
         for entry in fs::read_dir(&self.objects_directory)? {
             if hashes.len() >= maximum_entries {
@@ -519,6 +530,15 @@ impl ImmutableLedgerStorage {
         temporary.persist(&self.candidate_path).map_err(|error| error.error)?;
         set_file_mode(&self.candidate_path)?;
         sync_directory(&self.roots_directory)?;
+        #[cfg(test)]
+        if self
+            .fail_pre_exchange_once
+            .swap(false, std::sync::atomic::Ordering::SeqCst)
+        {
+            return Err(LedgerStorageError::Io(std::io::Error::other(
+                "injected pre-exchange failure",
+            )));
+        }
         renameat_with(CWD, &self.active_path, CWD, &self.candidate_path, RenameFlags::EXCHANGE)
             .map_err(|error| std::io::Error::from_raw_os_error(error.raw_os_error()))?;
         #[cfg(test)]
@@ -531,6 +551,12 @@ impl ImmutableLedgerStorage {
             )));
         }
         sync_directory(&self.roots_directory).map_err(LedgerStorageError::PublishedButUnsynced)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn inject_pre_exchange_failure_once(&self) {
+        self.fail_pre_exchange_once
+            .store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
     #[cfg(test)]

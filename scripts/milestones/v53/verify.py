@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify an architecture-owned v53 R0 handoff packet.
+"""Verify an architecture-owned v53 WP2 handoff packet.
 
 The verifier deliberately uses only the Python standard library.  Packet JSON is
 canonical, closed-schema JSON; repository bindings are checked against Git object
@@ -26,17 +26,24 @@ from decimal import ROUND_DOWN, Decimal
 from pathlib import Path
 from typing import Any
 
-SPEC_SCHEMA = "plico.v53.r0-spec/v2"
-HANDOFF_SCHEMA = "plico.v53.r0-handoff/v2"
-DIGEST_SCHEMA = "plico.v53.r0-handoff-digest/v2"
-COMMIT_SCHEMA = "plico.v53.r0-handoff-commit/v2"
-LOCK_SCHEMA = "plico.v53.r0-handoff-lock/v2"
+SPEC_SCHEMA = "plico.v53.wp2-spec/v1"
+HANDOFF_SCHEMA = "plico.v53.wp2-handoff/v1"
+DIGEST_SCHEMA = "plico.v53.wp2-handoff-digest/v1"
+COMMIT_SCHEMA = "plico.v53.wp2-handoff-commit/v1"
+LOCK_SCHEMA = "plico.v53.wp2-handoff-lock/v1"
 PACKET_FILES = ("LOCK", "handoff.json", "handoff.sha256.json", "COMMITTED")
 MAX_SAFE_INTEGER = 9_007_199_254_740_991
 MAX_PACKET_FILE_BYTES = 4 * 1024 * 1024
 HEX_SHA256 = re.compile(r"^[0-9a-f]{64}$")
 GIT_OBJECT_ID = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
-PACKET_ID = re.compile(r"^r0-[0-9a-f]{32}$")
+PACKET_ID = re.compile(r"^wp2-[0-9a-f]{32}$")
+SPEC_PATH = "scripts/milestones/v53/wp2_spec.json"
+REQUIRED_PREDECESSOR_COMMITS = [
+    "5584b8e7b48247e503d9054bb3b3227c64c7ad94",
+    "2c42b42dac601c9bb6f91ee7db019bf77012a017",
+    "9a44c91fec3c870e6a9d8272379da9b748d183bc",
+    "98de9bd2fa4eb6c6f2dbbb7171ba762124144104",
+]
 CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 CANONICAL_UUID = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
@@ -440,6 +447,7 @@ SPEC_TOP_KEYS = {
     "lockfiles",
     "namespace",
     "product_baseline_sha",
+    "predecessor_commits",
     "record_schemas",
     "required_bindings",
     "schema",
@@ -456,9 +464,14 @@ def validate_spec(value: Any) -> dict[str, Any]:
     spec = require_object(value, "spec")
     require_exact_keys(spec, SPEC_TOP_KEYS, "spec")
     if spec["schema"] != SPEC_SCHEMA:
-        raise VerificationError("unsupported R0 spec schema")
-    if spec["contract_version"] != "plico.milestone.v53/2":
+        raise VerificationError("unsupported WP2 spec schema")
+    if spec["contract_version"] != "plico.milestone.v53.wp2/1":
         raise VerificationError("unexpected contract version")
+    predecessors = require_string_list(
+        spec["predecessor_commits"], "spec.predecessor_commits"
+    )
+    if predecessors != REQUIRED_PREDECESSOR_COMMITS:
+        raise VerificationError("WP2 predecessor commit chain differs")
     _require_sha(
         spec["product_baseline_sha"], "spec.product_baseline_sha", GIT_OBJECT_ID
     )
@@ -471,15 +484,15 @@ def validate_spec(value: Any) -> dict[str, Any]:
         {"path", "required_heading", "required_phrases", "required_status"},
         "spec.accepted_adr",
     )
-    if adr["path"] != "docs/adr/0007-execution-observation-ledger-v1.md":
-        raise VerificationError("ADR path is not frozen ADR-0007")
+    if adr["path"] != "docs/adr/0008-execution-observation-store-substrate-v1.md":
+        raise VerificationError("ADR path is not frozen ADR-0008")
     require_string(adr["required_heading"], "spec.accepted_adr.required_heading")
     require_string(adr["required_status"], "spec.accepted_adr.required_status")
     require_string_list(adr["required_phrases"], "spec.accepted_adr.required_phrases")
 
     contract = require_object(spec["contract"], "spec.contract")
     require_exact_keys(contract, {"path", "required_state", "version"}, "spec.contract")
-    if contract["path"] != "docs/milestones/v53-execution-observation-spine.md":
+    if contract["path"] != "docs/milestones/v53-wp2-checkpoint.md":
         raise VerificationError("contract path is not frozen")
     if contract["version"] != spec["contract_version"]:
         raise VerificationError("nested contract version differs from spec version")
@@ -666,6 +679,7 @@ def validate_spec(value: Any) -> dict[str, Any]:
             "segment_max_bytes",
             "sequence_max",
             "sha256_ascii_bytes",
+            "stored_event_max_bytes",
         },
         "spec.limits",
     )
@@ -689,6 +703,7 @@ def validate_spec(value: Any) -> dict[str, Any]:
         "segment_max_bytes": 64 * 1024,
         "sequence_max": MAX_SAFE_INTEGER,
         "sha256_ascii_bytes": 64,
+        "stored_event_max_bytes": 135_168,
     }
     for key, expected in expected_limits.items():
         if limits[key] != expected:
@@ -845,35 +860,44 @@ def validate_spec(value: Any) -> dict[str, Any]:
     require_exact_keys(
         api,
         {
-            "append_started",
-            "append_terminal",
+            "commit_structural",
+            "inject_post_exchange_sync_failure_once",
+            "inject_pre_exchange_failure_once",
             "open_fixture",
-            "read_attempt",
-            "sealed_type",
+            "stored_event_type",
+            "store_type",
+            "structural_commit_type",
+            "structural_state",
+            "structural_state_type",
         },
         "spec.internal_api",
     )
     expected_api = {
-        "append_started": (
-            "pub(crate) fn append_started(&self, request: AppendStartedRequestV1) "
-            "-> Result<ObservationReceiptV1, ObservationStoreError>"
+        "commit_structural": (
+            "pub(super) fn commit_structural(&self, commit: FixtureStructuralCommitV1) "
+            "-> Result<FixtureStructuralStateV1, ObservationStoreError>"
         ),
-        "append_terminal": (
-            "pub(crate) fn append_terminal(&self, request: AppendTerminalRequestV1) "
-            "-> Result<ObservationReceiptV1, ObservationStoreError>"
+        "inject_post_exchange_sync_failure_once": (
+            "#[cfg(test)] pub(super) fn inject_post_exchange_sync_failure_once(&self)"
+        ),
+        "inject_pre_exchange_failure_once": (
+            "#[cfg(test)] pub(super) fn inject_pre_exchange_failure_once(&self)"
         ),
         "open_fixture": (
-            "pub(crate) fn open_fixture(vault: Arc<PersonalVaultStorage>) "
+            "pub(super) fn open_fixture(vault: Arc<PersonalVaultStorage>) "
             "-> Result<Self, ObservationStoreError>"
         ),
-        "read_attempt": (
-            "pub(crate) fn read_attempt(&self, key: &ExecutionAttemptKeyV1) "
-            "-> Result<Option<FixtureAttemptObservationV1>, ObservationStoreError>"
+        "stored_event_type": "pub(super) enum FixtureStoredEventV1",
+        "store_type": "pub(super) struct FixtureObservationStoreV1",
+        "structural_commit_type": "pub(super) struct FixtureStructuralCommitV1",
+        "structural_state": (
+            "pub(super) fn structural_state(&self) "
+            "-> Result<FixtureStructuralStateV1, ObservationStoreError>"
         ),
-        "sealed_type": "pub(crate) struct FixtureObservationLedgerV1",
+        "structural_state_type": "pub(super) struct FixtureStructuralStateV1",
     }
     if api != expected_api:
-        raise VerificationError("crate-private API differs from ADR-0007")
+        raise VerificationError("crate-private API differs from ADR-0008")
 
     errors = require_object(spec["error_taxonomy"], "spec.error_taxonomy")
     require_exact_keys(
@@ -932,6 +956,7 @@ def validate_spec(value: Any) -> dict[str, Any]:
             "invalid_transition",
             "current_view_mismatch",
             "invalid_candidate_state",
+            "stored_resource_limit",
         ],
         "terminal_variants": [
             "StorageUnavailable",
@@ -1015,52 +1040,71 @@ def validate_spec(value: Any) -> dict[str, Any]:
         raise VerificationError(
             "observation source file limits differ from the frozen scope"
         )
-    if scope["active_work_package"] != "WP1":
-        raise VerificationError("R0 may authorize only WP1")
+    if scope["active_work_package"] != "WP2":
+        raise VerificationError("WP2 checkpoint may authorize only WP2")
     work_packages = require_object(
         scope["work_packages"], "spec.developer_scope.work_packages"
     )
-    require_exact_keys(work_packages, {"WP1"}, "spec.developer_scope.work_packages")
-    wp1 = require_object(work_packages["WP1"], "spec.developer_scope.work_packages.WP1")
+    require_exact_keys(work_packages, {"WP2"}, "spec.developer_scope.work_packages")
+    wp1 = require_object(work_packages["WP2"], "spec.developer_scope.work_packages.WP2")
     require_exact_keys(
         wp1,
         {"allowed_exact", "allowed_globs", "allowed_prefixes"},
-        "spec.developer_scope.work_packages.WP1",
+        "spec.developer_scope.work_packages.WP2",
     )
     for key in ("allowed_exact", "allowed_globs", "allowed_prefixes"):
         require_string_list(
             wp1[key],
-            f"spec.developer_scope.work_packages.WP1.{key}",
+            f"spec.developer_scope.work_packages.WP2.{key}",
             sorted_unique=True,
         )
     expected_wp1 = [
-        "src/memory/execution_observation/canonical.rs",
-        "src/memory/execution_observation/error.rs",
-        "src/memory/execution_observation/hash.rs",
-        "src/memory/execution_observation/ids.rs",
         "src/memory/execution_observation/mod.rs",
-        "src/memory/execution_observation/model.rs",
-        "src/memory/execution_observation/tests.rs",
-        "src/memory/execution_observation/validation.rs",
-        "src/memory/mod.rs",
+        "src/memory/execution_observation/store/loader.rs",
+        "src/memory/execution_observation/store/mod.rs",
+        "src/memory/execution_observation/store/publisher.rs",
+        "src/memory/execution_observation/store/slots.rs",
+        "src/memory/execution_observation/store/tests.rs",
     ]
     if (
         wp1["allowed_exact"] != expected_wp1
         or wp1["allowed_globs"] != []
         or wp1["allowed_prefixes"] != []
     ):
-        raise VerificationError("WP1 exact allowlist differs from the frozen scope")
+        raise VerificationError("WP2 exact allowlist differs from the frozen scope")
     forbidden_wp1 = {
         "src/cas/INDEX.md",
+        "src/cas/execution_observation_store.rs",
+        "src/cas/execution_observation_store/tests.rs",
         "src/cas/ledger_store.rs",
         "src/cas/mod.rs",
         "src/memory/INDEX.md",
+        "src/memory/execution_observation/canonical.rs",
+        "src/memory/execution_observation/canonical/tests.rs",
+        "src/memory/execution_observation/counterexample_tests.rs",
         "src/memory/execution_observation/current_view.rs",
+        "src/memory/execution_observation/error.rs",
+        "src/memory/execution_observation/error/tests.rs",
         "src/memory/execution_observation/fault.rs",
-        "src/memory/execution_observation/store.rs",
+        "src/memory/execution_observation/field_reject_tests.rs",
+        "src/memory/execution_observation/hash.rs",
+        "src/memory/execution_observation/hash/tests.rs",
+        "src/memory/execution_observation/ids.rs",
+        "src/memory/execution_observation/ids/tests.rs",
+        "src/memory/execution_observation/model.rs",
+        "src/memory/execution_observation/model/event.rs",
+        "src/memory/execution_observation/model/ledger.rs",
+        "src/memory/execution_observation/model/request.rs",
+        "src/memory/execution_observation/tests.rs",
+        "src/memory/execution_observation/tests/fixtures.rs",
+        "src/memory/execution_observation/validation.rs",
+        "src/memory/execution_observation/validation/tests.rs",
+        "src/memory/mod.rs",
     }
     if not forbidden_wp1.issubset(scope["forbidden_exact"]):
-        raise VerificationError("WP1 CAS/store/view/fault exclusions are incomplete")
+        raise VerificationError(
+            "WP2 accepted-model/frozen-CAS exclusions are incomplete"
+        )
     if set(scope["architecture_owned"]) & set(wp1["allowed_exact"]):
         raise VerificationError("architecture-owned path is developer-allowed")
 
@@ -1182,7 +1226,7 @@ def validate_spec(value: Any) -> dict[str, Any]:
         "spec.local_gate_contract",
     )
     if (
-        gate["authorized_work_package"] != "WP1"
+        gate["authorized_work_package"] != "WP2"
         or gate["execution"] != "local_only"
         or gate["external_services"] != "forbidden"
         or gate["integration_branch"] != "v53-integration"
@@ -1206,14 +1250,14 @@ def validate_spec(value: Any) -> dict[str, Any]:
         "spec.local_gate_contract.approval",
     )
     if gate_approval != {
-        "approval_path": "docs/milestones/v53-r0-approval.json",
+        "approval_path": "docs/milestones/v53-wp2-approval.json",
         "attestation": "unsigned_repository_control",
         "decision": "GO",
         "default_ref": "refs/remotes/origin/v53-integration",
         "manual_review_required": True,
         "packet_authorization": "unverified",
         "review_method": "manual_review",
-        "tag_prefix": "v53-r0-v2-",
+        "tag_prefix": "v53-wp2-v1-",
     }:
         raise VerificationError("local Git approval contract differs")
     freshness = require_object(gate["freshness"], "spec.local_gate_contract.freshness")
@@ -1326,7 +1370,7 @@ def validate_spec(value: Any) -> dict[str, Any]:
             "post-packet approval record must be architecture-owned and absent from packet bindings"
         )
     if any(path.startswith(".github/workflows/") for path in bindings):
-        raise VerificationError("hosted workflow files must not be R0 bindings")
+        raise VerificationError("hosted workflow files must not be WP2 bindings")
     for required in (
         "Cargo.toml",
         "Cargo.lock",
@@ -1471,6 +1515,35 @@ def git_object(
     return mode, object_id, data
 
 
+def verify_predecessor_history(
+    repo: Path,
+    implementation_base: str,
+    predecessors: list[str],
+    *,
+    git_executable: Path | None = None,
+) -> None:
+    """Prove that the checkpoint base descends from every frozen R1/tooling commit."""
+
+    for index, predecessor in enumerate(predecessors):
+        resolved = resolve_commit(repo, predecessor, git_executable=git_executable)
+        if resolved != predecessor:
+            raise VerificationError(
+                f"predecessor commit {index} does not resolve canonically"
+            )
+        try:
+            output = run_git(
+                repo,
+                ["merge-base", "--is-ancestor", predecessor, implementation_base],
+                git_executable=git_executable,
+            )
+        except VerificationError as error:
+            raise VerificationError(
+                f"implementation base does not descend from predecessor {predecessor}"
+            ) from error
+        if output:
+            raise VerificationError("unexpected merge-base ancestry output")
+
+
 def validate_bound_documents(spec: dict[str, Any], objects: dict[str, bytes]) -> None:
     adr_path = spec["accepted_adr"]["path"]
     contract_path = spec["contract"]["path"]
@@ -1492,10 +1565,10 @@ def validate_bound_documents(spec: dict[str, Any], objects: dict[str, bytes]) ->
     for token in (
         spec["contract_version"],
         spec["contract"]["required_state"],
-        spec["product_baseline_sha"],
-        "Phase 1A",
-        "F01",
-        "F16",
+        spec["predecessor_commits"][0],
+        spec["predecessor_commits"][-1],
+        "Durable Store Substrate",
+        "F06",
         "CommitIndeterminate",
     ):
         if token not in contract:
@@ -1531,11 +1604,11 @@ def validate_bound_documents(spec: dict[str, Any], objects: dict[str, bytes]) ->
                 f"rust-toolchain.toml is missing frozen token: {token}"
             )
 
-    spec_source = objects.get("scripts/milestones/v53/r0_spec.json")
+    spec_source = objects.get(SPEC_PATH)
     if spec_source is None:
-        raise VerificationError("R0 spec Git object is not bound")
-    if strict_json_loads(spec_source, "bound r0_spec.json") != spec:
-        raise VerificationError("embedded R0 spec differs from its Git object")
+        raise VerificationError("WP2 spec Git object is not bound")
+    if strict_json_loads(spec_source, "bound wp2_spec.json") != spec:
+        raise VerificationError("embedded WP2 spec differs from its Git object")
 
 
 def _tool_launcher(command: str, repo: Path | None) -> Path:
@@ -2281,6 +2354,12 @@ def verify_handoff(
         )
         if base != handoff["implementation_base_sha"]:
             raise VerificationError("implementation-base object id is not canonical")
+        verify_predecessor_history(
+            repo,
+            base,
+            handoff["spec"]["predecessor_commits"],
+            git_executable=git_executable,
+        )
         tree = run_git(
             repo,
             ["rev-parse", f"{base}^{{tree}}"],
@@ -2338,10 +2417,10 @@ def main(argv: list[str] | None = None) -> int:
             check_toolchain=args.check_toolchain,
         )
     except VerificationError as error:
-        print(f"v53 R0 verification failed: {error}", file=sys.stderr)
+        print(f"v53 WP2 verification failed: {error}", file=sys.stderr)
         return 1
     print(
-        f"v53 R0 verified: packet={handoff['packet_id']} "
+        f"v53 WP2 verified: packet={handoff['packet_id']} "
         f"implementation_base={handoff['implementation_base_sha']} "
         "integrity=verified authorization=unverified"
     )

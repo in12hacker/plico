@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify a v53 candidate against the base sealed in a verified R0 packet."""
+"""Verify a v53 WP2 candidate against its architecture-sealed checkpoint."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ import fnmatch
 import json
 import os
 import re
+import resource
 import shutil
 import signal
 import stat
@@ -18,7 +19,7 @@ import tempfile
 import time
 from contextlib import contextmanager
 from decimal import Decimal
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import verify
 import authorize
@@ -52,6 +53,8 @@ PURE_STD_MODULES = {
     "result",
     "slice",
     "str",
+    "sync",
+    "time",
 }
 OBSERVATION_MODULES = {
     "canonical",
@@ -59,6 +62,7 @@ OBSERVATION_MODULES = {
     "hash",
     "ids",
     "model",
+    "store",
     "tests",
     "validation",
 }
@@ -81,6 +85,22 @@ RUST_PRIMITIVE_PATH_ROOTS = {
     "u128",
     "usize",
 }
+RUST_INTEGER_PATH_ROOTS = {
+    "i8",
+    "i16",
+    "i32",
+    "i64",
+    "i128",
+    "isize",
+    "u8",
+    "u16",
+    "u32",
+    "u64",
+    "u128",
+    "usize",
+}
+MAX_CANDIDATE_OUTPUT_BYTES = 16 * 1024 * 1024
+MAX_CANDIDATE_ADDRESS_SPACE_BYTES = 32 * 1024 * 1024 * 1024
 WP1_EXTERNAL_TESTS = r"""
 use std::num::NonZeroU32;
 
@@ -226,6 +246,435 @@ WP1_EXTERNAL_TEST_NAMES = {
     "memory::execution_observation::architecture_contract_tests::architecture_wp1_contract_jcs_precedes_semantics",
     "memory::execution_observation::architecture_contract_tests::architecture_wp1_contract_retry_identity_is_body_derived",
     "memory::execution_observation::architecture_contract_tests::architecture_wp1_contract_terminal_binds_key_policy_and_total",
+}
+WP2_EXTERNAL_TESTS = r"""
+use std::fs;
+use std::os::unix::fs::PermissionsExt;
+use std::path::Path;
+use std::sync::Arc;
+
+use crate::cas::execution_observation_store::ExecutionObservationFixtureStorage;
+use crate::cas::PersonalVaultStorage;
+
+use super::canonical::{parse_canonical, to_canonical_vec};
+use super::error::{CorruptionCategory, ObservationStoreError};
+use super::hash;
+use super::hash::tests::{
+    GENESIS_ROOT_SHA, GENESIS_VIEW_SHA, STARTED_EVENT_SHA, STARTED_ROOT_SHA,
+    STARTED_SEGMENT_SHA, TERMINAL_ROOT_SHA,
+};
+use super::model::{
+    FixtureActivePointerV1, FixtureCurrentViewV1, FixtureLedgerRootV1,
+    ATTESTATION_STATE, CURRENT_VIEW_SCHEMA, POINTER_SCHEMA, ROOT_SCHEMA,
+    TRUST_CLASS,
+};
+use super::store::{
+    FixtureObservationStoreV1, FixtureStoredEventV1, FixtureStructuralCommitV1,
+};
+use super::tests::{golden_chain, GoldenChain};
+use super::{POINTER_MAX_BYTES, ROOT_MAX_BYTES, SEGMENT_MAX_BYTES};
+
+const STORED_EVENT_MAX_BYTES: usize = 135_168;
+const DIRECTORY: &str = "execution-observation-fixture-ledger";
+
+fn open(vault: &Path) -> FixtureObservationStoreV1 {
+    let storage = Arc::new(PersonalVaultStorage::open(vault, None).expect("open vault"));
+    FixtureObservationStoreV1::open_fixture(storage).expect("open fixture store")
+}
+
+fn object_path(vault: &Path, hash: &str) -> std::path::PathBuf {
+    vault.join(DIRECTORY).join("objects").join(hash)
+}
+
+fn active_path(vault: &Path) -> std::path::PathBuf {
+    vault.join(DIRECTORY).join("roots/active")
+}
+
+fn candidate_path(vault: &Path) -> std::path::PathBuf {
+    vault.join(DIRECTORY).join("roots/candidate")
+}
+
+fn assert_stored_limit(vault: &Path) {
+    let storage = Arc::new(PersonalVaultStorage::open(vault, None).expect("reopen vault"));
+    assert!(matches!(
+        FixtureObservationStoreV1::open_fixture(storage),
+        Err(ObservationStoreError::CorruptStore {
+            category: CorruptionCategory::StoredResourceLimit,
+        }),
+    ));
+}
+
+fn started(chain: &GoldenChain) -> FixtureStructuralCommitV1 {
+    FixtureStructuralCommitV1 {
+        event: FixtureStoredEventV1::Started(chain.started_event.clone()),
+        segment: chain.started_segment.clone(),
+        current_view: chain.open_view.clone(),
+        root: chain.started_root.clone(),
+    }
+}
+
+fn terminal(chain: &GoldenChain) -> FixtureStructuralCommitV1 {
+    FixtureStructuralCommitV1 {
+        event: FixtureStoredEventV1::Terminal(chain.terminal_event.clone()),
+        segment: chain.terminal_segment.clone(),
+        current_view: chain.terminal_view.clone(),
+        root: chain.terminal_root.clone(),
+    }
+}
+
+#[test]
+fn architecture_wp2_store_rebuilds_structural_head_after_restart() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let vault = directory.path().join("vault");
+    let chain = golden_chain();
+    let store = open(&vault);
+    let genesis = store.structural_state().expect("genesis state");
+    assert_eq!(genesis.root_sha256, GENESIS_ROOT_SHA);
+    assert_eq!((genesis.generation, genesis.event_watermark), (0, 0));
+    let committed = store.commit_structural(started(&chain)).expect("started");
+    assert_eq!(committed.root_sha256, STARTED_ROOT_SHA);
+    drop(store);
+    let reopened = open(&vault);
+    let rebuilt = reopened.structural_state().expect("rebuilt state");
+    assert_eq!(rebuilt.root_sha256, STARTED_ROOT_SHA);
+    assert_eq!((rebuilt.generation, rebuilt.event_watermark), (1, 1));
+}
+
+#[test]
+fn architecture_wp2_store_never_promotes_pre_exchange_candidate() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let vault = directory.path().join("vault");
+    let chain = golden_chain();
+    let store = open(&vault);
+    store.commit_structural(started(&chain)).expect("started");
+    store.inject_pre_exchange_failure_once();
+    assert!(matches!(
+        store.commit_structural(terminal(&chain)),
+        Err(ObservationStoreError::StorageUnavailable),
+    ));
+    assert_eq!(
+        store.structural_state().expect("authoritative active").root_sha256,
+        STARTED_ROOT_SHA,
+    );
+    let active: FixtureActivePointerV1 =
+        parse_canonical(&fs::read(active_path(&vault)).expect("active pointer"))
+            .expect("parse active pointer");
+    let candidate: FixtureActivePointerV1 =
+        parse_canonical(&fs::read(candidate_path(&vault)).expect("candidate pointer"))
+            .expect("parse candidate pointer");
+    assert_eq!(active.root_sha256, STARTED_ROOT_SHA);
+    assert_eq!(candidate.root_sha256, TERMINAL_ROOT_SHA);
+    drop(store);
+    assert_eq!(
+        open(&vault).structural_state().expect("reopen").root_sha256,
+        STARTED_ROOT_SHA,
+    );
+}
+
+#[test]
+fn architecture_wp2_store_retries_only_recomputed_exact_genesis() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let vault = directory.path().join("vault");
+    let owner = Arc::new(PersonalVaultStorage::open(&vault, None).expect("vault"));
+    let storage = ExecutionObservationFixtureStorage::open(owner).expect("sealed storage");
+    let view = FixtureCurrentViewV1 {
+        schema: CURRENT_VIEW_SCHEMA.into(),
+        attestation_state: ATTESTATION_STATE.into(),
+        generation: 0,
+        event_watermark: 0,
+        attempts: Vec::new(),
+    };
+    let root = FixtureLedgerRootV1 {
+        schema: ROOT_SCHEMA.into(),
+        trust_class: TRUST_CLASS.into(),
+        generation: 0,
+        previous_root_sha256: None,
+        event_segment_head_sha256: None,
+        event_watermark: 0,
+        current_view_sha256: GENESIS_VIEW_SHA.into(),
+        committed_at_ms: 0,
+    };
+    let pointer = FixtureActivePointerV1 {
+        schema: POINTER_SCHEMA.into(),
+        root_sha256: GENESIS_ROOT_SHA.into(),
+    };
+    storage
+        .put_immutable_bounded(
+            GENESIS_VIEW_SHA,
+            &to_canonical_vec(&view).expect("genesis view"),
+            super::CURRENT_VIEW_MAX_BYTES as u64,
+        )
+        .expect("store genesis view");
+    storage
+        .put_immutable_bounded(
+            GENESIS_ROOT_SHA,
+            &to_canonical_vec(&root).expect("genesis root"),
+            ROOT_MAX_BYTES as u64,
+        )
+        .expect("store genesis root");
+    storage.inject_pre_exchange_failure_once();
+    assert!(storage
+        .publish_active(&to_canonical_vec(&pointer).expect("genesis pointer"))
+        .is_err());
+    assert_eq!(storage.read_active_bounded(POINTER_MAX_BYTES as u64).unwrap(), None);
+    let candidate: FixtureActivePointerV1 = parse_canonical(
+        &storage
+            .read_candidate_bounded(POINTER_MAX_BYTES as u64)
+            .unwrap()
+            .expect("prepared genesis candidate"),
+    )
+    .expect("parse candidate");
+    assert_eq!(candidate.root_sha256, GENESIS_ROOT_SHA);
+    drop(storage);
+
+    let reopened = open(&vault);
+    assert_eq!(
+        reopened.structural_state().expect("exact genesis retry").root_sha256,
+        GENESIS_ROOT_SHA,
+    );
+    let active: FixtureActivePointerV1 =
+        parse_canonical(&fs::read(active_path(&vault)).expect("active genesis"))
+            .expect("parse active genesis");
+    assert_eq!(active.root_sha256, GENESIS_ROOT_SHA);
+}
+
+#[test]
+fn architecture_wp2_store_poison_follows_exchange_uncertainty() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let vault = directory.path().join("vault");
+    let chain = golden_chain();
+    let store = open(&vault);
+    store.commit_structural(started(&chain)).expect("started");
+    store.inject_post_exchange_sync_failure_once();
+    assert!(matches!(
+        store.commit_structural(terminal(&chain)),
+        Err(ObservationStoreError::CommitIndeterminate),
+    ));
+    assert!(matches!(
+        store.structural_state(),
+        Err(ObservationStoreError::Poisoned),
+    ));
+    drop(store);
+    assert_eq!(
+        open(&vault).structural_state().expect("reconcile").root_sha256,
+        TERMINAL_ROOT_SHA,
+    );
+}
+
+#[test]
+fn architecture_wp2_store_rejects_oversized_pointer_before_parse() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let vault = directory.path().join("vault");
+    drop(open(&vault));
+    fs::write(active_path(&vault), vec![b'x'; POINTER_MAX_BYTES + 1]).expect("oversize pointer");
+    assert_stored_limit(&vault);
+}
+
+#[test]
+fn architecture_wp2_store_rejects_oversized_root_before_parse() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let vault = directory.path().join("vault");
+    drop(open(&vault));
+    fs::write(object_path(&vault, GENESIS_ROOT_SHA), vec![b'x'; ROOT_MAX_BYTES + 1])
+        .expect("oversize root");
+    assert_stored_limit(&vault);
+}
+
+#[test]
+fn architecture_wp2_store_rejects_oversized_segment_before_parse() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let vault = directory.path().join("vault");
+    let chain = golden_chain();
+    let store = open(&vault);
+    store.commit_structural(started(&chain)).expect("started");
+    drop(store);
+    fs::write(object_path(&vault, STARTED_SEGMENT_SHA), vec![b'x'; SEGMENT_MAX_BYTES + 1])
+        .expect("oversize segment");
+    assert_stored_limit(&vault);
+}
+
+#[test]
+fn architecture_wp2_store_rejects_oversized_event_before_parse() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let vault = directory.path().join("vault");
+    let chain = golden_chain();
+    let store = open(&vault);
+    store.commit_structural(started(&chain)).expect("started");
+    drop(store);
+    fs::write(
+        object_path(&vault, STARTED_EVENT_SHA),
+        vec![b'x'; STORED_EVENT_MAX_BYTES + 1],
+    )
+    .expect("oversize event");
+    assert_stored_limit(&vault);
+}
+
+#[test]
+fn architecture_wp2_store_maps_stored_semantic_limit_to_corruption() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let vault = directory.path().join("vault");
+    drop(open(&vault));
+    let mut root: FixtureLedgerRootV1 = parse_canonical(
+        &fs::read(object_path(&vault, GENESIS_ROOT_SHA)).expect("genesis root"),
+    )
+    .expect("parse genesis");
+    root.generation = 20_001;
+    root.event_watermark = 20_001;
+    let root_bytes = to_canonical_vec(&root).expect("canonical root");
+    let root_sha = hash::root_sha256(&root).expect("root hash");
+    fs::write(object_path(&vault, &root_sha), root_bytes).expect("stored invalid root");
+    let pointer = FixtureActivePointerV1 {
+        schema: POINTER_SCHEMA.into(),
+        root_sha256: root_sha,
+    };
+    fs::write(
+        active_path(&vault),
+        to_canonical_vec(&pointer).expect("canonical pointer"),
+    )
+    .expect("publish invalid pointer fixture");
+    assert_stored_limit(&vault);
+}
+
+#[test]
+fn architecture_wp2_store_maps_stored_schema_and_chain_failures_to_corruption() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let schema_vault = directory.path().join("schema-vault");
+    drop(open(&schema_vault));
+    let mut root: FixtureLedgerRootV1 = parse_canonical(
+        &fs::read(object_path(&schema_vault, GENESIS_ROOT_SHA)).expect("genesis root"),
+    )
+    .expect("parse genesis");
+    root.schema = "plico.execution-observation.unsupported/v1".into();
+    let root_sha = hash::root_sha256(&root).expect("root hash");
+    fs::write(
+        object_path(&schema_vault, &root_sha),
+        to_canonical_vec(&root).expect("canonical root"),
+    )
+    .expect("stored unsupported root");
+    let pointer = FixtureActivePointerV1 {
+        schema: POINTER_SCHEMA.into(),
+        root_sha256: root_sha,
+    };
+    fs::write(
+        active_path(&schema_vault),
+        to_canonical_vec(&pointer).expect("canonical pointer"),
+    )
+    .expect("publish unsupported root fixture");
+    let owner = Arc::new(PersonalVaultStorage::open(&schema_vault, None).expect("vault"));
+    assert!(matches!(
+        FixtureObservationStoreV1::open_fixture(owner),
+        Err(ObservationStoreError::CorruptStore {
+            category: CorruptionCategory::UnsupportedStoredSchema,
+        }),
+    ));
+
+    let chain_vault = directory.path().join("chain-vault");
+    let chain = golden_chain();
+    let store = open(&chain_vault);
+    store.commit_structural(started(&chain)).expect("started");
+    drop(store);
+    let mut root: FixtureLedgerRootV1 = parse_canonical(
+        &fs::read(object_path(&chain_vault, STARTED_ROOT_SHA)).expect("started root"),
+    )
+    .expect("parse started root");
+    root.previous_root_sha256 = None;
+    let root_sha = hash::root_sha256(&root).expect("root hash");
+    fs::write(
+        object_path(&chain_vault, &root_sha),
+        to_canonical_vec(&root).expect("canonical root"),
+    )
+    .expect("stored broken root");
+    let pointer = FixtureActivePointerV1 {
+        schema: POINTER_SCHEMA.into(),
+        root_sha256: root_sha,
+    };
+    fs::write(
+        active_path(&chain_vault),
+        to_canonical_vec(&pointer).expect("canonical pointer"),
+    )
+    .expect("publish broken root fixture");
+    let owner = Arc::new(PersonalVaultStorage::open(&chain_vault, None).expect("vault"));
+    assert!(matches!(
+        FixtureObservationStoreV1::open_fixture(owner),
+        Err(ObservationStoreError::CorruptStore {
+            category: CorruptionCategory::BrokenRootChain,
+        }),
+    ));
+}
+
+#[test]
+fn architecture_wp2_store_rejects_invalid_candidate_without_promotion() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let vault = directory.path().join("vault");
+    drop(open(&vault));
+    let active = fs::read(active_path(&vault)).expect("active bytes");
+    fs::write(candidate_path(&vault), b"{}").expect("invalid candidate");
+    let storage = Arc::new(PersonalVaultStorage::open(&vault, None).expect("reopen vault"));
+    assert!(matches!(
+        FixtureObservationStoreV1::open_fixture(storage),
+        Err(ObservationStoreError::CorruptStore {
+            category: CorruptionCategory::InvalidCandidateState,
+        }),
+    ));
+    assert_eq!(fs::read(active_path(&vault)).expect("active remains"), active);
+}
+
+#[test]
+fn architecture_wp2_store_rejects_non_private_topology_without_repair() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let vault = directory.path().join("vault");
+    drop(PersonalVaultStorage::open(&vault, None).expect("create vault"));
+    let observation = vault.join(DIRECTORY);
+    fs::create_dir(&observation).expect("observation directory");
+    fs::create_dir(observation.join("objects")).expect("objects");
+    fs::create_dir(observation.join("roots")).expect("roots");
+    fs::write(observation.join("roots/active"), []).expect("active");
+    fs::write(observation.join("roots/candidate"), []).expect("candidate");
+    fs::set_permissions(&observation, fs::Permissions::from_mode(0o755)).expect("mode");
+    let storage = Arc::new(PersonalVaultStorage::open(&vault, None).expect("reopen vault"));
+    assert!(matches!(
+        FixtureObservationStoreV1::open_fixture(storage),
+        Err(ObservationStoreError::StorageUnavailable),
+    ));
+    assert_eq!(
+        fs::metadata(&observation).expect("metadata").permissions().mode() & 0o777,
+        0o755,
+    );
+}
+
+#[test]
+fn architecture_wp2_cas_collision_read_is_bounded_and_nonmutating() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let vault = directory.path().join("vault");
+    let owner = Arc::new(PersonalVaultStorage::open(&vault, None).expect("vault"));
+    let storage = ExecutionObservationFixtureStorage::open(owner).expect("sealed storage");
+    let hash = "a".repeat(64);
+    storage.put_immutable_bounded(&hash, b"x", 1).expect("first put");
+    fs::write(object_path(&vault, &hash), b"xx").expect("oversized collision fixture");
+    assert_eq!(
+        storage
+            .put_immutable_bounded(&hash, b"x", 1)
+            .expect_err("bounded collision read")
+            .kind(),
+        std::io::ErrorKind::InvalidData,
+    );
+    assert_eq!(fs::read(object_path(&vault, &hash)).expect("collision bytes"), b"xx");
+}
+"""
+WP2_EXTERNAL_TEST_NAMES = {
+    "memory::execution_observation::architecture_wp2_store_tests::architecture_wp2_cas_collision_read_is_bounded_and_nonmutating",
+    "memory::execution_observation::architecture_wp2_store_tests::architecture_wp2_store_maps_stored_semantic_limit_to_corruption",
+    "memory::execution_observation::architecture_wp2_store_tests::architecture_wp2_store_maps_stored_schema_and_chain_failures_to_corruption",
+    "memory::execution_observation::architecture_wp2_store_tests::architecture_wp2_store_never_promotes_pre_exchange_candidate",
+    "memory::execution_observation::architecture_wp2_store_tests::architecture_wp2_store_poison_follows_exchange_uncertainty",
+    "memory::execution_observation::architecture_wp2_store_tests::architecture_wp2_store_rejects_invalid_candidate_without_promotion",
+    "memory::execution_observation::architecture_wp2_store_tests::architecture_wp2_store_rejects_non_private_topology_without_repair",
+    "memory::execution_observation::architecture_wp2_store_tests::architecture_wp2_store_rejects_oversized_event_before_parse",
+    "memory::execution_observation::architecture_wp2_store_tests::architecture_wp2_store_rejects_oversized_pointer_before_parse",
+    "memory::execution_observation::architecture_wp2_store_tests::architecture_wp2_store_rejects_oversized_root_before_parse",
+    "memory::execution_observation::architecture_wp2_store_tests::architecture_wp2_store_rejects_oversized_segment_before_parse",
+    "memory::execution_observation::architecture_wp2_store_tests::architecture_wp2_store_rebuilds_structural_head_after_restart",
+    "memory::execution_observation::architecture_wp2_store_tests::architecture_wp2_store_retries_only_recomputed_exact_genesis",
 }
 LISTED_F_TEST = re.compile(
     r"(?m)^(?P<name>\S*execution_observation_f(?P<id>\d{2})_\S*): test$"
@@ -394,7 +843,15 @@ def _module_depths(path: str, tokens: list[str]) -> list[int]:
     spelling `super`, which is safe in a child but an escape at the boundary.
     """
 
-    base_depth = 0 if path.endswith("/mod.rs") else 1
+    observation_root = PurePosixPath("src/memory/execution_observation")
+    try:
+        relative = PurePosixPath(path).relative_to(observation_root)
+    except ValueError as error:
+        raise verify.VerificationError(
+            f"Rust source is outside execution_observation: {path}"
+        ) from error
+    parent_depth = len(relative.parts) - 1
+    base_depth = parent_depth if relative.name == "mod.rs" else parent_depth + 1
     module_braces = {
         index + 2
         for index in range(len(tokens) - 2)
@@ -522,9 +979,26 @@ def _validate_capability_path(
     root = path[0]
     if root == "self" or root in OBSERVATION_MODULES:
         return
+    is_store_test = source_path == "src/memory/execution_observation/store/tests.rs"
+    if root == "tempfile" and is_store_test:
+        return
+    sealed_cas_capability = path == (
+        "crate",
+        "cas",
+        "execution_observation_store",
+        "ExecutionObservationFixtureStorage",
+    )
+    frozen_cas_types = (
+        len(path) == 3
+        and path[1] == "cas"
+        and path[2]
+        in {"LedgerStorageError", "LedgerStorageOpenError", "PersonalVaultStorage"}
+    )
+    if root == "crate" and (sealed_cas_capability or frozen_cas_types):
+        return
     if root == "crate":
         raise verify.VerificationError(
-            f"crate dependency escapes the WP1 pure-type boundary: {source_path}"
+            f"crate dependency escapes the WP2 observation boundary: {source_path}"
         )
     if root not in PURE_EXTERNAL_ROOTS:
         raise verify.VerificationError(
@@ -551,6 +1025,15 @@ def _qualified_path(tokens: list[str], start: int) -> tuple[str, ...]:
         segments.append(segment)
         cursor += 2
     return tuple(segments)
+
+
+def _count_token_sequence(tokens: list[str], sequence: list[str]) -> int:
+    if not sequence or len(sequence) > len(tokens):
+        return 0
+    return sum(
+        tokens[index : index + len(sequence)] == sequence
+        for index in range(len(tokens) - len(sequence) + 1)
+    )
 
 
 def _scan_rust_tokens(path: str, text: str, *, observation: bool) -> list[str]:
@@ -609,7 +1092,15 @@ def _scan_rust_tokens(path: str, text: str, *, observation: bool) -> list[str]:
                 "path",
                 "macro_export",
             }:
-                if attribute != ["cfg", "(", "test", ")"]:
+                allowed_attributes = [["cfg", "(", "test", ")"]]
+                if path == "src/memory/execution_observation/store/tests.rs":
+                    allowed_attributes.extend(
+                        [
+                            ["cfg", "(", "unix", ")"],
+                            ["cfg", "(", "not", "(", "unix", ")", ")"],
+                        ]
+                    )
+                if attribute not in allowed_attributes:
                     raise verify.VerificationError(
                         f"conditional/path/macro attribute is forbidden: {path}"
                     )
@@ -627,15 +1118,29 @@ def _scan_rust_tokens(path: str, text: str, *, observation: bool) -> list[str]:
             )
         if token == "unsafe":
             raise verify.VerificationError(f"unsafe code is forbidden: {path}")
+        if token in RUST_INTEGER_PATH_ROOTS and tokens[index + 1 : index + 3] == [
+            "::",
+            "MAX",
+        ]:
+            raise verify.VerificationError(
+                f"unbounded {token}::MAX capability is forbidden: {path}"
+            )
         if token == "pub":
             if index + 1 >= len(tokens) or tokens[index + 1] != "(":
                 raise verify.VerificationError(
                     f"plain public export is forbidden in observation module: {path}"
                 )
             end = _matching_token(tokens, index + 1, "(", ")")
-            if tokens[index + 2 : end] not in (["crate"], ["super"]):
+            visibility = tokens[index + 2 : end]
+            if visibility not in (["crate"], ["super"]):
                 raise verify.VerificationError(
                     f"only pub(crate)/pub(super) visibility is allowed: {path}"
+                )
+            if path.startswith(
+                "src/memory/execution_observation/store/"
+            ) and visibility != ["super"]:
+                raise verify.VerificationError(
+                    f"WP2 store visibility must remain pub(super): {path}"
                 )
         if not _is_rust_identifier(token) or index + 1 >= len(tokens):
             continue
@@ -688,6 +1193,29 @@ def _verify_wp1_memory_module_anchor(repo: Path, base: str, candidate: str) -> N
     if without_anchor != base_bytes:
         raise verify.VerificationError(
             "WP1 src/memory/mod.rs changed beyond the exact crate-private module anchor"
+        )
+
+
+def _verify_wp2_module_anchor(repo: Path, base: str, candidate: str) -> None:
+    """Permit only the checkpoint-frozen private observation-store activation."""
+
+    memory_path = "src/memory/execution_observation/mod.rs"
+    _, _, memory_base = verify.git_object(repo, base, memory_path)
+    _, _, memory_candidate = verify.git_object(repo, candidate, memory_path)
+    anchor_after = b"pub(crate) mod model;\n"
+    store_anchor = b"mod store;\n"
+    if memory_base.count(anchor_after) != 1 or store_anchor in memory_base:
+        raise verify.VerificationError(
+            "WP2 observation base cannot accept the frozen private store anchor"
+        )
+    memory_expected = memory_base.replace(
+        anchor_after,
+        anchor_after + store_anchor,
+        1,
+    )
+    if memory_candidate != memory_expected:
+        raise verify.VerificationError(
+            "WP2 observation mod.rs differs from the exact private store anchor"
         )
 
 
@@ -876,7 +1404,7 @@ def _resolve_frozen_cargo(
     cargo_digest = verify.sha256_bytes(cargo_bytes)
     sealed_cargo = observed["cargo"]
     if cargo_digest != sealed_cargo["launcher_sha256"]:
-        raise verify.VerificationError("cargo launcher content differs from R0 packet")
+        raise verify.VerificationError("cargo launcher content differs from WP2 packet")
     environment = _hardened_tool_environment(cargo_path)
     for name in ("cargo", "cargo_llvm_cov", "rustc", "git"):
         current = verify._observe_tool(
@@ -905,7 +1433,7 @@ def _resolve_frozen_cargo(
     sealed_resolved = sealed_cargo["resolved_tool"]
     if verify.sha256_bytes(resolved_realpath.read_bytes()) != sealed_resolved["sha256"]:
         raise verify.VerificationError(
-            "resolved cargo 1.95.0 identity differs from R0 packet"
+            "resolved cargo 1.95.0 identity differs from WP2 packet"
         )
     if verify.sha256_bytes(realpath.read_bytes()) != cargo_digest:
         raise verify.VerificationError(
@@ -920,7 +1448,7 @@ def _resolve_frozen_cargo(
     sealed_cov = observed["cargo_llvm_cov"]["resolved_tool"]
     if cov_digest != sealed_cov["sha256"]:
         raise verify.VerificationError(
-            "resolved cargo-llvm-cov identity differs from R0 packet"
+            "resolved cargo-llvm-cov identity differs from WP2 packet"
         )
     git_path = verify._tool_launcher(spec["toolchain"]["git"]["command"][0], None)
     git_realpath = git_path.resolve(strict=True)
@@ -1007,25 +1535,53 @@ def _run_bounded_process(
     environment: dict[str, str],
     timeout: int,
 ) -> subprocess.CompletedProcess[bytes]:
-    """Run a candidate command in a new process group and kill the group on timeout."""
+    """Run candidate code with bounded time, output and basic OS resources."""
+
+    def child_limits() -> None:
+        os.umask(0o077)
+        resource.setrlimit(
+            resource.RLIMIT_AS,
+            (
+                MAX_CANDIDATE_ADDRESS_SPACE_BYTES,
+                MAX_CANDIDATE_ADDRESS_SPACE_BYTES,
+            ),
+        )
+        resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
 
     try:
-        process = subprocess.Popen(
-            command,
-            cwd=cwd,
-            env=environment,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            start_new_session=True,
-        )
-        try:
-            stdout, _ = process.communicate(timeout=timeout)
-        except subprocess.TimeoutExpired as error:
-            os.killpg(process.pid, signal.SIGKILL)
-            stdout, _ = process.communicate()
-            raise verify.VerificationError(
-                f"candidate command exceeded {timeout} seconds: {command[0]}"
-            ) from error
+        with tempfile.TemporaryFile() as output:
+            process = subprocess.Popen(
+                command,
+                cwd=cwd,
+                env=environment,
+                stdout=output,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+                preexec_fn=child_limits,
+            )
+            deadline = time.monotonic() + timeout
+            while process.poll() is None:
+                if os.fstat(output.fileno()).st_size > MAX_CANDIDATE_OUTPUT_BYTES:
+                    os.killpg(process.pid, signal.SIGKILL)
+                    process.wait()
+                    raise verify.VerificationError(
+                        "candidate command output exceeded "
+                        f"{MAX_CANDIDATE_OUTPUT_BYTES} bytes"
+                    )
+                if time.monotonic() >= deadline:
+                    os.killpg(process.pid, signal.SIGKILL)
+                    process.wait()
+                    raise verify.VerificationError(
+                        f"candidate command exceeded {timeout} seconds: {command[0]}"
+                    )
+                time.sleep(0.05)
+            output_size = os.fstat(output.fileno()).st_size
+            if output_size > MAX_CANDIDATE_OUTPUT_BYTES:
+                raise verify.VerificationError(
+                    f"candidate command output exceeded {MAX_CANDIDATE_OUTPUT_BYTES} bytes"
+                )
+            output.seek(0)
+            stdout = output.read(MAX_CANDIDATE_OUTPUT_BYTES + 1)
     except OSError as error:
         raise verify.VerificationError(
             f"candidate command could not execute: {error}"
@@ -1373,6 +1929,203 @@ def _scan_observation_source(
             f"observation source must remain below 300 lines: {path}"
         )
     _scan_rust_tokens(path, text, observation=True)
+    if path.startswith("src/memory/execution_observation/store/"):
+        deferred = {
+            "append_started",
+            "append_terminal",
+            "read_attempt",
+            "FixtureAttemptObservationV1",
+            "FixtureAttemptViewV1",
+            "FixtureObservationLedgerV1",
+            "ObservationReceiptV1",
+            "validate_started_transition",
+            "validate_terminal_transition",
+        }
+        tokens = set(_rust_tokens(text))
+        used = deferred & tokens
+        if used:
+            raise verify.VerificationError(
+                f"WP3 facade/receipt symbol is forbidden in WP2: {path}"
+            )
+        token_stream = _rust_tokens(text)
+        if path != "src/memory/execution_observation/store/tests.rs":
+            forbidden_output_macros = {
+                "dbg",
+                "eprint",
+                "eprintln",
+                "panic",
+                "print",
+                "println",
+                "todo",
+                "unimplemented",
+            }
+            for index, token in enumerate(token_stream[:-1]):
+                if token in forbidden_output_macros and token_stream[index + 1] == "!":
+                    raise verify.VerificationError(
+                        f"production output/panic macro is forbidden in WP2: {path}"
+                    )
+        for index, token in enumerate(token_stream):
+            if token != "PersonalVaultStorage":
+                continue
+            cursor = index + 1
+            if cursor < len(token_stream) and token_stream[cursor] == ">":
+                cursor += 1
+            if (
+                token_stream[cursor : cursor + 3] == ["::", "open", "("]
+                and path != "src/memory/execution_observation/store/tests.rs"
+            ):
+                raise verify.VerificationError(
+                    f"WP2 production store may not open a second vault: {path}"
+                )
+
+
+def _verify_wp2_store_surface(candidate_files: dict[str, bytes]) -> None:
+    """Enforce the ADR-0008 seam as a closed crate-private declaration set."""
+
+    production_sources = "\n".join(
+        data.decode("utf-8", errors="strict")
+        for path, data in sorted(candidate_files.items())
+        if path.startswith("src/memory/execution_observation/store/")
+        and path != "src/memory/execution_observation/store/tests.rs"
+    )
+    sources = "\n".join(
+        data.decode("utf-8", errors="strict")
+        for path, data in sorted(candidate_files.items())
+        if path.startswith("src/memory/execution_observation/store/")
+    )
+    expected_types = {
+        "FixtureObservationStoreV1",
+        "FixtureStoredEventV1",
+        "FixtureStructuralCommitV1",
+        "FixtureStructuralStateV1",
+    }
+    expected_methods = {
+        "commit_structural",
+        "inject_post_exchange_sync_failure_once",
+        "inject_pre_exchange_failure_once",
+        "open_fixture",
+        "structural_state",
+    }
+    expected_fields = {
+        "current_view",
+        "event",
+        "event_watermark",
+        "generation",
+        "root",
+        "root_sha256",
+        "segment",
+    }
+    types = set(
+        re.findall(
+            r"pub\s*\(\s*super\s*\)\s*(?:enum|struct)\s+([A-Za-z_][A-Za-z0-9_]*)",
+            sources,
+        )
+    )
+    methods = set(
+        re.findall(
+            r"pub\s*\(\s*super\s*\)\s*fn\s+([A-Za-z_][A-Za-z0-9_]*)",
+            sources,
+        )
+    )
+    fields = set(
+        re.findall(
+            r"pub\s*\(\s*super\s*\)\s*([a-z_][A-Za-z0-9_]*)\s*:",
+            sources,
+        )
+    )
+    surface_tokens = _rust_tokens(sources)
+    production_tokens = _rust_tokens(production_sources)
+    if production_tokens.count("PersonalVaultStorage") != 2:
+        raise verify.VerificationError(
+            "PersonalVaultStorage may appear only in the frozen import and Arc parameter"
+        )
+    if production_tokens.count("vault") != 2:
+        raise verify.VerificationError(
+            "open_fixture vault may only be declared and consumed by the sealed CAS opener"
+        )
+    signature = ["vault", ":", "Arc", "<", "PersonalVaultStorage", ">"]
+    delegation = [
+        "ExecutionObservationFixtureStorage",
+        "::",
+        "open",
+        "(",
+        "vault",
+        ")",
+    ]
+    if (
+        _count_token_sequence(production_tokens, signature) != 1
+        or _count_token_sequence(production_tokens, delegation) != 1
+    ):
+        raise verify.VerificationError(
+            "open_fixture must consume its vault exactly once through the sealed CAS opener"
+        )
+    enum_starts = [
+        index
+        for index in range(len(surface_tokens) - 2)
+        if surface_tokens[index : index + 2] == ["enum", "FixtureStoredEventV1"]
+    ]
+    if len(enum_starts) != 1 or surface_tokens[enum_starts[0] + 2] != "{":
+        raise verify.VerificationError(
+            "FixtureStoredEventV1 declaration differs from ADR-0008"
+        )
+    enum_end = _matching_token(surface_tokens, enum_starts[0] + 2, "{", "}")
+    enum_body = surface_tokens[enum_starts[0] + 3 : enum_end]
+    if enum_body and enum_body[-1] == ",":
+        enum_body = enum_body[:-1]
+    if enum_body != [
+        "Started",
+        "(",
+        "StoredStartedEventV1",
+        ")",
+        ",",
+        "Terminal",
+        "(",
+        "StoredTerminalEventV1",
+        ")",
+    ]:
+        raise verify.VerificationError(
+            "FixtureStoredEventV1 variants differ from ADR-0008"
+        )
+    cfg_test_prefix = [
+        "#",
+        "[",
+        "cfg",
+        "(",
+        "test",
+        ")",
+        "]",
+        "pub",
+        "(",
+        "super",
+        ")",
+        "fn",
+    ]
+    for method in {
+        "inject_pre_exchange_failure_once",
+        "inject_post_exchange_sync_failure_once",
+    }:
+        occurrences = [
+            index
+            for index, token in enumerate(surface_tokens)
+            if token == method and index > 0 and surface_tokens[index - 1] == "fn"
+        ]
+        if (
+            len(occurrences) != 1
+            or surface_tokens[occurrences[0] - len(cfg_test_prefix) : occurrences[0]]
+            != cfg_test_prefix
+        ):
+            raise verify.VerificationError(
+                f"WP2 fault seam must remain cfg(test): {method}"
+            )
+    if (
+        types != expected_types
+        or methods != expected_methods
+        or fields != expected_fields
+        or len(re.findall(r"pub\s*\(\s*super\s*\)", sources)) != 16
+    ):
+        raise verify.VerificationError(
+            "WP2 store crate-private surface differs from the frozen ADR-0008 seam"
+        )
 
 
 def _read_lcov(path: Path, repo: Path) -> dict[str, dict[int, int]]:
@@ -1830,6 +2583,112 @@ def _run_wp1_external_corpus(
     }
 
 
+def _run_wp2_external_corpus(
+    source_repo: Path,
+    candidate: str,
+    candidate_checkout: Path,
+    candidate_manifest: dict[str, tuple[str, str]],
+    toolchain: dict[str, object],
+) -> dict[str, object]:
+    """Compile the independent WP2 store oracle over immutable candidate bytes."""
+
+    module = candidate_checkout / "src/memory/execution_observation/mod.rs"
+    corpus = (
+        candidate_checkout
+        / "src/memory/execution_observation/architecture_wp2_store_tests.rs"
+    )
+    module_bytes = module.read_bytes()
+    anchor = b"\n#[cfg(test)]\nmod architecture_wp2_store_tests;\n"
+    if b"architecture_wp2_store_tests" in module_bytes or corpus.exists():
+        raise verify.VerificationError(
+            "candidate predeclares the architecture-owned WP2 corpus"
+        )
+    module.chmod(0o600)
+    module.write_bytes(module_bytes + anchor)
+    module.chmod(0o400)
+    corpus.write_text(WP2_EXTERNAL_TESTS, encoding="utf-8")
+    corpus.chmod(0o400)
+
+    overlay_manifest = candidate_manifest.copy()
+    module_name = "src/memory/execution_observation/mod.rs"
+    corpus_name = "src/memory/execution_observation/architecture_wp2_store_tests.rs"
+    overlay_manifest[module_name] = (
+        "100644",
+        verify.sha256_bytes(module.read_bytes()),
+    )
+    overlay_manifest[corpus_name] = (
+        "100644",
+        verify.sha256_bytes(corpus.read_bytes()),
+    )
+    _verify_materialized_tree(candidate_checkout, overlay_manifest)
+    _assert_execution_seal(source_repo, candidate, toolchain)
+
+    with _isolated_candidate_environment(toolchain["environment"]) as (
+        environment,
+        _,
+    ):
+        listed_result = _run_bounded_process(
+            [
+                os.fspath(toolchain["cargo_path"]),
+                "test",
+                "--locked",
+                "--all-features",
+                "architecture_wp2_store_",
+                "--",
+                "--list",
+            ],
+            cwd=candidate_checkout,
+            environment=environment,
+            timeout=1200,
+        )
+        listed_output = listed_result.stdout.decode("utf-8", errors="replace")
+        if listed_result.returncode != 0:
+            detail = listed_output.strip().splitlines()
+            raise verify.VerificationError(
+                "architecture WP2 corpus list failed: "
+                f"{detail[-1] if detail else 'no output'}"
+            )
+        listed = {
+            line.removesuffix(": test")
+            for line in listed_output.splitlines()
+            if line.endswith(": test") and "architecture_wp2_store_" in line
+        }
+        if listed != WP2_EXTERNAL_TEST_NAMES:
+            raise verify.VerificationError(
+                "architecture WP2 corpus inventory differs from the frozen oracle"
+            )
+        for name in sorted(WP2_EXTERNAL_TEST_NAMES):
+            exact = _run_bounded_process(
+                [
+                    os.fspath(toolchain["cargo_path"]),
+                    "test",
+                    "--locked",
+                    "--all-features",
+                    name,
+                    "--",
+                    "--exact",
+                    "--nocapture",
+                ],
+                cwd=candidate_checkout,
+                environment=environment,
+                timeout=1200,
+            )
+            output = exact.stdout.decode("utf-8", errors="replace")
+            if exact.returncode != 0:
+                detail = output.strip().splitlines()
+                raise verify.VerificationError(
+                    "architecture WP2 corpus test failed: "
+                    f"{detail[-1] if detail else name}"
+                )
+            _parse_exact_f_test_execution(output, name)
+            _assert_execution_seal(source_repo, candidate, toolchain)
+            _verify_materialized_tree(candidate_checkout, overlay_manifest)
+    return {
+        "source_sha256": verify.sha256_bytes(WP2_EXTERNAL_TESTS.encode("utf-8")),
+        "tests": sorted(WP2_EXTERNAL_TEST_NAMES),
+    }
+
+
 def _extract_git_archive(
     repo: Path, commit: str, destination: Path
 ) -> dict[str, tuple[str, str]]:
@@ -1952,7 +2811,7 @@ def _verified_candidate_files_from_checkout(
     return result
 
 
-def _run_wp1_archive_gate(
+def _run_wp2_archive_gate(
     source_repo: Path,
     base: str,
     candidate: str,
@@ -1967,17 +2826,22 @@ def _run_wp1_archive_gate(
         root.chmod(0o700)
         base_checkout = root / "base"
         candidate_checkout = root / "candidate"
-        external_checkout = root / "external-corpus"
+        wp1_external_checkout = root / "wp1-external-corpus"
+        wp2_external_checkout = root / "wp2-external-corpus"
         base_manifest = _extract_git_archive(source_repo, base, base_checkout)
         candidate_manifest = _extract_git_archive(
             source_repo, candidate, candidate_checkout
         )
-        external_manifest = _extract_git_archive(
-            source_repo, candidate, external_checkout
+        wp1_external_manifest = _extract_git_archive(
+            source_repo, candidate, wp1_external_checkout
+        )
+        wp2_external_manifest = _extract_git_archive(
+            source_repo, candidate, wp2_external_checkout
         )
         _verify_materialized_tree(base_checkout, base_manifest)
         _verify_materialized_tree(candidate_checkout, candidate_manifest)
-        _verify_materialized_tree(external_checkout, external_manifest)
+        _verify_materialized_tree(wp1_external_checkout, wp1_external_manifest)
+        _verify_materialized_tree(wp2_external_checkout, wp2_external_manifest)
 
         object_files = _candidate_files(source_repo, candidate)
         candidate_files = _verified_candidate_files_from_checkout(
@@ -1986,7 +2850,7 @@ def _run_wp1_archive_gate(
         observation_sources = {
             path: data
             for path, data in candidate_files.items()
-            if path.startswith("src/memory/execution_observation/")
+            if path.startswith("src/memory/execution_observation/store/")
         }
         if not observation_sources:
             raise verify.VerificationError(
@@ -1999,6 +2863,7 @@ def _run_wp1_archive_gate(
                 maximum_bytes=scope["observation_file_max_bytes"],
                 maximum_lines_exclusive=scope["observation_file_max_lines_exclusive"],
             )
+        _verify_wp2_store_surface(candidate_files)
 
         declarations: dict[str, int] = {f"F{index:02d}": 0 for index in range(1, 17)}
         total_tests = 0
@@ -2020,13 +2885,13 @@ def _run_wp1_archive_gate(
         required_test_ids = {
             test_id
             for test_id, contract in test_contract.items()
-            if contract["work_package"] == "WP1"
+            if contract["work_package"] in {"WP1", "WP2"}
         }
         for test_id in sorted(required_test_ids):
             minimum = test_contract[test_id]["minimum_tests"]
             if declarations[test_id] < minimum:
                 raise verify.VerificationError(
-                    f"WP1 requires at least {minimum} source declaration for {test_id}"
+                    f"WP2 cumulative gate requires at least {minimum} source declaration for {test_id}"
                 )
 
         candidate_self_evidence = _run_required_f_tests(
@@ -2039,14 +2904,25 @@ def _run_wp1_archive_gate(
             toolchain,
         )
         _verify_materialized_tree(candidate_checkout, candidate_manifest)
-        external_evidence = _run_wp1_external_corpus(
+        wp1_external_evidence = _run_wp1_external_corpus(
             source_repo,
             candidate,
-            external_checkout,
-            external_manifest,
+            wp1_external_checkout,
+            wp1_external_manifest,
             toolchain,
         )
-        return candidate_files, candidate_self_evidence, external_evidence
+        wp2_external_evidence = _run_wp2_external_corpus(
+            source_repo,
+            candidate,
+            wp2_external_checkout,
+            wp2_external_manifest,
+            toolchain,
+        )
+        return (
+            candidate_files,
+            candidate_self_evidence,
+            {"WP1": wp1_external_evidence, "WP2": wp2_external_evidence},
+        )
 
 
 def _normalize_semantic(value: object, key: str = "") -> object:
@@ -2300,7 +3176,7 @@ def _verify_scope_sanitized(
     toolchain["repository_metadata_fingerprint"] = _audit_repository_metadata(repo)
     verified_against_repo = verify.verify_handoff(handoff_dir, repo=repo)
     if verified_against_repo != handoff:
-        raise verify.VerificationError("R0 packet changed during scope verification")
+        raise verify.VerificationError("WP2 packet changed during scope verification")
     if (
         authorization.get("authorization") != "GO"
         or authorization.get("integrity") != "verified"
@@ -2371,9 +3247,9 @@ def _verify_scope_sanitized(
                 ) from error
             _scan_rust_tokens(path, rust_text, observation=False)
 
-    _verify_wp1_memory_module_anchor(repo, base, candidate)
+    _verify_wp2_module_anchor(repo, base, candidate)
 
-    candidate_files, candidate_self_evidence, external_evidence = _run_wp1_archive_gate(
+    candidate_files, candidate_self_evidence, external_evidence = _run_wp2_archive_gate(
         repo,
         base,
         candidate,
@@ -2383,7 +3259,7 @@ def _verify_scope_sanitized(
     )
 
     lifecycle_result: dict[str, object] | None = None
-    if work_package in {"WP5", "WP6"}:
+    if work_package in {"WP2", "WP5", "WP6"}:
         lifecycle_result = _run_lifecycle_differential(repo, base, candidate, toolchain)
 
     coverage_result: dict[str, object] | None = None
@@ -2396,7 +3272,7 @@ def _verify_scope_sanitized(
     _assert_execution_seal(repo, candidate, toolchain)
     final_handoff = verify.verify_handoff(handoff_dir, repo=repo)
     if final_handoff != handoff:
-        raise verify.VerificationError("R0 packet changed during candidate execution")
+        raise verify.VerificationError("WP2 packet changed during candidate execution")
     try:
         final_authorization = authorize.authorize(
             handoff_dir,
@@ -2441,10 +3317,10 @@ def verify_scope(
     work_package: str,
     require_clean: bool,
 ) -> dict[str, object]:
-    if work_package != "WP1":
+    if work_package != "WP2":
         raise verify.VerificationError(
-            "the R0 authorization boundary only permits WP1; later work packages "
-            "require a new architecture approval"
+            "the WP2 checkpoint only permits WP2; old WP1 and later work packages "
+            "require their own architecture approval"
         )
     with _sanitized_git_environment():
         try:
@@ -2455,7 +3331,7 @@ def verify_scope(
             )
         except authorize.AuthorizationError as error:
             raise verify.VerificationError(
-                f"offline R0 authorization failed: {error}"
+                f"offline WP2 authorization failed: {error}"
             ) from error
         handoff = verify.verify_handoff(handoff_dir, repo=None)
         toolchain = _resolve_frozen_cargo(
@@ -2485,7 +3361,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         help="allowed v53 approval ref or exact approval commit object id",
     )
     parser.add_argument("--candidate", default="HEAD")
-    parser.add_argument("--work-package", choices=["WP1"], required=True)
+    parser.add_argument("--work-package", choices=["WP2"], required=True)
     parser.add_argument("--require-clean", action="store_true")
     return parser.parse_args(argv)
 

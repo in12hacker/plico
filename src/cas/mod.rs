@@ -11,6 +11,7 @@
 //! - [`object`] — AIObject and AIObjectMeta definitions
 //! - [`storage`] — CAS storage engine
 
+pub(crate) mod execution_observation_store;
 pub(crate) mod ledger_store;
 pub mod object;
 #[cfg(feature = "offline-migration")]

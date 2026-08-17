@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Collect the architecture-owned v53 R0 exact-four-file handoff packet."""
+"""Collect the architecture-owned v53 WP2 exact-four-file handoff packet."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from pathlib import Path
 import verify
 
 
-SPEC_PATH = "scripts/milestones/v53/r0_spec.json"
+SPEC_PATH = "scripts/milestones/v53/wp2_spec.json"
 
 
 def _ensure_external_output(repo: Path, output: Path) -> None:
@@ -27,7 +27,7 @@ def _ensure_external_output(repo: Path, output: Path) -> None:
         raise verify.VerificationError("repo/output path comparison failed") from error
     if common == repo_real:
         raise verify.VerificationError(
-            "R0 packet must be outside the source repository"
+            "WP2 packet must be outside the source repository"
         )
     if os.path.lexists(output):
         raise verify.VerificationError("output directory already exists")
@@ -130,7 +130,7 @@ def collect(
         )
     expires = generated + dt.timedelta(seconds=ttl_seconds)
 
-    packet_id = f"r0-{secrets.token_hex(16)}"
+    packet_id = f"wp2-{secrets.token_hex(16)}"
     handoff: dict[str, object] = {
         "authorization": {
             "approval_path": spec["local_gate_contract"]["approval"]["approval_path"],
@@ -212,10 +212,10 @@ def main(argv: list[str] | None = None) -> int:
             ttl_seconds=args.ttl_seconds,
         )
     except verify.VerificationError as error:
-        print(f"v53 R0 collection failed: {error}", file=sys.stderr)
+        print(f"v53 WP2 collection failed: {error}", file=sys.stderr)
         return 1
     print(
-        f"v53 R0 collected: packet={handoff['packet_id']} "
+        f"v53 WP2 collected: packet={handoff['packet_id']} "
         f"implementation_base={handoff['implementation_base_sha']} "
         "integrity=verified authorization=unverified"
     )

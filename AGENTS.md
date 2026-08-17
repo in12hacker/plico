@@ -7,6 +7,7 @@
 ```
 src/
 ├── cas/                 # Content-Addressed Storage — SHA-256 对象标识，自动去重
+│   └── execution_observation_store.rs # ADR-0008 固定 namespace 的 sealed bounded CAS capability
 ├── memory/              # Layered Memory — Ephemeral / Working / LongTerm / Procedural
 ├── intent/              # Intent Router — NL → ApiRequest（启发式 + LLM 链）
 ├── scheduler/           # Agent 生命周期 — 注册、优先队列、意图调度、消息传递

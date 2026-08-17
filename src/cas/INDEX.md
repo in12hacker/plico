@@ -38,6 +38,15 @@ NOFOLLOW/NO_XDEV quarantine recovery; it never exposes a direct live-create writ
 an untrusted exchanged tree. Artifact bytes must be owner-only, durable and hash-verified before the
 projection manifest root pointer can publish Ready; unsupported atomic exchange remains fail closed.
 
+## v53 execution-observation fixture boundary
+
+ADR-0008 adds a default-off, fixed `execution-observation-fixture-ledger` namespace. Only the sealed
+`ExecutionObservationFixtureStorage` may claim it from an existing `Arc<PersonalVaultStorage>`; the generic
+immutable-ledger entrypoint rejects this namespace. The sealed handle exposes bounded object/pointer reads,
+bounded collision writes and dual-slot publish, but no host path, arbitrary namespace or unbounded inventory.
+Existing topology is validated exactly and is never chmod-repaired or completed. This is an internal WP2
+substrate, not a public API or a live execution-observation writer.
+
 ## Public API
 
 | Export | File | Description |
@@ -56,6 +65,8 @@ projection manifest root pointer can publish Ready; unsupported atomic exchange 
 | `object.rs` | ~213 | AIObject, AIObjectMeta, ContentType definitions |
 | `storage.rs` | ~254 | CASStorage engine: put/get/delete/list with sharding |
 | `ledger_store.rs` | Generic immutable object/root-slot storage used by canonical memory |
+| `execution_observation_store.rs` | Fixed sealed and bounded CAS capability for ADR-0008 |
+| `execution_observation_store/tests.rs` | Capability, topology and crash-window adversarial tests |
 | `offline_migration.rs` | CAS-owned offline migration filesystem boundary |
 | `mod.rs` | ~18 | Re-exports |
 
@@ -77,3 +88,4 @@ None — CAS is the lowest layer, depends only on std + external crates (sha2, s
 - Integration: `tests/kernel_test.rs` (exercises CAS through kernel)
 - Critical: `test_put_and_get`, `test_deduplication`, `test_cid_is_content_hash`
 - Migration failure injection: `src/cas/offline_migration.rs` inline tests
+- Execution-observation capability: `src/cas/execution_observation_store/tests.rs`
