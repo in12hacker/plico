@@ -18,7 +18,7 @@
 | [v50](v50-memory-rearchitecture.md) | Memory Rearchitecture | 2026-05-14 | ✅ 完成 |
 | [v51](v51-summary.md) | Search Quality & Scope Isolation | 2026-05-17 | ✅ 完成（SAS 15/20，embedding 稳定性已修复） |
 | [v52](v52-trace-observability.md) | Trace Observability + Quality Fixes | 2026-05-18 | ✅ 完成 |
-| [v53](v53-execution-observation-spine.md) | Execution Observation Ledger Core（[R2 accepted](v53-r2-acceptance.md)；[WP3A handoff](v53-wp3a-developer-handoff.md)；[WP3 blueprint](v53-wp3-blueprint.md)；[WP3B.1 handoff](v53-wp3b1-handoff.md)；[WP3B.1 contract](../adr/0010-execution-observation-single-writer-append-v1.md)；[R4 audit](v53-r4-wp3b1-acceptance.md)） | 2026-08-18 | R2 GO / R3+R3.1+R3.1.1 delivered / WP3B.1-B delivered / R4 audit ready |
+| [v53](v53-execution-observation-spine.md) | Execution Observation Ledger Core（[R2 accepted](v53-r2-acceptance.md)；[WP3A handoff](v53-wp3a-developer-handoff.md)；[WP3B.1 handoff](v53-wp3b1-handoff.md)；[R4 acceptance](v53-r4-wp3b1-acceptance.md)；[W0 handoff](v53-w0-developer-handoff.md)） | 2026-08-18 | R4 GO / WP3B.1 accepted / W0 READY FOR DEVELOPMENT |
 
 ## 模板
 
