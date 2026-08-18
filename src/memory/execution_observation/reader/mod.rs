@@ -1,20 +1,17 @@
 //! Deterministic read facade (ADR-0009; milestone v53 WP3A).
 //!
-//! Sealed, crate-private, strictly read-only: opens the frozen sealed CAS
-//! capability, independently replays the authoritative active chain through
-//! the single pure reducer, verifies the stored current view against that
-//! replay, and serves `read_attempt` lookups from the verified result.
-//! No append, receipt, clock, repair, CAS paths, or production wiring.
+//! Sealed, crate-private, strictly read-only: borrows the architecture-frozen
+//! existing-only CAS read capability, independently replays the authoritative
+//! active chain through the single pure reducer, verifies the stored current
+//! view against that replay, and serves `read_attempt` lookups from the
+//! verified result. No append, receipt, clock, repair, CAS paths, or
+//! production wiring.
 //!
-//! Inherited seam behavior (accurate as of this baseline): the only available
-//! sealed opener is the WRITER opener — it creates the observation namespace
-//! directories on a fresh vault (no open-existing-only capability exists yet)
-//! and registers a writer namespace claim that persists for the whole vault
-//! lifecycle even after this reader is dropped. Consequences: opening a
-//! reader on a fresh vault mutates the vault, and a caller that keeps the
-//! same `Arc<PersonalVaultStorage>` cannot open a writer afterwards
-//! (`NamespaceAlreadyClaimed`). An existing-only read capability is the
-//! architecture group's WP3A.1 precondition (Architecture Deviation filed).
+//! Read seam (WP3A.2-A `ExistingExecutionObservationReadOnly`): an absent
+//! namespace is an empty ledger, a present-but-damaged topology fails closed
+//! without repair, and opening never creates, completes, chmods, or claims
+//! anything — a writer may hold or later take the namespace claim on the
+//! same vault Arc.
 
 #![allow(dead_code)] // WP3A has no production caller by contract; wiring belongs to a later authorized package
 
@@ -22,11 +19,12 @@ mod reducer;
 mod replay;
 
 #[cfg(test)]
+mod readonly_tests;
+#[cfg(test)]
 mod tests;
 
 use std::sync::Arc;
 
-use crate::cas::execution_observation_store::ExecutionObservationFixtureStorage;
 use crate::cas::PersonalVaultStorage;
 
 use super::error::ObservationStoreError;
@@ -38,22 +36,20 @@ pub(crate) struct FixtureObservationReaderV1 {
 }
 
 impl FixtureObservationReaderV1 {
-    /// Opens the fixture ledger and replays it once. The vault handle is
-    /// consumed by the sealed CAS opener and dropped with it afterwards; the
-    /// reader keeps no storage handle and no write capability of any kind.
+    /// Opens the existing fixture ledger through the existing-only readonly
+    /// capability and replays it once; an absent namespace replays as an
+    /// empty ledger. The vault handle is only borrowed for the closure, and
+    /// the reader keeps no storage handle and no write capability of any
+    /// kind. Open-phase I/O and topology failures are storage-level for the
+    /// reader (the WP2 corpus pins the same open-phase classification).
     pub(crate) fn open_fixture(vault: Arc<PersonalVaultStorage>) -> Result<Self, ObservationStoreError> {
-        let storage = ExecutionObservationFixtureStorage::open(vault).map_err(|error| {
-            if error
-                .to_string()
-                .starts_with("immutable ledger namespace is already claimed")
-            {
-                ObservationStoreError::NamespaceAlreadyClaimed
-            } else {
-                ObservationStoreError::StorageUnavailable
-            }
-        })?;
-        let ledger = replay::replay(&storage)?;
-        Ok(Self { attempts: ledger })
+        let attempts = vault
+            .with_existing_execution_observation_readonly(|view| match view {
+                None => Ok(Vec::new()),
+                Some(view) => replay::replay(&view),
+            })
+            .map_err(|_| ObservationStoreError::StorageUnavailable)??;
+        Ok(Self { attempts })
     }
 
     /// Reads one attempt's rebuilt observation. `None` when the attempt key is

@@ -19,6 +19,7 @@ pub mod offline_migration;
 pub(crate) mod projection_store;
 pub mod storage;
 
+pub(crate) use execution_observation_store::ExistingExecutionObservationReadOnly;
 pub(crate) use ledger_store::{
     ExistingProjectionReadOnly, ImmutableLedgerNamespace, ImmutableLedgerStorage, LedgerStorageError,
     LedgerStorageOpenError, PersonalVaultStorage,

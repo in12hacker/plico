@@ -97,7 +97,7 @@ fn open_reader_failure(path: &Path) -> ObservationStoreError {
     }
 }
 
-fn attempt_key(execution_id: super::super::ids::CanonicalUuid, attempt: u32) -> ExecutionAttemptKeyV1 {
+pub(super) fn attempt_key(execution_id: super::super::ids::CanonicalUuid, attempt: u32) -> ExecutionAttemptKeyV1 {
     ExecutionAttemptKeyV1 {
         execution_id,
         attempt: NonZeroU32::new(attempt).expect("nonzero"),
@@ -109,7 +109,7 @@ fn open_store(path: &Path) -> FixtureObservationStoreV1 {
     FixtureObservationStoreV1::open_fixture(owner).expect("store")
 }
 
-fn started_bundle(chain: &GoldenChain) -> FixtureStructuralCommitV1 {
+pub(super) fn started_bundle(chain: &GoldenChain) -> FixtureStructuralCommitV1 {
     FixtureStructuralCommitV1 {
         event: FixtureStoredEventV1::Started(chain.started_event.clone()),
         segment: chain.started_segment.clone(),
@@ -118,7 +118,7 @@ fn started_bundle(chain: &GoldenChain) -> FixtureStructuralCommitV1 {
     }
 }
 
-fn terminal_bundle(chain: &GoldenChain) -> FixtureStructuralCommitV1 {
+pub(super) fn terminal_bundle(chain: &GoldenChain) -> FixtureStructuralCommitV1 {
     FixtureStructuralCommitV1 {
         event: FixtureStoredEventV1::Terminal(chain.terminal_event.clone()),
         segment: chain.terminal_segment.clone(),
@@ -131,7 +131,7 @@ fn terminal_bundle(chain: &GoldenChain) -> FixtureStructuralCommitV1 {
 /// generation 3, with every binding rehashed like the publisher does. The
 /// terminal-after-started machinery is key-independent and already covered by
 /// the reducer corpus and attempt 1, so attempt 2 stays Open here.
-fn second_attempt_started(chain: &GoldenChain) -> FixtureStructuralCommitV1 {
+pub(super) fn second_attempt_started(chain: &GoldenChain) -> FixtureStructuralCommitV1 {
     let key = ExecutionAttemptKeyV1 {
         execution_id: chain.started_event.request.key.execution_id,
         attempt: NonZeroU32::new(2).expect("nonzero"),

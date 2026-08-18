@@ -6,7 +6,7 @@
 //! then compares the stored current view against the reducer's result
 //! field-by-field. The stored view is never trusted on its own.
 
-use crate::cas::execution_observation_store::ExecutionObservationFixtureStorage;
+use crate::cas::ExistingExecutionObservationReadOnly;
 
 use super::super::canonical::parse_canonical;
 use super::super::error::{CorruptionCategory, InvalidRequestCategory, ObservationStoreError};
@@ -38,12 +38,12 @@ fn map_stored(error: ObservationStoreError) -> ObservationStoreError {
 }
 
 fn read_object(
-    storage: &ExecutionObservationFixtureStorage,
+    view: &ExistingExecutionObservationReadOnly,
     sha256: &str,
     maximum_bytes: usize,
     missing: CorruptionCategory,
 ) -> Result<Vec<u8>, ObservationStoreError> {
-    match storage.get_immutable_bounded(sha256, maximum_bytes as u64) {
+    match view.get_immutable_bounded(sha256, maximum_bytes as u64) {
         Ok(bytes) => Ok(bytes),
         Err(error) => Err(match error.kind() {
             std::io::ErrorKind::NotFound => corrupt(missing),
@@ -55,10 +55,10 @@ fn read_object(
 
 /// Loads and name-verifies one root object.
 fn load_root(
-    storage: &ExecutionObservationFixtureStorage,
+    view: &ExistingExecutionObservationReadOnly,
     sha256: &str,
 ) -> Result<FixtureLedgerRootV1, ObservationStoreError> {
-    let bytes = read_object(storage, sha256, ROOT_MAX_BYTES, CorruptionCategory::BrokenRootChain)?;
+    let bytes = read_object(view, sha256, ROOT_MAX_BYTES, CorruptionCategory::BrokenRootChain)?;
     let root = parse_canonical::<FixtureLedgerRootV1>(&bytes).map_err(map_stored)?;
     if hash::root_sha256(&root).map_err(map_stored)? != sha256 {
         return Err(corrupt(CorruptionCategory::ObjectHashMismatch));
@@ -92,9 +92,9 @@ enum FixtureStoredEvent {
 /// Replays the authoritative chain and returns reducer-built attempts in
 /// canonical key order; the stored current view must match them exactly.
 pub(super) fn replay(
-    storage: &ExecutionObservationFixtureStorage,
+    view: &ExistingExecutionObservationReadOnly,
 ) -> Result<Vec<ReducibleAttemptV1>, ObservationStoreError> {
-    let active = storage
+    let active = view
         .read_active_bounded(POINTER_MAX_BYTES as u64)
         .map_err(|_| corrupt(CorruptionCategory::MissingActivePointer))?
         .ok_or_else(|| corrupt(CorruptionCategory::MissingActivePointer))?;
@@ -105,9 +105,9 @@ pub(super) fn replay(
     }
 
     let mut events: Vec<ReducibleEventV1> = Vec::new();
-    let mut root = load_root(storage, &pointer.root_sha256)?;
-    let stored_view = verify_generation(storage, &root)?;
-    let mut segment_previous = collect_generation(storage, &root, &mut events)?;
+    let mut root = load_root(view, &pointer.root_sha256)?;
+    let stored_view = verify_generation(view, &root)?;
+    let mut segment_previous = collect_generation(view, &root, &mut events)?;
     let mut steps = 0_u64;
     while let Some(previous) = root.previous_root_sha256.clone() {
         // cap counts parent edges (event generations), matching the store
@@ -116,13 +116,13 @@ pub(super) fn replay(
         if steps > EVENTS_MAX {
             return Err(corrupt(CorruptionCategory::StoredResourceLimit));
         }
-        let parent = load_root(storage, &previous)?;
+        let parent = load_root(view, &previous)?;
         if segment_previous != parent.event_segment_head_sha256 {
             return Err(corrupt(CorruptionCategory::BrokenSegmentChain));
         }
         root = parent;
-        verify_generation(storage, &root)?;
-        segment_previous = collect_generation(storage, &root, &mut events)?;
+        verify_generation(view, &root)?;
+        segment_previous = collect_generation(view, &root, &mut events)?;
     }
     if root.generation != 0 || root.event_watermark != 0 || root.previous_root_sha256.is_some() {
         return Err(corrupt(CorruptionCategory::BrokenRootChain));
@@ -139,11 +139,11 @@ pub(super) fn replay(
 /// Reads, verifies, and validates one generation's view; returns it for the
 /// final comparison against the reducer output.
 fn verify_generation(
-    storage: &ExecutionObservationFixtureStorage,
+    view: &ExistingExecutionObservationReadOnly,
     root: &FixtureLedgerRootV1,
 ) -> Result<FixtureCurrentViewV1, ObservationStoreError> {
     let view_bytes = read_object(
-        storage,
+        view,
         &root.current_view_sha256,
         CURRENT_VIEW_MAX_BYTES,
         CorruptionCategory::CurrentViewMismatch,
@@ -163,7 +163,7 @@ fn verify_generation(
 /// returns the segment's previous-head reference for the chain binding. The
 /// segment's event reference is digest-validated before dereference.
 fn collect_generation(
-    storage: &ExecutionObservationFixtureStorage,
+    view: &ExistingExecutionObservationReadOnly,
     root: &FixtureLedgerRootV1,
     events: &mut Vec<ReducibleEventV1>,
 ) -> Result<Option<String>, ObservationStoreError> {
@@ -174,7 +174,7 @@ fn collect_generation(
         return Err(corrupt(CorruptionCategory::BrokenSegmentChain));
     };
     let segment_bytes = read_object(
-        storage,
+        view,
         &segment_sha256,
         SEGMENT_MAX_BYTES,
         CorruptionCategory::BrokenSegmentChain,
@@ -190,7 +190,7 @@ fn collect_generation(
         return Err(corrupt(CorruptionCategory::ObjectHashMismatch));
     }
     let event_bytes = read_object(
-        storage,
+        view,
         &segment.event_sha256,
         STORED_EVENT_MAX_BYTES,
         CorruptionCategory::BrokenSegmentChain,
