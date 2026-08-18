@@ -4,8 +4,11 @@
 //! (poison check → snapshot → validation → writes → publish → state update),
 //! so sibling commits on one handle serialize and at most one returns `Ok`.
 
+pub(crate) mod clock;
+pub(crate) mod facade;
 mod loader;
 mod publisher;
+pub(crate) mod reducer;
 mod slots;
 
 #[cfg(test)]
