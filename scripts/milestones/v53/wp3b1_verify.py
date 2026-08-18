@@ -24,6 +24,8 @@ import pathlib
 import subprocess
 import sys
 
+import verify as common_verify
+
 FACADE_FILE = "src/memory/execution_observation/store/facade.rs"
 REQUIRED_API_MARKERS = [
     "pub(crate) struct FixtureObservationLedgerV1",
@@ -65,6 +67,10 @@ def main() -> int:
     args = parser.parse_args()
 
     spec = json.loads(pathlib.Path(args.spec).read_text(encoding="utf-8"))
+    try:
+        common_verify.reject_nonportable_serialized_value(spec, "wp3b1_spec")
+    except common_verify.VerificationError as error:
+        raise SystemExit(f"non-portable WP3B.1 spec: {error}") from error
     base = args.base
     if base is None:
         tag = spec.get("architecture_base_tag")

@@ -140,7 +140,7 @@
       "EMBEDDING_BACKEND": "stub",
       "LLM_BACKEND": "stub",
       "CARGO_NET_OFFLINE": "true",
-      "CARGO_TARGET_DIR": "/home/leo/.cache/plico-v53-build/cargo-target"
+      "CARGO_TARGET_DIR": "<RUNNER_ROOT>/cargo-target"
     },
     "scope_verify_command": "python3 scripts/milestones/v53/wp3b1_verify.py --repo . --spec scripts/milestones/v53/wp3b1_spec.json",
     "targeted_test_command": "cargo test --locked --offline --lib execution_observation_",

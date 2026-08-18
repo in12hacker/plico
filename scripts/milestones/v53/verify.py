@@ -2132,8 +2132,8 @@ def _validate_binding(value: Any, index: int) -> dict[str, Any]:
     return binding
 
 
-def _reject_nonportable_handoff_value(value: Any, location: str = "handoff") -> None:
-    """Reject host/user/check-out paths from the serialized packet contract."""
+def reject_nonportable_serialized_value(value: Any, location: str = "serialized_value") -> None:
+    """Reject host/user/check-out paths from any serialized milestone contract."""
 
     if isinstance(value, str):
         windows_home = re.search(r"(?i)(?:^|[\\/])users[\\/]", value)
@@ -2155,10 +2155,16 @@ def _reject_nonportable_handoff_value(value: Any, location: str = "handoff") -> 
             )
     elif isinstance(value, list):
         for index, item in enumerate(value):
-            _reject_nonportable_handoff_value(item, f"{location}[{index}]")
+            reject_nonportable_serialized_value(item, f"{location}[{index}]")
     elif isinstance(value, dict):
         for key, item in value.items():
-            _reject_nonportable_handoff_value(item, f"{location}.{key}")
+            reject_nonportable_serialized_value(item, f"{location}.{key}")
+
+
+def _reject_nonportable_handoff_value(value: Any, location: str = "handoff") -> None:
+    """Compatibility wrapper for the v53 packet validator."""
+
+    reject_nonportable_serialized_value(value, location)
 
 
 def validate_handoff(value: Any, *, now: dt.datetime | None = None) -> dict[str, Any]:

@@ -15,17 +15,17 @@
 本里程碑不接 kernel/scheduler/public/MCP，不宣称真实执行 evidence、身份授权或 VEG；仅裁决
 `unverified_fixture` ledger 的 single-writer append、receipt、poison 与 restart 语义。
 
-## 2. R4 前置架构修正
+## 2. R4 前置架构修正（已前向闭合）
 
 冻结的 `wp3b1_spec.json` 含本机绝对 `CARGO_TARGET_DIR`。它不改变 candidate Git diff，
-但违反 portable/path-free handoff 规则。架构组必须：
+但违反 portable/path-free handoff 规则。R4 架构分支已经：
 
-1. 发布 forward-only path-free spec 修订，使用 runtime `<RUNNER_ROOT>`，不改写旧 tag/历史；
-2. 对全部 milestone JSON/packet 共用一个递归 portable-value validator，拒绝 POSIX/Windows/UNC/Home/
-   checkout/file URI；
-3. 将 validator mutation tests 纳入架构工具门，避免以后逐 spec 修补。
+1. 将当前 spec 前向修订为 runtime `<RUNNER_ROOT>`，不改写旧 tag/历史；
+2. 把 packet 的递归检查提升为共用 `reject_nonportable_serialized_value`，WP3B verifier 强制调用，
+   拒绝 POSIX/Windows/UNC/Home/checkout/file URI；
+3. 用 5 类路径攻击与 portable placeholder 做定向回归。后续 milestone verifier 必须复用该函数。
 
-未完成这三项，不出具 R4 最终 GO。
+历史 contract bytes 仍保留旧路径事实，不追溯改写；R4 只认可该前向修订后的 verifier。
 
 ## 3. 独立对抗矩阵
 

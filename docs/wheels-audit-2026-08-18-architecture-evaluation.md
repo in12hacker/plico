@@ -72,8 +72,8 @@
 ## 5. 本轮发现的治理修正
 
 - 开发组的事实核验不能命名为“架构组全量接受”；已降级为 research input。
-- `wp3b1_spec.json` 又写入本机绝对 `CARGO_TARGET_DIR`。R4 前由架构组发布 path-free 修订，
-  并为所有 machine-readable milestone spec 增加统一 portable-value validator；历史 bytes 不改写，
+- `wp3b1_spec.json` 又写入本机绝对 `CARGO_TARGET_DIR`。R4 架构分支已前向改为 `<RUNNER_ROOT>`，
+  并把 packet 检查提升为 machine-readable contract 共用的 portable-value validator；历史 bytes 不改写，
   新门禁不再序列化用户名、Home 或 checkout 路径。
 - 现有 WP3B.1 candidate 的 `facade.rs`/测试文件较长属于可维护性 P2；300 行是 review trigger，
   不是语义 gate。R4 后按自然职责拆分，禁止仅为过线制造 `part1/part2`。
