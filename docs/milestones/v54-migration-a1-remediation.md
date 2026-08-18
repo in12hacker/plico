@@ -163,3 +163,70 @@ Plico 架构组复审只有三种输出：
 
 低成本执行顺序：R01 编译 spike → R02 lifecycle/deadline → R03 wire bounds →
 R04 corpus mutation。任一阶段证实不可行即可停止后续重型测试。
+
+## 6. A.1 执行记录（2026-08-19，外包架构组交付，待 Plico 架构组复审）
+
+### A1-R01 transport/feature 修正 —— executed / pass
+
+- 源码核实：`transport-io` = 本进程 Tokio stdio（server 语义）；
+  `transport-child-process` = rmcp 自持 child；任意异步流对 =
+  `transport-async-rw`（`AsyncRwTransport::new_client(read, write)`，
+  `rmcp::transport::async_rw`，feature 门控 `transport-async-rw`）。
+- **冻结 feature 集：`client` + `transport-async-rw`，`--no-default-features`**。
+  剥除 async-rw 后编译失败（E0432，实测）；旧 8-crate 口径中的
+  `process-wrap`/`nix` 随 child-process 特性消失——**新依赖面收敛为 5 个
+  crate**（rmcp、futures-executor、futures-macro、tokio-stream、tokio-util）。
+- 供应链身份：rmcp-3.1.3.crate SHA-256
+  `5f17072af977b0f86f714dbd64b3d37d0715bb63064f9d13483f0a1775813374`；
+  harness Cargo.lock SHA-256
+  `b879b7a09b6afa5d1fe5e81d2ce9fbce8575ca89590a7761b14710fc00d59878`；
+  API 符号清单见 ADR-0011 §4。
+- Plico-owner + rmcp 消费流的组合路径已在 Phase A 对真实 plico-mcp 二进制
+  实测绿（协商降级/exact-14/typed 错误）。A.1 的 fixture 版 SDK 路径三连测
+  出现挂起，已隔离出交付树并如实登记为 Phase B 首项前置（见 §6 末尾）。
+
+### A1-R02 runtime/生命周期冻结 —— executed / pass（twin 实证）
+
+- 冻结常量：INITIALIZE 10s、REQUEST 30s、SHUTDOWN_GRACE 2s、KILL_WAIT_CAP
+  5s、MAX_INFLIGHT 64、`reset_timeout_on_progress = false`（写入 ADR §7）。
+- twin 状态机：单一 worker 线程 + bounded sync channel；Drop 五状态 bounded，
+  always wait/reap；**churn 1000 轮确定性回收（wait 句柄 + /proc 双证）**，
+  case `a07b` pass（clean 11.6s / formal 全量内含）。
+- mutex poison/worker panic 路径在 twin 中经 fail_all 收敛为 typed error。
+
+### A1-R03 bounded wire + _meta 边界 —— executed / pass
+
+- 冻结 `MAX_MCP_MESSAGE_BYTES = 1 MiB`；`LineBoundedReader` 在 parse 前按
+  行拒绝（cap/cap+1/无分隔符/分片到达四类用例绿：`a09`/`a09b`）。
+- rmcp 3.1.3 `AsyncRwTransport::receive` 源码证实为无界
+  `read_until`（持久 Vec，无 max_length）——Phase B 必须以本 harness 的
+  bounded reader 包裹读半边（同构实现已在 twin 中验证）。
+- `_meta`：仅 adapter 层接受并忽略；消息整体先过 1 MiB 上限（有界 by
+  construction），未知顶层业务参数仍 deny_unknown_fields 拒绝（corpus
+  `a12d` 目录漂移拒绝 + `mut-no-wire-cap` 红）。
+
+### A1-R04 可执行 mutation corpus —— executed / pass
+
+- 交付：`scripts/milestones/v54/harness/`（独立 crate + fixture 服务器 +
+  `run_corpus.py`，preflight/formal 同一规则表，全部子进程命令为内联字面量
+  参数表）。
+- 正式命令：`python3 scripts/milestones/v54/harness/run_corpus.py --mode
+  formal`；preflight：同命令 `--mode preflight`。
+- 最新结果（2026-08-19，offline）：
+  `clean 11/11 pass；6 mutation 全 red；summary executed=17 pass-or-red=17
+  fail=0 not-run=0`。六个必杀 mutation 与杀死它们的用例：
+  ignore-id→a01、no-deadline→a03（挂起即红）、late-response-reuse→a06、
+  drop-no-reap→a07/a07b、no-wire-cap→a09/a09b、loosen-exact14→a12d。
+
+### 分类与残留（executed/pass/fail/not-run 全量披露）
+
+| 项 | 状态 |
+|---|---|
+| R01 feature 修正 + 最小特性证明 + 供应链身份 | executed / pass |
+| R02 常量冻结 + churn 1000 | executed / pass |
+| R03 wire cap 四类 + _meta 边界 | executed / pass |
+| R04 corpus + 6 mutation 红 | executed / pass（17/17） |
+| SDK 路径（fixture 版三连测） | **fail（挂起）**——源码移出交付树；Phase A 对真实二进制的实测仍有效；Phase B 前置首项 |
+| rmcp-server 两象限 / schemars 等价 / 全链 release 体积 | not-run（按 §3 滚动，OPEN 不变） |
+
+过程中清理了调试残留的全部 fixture/测试子进程（最终 `ps` 零残留）。

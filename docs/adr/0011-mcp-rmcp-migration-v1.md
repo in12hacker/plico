@@ -65,22 +65,37 @@ stdio——**全部保留**，仅按 §6 加 `_meta` 容忍。
    （本 Phase 实测：协商/列表/错误路径绿，tools/call 需 MCP-B-R1）**；
    rmcp-server 两个象限 **OPEN**（Migration-B 前置 spike，本 ADR 不预支结论）。
 
-## 4. A2 —— 供应链冻结（GO-partial 口径）
+## 4. A2 —— 供应链冻结（GO-partial 口径，A.1 修正版）
 
 - **exact 版本：`rmcp = "=3.1.3"`**（crates.io 2026-08-17 发布；Apache-2.0；
-  MSRV 1.88 ≤ 仓库 toolchain 1.95.0 ✓）。特性：`client`、
-  `transport-child-process`、`transport-io`、`--no-default-features`；**禁用**
-  HTTP/SSE/OAuth/auth/`base64`/`request-state` 一切未用特性。
-- **新依赖面（client-only，实测 `cargo tree`）：8 个新 crate** —— rmcp、
-  rmcp-macros、process-wrap、nix、tokio-stream、tokio-util、futures-executor、
-  futures-macro（全特性则 31 个：额外 schemars 链/pastey/ref-cast 等，GO-partial
-  不引入）。全部为主流维护crate；升级走 minor 安全窗口，major 需新 ADR。
+  MSRV 1.88 ≤ 仓库 toolchain 1.95.0 ✓）。**修正后特性集（A1-R01）：
+  `client` + `transport-async-rw`，`--no-default-features`**——
+  `AsyncRwTransport::new_client(read, write)` 消费 Plico owner 提供的
+  tokio 异步流；`transport-child-process`（rmcp 自持 child，与唯一 owner
+  冲突）与 `transport-io`（本进程 stdio，server 侧语义）**均不启用**，
+  由此 `process-wrap`/`nix` 不进入依赖树。HTTP/SSE/OAuth/auth/base64/
+  request-state 一切未用特性继续禁用。
+- **最小特性证明（实测）**：剥除 `transport-async-rw` 后 `cargo build`
+  失败（E0432 unresolved import `rmcp::transport::async_rw`）；启用错误
+  feature 组合会引入 process-wrap/nix（供应链门拒绝）。
+- **新依赖面（修正后实测 `cargo tree`）：5 个新 crate** —— `rmcp`、
+  `futures-executor`、`futures-macro`、`tokio-stream`、`tokio-util`
+  （此前含 child-process 特性的 8-crate 口径作废）。
+- **供应链身份绑定（A1-R01.4）**：crates.io tarball
+  `rmcp-3.1.3.crate` SHA-256
+  `5f17072af977b0f86f714dbd64b3d37d0715bb63064f9d13483f0a1775813374`；
+  harness `Cargo.lock` SHA-256
+  `b879b7a09b6afa5d1fe5e81d2ce9fbce8575ca89590a7761b14710fc00d59878`；
+  使用的 rmcp API 符号：`AsyncRwTransport::new_client`、`ServiceExt::serve`、
+  `Peer::peer_info`、`Peer::list_all_tools`、`Peer::call_tool`、
+  `CallToolRequestParams`、`ContentBlock::Text`、`PeerRequestOptions`
+  （timeout 能力，源码证实）。
 - 离线：Phase B 引入方式 = `cargo vendor` 入仓 + `.cargo/config.toml` offline
   source replacement + lockfile 全量校验和；构建期零网络（现有
-  `CARGO_NET_OFFLINE=true` 门保持）。本地 registry 预热不足以满足可复现要求。
-- 成本数据（research §3）：client-only 依赖冷编译墙钟 ~5.9s（本机 61 crate
-  含共享）；release 二进制增量与基线对照见 research（待后台测量回填，缺数
-  不虚构）。
+  `CARGO_NET_OFFLINE=true` 门保持）。
+- 成本数据（research §3）：修正特性冷编译墙钟 ~5.9s（61→54 crate 口径）；
+  全链 release 增量在 Phase B 候选构建后实测（A.1 冻结测量命令，禁止以
+  spike 体积外推整仓）。
 - 回滚策略：adapter 层隔离（`McpClient` 公共 API 不变），保留手写 transport
   一个 commit 距离；回滚 = revert Phase B 单提交。
 
@@ -106,11 +121,43 @@ stdio——**全部保留**，仅按 §6 加 `_meta` 容忍。
 禁改：`api/public`、kernel、scheduler、CAS/memory、exact-14 catalog、
 AGENTS.md；schema derive 触碰 public input types = 先提 Deviation。
 
-## 7. 反例 corpus
+## 7. 反例 corpus（A1-R04 修正：可执行）
 
-架构拥有的 12 例（MCP-A01..A12）已落盘
-`scripts/milestones/v54/mcp_migration_corpus.json`，每例绑定必杀 mutation；
-开发组测试仅为补充 self-evidence。
+架构拥有的 12 例已从声明式升级为**可执行** harness：
+`scripts/milestones/v54/harness/`（独立 crate `reference-adapter` + fixture
+服务器 + `run_corpus.py`）。正式验收命令（与 preflight 同一规则实现）：
+
+```
+python3 scripts/milestones/v54/harness/run_corpus.py --mode formal
+```
+
+最新自测（2026-08-19，本机 offline）：
+
+```
+clean:a01..a07b (must-pass): 11/11 pass
+mutation:mut-ignore-id / mut-no-deadline / mut-late-response-reuse /
+         mut-drop-no-reap / mut-no-wire-cap / mut-loosen-exact14: 6/6 red
+summary: executed=17 pass-or-red=17 fail=0 not-run=0
+```
+
+冻结常量（twin 与 Phase B 实现共享）：
+`MAX_MCP_MESSAGE_BYTES = 1 MiB`（parse 前拒绝，含无分隔符/超长行/分片）、
+`INITIALIZE_DEADLINE = 10s`、`REQUEST_DEADLINE = 30s`、
+`SHUTDOWN_GRACE = 2s`、`KILL_WAIT_CAP = 5s`、`MAX_INFLIGHT = 64`。
+`reset_timeout_on_progress` 冻结为 **false**（持续恶意 progress 不得无限
+延长请求）；timeout 仅表示等待终止，不是远端副作用取消。
+
+运行时与生命周期（A1-R02）：单一 runtime 由 adapter 创建持有
+（multi-thread，2 workers），同步 caller 经 block_on 桥接，禁止嵌套
+block_on 与每请求 runtime；child 由 Plico 侧 ManagedChild（async 端口）
+唯一持有，Drop 五状态（初始化中/请求中/panic/EOF/stubborn）均 bounded，
+最终 always wait/reap（churn 1000 确定性回收已证）。
+
+**SDK 路径残留（如实登记）**：`transport-async-rw` + 测试持有 child 的
+直连 spike 曾在 Phase A 对真实 plico-mcp 二进制全绿（协商/exact-14/错误
+路径）；A.1 期间基于 fixture 的 SDK 路径三连测出现挂起（已隔离、未纳入
+交付树），根因排查留在 Phase B 首项——不作为接受障碍，但 Phase B 第一个
+里程碑必须先让 SDK 路径在 fixture 上全绿再动生产代码。
 
 ## 8. OPEN（Migration-B 冓前必须补齐）
 

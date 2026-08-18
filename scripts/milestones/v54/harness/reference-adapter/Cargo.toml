@@ -1,0 +1,42 @@
+[workspace]
+# Standalone architecture-owned harness crate (Migration-A.1): never part
+# of the main plico package. See docs/milestones/v54-migration-a1-remediation.md.
+
+[package]
+name = "reference-adapter"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+serde_json = "1"
+
+[dev-dependencies]
+rmcp = { version = "=3.1.3", default-features = false, features = [
+    "client",
+    "transport-async-rw",
+] }
+tokio = { version = "1", features = [
+    "macros",
+    "rt-multi-thread",
+    "process",
+    "io-util",
+    "time",
+] }
+
+[[test]]
+name = "corpus"
+harness = false
+
+
+[features]
+default = []
+# Mutation knobs for the executable corpus (A1-R04). Each one disables
+# exactly one frozen enforcement point of the reference adapter; the
+# corpus must turn RED under every one of them.
+mut-ignore-id = []
+mut-no-deadline = []
+mut-late-response-reuse = []
+mut-drop-no-reap = []
+mut-no-wire-cap = []
+mut-loosen-exact14 = []
