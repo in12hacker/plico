@@ -149,9 +149,10 @@ API、exact-14 catalog、CAS/memory/kernel/scheduler。** 若验证需要临时�
 
 ## 5. 交付与下一决策
 
-外包架构组从输入提交建立 A.1 候选，提交：更新后的 Proposed ADR、研究证据、
-可执行 corpus/harness 与自测结果。不得把 ADR 改为 Accepted，不得生成开发组
-实现提交。
+外包架构组从交接分支 `v54-mcp-migration-a-r1` 建立 A.1 候选；被审输入提交
+`506af2c9e89296134b8e2c8350600c68b0dc4fef` 必须保持为祖先。提交更新后的
+Proposed ADR、研究证据、可执行 corpus/harness 与自测结果。不得把 ADR 改为
+Accepted，不得生成开发组实现提交。
 
 Plico 架构组复审只有三种输出：
 
