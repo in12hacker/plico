@@ -1,0 +1,80 @@
+{
+  "schema": "plico.milestone.v53.wp3b1.corpus/1",
+  "bound_adr": "docs/adr/0010-execution-observation-single-writer-append-v1.md",
+  "bound_handoff": "docs/milestones/v53-wp3b1-handoff.md",
+  "notes": "Architecture-owned adversarial corpus for R4. Each case is declarative: the executor (R4 harness, dev self-evidence) binds these to concrete fixtures. Every case must hold on the candidate; R4 may add cases but not remove or weaken these.",
+  "cases": [
+    {
+      "id": "WP3B1-C01",
+      "category": "started-idempotency",
+      "procedure": "append_started with canonical request R; capture receipt_1 plus tree fingerprint (root/pointer/candidate/inventory/modes/bytes) and clock watermark; retry the identical request on the same handle and on a reopened handle.",
+      "expectation": "retry returns a receipt field-identical to receipt_1 (request_sha256, event_sha256, sequence, root_generation, root_sha256, recorded_at_ms); tree fingerprint and clock watermark are byte-identical after both retries."
+    },
+    {
+      "id": "WP3B1-C02",
+      "category": "started-conflict",
+      "procedure": "append_started(R1) succeeds; then append_started(R2) with the same key but any differing canonical field, sequentially and concurrently (two threads, one barrier).",
+      "expectation": "exactly one Started is accepted per key; every other attempt returns typed InvalidRequest/TransitionConflict per the frozen taxonomy with zero durable mutation (fingerprint equal to post-R1 state)."
+    },
+    {
+      "id": "WP3B1-C03",
+      "category": "terminal-idempotency",
+      "procedure": "after Started, append_terminal(T) succeeds; N concurrent identical T retries plus reopen-retry of T.",
+      "expectation": "all callers receive the identical first receipt; no sibling accepted root, no second terminal event, zero mutation for every retry after the first."
+    },
+    {
+      "id": "WP3B1-C04",
+      "category": "terminal-conflict",
+      "procedure": "vary outcome, output_evidence_cids, execution_elapsed_ms, policy_sha256, runtime_sha256 independently against an accepted terminal; also terminal-without-started and a second distinct terminal.",
+      "expectation": "each rebind attempt returns TransitionConflict (terminal-without-started keeps its existing typed category) with zero mutation; only the first terminal binds."
+    },
+    {
+      "id": "WP3B1-C05",
+      "category": "restart-equality",
+      "procedure": "Open -> Started -> Terminal on handle H1, capturing both receipts and read_attempt; drop H1; reopen as H2; read_attempt and re-issue both idempotent retries.",
+      "expectation": "H2 read_attempt is field-identical including attestation_state=unverified_fixture; idempotent retries on H2 return receipts field-identical to the first-commit receipts (recorded_at_ms included)."
+    },
+    {
+      "id": "WP3B1-C06",
+      "category": "terminal-outcomes",
+      "procedure": "run C05 for each TerminalOutcomeV1 variant (success, failure, timeout, cancel, indeterminate), including failure with each FailureCategoryV1.",
+      "expectation": "all five outcome classes restart-rebuild identically and their receipts round-trip; no outcome is silently coerced to another."
+    },
+    {
+      "id": "WP3B1-C07",
+      "category": "crash-pre-exchange",
+      "procedure": "inject the structural store's pre-exchange failure once; attempt append_started; then retry un-injected on the same handle.",
+      "expectation": "failed attempt returns the storage error (no receipt); in-memory facade state unchanged (head equality still passes); retry succeeds exactly once; old active never contains a partial new chain."
+    },
+    {
+      "id": "WP3B1-C08",
+      "category": "crash-post-exchange",
+      "procedure": "inject the post-exchange sync failure once; attempt append_terminal; then attempt any read and any write on the same handle; reopen.",
+      "expectation": "CommitIndeterminate poisons the handle: subsequent read/write return Poisoned; reopen reconciles strictly from the authoritative active (accepting the exchanged root if durable) and never promotes or trusts candidate."
+    },
+    {
+      "id": "WP3B1-C09",
+      "category": "candidate-no-promote",
+      "procedure": "leave a fully valid child chain in the candidate slot (forged via sealed test seams); open the facade; read_attempt; append a further event.",
+      "expectation": "candidate is never promoted or merged: open reads the active chain only; the next append builds on active head; a candidate contradicting active fails closed per existing slot classification, never auto-repaired."
+    },
+    {
+      "id": "WP3B1-C10",
+      "category": "clock",
+      "procedure": "via the cfg(test) clock seam: set system clock behind the previous accepted recorded_at_ms (rollback); equal millisecond; beyond JSON-safe 2^53-1; observe an idempotent hit between settings.",
+      "expectation": "recorded_at_ms = max(system, previous_accepted) never regresses; equal millisecond still advances sequence/generation; beyond-safe input returns typed LimitExceeded with zero mutation; idempotent hit consumes no clock."
+    },
+    {
+      "id": "WP3B1-C11",
+      "category": "concurrency",
+      "procedure": "barriered races: (a) same-Started x8 threads; (b) same-Terminal x8 threads; (c) distinct-Terminal x2; (d) Started+Terminal interleavings; all against one handle.",
+      "expectation": "single linearization: no sibling accepted roots (exactly one root per generation), no double terminal, no receipt drift for identical requests; losers carry typed conflicts; final reopen replays to the same state as the facade's."
+    },
+    {
+      "id": "WP3B1-C12",
+      "category": "boundary-default-off",
+      "procedure": "compare default lifecycle with and without any facade use: vault tree fingerprint, public exact-14 catalog string set, MCP/aicli surfaces.",
+      "expectation": "default-off remains resource-identical (no namespace/lock/handle/thread created by module inclusion alone); exact-14 catalog unchanged; no kernel/scheduler/public/MCP wiring appears anywhere in the candidate diff (verifier-enforced)."
+    }
+  ]
+}

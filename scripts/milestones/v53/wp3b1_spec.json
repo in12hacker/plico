@@ -1,0 +1,156 @@
+{
+  "contract": {
+    "path": "docs/adr/0010-execution-observation-single-writer-append-v1.md",
+    "required_state": "Accepted",
+    "handoff": "docs/milestones/v53-wp3b1-handoff.md",
+    "version": "plico.milestone.v53.wp3b1/1"
+  },
+  "contract_version": "plico.milestone.v53.wp3b1/1",
+  "architecture_base_tag": "v53-wp3b1-contract",
+  "predecessor_commits": [
+    "16e610629d3741f8e7cedf1b471e974c81960cb6",
+    "3e2a7c20076638ab8e632090d7761b651559c8ea",
+    "932a7d42779bf3da37c0235c865cba8f10b8cf14",
+    "c65ea2ca54a8cddc41744a2ea92ba4007aae4fdd",
+    "c5387448d29454a16a1647d40ba95798f3e1bab5"
+  ],
+  "internal_api": {
+    "facade_type": "pub(crate) struct FixtureObservationLedgerV1",
+    "open_fixture": "pub(crate) fn open_fixture(vault: Arc<PersonalVaultStorage>) -> Result<Self, ObservationStoreError>",
+    "append_started": "pub(crate) fn append_started(&self, request: AppendStartedRequestV1) -> Result<ObservationReceiptV1, ObservationStoreError>",
+    "append_terminal": "pub(crate) fn append_terminal(&self, request: AppendTerminalRequestV1) -> Result<ObservationReceiptV1, ObservationStoreError>",
+    "read_attempt": "pub(crate) fn read_attempt(&self, key: &ExecutionAttemptKeyV1) -> Result<Option<FixtureAttemptObservationV1>, ObservationStoreError>",
+    "reused_types": [
+      "AppendStartedRequestV1",
+      "AppendTerminalRequestV1",
+      "ObservationReceiptV1",
+      "FixtureAttemptObservationV1",
+      "ExecutionAttemptKeyV1",
+      "ObservationStoreError",
+      "FixtureStructuralCommitV1",
+      "FixtureStoredEventV1",
+      "FixtureStructuralStateV1"
+    ]
+  },
+  "developer_scope": {
+    "active_work_package": "WP3B.1",
+    "allowed_paths": [
+      "src/memory/execution_observation/mod.rs",
+      "src/memory/execution_observation/store/mod.rs",
+      "src/memory/execution_observation/store/facade.rs",
+      "src/memory/execution_observation/store/facade/tests.rs",
+      "src/memory/execution_observation/store/reducer.rs",
+      "src/memory/execution_observation/store/clock.rs",
+      "src/memory/execution_observation/reader/reducer.rs"
+    ],
+    "forbidden_paths": [
+      "src/cas/",
+      "src/bin/",
+      "src/api/",
+      "src/kernel/",
+      "src/scheduler/",
+      "src/mcp/",
+      "src/tool/",
+      "src/fs/",
+      "src/intent/",
+      "src/llm/",
+      "src/client.rs",
+      "src/lib.rs",
+      "Cargo.toml",
+      "Cargo.lock",
+      "src/memory/execution_observation/model.rs",
+      "src/memory/execution_observation/model/",
+      "src/memory/execution_observation/hash.rs",
+      "src/memory/execution_observation/error.rs",
+      "src/memory/execution_observation/ids.rs",
+      "src/memory/execution_observation/canonical.rs",
+      "src/memory/execution_observation/validation.rs",
+      "tests/",
+      "docs/adr/"
+    ],
+    "facade_forbidden_symbols": [
+      "pub fn",
+      "pub struct",
+      "pub enum",
+      "read_candidate",
+      "publish_active",
+      "put_immutable",
+      "claim_immutable_ledger",
+      "immutable_ledger(",
+      "vault_root",
+      "PathBuf",
+      "crate::kernel",
+      "crate::scheduler",
+      "crate::api",
+      "crate::mcp",
+      "std::fs"
+    ],
+    "mod_decl_only_note": "store/mod.rs 与 execution_observation/mod.rs 仅允许模块声明与 pub(crate)/pub(super) re-export；reader/reducer.rs 仅允许 reducer 收敛所需的最小移动，diff 须单列说明"
+  },
+  "lock_and_state_contract": {
+    "lock_order": ["facade_state", "structural_store_transaction"],
+    "linearization_interval": "poison check -> head equality -> transition/idempotency -> clock -> bundle -> commit_structural -> facade state update",
+    "idempotency_before": ["clock read", "sequence allocation", "object construction"],
+    "poison_rules": "CommitIndeterminate => Poisoned for all subsequent reads/writes on the handle; reopen trusts authoritative active only",
+    "candidate": "facade never promotes, writes, or reads the candidate slot"
+  },
+  "clock_contract": {
+    "field": "recorded_at_ms",
+    "rule": "max(system_now_ms, previous_accepted_recorded_at_ms)",
+    "json_safe_max": 9007199254740991,
+    "overflow": "typed LimitExceeded; no silent truncation",
+    "idempotent_hit": "does not consume the clock",
+    "test_seam": "#[cfg(test)]-only clock injector, facade-private; no production-injectable clock"
+  },
+  "derivation_order": [
+    "canonical request -> request_sha256",
+    "stored event (sequence=root_generation=watermark+1)",
+    "event_sha256",
+    "segment (previous_segment=head) -> segment_sha256",
+    "current_view via the single reducer -> view_sha256",
+    "root (previous_root=head root) -> root_sha256",
+    "FixtureStructuralCommitV1 -> commit_structural",
+    "ObservationReceiptV1 from accepted identity only"
+  ],
+  "receipt_semantics": {
+    "attestation": "unverified_fixture (ATTESTATION_STATE unchanged)",
+    "rebuild": "only from accepted event/root identity; never from caller input, candidate, orphan, or unverified cache",
+    "idempotent_hit_zero_mutation": ["root", "pointer", "candidate", "inventory", "clock"]
+  },
+  "corpus": {
+    "path": "scripts/milestones/v53/wp3b1_corpus/corpus.json",
+    "categories": [
+      "started-idempotency",
+      "started-conflict",
+      "terminal-idempotency",
+      "terminal-conflict",
+      "restart-equality",
+      "terminal-outcomes",
+      "crash-pre-exchange",
+      "crash-post-exchange",
+      "candidate-no-promote",
+      "clock",
+      "concurrency",
+      "boundary-default-off"
+    ]
+  },
+  "local_gate_contract": {
+    "offline": true,
+    "env": {
+      "EMBEDDING_BACKEND": "stub",
+      "LLM_BACKEND": "stub",
+      "CARGO_NET_OFFLINE": "true",
+      "CARGO_TARGET_DIR": "/home/leo/.cache/plico-v53-build/cargo-target"
+    },
+    "scope_verify_command": "python3 scripts/milestones/v53/wp3b1_verify.py --repo . --spec scripts/milestones/v53/wp3b1_spec.json",
+    "targeted_test_command": "cargo test --locked --offline --lib execution_observation_",
+    "lint_command": "cargo clippy --locked --offline --all-targets --all-features -- -D warnings",
+    "fmt_command": "cargo fmt --all -- --check",
+    "full_lib_command": "cargo test --locked --offline --lib",
+    "known_environmental": "D1 deadline family trips under external load spikes >= ~10 with or without candidate content; not a candidate gate"
+  },
+  "rolling_debt_visible": [
+    "D-MCP-2 poisoned inherent call_tool panic (owner: outsourcing architecture group)",
+    "D-MCP-3 missing MCP I/O deadline (owner: outsourcing architecture group)"
+  ]
+}
