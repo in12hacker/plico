@@ -42,5 +42,7 @@ None — depends only on external crates (serde, serde_json, tokio for process I
 
 ## Tests
 
-- Unit: `src/mcp/tests.rs`
-- Integration: `tests/mcp_test.rs`
+- Unit (pure, no subprocess): `src/mcp/tests.rs` — kernel tool-provider wiring with an in-memory fake `ExternalToolProvider`
+- Integration (real binary): `tests/mcp_test.rs` — raw JSON-RPC public protocol parity, self-contained process lifecycle
+- Integration (real binary): `tests/mcp_client_test.rs` — typed `McpClient` cross-validation via Cargo's `CARGO_BIN_EXE_plico-mcp`
+- Shared support: `tests/support/mod.rs` — binary location + stubbed environment for typed-client tests
