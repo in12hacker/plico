@@ -1,0 +1,85 @@
+{
+  "schema": "plico.milestone.v54.mcp-migration.corpus/1",
+  "bound_adr": "docs/adr/0011-mcp-rmcp-migration-v1.md",
+  "bound_charter": "docs/milestones/v54-mcp-sdk-migration-a.md",
+  "verdict_recommendation": "GO-partial (client-first rmcp 3.1.3)",
+  "notes": "Architecture-owned adversarial corpus for MCP migration (Phase B implementation and Migration-B alike). R4 may add cases but not remove or weaken these. Each case names the mutation it must kill.",
+  "cases": [
+    {
+      "id": "MCP-A01",
+      "category": "response-id-integrity",
+      "procedure": "Interpose a probe server that answers a tools/call request with a wrong id, a duplicated id, and an unknown id (three sub-runs).",
+      "expectation": "The adapter returns a typed protocol error for every mismatched response; no caller ever receives another request's result. KILLS: 'ignore response id' (the B-01 debt) — under rmcp the oneshot id map must surface this as an error, never as success with foreign payload."
+    },
+    {
+      "id": "MCP-A02",
+      "category": "notification-interleave",
+      "procedure": "Probe server interleaves notifications/progress messages between request and matching response, including a notification that arrives before the response and one after it.",
+      "expectation": "Notifications are diverted (handler callback or bounded log), the request still resolves by id; ordering of subsequent requests is unaffected. KILLS: 'lockstep line reader' (old behavior)."
+    },
+    {
+      "id": "MCP-A03",
+      "category": "version-negotiation",
+      "procedure": "Probe server replies (a) 2024-11-05, (b) 2025-11-25, (c) an unknown version string, (d) a malformed initialize result. Client default proposal per rmcp latest.",
+      "expectation": "(a),(b) negotiate explicitly (observed value equals server reply); (c),(d) fail closed with a typed error at initialize — no silent downgrade to an undeclared version, no session started. KILLS: 'accept any version'.",
+      "evidence_note": "Downgrade to 2024-11-05 already proven live against the real plico-mcp server (research 2.2)."
+    },
+    {
+      "id": "MCP-A04",
+      "category": "params-schema-contract",
+      "procedure": "Send tools/call with missing name, unknown extra field (non-meta), arguments of wrong JSON type, and boundary-size arguments; plus the rmcp-mandatory '_meta.progressToken' presence (wire-verified) against the hardened server.",
+      "expectation": "Typed -32602 classification identical to the frozen baseline for the first three; the '_meta' object is accepted-and-ignored (MCP-B-R1) with zero behavioral change; exact-14 tool names unchanged. KILLS: 'loosen deny_unknown_fields beyond _meta'."
+    },
+    {
+      "id": "MCP-A05",
+      "category": "deadline-bounded",
+      "procedure": "Probe server never responds to (a) initialize, (b) tools/call; adapter default deadline applies.",
+      "expectation": "Both return the deadline error within the frozen bound; no unbounded await; child process still reaped per lifecycle contract. KILLS: 'no deadline' (D-MCP-3 debt).",
+      "evidence_note": "rmcp PeerRequestOptions::timeout + reset_timeout_on_progress confirmed in source (service.rs send path)."
+    },
+    {
+      "id": "MCP-A06",
+      "category": "late-response-after-timeout",
+      "procedure": "Probe server responds after the deadline expired; the adapter then issues a second request.",
+      "expectation": "The late response is dropped by id (never delivered to the next caller); the adapter reports timeout, not a fake 'cancelled'; the second request resolves only against its own id. KILLS: 'reuse stale response' and 'timeout as cancel'."
+    },
+    {
+      "id": "MCP-A07",
+      "category": "child-lifecycle",
+      "procedure": "All four paths: graceful EOF shutdown; stubborn child ignoring EOF; initialize-time failure; panic/poison during transport. ManagedChild remains the sole process owner; rmcp consumes streams via transport-io.",
+      "expectation": "Every path: bounded grace, kill if needed, always wait/reap; zero zombies after 100x churn; no double owner. KILLS: 'Drop without wait' — including the OBSERVED rmcp TokioChildProcess drop-leak (research 2.4), which is why TokioChildProcess is forbidden in the adapter.",
+      "evidence_note": "TokioChildProcess drop leak reproduced live in the spike."
+    },
+    {
+      "id": "MCP-A08",
+      "category": "poisoned-state",
+      "procedure": "Force transport error/poison state; then public call_tool and shutdown.",
+      "expectation": "Public inherent call returns a typed error, never panics (D-MCP-2 class); shutdown still closes streams and reaps the child. KILLS: 'unwrap on poisoned lock'."
+    },
+    {
+      "id": "MCP-A09",
+      "category": "malformed-and-oversized-io",
+      "procedure": "Probe server emits malformed JSON lines, an oversized line beyond the frozen cap, and stderr containing secret-shaped strings.",
+      "expectation": "Client fails closed typed on malformed/oversized; logs never echo response bodies or secret-shaped stderr content. KILLS: 'log the body'."
+    },
+    {
+      "id": "MCP-A10",
+      "category": "four-way-cross",
+      "procedure": "Matrix: {old Plico client, rmcp client} x {old Plico server, rmcp-server-spike}. The rmcp-server quadrants are OPEN until the Migration-B pre-spike (ADR 0011 §8.1).",
+      "expectation": "Only combinations declared by the ADR pass: old x old (today), rmcp-client x old-server (after MCP-B-R1), and later quadrants only with their own frozen declarations. KILLS: 'assume bidirectional compat'."
+    },
+    {
+      "id": "MCP-A11",
+      "category": "default-off-boundary",
+      "procedure": "Build and run default lifecycle with MCP unused; diff vault tree, public exact-14 catalog string set, process/thread inventory against the pre-migration baseline.",
+      "expectation": "Zero additional resources or behavior from module inclusion; exact-14 byte-identical. KILLS: 'eager static wiring'."
+    },
+    {
+      "id": "MCP-A12",
+      "category": "exact-14-equivalence",
+      "procedure": "For all 14 operations on the real server: list schema shape, call success path, and the three domain failure paths (unknown operation, invalid params, typed domain error) through both old and rmcp clients.",
+      "expectation": "Operation names, schema fields, typed error codes and envelope structure equivalent to baseline (ServiceError→McpError mapping table frozen in the adapter). KILLS: 'error classification drift'.",
+      "evidence_note": "rmcp-client x real plico-mcp: exact-14 list equivalence already proven live (research 2.2)."
+    }
+  ]
+}
