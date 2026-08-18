@@ -6,11 +6,12 @@
 #![allow(dead_code)] // Architecture-frozen for WP2; B2 deliberately has no caller.
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use super::ledger_store::{
-    ImmutableLedgerNamespace, ImmutableLedgerStorage, LedgerStorageError, LedgerStorageOpenError, PersonalVaultStorage,
+    read_private_file_bounded, validate_hash, ImmutableLedgerNamespace, ImmutableLedgerStorage, LedgerStorageError,
+    LedgerStorageOpenError, PersonalVaultLease, PersonalVaultStorage,
 };
 
 const DIRECTORY: &str = "execution-observation-fixture-ledger";
@@ -66,6 +67,60 @@ impl ExecutionObservationFixtureStorage {
     #[cfg(test)]
     pub(crate) fn inject_bounded_collision_before_noclobber_once(&self, bytes: &[u8]) {
         self.inner.inject_bounded_collision_before_noclobber_once(bytes);
+    }
+}
+
+/// Borrowed, closure-bounded read-only view of an existing execution
+/// observation fixture namespace. It cannot escape the inspection closure,
+/// holds no generic ledger capability, and exposes neither host paths,
+/// candidate access, nor any write operation.
+pub(crate) struct ExistingExecutionObservationReadOnly<'a> {
+    _lease: &'a PersonalVaultLease,
+    objects_directory: PathBuf,
+    active_path: PathBuf,
+}
+
+impl PersonalVaultStorage {
+    /// Inspect the existing execution-observation namespace without any
+    /// writer capability: an absent namespace yields `None`, a present but
+    /// damaged topology fails closed without repair, and the namespace is
+    /// never created, completed, chmod-ed, or claimed here. A writer may
+    /// therefore hold the namespace claim on the same vault concurrently,
+    /// and readers only ever observe the complete pre-exchange or complete
+    /// post-exchange active pointer: publication is a single
+    /// `RENAME_EXCHANGE` and objects are immutable and durable before the
+    /// pointer moves.
+    pub(crate) fn with_existing_execution_observation_readonly<R>(
+        &self,
+        inspect: impl for<'a> FnOnce(Option<ExistingExecutionObservationReadOnly<'a>>) -> R,
+    ) -> Result<R, LedgerStorageOpenError> {
+        let directory = self.lease.vault_root.join(DIRECTORY);
+        let present = match fs::symlink_metadata(&directory) {
+            Ok(_) => true,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+            Err(error) => return Err(error.into()),
+        };
+        if !present {
+            return Ok(inspect(None));
+        }
+        validate_existing_topology(&directory)?;
+        Ok(inspect(Some(ExistingExecutionObservationReadOnly {
+            _lease: &self.lease,
+            objects_directory: directory.join("objects"),
+            active_path: directory.join("roots").join("active"),
+        })))
+    }
+}
+
+impl ExistingExecutionObservationReadOnly<'_> {
+    pub(crate) fn read_active_bounded(&self, maximum_bytes: u64) -> std::io::Result<Option<Vec<u8>>> {
+        let bytes = read_private_file_bounded(&self.active_path, maximum_bytes)?;
+        Ok((!bytes.is_empty()).then_some(bytes))
+    }
+
+    pub(crate) fn get_immutable_bounded(&self, hash: &str, maximum_bytes: u64) -> std::io::Result<Vec<u8>> {
+        validate_hash(hash)?;
+        read_private_file_bounded(&self.objects_directory.join(hash), maximum_bytes)
     }
 }
 

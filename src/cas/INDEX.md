@@ -51,6 +51,13 @@ their durability boundaries, so an upper layer cannot create a redundant post-pu
 Existing topology is validated exactly and is never chmod-repaired or completed. This is an internal WP2
 substrate, not a public API or a live execution-observation writer.
 
+`PersonalVaultStorage::with_existing_execution_observation_readonly` (WP3A.2-A) is the existing-only read
+counterpart: a closure-bounded `ExistingExecutionObservationReadOnly` view with exactly two bounded reads
+(`read_active_bounded`, `get_immutable_bounded`). It never creates, completes, chmods or claims the namespace
+(an absent namespace yields `None`, damaged topology fails closed), never touches the candidate slot or host
+paths, and takes no locks — a writer may hold the namespace claim on the same vault while readers observe only
+complete pre- or post-exchange active pointers.
+
 ## Public API
 
 | Export | File | Description |
