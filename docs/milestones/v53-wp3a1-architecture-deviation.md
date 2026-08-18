@@ -55,4 +55,3 @@ ImmutableLedgerStorage Drop 解锁；read handle 不逃出 closure；同 Arc 下
 
 定向 reader 测试 → clippy → 全库门禁；三路对抗审查（红队/测试审计/规范符合性，
 发现项已收敛）；交付 exact commit + diff + 定向原始摘要；不宣称 R3 GO；WP3B 未触碰。
-
