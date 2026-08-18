@@ -20,6 +20,28 @@ pub struct TemporalRange {
     pub expression: String,
 }
 
+impl TemporalRange {
+    /// Expand the range symmetrically by `days` in both directions.
+    ///
+    /// Reinstated by W0.1 with the pre-W-0 signature and behavior: this is
+    /// crate-public surface, so mainline non-use is not a deletion license.
+    /// Nothing on the mainline calls it automatically — medium-confidence
+    /// ranges are used exactly as resolved.
+    #[deprecated(
+        note = "unused on the mainline; retained for external compatibility until an explicit semver/public-API change (W0.1)"
+    )]
+    pub fn expanded(&self, days: i64) -> Self {
+        let day_ms = days * 86_400_000;
+        Self {
+            since: self.since.saturating_sub(day_ms),
+            until: self.until.saturating_add(day_ms),
+            confidence: self.confidence,
+            granularity: Granularity::Fuzzy,
+            expression: self.expression.clone(),
+        }
+    }
+}
+
 /// Resolves natural-language time expressions to concrete time ranges.
 ///
 /// Implementations range from fast rule-based (no LLM) to full LLM-powered

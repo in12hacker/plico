@@ -20,6 +20,15 @@ pub enum Granularity {
     Month,
     /// Calendar quarter (Q1=Jan-Mar, …, Q4=Oct-Dec).
     Quarter,
+    /// Half-year.
+    ///
+    /// Reinstated by W0.1 with the pre-W-0 variant and encoding: this is
+    /// crate-public surface, so mainline non-use is not a deletion license.
+    /// No rule emits it.
+    #[deprecated(
+        note = "unused on the mainline; retained for external compatibility until an explicit semver/public-API change (W0.1)"
+    )]
+    HalfYear,
     /// Full calendar year.
     Year,
     /// Vague / approximate — use expanded search window.

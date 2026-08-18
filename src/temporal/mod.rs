@@ -15,7 +15,7 @@
 //! | Confidence | Behavior |
 //! |------------|---------|
 //! | ≥ 0.8     | Strict: use resolved range exactly |
-//! | 0.5–0.8   | Expanded: extend range ±7 days, rerank by recency |
+//! | 0.5–0.8   | Medium: range used exactly as resolved (no automatic ±7-day expansion; the deprecated `TemporalRange::expanded` helper stays available for explicit callers) |
 //! | < 0.5     | Fallback: pure semantic search, ignore time filter |
 //!
 //! # Key Design Insight

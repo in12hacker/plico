@@ -51,6 +51,19 @@ pub fn safe_truncate(s: &str, max_len: usize) -> &str {
     }
 }
 
+/// Slices a string safely around a given range, ensuring no char boundary panics.
+///
+/// Reinstated by W0.1 with the pre-W-0 signature and behavior: this is
+/// crate-public surface, so mainline non-use is not a deletion license.
+#[deprecated(
+    note = "unused on the mainline; retained for external compatibility until an explicit semver/public-API change (W0.1)"
+)]
+pub fn safe_range(s: &str, start: usize, end: usize) -> &str {
+    let start_idx = s.char_indices().map(|(i, _)| i).rfind(|&i| i <= start).unwrap_or(0);
+    let end_idx = s.char_indices().map(|(i, _)| i).find(|&i| i >= end).unwrap_or(s.len());
+    &s[start_idx..end_idx]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
