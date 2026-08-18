@@ -21,8 +21,8 @@ Status: stable | Fan-in: 1 | Fan-out: 0
 | File | Lines | Purpose |
 |------|-------|---------|
 | `mod.rs` | — | Re-exports (ExternalToolProvider adapter) |
-| `client.rs` | — | McpClient: spawn process, JSON-RPC communicate, discover tools |
-| `tests.rs` | — | Unit tests |
+| `client.rs` | — | McpClient: spawn process, JSON-RPC communicate, discover tools; `ManagedChild` RAII owns the subprocess (close transport → bounded grace → kill → always reap) |
+| `tests.rs` | — | Unit tests (pure provider wiring, poison-tolerant take, managed-child state machine) |
 
 ## Dependencies (Fan-out: 0)
 

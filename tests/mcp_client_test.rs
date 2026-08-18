@@ -12,7 +12,7 @@ mod support;
 use base64::Engine;
 
 use plico::api::public::PUBLIC_OPERATIONS;
-use plico::mcp::McpClient;
+use plico::mcp::{McpClient, McpError};
 use plico::tool::ExternalToolProvider;
 
 struct TestClient {
@@ -124,4 +124,46 @@ fn trait_call_tool_succeeds() {
         }),
     );
     assert!(result.success, "tool call failed: {:?}", result.error);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn client_churn_hundred_drops_leave_no_zombie_children() {
+    for _ in 0..100 {
+        let root = tempfile::TempDir::new().unwrap();
+        drop(support::typed_client(root.path()));
+    }
+    support::wait_for_zero_zombie_children(
+        "plico-mcp",
+        std::time::Instant::now() + std::time::Duration::from_secs(5),
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn client_initialize_failure_leaves_no_zombie_children() {
+    for _ in 0..25 {
+        // `true` exits immediately: the initialize handshake hits EOF.
+        let Err(failure) = McpClient::new("true", &[], &[]) else {
+            panic!("true cannot speak MCP");
+        };
+        assert!(matches!(failure, McpError::Protocol(_) | McpError::Io(_)));
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    support::wait_for_zero_zombie_children("true", std::time::Instant::now() + std::time::Duration::from_secs(5));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn client_tools_list_failure_leaves_no_zombie_children() {
+    for _ in 0..25 {
+        // cat echoes requests back: initialize "succeeds" with default
+        // server info, tools/list then fails on the missing array.
+        let Err(failure) = McpClient::new("cat", &[], &[]) else {
+            panic!("cat has no tool catalog");
+        };
+        assert!(matches!(failure, McpError::Protocol(_)));
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    support::wait_for_zero_zombie_children("cat", std::time::Instant::now() + std::time::Duration::from_secs(5));
 }

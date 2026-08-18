@@ -1,9 +1,10 @@
-//! Pure unit tests for the MCP client layer — no subprocess is spawned.
+//! Unit tests for the MCP client layer.
 //!
-//! Subprocess cross-validation against the real `plico-mcp` binary lives in
-//! `tests/mcp_client_test.rs`: only integration targets receive Cargo's
+//! No `plico-mcp` binary is spawned here: subprocess cross-validation lives
+//! in `tests/mcp_client_test.rs` (integration targets receive Cargo's
 //! official `CARGO_BIN_EXE_plico-mcp` location, which honors any
-//! `CARGO_TARGET_DIR` and is built automatically as a test dependency.
+//! `CARGO_TARGET_DIR`). The lifecycle tests below exercise the managed
+//! child state machine with fixed literal helper programs only.
 
 #[cfg(test)]
 mod test {
@@ -64,5 +65,84 @@ mod test {
             "local-cognitive-role",
         );
         assert!(result.success, "handler failed: {:?}", result.error);
+    }
+
+    #[test]
+    fn poisoned_transport_mutex_is_taken_without_panic() {
+        use std::sync::Mutex;
+
+        use crate::mcp::client::take_even_if_poisoned;
+
+        let cell = Mutex::new(Some(7u8));
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = cell.lock().unwrap();
+            panic!("poison the transport mutex");
+        }));
+        assert!(cell.is_poisoned());
+        assert_eq!(take_even_if_poisoned(&cell), Some(7));
+        assert_eq!(take_even_if_poisoned(&cell), None);
+    }
+}
+
+/// Managed-child lifecycle counterexamples. `/proc` is the reaping oracle: a
+/// reaped pid has no `/proc/<pid>` entry, an unreaped one is a zombie ('Z').
+///
+/// Only two forks happen here, one per state-machine path: every `fork` in
+/// the library test binary briefly stalls sibling threads and can trip the
+/// pre-existing flock/reopen race in the projection suite (KNOWN_ISSUES D1
+/// family). The heavier counterexamples (100x churn, construction-failure
+/// loops, drop-only backstop at scale) live in the integration target.
+#[cfg(all(test, target_os = "linux"))]
+mod managed_child_lifecycle {
+    use std::process::{Command, Stdio};
+    use std::time::Duration;
+
+    use crate::mcp::client::{ManagedChild, ManagedChildOutcome};
+
+    fn spawn_cat() -> std::process::Child {
+        let mut command = Command::new("cat");
+        command.stdin(Stdio::piped()).stdout(Stdio::piped());
+        command.spawn().expect("spawn cat")
+    }
+
+    fn spawn_sleep_ignoring_eof() -> std::process::Child {
+        let mut command = Command::new("sleep");
+        command.stdin(Stdio::piped()).stdout(Stdio::piped());
+        command.arg("30");
+        command.spawn().expect("spawn sleep")
+    }
+
+    fn process_state(pid: u32) -> Option<char> {
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+        stat.rsplit_once(')')?.1.split_whitespace().next()?.chars().next()
+    }
+
+    #[test]
+    fn managed_child_exits_gracefully_on_eof_and_is_reaped() {
+        let child = spawn_cat();
+        let pid = child.id();
+        let mut managed = ManagedChild::new(child, Duration::from_secs(3));
+
+        assert_eq!(
+            managed.shutdown_and_reap(),
+            Some(ManagedChildOutcome::ExitedDuringGrace)
+        );
+        assert_eq!(managed.shutdown_and_reap(), None, "shutdown is idempotent");
+        assert!(process_state(pid).is_none(), "cat must be reaped, not left as a zombie");
+    }
+
+    #[test]
+    fn managed_child_kills_and_reaps_when_eof_is_ignored() {
+        let child = spawn_sleep_ignoring_eof();
+        let pid = child.id();
+        let mut managed = ManagedChild::new(child, Duration::from_millis(50));
+        assert_eq!(
+            managed.shutdown_and_reap(),
+            Some(ManagedChildOutcome::KilledAfterTimeout)
+        );
+        assert!(
+            process_state(pid).is_none(),
+            "killed sleep must be reaped, not left as a zombie"
+        );
     }
 }
