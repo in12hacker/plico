@@ -18,7 +18,8 @@
 | [v50](v50-memory-rearchitecture.md) | Memory Rearchitecture | 2026-05-14 | ✅ 完成 |
 | [v51](v51-summary.md) | Search Quality & Scope Isolation | 2026-05-17 | ✅ 完成（SAS 15/20，embedding 稳定性已修复） |
 | [v52](v52-trace-observability.md) | Trace Observability + Quality Fixes | 2026-05-18 | ✅ 完成 |
-| [v53](v53-execution-observation-spine.md) | Execution Observation Ledger Core（[R2 accepted](v53-r2-acceptance.md)；[WP3A handoff](v53-wp3a-developer-handoff.md)；[WP3B.1 handoff](v53-wp3b1-handoff.md)；[R4 acceptance](v53-r4-wp3b1-acceptance.md)；[W0 handoff](v53-w0-developer-handoff.md)；[W0.1 remediation](v53-w0-r1-remediation.md)） | 2026-08-18 | R4 GO / WP3B.1 accepted / W0 candidate needs W0.1 public-API remediation |
+| [v53](v53-execution-observation-spine.md) | Execution Observation Ledger Core（[R4 acceptance](v53-r4-wp3b1-acceptance.md)；[W0 acceptance](v53-w0-acceptance.md)） | 2026-08-18 | R4 GO / WP3B.1 + W0 accepted |
+| [v54](v54-mcp-sdk-migration-a.md) | MCP SDK Migration-A — official RMCP architecture freeze | 2026-08-18 | READY FOR OUTSOURCED ARCHITECTURE / dev blocked |
 
 ## 模板
 
