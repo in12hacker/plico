@@ -7,6 +7,7 @@
 use super::{IntentError, IntentRouter, ResolvedIntent, RoutingAction};
 use crate::api::semantic::ApiRequest;
 use crate::temporal::resolve_heuristic;
+use crate::util::safe_truncate;
 
 pub struct HeuristicRouter;
 
@@ -286,7 +287,7 @@ fn to_api_request(m: PatternMatch, agent_id: &str) -> ResolvedIntent {
             };
             (
                 action,
-                format!("Create object with content '{}'", truncate(&m.query_text, 50)),
+                format!("Create object with content '{}'", safe_truncate(&m.query_text, 50)),
             )
         }
         ActionType::Delete => (
@@ -308,7 +309,7 @@ fn to_api_request(m: PatternMatch, agent_id: &str) -> ResolvedIntent {
                 tenant_id: None,
                 agent_token: None,
             },
-            format!("Update object with '{}'", truncate(&m.query_text, 50)),
+            format!("Update object with '{}'", safe_truncate(&m.query_text, 50)),
         ),
         ActionType::Remember => (
             ApiRequest::Remember {
@@ -316,7 +317,7 @@ fn to_api_request(m: PatternMatch, agent_id: &str) -> ResolvedIntent {
                 tenant_id: None,
                 content: m.query_text.clone(),
             },
-            format!("Remember '{}'", truncate(&m.query_text, 50)),
+            format!("Remember '{}'", safe_truncate(&m.query_text, 50)),
         ),
         ActionType::Recall => (
             ApiRequest::Recall {
@@ -403,7 +404,7 @@ impl IntentRouter for HeuristicRouter {
                                 routing_action: RoutingAction::LowConfidence,
                                 confidence: 0.3,
                                 action,
-                                explanation: format!("Fallback search for '{}'", truncate(part, 50)),
+                                explanation: format!("Fallback search for '{}'", safe_truncate(part, 50)),
                             })
                         }
                     }
@@ -447,7 +448,7 @@ impl IntentRouter for HeuristicRouter {
                     routing_action: RoutingAction::LowConfidence,
                     confidence: 0.3,
                     action,
-                    explanation: format!("Fallback search for '{}'", truncate(trimmed, 50)),
+                    explanation: format!("Fallback search for '{}'", safe_truncate(trimmed, 50)),
                 }])
             }
         }
@@ -596,14 +597,6 @@ fn resolve_temporal_bounds(temporal_text: Option<&str>) -> (Option<i64>, Option<
             (start_ms, end_ms)
         }
         None => (None, None),
-    }
-}
-
-fn truncate(s: &str, max_len: usize) -> &str {
-    if s.len() <= max_len {
-        s
-    } else {
-        &s[..max_len]
     }
 }
 
@@ -990,8 +983,39 @@ mod tests {
 
     #[test]
     fn test_helper_truncate() {
-        assert_eq!(truncate("short", 10), "short");
-        assert_eq!(truncate("a long string here", 5), "a lon");
+        assert_eq!(safe_truncate("short", 10), "short");
+        assert_eq!(safe_truncate("a long string here", 5), "a lon");
+    }
+
+    #[test]
+    fn test_multibyte_query_text_never_panics_on_truncation() {
+        // W-06: every truncation call site used to slice at a byte index;
+        // 40 CJK characters (120 bytes) cross the 50-byte boundary mid-char.
+        let router = HeuristicRouter::new();
+        let long = "会议记录关于产品路线图的详细讨论".repeat(4);
+        for prompt in [
+            format!("store {long}"),
+            format!("update {long}"),
+            format!("remember {long}"),
+            long.clone(),
+            // A compound query routes the long part through the per-part
+            // fallback path as well, covering the fifth truncation site.
+            format!("save the notes and {long}"),
+        ] {
+            let results = router
+                .resolve(&prompt, "agent1")
+                .expect("no panic on multibyte truncation");
+            assert!(!results.is_empty());
+            for resolved in &results {
+                // The quoted excerpt stays within the 50-character cap, so
+                // the whole explanation stays bounded.
+                assert!(
+                    resolved.explanation.chars().count() <= 82,
+                    "explanation unbounded: {}",
+                    resolved.explanation
+                );
+            }
+        }
     }
 
     #[test]

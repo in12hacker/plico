@@ -407,7 +407,8 @@ impl ContextQualityEngine {
         String::from_utf8(obj.data).ok()
     }
 
-    /// 获取CID的实际token数量（按字符数估算，~4 chars/token）
+    /// 获取CID的token数量。此路径没有可读的 provider usage 字段
+    /// （wheels audit W-05），保持 ~4 chars/token 的回退估算。
     fn cid_token_count(&self, cid: &str) -> usize {
         self.cas
             .get_raw(cid)
@@ -584,6 +585,16 @@ mod tests {
         let issue = ContextIssue::HighRedundancy { redundant_ratio: 0.5 };
         let cloned = issue.clone();
         assert!(matches!(cloned, ContextIssue::HighRedundancy { .. }));
+    }
+
+    #[test]
+    fn test_cid_token_count_fallback_estimate() {
+        // W-05: the CAS path has no provider usage field, so token counts
+        // stay the documented ~4-chars-per-token fallback estimate.
+        let (engine, cas, _dir) = make_engine();
+        let cid = store_text_object(&cas, "sixteen characters!", &[]);
+        assert_eq!(engine.cid_token_count(&cid), 4); // 19 bytes -> floor(19/4)
+        assert_eq!(engine.cid_token_count("missing-cid"), 0);
     }
 
     #[test]

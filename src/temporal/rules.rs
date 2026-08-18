@@ -20,8 +20,6 @@ pub enum Granularity {
     Month,
     /// Calendar quarter (Q1=Jan-Mar, …, Q4=Oct-Dec).
     Quarter,
-    /// Half-year.
-    HalfYear,
     /// Full calendar year.
     Year,
     /// Vague / approximate — use expanded search window.
@@ -996,7 +994,6 @@ mod tests {
         assert_eq!(format!("{:?}", Granularity::Week), "Week");
         assert_eq!(format!("{:?}", Granularity::Month), "Month");
         assert_eq!(format!("{:?}", Granularity::Quarter), "Quarter");
-        assert_eq!(format!("{:?}", Granularity::HalfYear), "HalfYear");
         assert_eq!(format!("{:?}", Granularity::Year), "Year");
         assert_eq!(format!("{:?}", Granularity::Fuzzy), "Fuzzy");
     }

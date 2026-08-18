@@ -26,7 +26,7 @@ Status: stable | Fan-in: 1 | Fan-out: 0
 
 ## Dependencies (Fan-out: 0)
 
-None — depends only on external crates (serde, serde_json, tokio for process I/O).
+None — depends only on external crates (serde, serde_json); process I/O is synchronous std (`std::process`), not tokio.
 
 ## Modification Risk
 

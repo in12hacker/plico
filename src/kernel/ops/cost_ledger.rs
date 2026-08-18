@@ -103,8 +103,9 @@ impl TokenCostLedger {
 
     /// Record an embedding call with estimated token usage.
     ///
-    /// Uses character-based estimation: ~4 chars per token (English text).
-    /// For accurate counts, use `record_embedding_with_tokens` instead.
+    /// The embedding path has no provider usage field to read (wheels audit
+    /// W-05), so this stays a deliberate ~4-chars-per-token fallback
+    /// estimate; for accurate counts use `record_embedding_with_tokens`.
     pub fn record_embedding(&self, text: &str, model_id: &str, session_id: &str, agent_id: &str) {
         let estimated_tokens = (text.len() / 4).max(1) as u32;
         self.record_embedding_with_tokens(estimated_tokens, model_id, session_id, agent_id);
@@ -294,6 +295,23 @@ mod tests {
         );
         ledger.record(entry);
         assert_eq!(ledger.entry_count(), 1);
+    }
+
+    #[test]
+    fn test_record_embedding_fallback_estimate() {
+        // W-05: the embedding path has no provider usage field, so the
+        // ledger records the documented ~4-chars-per-token fallback.
+        let ledger = TokenCostLedger::new();
+        let text = "sixteen characters!"; // 19 bytes -> floor(19/4) = 4 tokens
+        ledger.record_embedding(text, "embed-model", "s1", "a1");
+        let summary = ledger.session_summary("s1").expect("summary");
+        assert_eq!(summary.total_input_tokens, 4);
+        assert_eq!(summary.total_output_tokens, 0);
+
+        let tiny = "x"; // 1 byte -> max(0, 1) = 1 token
+        ledger.record_embedding(tiny, "embed-model", "s1", "a1");
+        let summary = ledger.session_summary("s1").expect("summary");
+        assert_eq!(summary.total_input_tokens, 5);
     }
 
     #[test]

@@ -62,32 +62,6 @@ def bleu1(pred: str, ref: str) -> float:
     return precision * bp
 
 
-def recall_at_k(relevants: set[Any], retrieved: list[Any], k: int) -> float:
-    if not relevants:
-        return 0.0
-    retrieved_k = set(retrieved[:k])
-    return len(relevants & retrieved_k) / len(relevants)
-
-
-def ndcg_at_k(relevances: dict[Any, float], retrieved: list[Any], k: int) -> float:
-    """Compute NDCG@k given relevance scores for items."""
-    dcg = 0.0
-    for i, item in enumerate(retrieved[:k], start=1):
-        rel = relevances.get(item, 0.0)
-        dcg += rel / math.log2(i + 1)
-    # ideal DCG
-    ideal_rels = sorted(relevances.values(), reverse=True)[:k]
-    idcg = sum(rel / math.log2(i + 2) for i, rel in enumerate(ideal_rels))
-    return dcg / idcg if idcg > 0 else 0.0
-
-
-def mrr(relevants: set[Any], retrieved: list[Any]) -> float:
-    for i, item in enumerate(retrieved, start=1):
-        if item in relevants:
-            return 1.0 / i
-    return 0.0
-
-
 def compute_statistics(
     values: list[float], *, seed: int = 42, bootstrap_resamples: int = 10_000
 ) -> dict[str, float | int | str]:
@@ -141,7 +115,13 @@ def latency_percentiles(latencies_ms: list[float]) -> dict[str, float]:
 
 
 def estimate_tokens(text: str) -> int:
-    """Estimate token count. ~4 chars per token for English, ~2 for CJK."""
+    """Estimate token count. ~4 chars per token for English, ~2 for CJK.
+
+    Deliberate fallback (wheels audit W-05): no tokenizer dependency here.
+    When a provider response carries real usage fields (e.g. Ollama's
+    prompt_eval_count/eval_count), callers should prefer those counts and
+    only fall back to this estimate when the fields are absent.
+    """
     if not text:
         return 0
     # Count CJK characters (roughly 1 token each)

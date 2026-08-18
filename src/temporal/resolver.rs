@@ -20,21 +20,6 @@ pub struct TemporalRange {
     pub expression: String,
 }
 
-impl TemporalRange {
-    /// Expand the range symmetrically by `days` in both directions.
-    /// Used for medium-confidence resolutions.
-    pub fn expanded(&self, days: i64) -> Self {
-        let day_ms = days * 86_400_000;
-        Self {
-            since: self.since.saturating_sub(day_ms),
-            until: self.until.saturating_add(day_ms),
-            confidence: self.confidence,
-            granularity: Granularity::Fuzzy,
-            expression: self.expression.clone(),
-        }
-    }
-}
-
 /// Resolves natural-language time expressions to concrete time ranges.
 ///
 /// Implementations range from fast rule-based (no LLM) to full LLM-powered
@@ -61,37 +46,6 @@ impl TemporalResolver for StubTemporalResolver {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_temporal_range_expanded() {
-        let range = TemporalRange {
-            since: 1000,
-            until: 2000,
-            confidence: 0.8,
-            granularity: crate::temporal::rules::Granularity::ExactDay,
-            expression: "test".to_string(),
-        };
-        let expanded = range.expanded(1);
-        // Should expand by 1 day in both directions
-        assert!(expanded.since < range.since);
-        assert!(expanded.until > range.until);
-        assert_eq!(expanded.confidence, range.confidence);
-        assert_eq!(expanded.expression, range.expression);
-    }
-
-    #[test]
-    fn test_temporal_range_expanded_preserves_granularity() {
-        let range = TemporalRange {
-            since: 1000,
-            until: 2000,
-            confidence: 0.5,
-            granularity: crate::temporal::rules::Granularity::Week,
-            expression: "test".to_string(),
-        };
-        let expanded = range.expanded(3);
-        // Expanded range becomes Fuzzy
-        assert_eq!(expanded.granularity, crate::temporal::rules::Granularity::Fuzzy);
-    }
 
     // ─── Stub Temporal Resolver ─────────────────────────────────────────────
 

@@ -82,6 +82,8 @@ impl OllamaProvider {
         #[derive(serde::Deserialize)]
         struct ChatResponse {
             message: MessageContent,
+            prompt_eval_count: Option<u32>,
+            eval_count: Option<u32>,
         }
         #[derive(serde::Deserialize)]
         struct MessageContent {
@@ -92,11 +94,26 @@ impl OllamaProvider {
             serde_json::from_slice(&body_bytes).map_err(|e| LlmError::Parse(format!("response parse error: {e}")))?;
 
         let content = parsed.message.content.trim().to_string();
-        let input_tokens = messages.iter().map(|m| m.content.len() as u32 / 4).sum::<u32>().max(1);
-        let output_tokens = (content.len() as u32 / 4).max(1);
+        let (input_tokens, output_tokens) =
+            usage_or_estimate(parsed.prompt_eval_count, parsed.eval_count, messages, &content);
 
         Ok((content, input_tokens, output_tokens))
     }
+}
+
+/// Real token usage from the provider response; older Ollama servers omit
+/// the usage fields, so the ~4-chars-per-token estimate remains the
+/// documented fallback (wheels audit W-05; no tokenizer dependency).
+fn usage_or_estimate(
+    prompt_eval_count: Option<u32>,
+    eval_count: Option<u32>,
+    messages: &[ChatMessage],
+    content: &str,
+) -> (u32, u32) {
+    let input_tokens =
+        prompt_eval_count.unwrap_or_else(|| messages.iter().map(|m| m.content.len() as u32 / 4).sum::<u32>().max(1));
+    let output_tokens = eval_count.unwrap_or_else(|| (content.len() as u32 / 4).max(1));
+    (input_tokens, output_tokens)
 }
 
 impl LlmProvider for OllamaProvider {
@@ -164,5 +181,29 @@ mod tests {
         };
         let result = provider.chat(&msgs, &opts);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_ollama_usage_fields_win_over_estimate() {
+        let messages = vec![ChatMessage::user("a long prompt"), ChatMessage::user("and a reply")];
+        let (input_tokens, output_tokens) = usage_or_estimate(Some(4321), Some(876), &messages, "short");
+        assert_eq!((input_tokens, output_tokens), (4321, 876));
+    }
+
+    #[test]
+    fn test_ollama_usage_fallback_estimates_chars_quarters() {
+        // Older servers omit prompt_eval_count/eval_count entirely: the
+        // ~4-chars-per-token estimate is the documented fallback.
+        let messages = vec![ChatMessage::user("twelve chars"), ChatMessage::user("four")];
+        let (input_tokens, output_tokens) = usage_or_estimate(None, None, &messages, "sixteen characters"); // 18 bytes
+        assert_eq!(input_tokens, (12 / 4) + (4 / 4));
+        assert_eq!(output_tokens, 18 / 4);
+    }
+
+    #[test]
+    fn test_ollama_usage_fallback_never_returns_zero() {
+        let messages = vec![ChatMessage::user("x")];
+        let (input_tokens, output_tokens) = usage_or_estimate(None, None, &messages, "y");
+        assert_eq!((input_tokens, output_tokens), (1, 1));
     }
 }

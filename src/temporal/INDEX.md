@@ -12,15 +12,14 @@ Status: stable | Fan-in: 2 | Fan-out: 0
 ## Modification Risk
 
 - Add `TemporalRule` pattern → compatible, extends recognition
-- Change `TemporalResolver` trait → BREAKING, update OllamaTemporalResolver + HeuristicTemporalResolver + StubTemporalResolver
+- Change `TemporalResolver` trait → BREAKING, update HeuristicTemporalResolver + StubTemporalResolver
 - Change `Granularity` variants → BREAKING, update match arms in resolver
-- Change confidence thresholds → behavioral change, affects search window expansion
+- Change confidence thresholds → behavioral change, affects search filtering
 
 ## Task Routing
 
 - Add time expression rule → modify `src/temporal/rules.rs` RULES array + evaluate()
-- Add LLM resolver → modify `src/temporal/resolver.rs` OllamaTemporalResolver
-- Change confidence strategy → modify `src/temporal/resolver.rs`
+- Change confidence strategy → modify `src/temporal/rules.rs`
 - Add new granularity → modify `src/temporal/rules.rs` Granularity enum
 
 ## Public API
@@ -29,32 +28,31 @@ Status: stable | Fan-in: 2 | Fan-out: 0
 |--------|------|-------------|
 | `TemporalResolver` | `resolver.rs` | Trait: expression → TemporalRange |
 | `TemporalRange` | `resolver.rs` | Resolved range (since/until Unix ms, confidence, granularity) |
-| `OllamaTemporalResolver` | `resolver.rs` | LLM-powered resolver with LRU cache |
 | `StubTemporalResolver` | `resolver.rs` | Always returns None (forces pure semantic search) |
 | `HeuristicTemporalResolver` | `rules.rs` | Rule-based synchronous resolver |
 | `RULE_BASED_RESOLVER` | `rules.rs` | Static default heuristic resolver instance |
 | `Granularity` | `rules.rs` | Time granularity (ExactDay/Week/Month/Quarter/Year/Fuzzy) |
 | `resolve_heuristic` | `rules.rs` | Direct function for rule-based resolution |
+| `TemporalRule` | `rules.rs` | One keyword pattern + resolution strategy |
 
 ## Files
 
 | File | Lines | Purpose |
 |------|-------|---------|
-| `resolver.rs` | ~200 | TemporalResolver trait, OllamaTemporalResolver, StubTemporalResolver |
-| `rules.rs` | ~339 | HeuristicTemporalResolver, pre-defined rules (中文 + English) |
-| `mod.rs` | ~35 | Re-exports |
+| `resolver.rs` | ~72 | TemporalResolver trait, TemporalRange, StubTemporalResolver |
+| `rules.rs` | ~1065 | HeuristicTemporalResolver, pre-defined rules (中文 + English) |
+| `mod.rs` | ~34 | Re-exports |
 
 ## Dependencies (Fan-out: 0)
 
-None — temporal is standalone, depends only on external crates (chrono, reqwest, lru, serde_json).
+None — temporal is standalone; the only external crate used is `chrono` (rule date math in `rules.rs`).
 
 ## Interface Contract
 
 - `TemporalResolver::resolve()`: returns `Option<TemporalRange>`; None = expression not understood
-- `OllamaTemporalResolver`: tries heuristic first (fast), falls back to LLM; results cached in LRU
 - `HeuristicTemporalResolver`: pure rule-based, no network calls, synchronous
-- Confidence levels: ≥0.8 strict range; 0.5–0.8 expanded ±7 days; <0.5 fallback to semantic search
-- Thread safety: `OllamaTemporalResolver` uses `RwLock` for cache; `HeuristicTemporalResolver` is stateless
+- Confidence levels: ≥0.8 strict range; <0.5 fallback to semantic search; medium-confidence ranges are used exactly as resolved (no ±7-day expansion is implemented)
+- Thread safety: `HeuristicTemporalResolver` is stateless
 
 ## Tests
 
