@@ -19,7 +19,7 @@
 | [v51](v51-summary.md) | Search Quality & Scope Isolation | 2026-05-17 | ✅ 完成（SAS 15/20，embedding 稳定性已修复） |
 | [v52](v52-trace-observability.md) | Trace Observability + Quality Fixes | 2026-05-18 | ✅ 完成 |
 | [v53](v53-execution-observation-spine.md) | Execution Observation Ledger Core（[R4 acceptance](v53-r4-wp3b1-acceptance.md)；[W0 acceptance](v53-w0-acceptance.md)） | 2026-08-18 | R4 GO / WP3B.1 + W0 accepted |
-| [v54](v54-mcp-sdk-migration-a.md) | MCP SDK Migration-A — official RMCP architecture freeze（[Proposed ADR-0011](../adr/0011-mcp-rmcp-migration-v1.md)；[research](v54-migration-a-research.md)） | 2026-08-18 | Phase A PROPOSED (GO-partial) — awaiting Plico architecture acceptance |
+| [v54](v54-mcp-sdk-migration-a.md) | MCP SDK Migration-A — official RMCP architecture freeze（[Proposed ADR-0011](../adr/0011-mcp-rmcp-migration-v1.md)；[research](v54-migration-a-research.md)；[A.1 remediation](v54-migration-a1-remediation.md)） | 2026-08-19 | Phase A.1 READY FOR OUTSOURCED ARCHITECTURE / development blocked |
 
 ## 模板
 
