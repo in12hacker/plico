@@ -1,6 +1,6 @@
 # ADR-0011: MCP SDK Migration —— rmcp 采用决策（Phase A, Proposed）
 
-- 状态：**Proposed（外包架构组提交；仅 Plico 架构组可 Accept）**
+- 状态：**Accepted（2026-08-19，Plico 架构组复审，见 v54-migration-a1-remediation.md §7）**
 - 日期：2026-08-18
 - 基线：v53 W0 accepted `c64df2157bd9dcbb1c946704cbda16a08ef4d325`
 - 宪章：`docs/milestones/v54-mcp-sdk-migration-a.md`

@@ -230,3 +230,32 @@ R04 corpus mutation。任一阶段证实不可行即可停止后续重型测试�
 | rmcp-server 两象限 / schemars 等价 / 全链 release 体积 | not-run（按 §3 滚动，OPEN 不变） |
 
 过程中清理了调试残留的全部 fixture/测试子进程（最终 `ps` 零残留）。
+
+## 7. Plico 架构组复审裁决（2026-08-19）
+
+**Accept client-first（GO-partial，ADR-0011 Accepted）。**
+
+复审项与证据：
+1. 祖先链：506af2c ∈ ancestors(75e2d3d) ✓（`merge-base --is-ancestor`）；
+2. scope：`506af2c..75e2d3d` 全部 8 文件 ∈ allowlist（ADR/INDEX/remediation/
+   scripts/milestones/v54/**），`src/、Cargo.*、tests/` 零修改 ✓；
+3. 交付时状态合规：ADR 保持 Proposed 至本复审；无生产 Rust ✓；
+4. **fresh 复跑官方命令**：`run_corpus.py --mode formal` 在复审机上
+   **executed=17 / pass-or-red=17 / fail=0 / not-run=0**（clean 11/11，
+   6 mutation 全 red）——独立重现 ✓；
+5. 研究文档关键主张（rmcp receive 无界、_meta 注入、child-process 冲突）
+   与源码/线捕一致 ✓；
+6. **A.1 唯一悬挂项（SDK 路径 fixture 挂起）根因定位**：panic 位于
+   `child.stdin/stdout.take().expect(...)`——spike 程序未为子进程配置
+   piped stdio（`Stdio::piped()` 缺失）。与 rmcp 无关，不构成架构障碍；
+   Phase B 直接以正确管道构造即可。复审记录此定位并撤销“挂起=未明”
+   表述：根因已明（测试代码缺陷）。
+7. 复审后进程零残留 ✓。
+
+裁决后动作：
+- ADR-0011 转 **Accepted**（本节附注随 acceptance commit 入库）；
+- 开发组 Phase B 由外包架构组出任务单：MCP-B-R1（`_meta` 容忍，rpc.rs
+  一处）+ rmcp 客户端迁移（corrected feature 集、vendor 离线、
+  corrected pipeline 构造）+ 复用本 harness corpus 作为独立验收；
+- 不扩大研究面；rmcp-server 两象限、schemars 等价、全链 release 体积
+  继续滚动（Migration-B 前置）。
